@@ -11,7 +11,7 @@ use matrix_sdk::{
 use serde::{Deserialize, Serialize};
 use crate::{
     avatar_cache::clear_avatar_cache, home::{
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, space_lobby::SpaceLobbyScreenWidgetRefExt
+        create_space_room_modal::{CreateSpaceRoomModalAction, CreateSpaceRoomModalWidgetRefExt}, event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, search_rooms_modal::{SearchRoomsModalAction, SearchRoomsModalWidgetRefExt}, space_lobby::SpaceLobbyScreenWidgetRefExt
     }, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, current_user_id, submit_async_request}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
@@ -105,6 +105,19 @@ script_mod! {
                         invite_modal := Modal {
                             content +: {
                                 invite_modal_inner := InviteModal {}
+                            }
+                        }
+
+                        create_space_room_modal := Modal {
+                            can_dismiss: false
+                            content +: {
+                                create_space_room_modal_inner := CreateSpaceRoomModal {}
+                            }
+                        }
+
+                        search_rooms_modal := Modal {
+                            content +: {
+                                search_rooms_modal_inner := SearchRoomsModal {}
                             }
                         }
 
@@ -620,6 +633,36 @@ impl MatchEvent for App {
                 }
                 Some(InviteModalAction::Close) => {
                     self.ui.modal(cx, ids!(invite_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
+            match action.downcast_ref() {
+                Some(CreateSpaceRoomModalAction::Open(space_name_id)) => {
+                    self.ui
+                        .create_space_room_modal(cx, ids!(create_space_room_modal_inner))
+                        .show(cx, space_name_id.clone());
+                    self.ui.modal(cx, ids!(create_space_room_modal)).open(cx);
+                    continue;
+                }
+                Some(CreateSpaceRoomModalAction::Close) => {
+                    self.ui.modal(cx, ids!(create_space_room_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
+            match action.downcast_ref() {
+                Some(SearchRoomsModalAction::Open) => {
+                    self.ui
+                        .search_rooms_modal(cx, ids!(search_rooms_modal_inner))
+                        .show(cx);
+                    self.ui.modal(cx, ids!(search_rooms_modal)).open(cx);
+                    continue;
+                }
+                Some(SearchRoomsModalAction::Close) => {
+                    self.ui.modal(cx, ids!(search_rooms_modal)).close(cx);
                     continue;
                 }
                 _ => {}
