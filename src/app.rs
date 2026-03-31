@@ -2,10 +2,11 @@
 //!
 //! See `handle_startup()` for the first code that runs on app startup.
 
-use std::{cell::RefCell, collections::HashMap};
+use std::{cell::RefCell, collections::HashMap, sync::mpsc, io::{BufRead, BufReader}};
 use makepad_widgets::*;
 use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId}};
 use serde::{Deserialize, Serialize};
+use makepad_widgets::makepad_platform::permission::Permission;
 use crate::{
     avatar_cache::clear_avatar_cache, home::{
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, space_lobby::SpaceLobbyScreenWidgetRefExt
@@ -14,7 +15,8 @@ use crate::{
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, current_user_id, submit_async_request}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
-    }
+    },
+    voip::VoipGlobalState,
 };
 
 script_mod! {
@@ -174,6 +176,10 @@ pub struct App {
     /// A stack of previously-selected rooms for mobile navigation.
     /// When a view is popped off the stack, the previous `selected_room` is restored from here.
     #[rust] mobile_room_nav_stack: Vec<SelectedRoom>,
+    /// Stdin command receiver for switching to VoIP screen
+    #[rust] stdin_rx: Option<mpsc::Receiver<String>>,
+    /// Timer for polling stdin
+    #[rust] stdin_poll_timer: Timer,
 }
 
 impl ScriptHook for App {
@@ -237,6 +243,27 @@ impl MatchEvent for App {
             log!("App::Startup: initializing TSP (Trust Spanning Protocol) module.");
             crate::tsp::tsp_init(_tokio_rt_handle).unwrap();
         }
+
+        // Start stdin reader thread for VoIP screen commands
+        let (tx, rx) = mpsc::channel();
+        self.stdin_rx = Some(rx);
+        std::thread::spawn(move || {
+            let stdin = std::io::stdin();
+            let reader = BufReader::new(stdin);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    let _ = tx.send(line);
+                }
+            }
+        });
+
+        // Start timer to poll stdin (10 times per second)
+        self.stdin_poll_timer = cx.start_interval(0.1);
+
+        // Initialize VoIP global state and request camera permissions/video inputs early
+        VoipGlobalState::initialize(cx);
+
+        log!("App: stdin listener started. Type 'voip' to switch to VoIP screen.");
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
@@ -740,6 +767,7 @@ impl AppMain for App {
         crate::join_leave_room_modal::script_mod(vm);
         crate::verification_modal::script_mod(vm);
         crate::profile::script_mod(vm);
+        crate::voip::voip_screen::script_mod(vm);
         crate::home::script_mod(vm);
         crate::login::script_mod(vm);
         crate::logout::script_mod(vm);
@@ -780,6 +808,22 @@ impl AppMain for App {
             }
         }
         
+        // Handle VoIP-related events at app level (before VoipScreen is shown)
+        match event {
+            Event::PermissionResult(result) if result.permission == Permission::Camera => {
+                VoipGlobalState::handle_permission_result(cx, result.status);
+            }
+            Event::VideoInputs(ev) => {
+                VoipGlobalState::handle_video_inputs(cx, ev);
+            }
+            _ => {}
+        }
+
+        // Poll stdin for VoIP commands
+        if self.stdin_poll_timer.is_event(event).is_some() {
+            self.poll_stdin(cx);
+        }
+
         // Forward events to the MatchEvent trait implementation.
         self.match_event(cx, event);
         let scope = &mut Scope::with_data(&mut self.app_state);
@@ -820,6 +864,46 @@ impl AppMain for App {
 }
 
 impl App {
+    /// Poll stdin for commands to switch screens
+    fn poll_stdin(&mut self, cx: &mut Cx) {
+        let commands: Vec<String> = if let Some(rx) = &self.stdin_rx {
+            let mut cmds = Vec::new();
+            while let Ok(line) = rx.try_recv() {
+                cmds.push(line);
+            }
+            cmds
+        } else {
+            Vec::new()
+        };
+
+        for line in commands {
+            let cmd = line.trim().to_lowercase();
+            match cmd.as_str() {
+                "voip" => {
+                    log!("Stdin command: switching to VoIP screen");
+                    cx.action(NavigationBarAction::GoToVoip);
+                    self.ui.redraw(cx);
+                }
+                "home" => {
+                    log!("Stdin command: switching to Home screen");
+                    cx.action(NavigationBarAction::GoToHome);
+                    self.ui.redraw(cx);
+                }
+                "help" => {
+                    log!("=== Stdin Commands ===");
+                    log!("  voip  - Switch to VoIP call screen");
+                    log!("  home  - Switch to Home screen");
+                    log!("  help  - Show this help");
+                    log!("======================");
+                }
+                _ if !cmd.is_empty() => {
+                    log!("Unknown command: '{}'. Type 'help' for available commands.", cmd);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn update_login_visibility(&self, cx: &mut Cx) {
         let show_login = !self.app_state.logged_in;
         if !show_login {

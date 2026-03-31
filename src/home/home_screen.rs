@@ -1,6 +1,6 @@
 use makepad_widgets::*;
 
-use crate::{app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, settings::settings_screen::SettingsScreenWidgetRefExt};
+use crate::{app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, voip::VoipScreenWidgetRefExt, settings::settings_screen::SettingsScreenWidgetRefExt};
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -248,6 +248,16 @@ script_mod! {
                             add_room_screen := mod.widgets.AddRoomScreen {}
                         }
                     }
+
+                    voip_page := SolidView {
+                        width: Fill, height: Fill
+                        show_bg: true,
+                        draw_bg.color: (COLOR_PRIMARY)
+
+                        CachedWidget {
+                            voip_screen := mod.widgets.VoipScreen {}
+                        }
+                    }
                 }
             }
 
@@ -295,6 +305,15 @@ script_mod! {
 
                                     CachedWidget {
                                         add_room_screen := mod.widgets.AddRoomScreen {}
+                                    }
+                                }
+
+                                voip_page := View {
+                                    width: Fill, height: Fill
+                                    padding: Inset{top: 20}
+
+                                    CachedWidget {
+                                        voip_screen := mod.widgets.VoipScreen {}
                                     }
                                 }
                             }
@@ -466,6 +485,21 @@ impl Widget for HomeScreen {
                             self.view.redraw(cx);
                         }
                     }
+                    Some(NavigationBarAction::GoToVoip) => {
+                        if !matches!(app_state.selected_tab, SelectedTab::VoIP) {
+                            self.previous_selection = app_state.selected_tab.clone();
+                            app_state.selected_tab = SelectedTab::VoIP;
+                            cx.action(NavigationBarAction::TabSelected(app_state.selected_tab.clone()));
+                            if let Some(voip_page) = self.update_active_page_from_selection(cx, app_state) {
+                                voip_page
+                                    .voip_screen(cx, ids!(voip_screen))
+                                    .initialize(cx);
+                                self.view.redraw(cx);
+                            } else {
+                                error!("BUG: failed to set active page to show VoIP screen.");
+                            }
+                        }
+                    }
                     Some(NavigationBarAction::ToggleSpacesBar) => {
                         self.is_spaces_bar_shown = !self.is_spaces_bar_shown;
                         self.view.spaces_bar_wrapper(cx, ids!(spaces_bar_wrapper))
@@ -508,6 +542,7 @@ impl HomeScreen {
                     | SelectedTab::Home => id!(home_page),
                     SelectedTab::Settings => id!(settings_page),
                     SelectedTab::AddRoom => id!(add_room_page),
+                    SelectedTab::VoIP => id!(voip_page),
                 },
             )
     }
