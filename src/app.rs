@@ -16,7 +16,7 @@ use crate::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     },
-    voip::VoipGlobalState,
+    voip::{VoipGlobalState, VoipAction},
 };
 
 script_mod! {
@@ -402,6 +402,16 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            // Handle VoIP close action - reset the VoIP visibility on the mobile RoomScreen
+            // if let Some(VoipAction::Close(_room_id)) = action.downcast_ref() {
+            //     log!("App: VoipAction::Close received, resetting VoIP visibility");
+            //     // Reset VoIP visibility on room_screen_0 (mobile path)
+            //     let room_screen = self.ui.room_screen(cx, ids!(room_screen_0));
+            //     room_screen.set_voip_visible(cx, false, None);
+            //     self.ui.redraw(cx);
+            //     continue;
+            // }
+
             // When a stack navigation pop is initiated (back button pressed),
             // pop the mobile nav stack so it stays in sync with StackNavigation.
             if let StackNavigationAction::Pop = action.as_widget_action().cast() {
@@ -627,6 +637,8 @@ impl MatchEvent for App {
                 }
                 continue;
             }
+
+            // Note: RtcCallAction::JoinCall is now handled via RoomsListAction::Selected(SelectedRoom::Voip)
 
             // Handle a request to show the generic positive confirmation modal.
             if let Some(PositiveConfirmationModalAction::Show(content_opt)) = action.downcast_ref() {
@@ -880,9 +892,19 @@ impl App {
             let cmd = line.trim().to_lowercase();
             match cmd.as_str() {
                 "voip" => {
-                    log!("Stdin command: switching to VoIP screen");
-                    cx.action(NavigationBarAction::GoToVoip);
-                    self.ui.redraw(cx);
+                    // Get the currently selected room and show VoIP for it
+                    if let Some(selected) = &self.app_state.selected_room {
+                        let room_name_id = selected.room_name().clone();
+                        log!("Stdin command: showing VoIP for room {}", room_name_id.room_id());
+                        // Use widget_action so it's handled by the widget action handlers
+                        cx.widget_action(
+                            WidgetUid(0),  // Use a placeholder widget_uid
+                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                        );
+                        self.ui.redraw(cx);
+                    } else {
+                        log!("Stdin command: no room selected, cannot show VoIP");
+                    }
                 }
                 "home" => {
                     log!("Stdin command: switching to Home screen");
@@ -1067,6 +1089,12 @@ impl App {
                     .set_displayed_space(cx, space_name_id);
                 id!(space_lobby_view)
             }
+            SelectedRoom::Voip { room_name_id } => {
+                // VoIP uses RoomScreen with VoIP as main content (no timeline)
+                let room_screen = self.ui.room_screen(cx, ids!(room_screen_0));
+                room_screen.set_voip_visible(cx, true, Some(room_name_id.room_id().clone()));
+                id!(room_view_0)
+            }
         };
 
         // Set the header title for the view being pushed.
@@ -1112,6 +1140,9 @@ pub struct AppState {
     pub logged_in: bool,
     /// Local configuration and UI state for bot-assisted room binding.
     pub bot_settings: BotSettingsState,
+    /// The room ID for VoIP calls, set when navigating to VoIP screen from a call notification.
+    #[serde(skip)]
+    pub voip_room_id: Option<OwnedRoomId>,
 }
 
 /// Local bot integration settings persisted per Matrix account.
@@ -1280,6 +1311,9 @@ pub enum SelectedRoom {
     Space {
         space_name_id: RoomNameId,
     },
+    Voip {
+        room_name_id: RoomNameId,
+    },
 }
 
 impl SelectedRoom {
@@ -1289,6 +1323,8 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id.room_id(),
             SelectedRoom::Space { space_name_id } => space_name_id.room_id(),
             SelectedRoom::Thread { room_name_id, .. } => room_name_id.room_id(),
+            SelectedRoom::Voip { room_name_id } => room_name_id.room_id(),
+
         }
     }
 
@@ -1298,6 +1334,7 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id,
             SelectedRoom::Space { space_name_id } => space_name_id,
             SelectedRoom::Thread { room_name_id, .. } => room_name_id,
+            SelectedRoom::Voip { room_name_id } => room_name_id,
         }
     }
 
@@ -1328,6 +1365,12 @@ impl SelectedRoom {
                     &format!("{}##{}", room_name_id.room_id(), thread_root_event_id)
                 )
             }
+            SelectedRoom::Voip { room_name_id } => {
+                // VoIP tabs get a distinct ID to differentiate from normal room tabs
+                LiveId::from_str(
+                    &format!("{}##voip", room_name_id.room_id())
+                )
+            }
             other => LiveId::from_str(other.room_id().as_str()),
         }
     }
@@ -1339,6 +1382,7 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id.to_string(),
             SelectedRoom::Space { space_name_id } => format!("[Space] {space_name_id}"),
             SelectedRoom::Thread { room_name_id, .. } => format!("[Thread] {room_name_id}"),
+            SelectedRoom::Voip { room_name_id } => format!("[VoIP] {room_name_id}"),
         }
     }
 }
@@ -1346,6 +1390,7 @@ impl SelectedRoom {
 impl PartialEq for SelectedRoom {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            // Threads are equal if room_id and thread_root_event_id match
             (
                 SelectedRoom::Thread {
                     room_name_id: lhs_room_name_id,
@@ -1359,7 +1404,16 @@ impl PartialEq for SelectedRoom {
                 lhs_room_name_id.room_id() == rhs_room_name_id.room_id()
                     && lhs_thread_root_event_id == rhs_thread_root_event_id
             }
+            // Thread is never equal to non-Thread
             (SelectedRoom::Thread { .. }, _) | (_, SelectedRoom::Thread { .. }) => false,
+            // VoIP rooms are equal only to other VoIP rooms with same room_id
+            (
+                SelectedRoom::Voip { room_name_id: lhs },
+                SelectedRoom::Voip { room_name_id: rhs },
+            ) => lhs.room_id() == rhs.room_id(),
+            // VoIP is never equal to non-VoIP (even if same room_id)
+            (SelectedRoom::Voip { .. }, _) | (_, SelectedRoom::Voip { .. }) => false,
+            // All other variants compare by room_id only
             _ => self.room_id() == other.room_id(),
         }
     }

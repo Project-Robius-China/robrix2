@@ -2570,6 +2570,7 @@ struct RoomListServiceRoomInfo {
     is_direct: bool,
     is_marked_unread: bool,
     is_tombstoned: bool,
+    has_active_call: bool,
     tags: Option<Tags>,
     user_power_levels: Option<UserPowerLevels>,
     latest_event_timestamp: Option<MilliSecondsSinceUnixEpoch>,
@@ -2601,6 +2602,7 @@ impl RoomListServiceRoomInfo {
             is_direct: is_direct.unwrap_or(false),
             is_marked_unread: room.is_marked_unread(),
             is_tombstoned: room.is_tombstoned(),
+            has_active_call: room.has_active_room_call(),
             tags: tags.ok().flatten(),
             user_power_levels,
             latest_event_timestamp: room.latest_event_timestamp(),
@@ -3335,6 +3337,18 @@ async fn update_room(
                 });
             }
 
+            if old_room.has_active_call != new_room.has_active_call {
+                log!("Updating room {} has_active_call from {} to {}",
+                    new_room_id,
+                    old_room.has_active_call,
+                    new_room.has_active_call,
+                );
+                enqueue_rooms_list_update(RoomsListUpdate::UpdateActiveCall {
+                    room_id: new_room_id.clone(),
+                    has_active_call: new_room.has_active_call,
+                });
+            }
+
             let mut __timeline_update_sender_opt = None;
             let mut get_timeline_update_sender = |room_id| {
                 if __timeline_update_sender_opt.is_none() {
@@ -3535,6 +3549,7 @@ async fn add_new_room(
         is_selected: false,
         is_direct: new_room.is_direct,
         is_tombstoned: new_room.is_tombstoned,
+        has_active_call: new_room.has_active_call,
     }));
 
     Cx::post_action(AppStateAction::RoomLoadedSuccessfully {

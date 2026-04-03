@@ -542,8 +542,8 @@ pub enum NavigationBarAction {
     CloseSettings,
     /// Go the space screen for the given space.
     GoToSpace { space_name_id: RoomNameId },
-    /// Go to the VoIP call screen.
-    GoToVoip,
+    // /// Go to the VoIP call screen.
+    // GoToVoip,
 
     // TODO: add GoToAlertsInbox, once we add that button/screen
 

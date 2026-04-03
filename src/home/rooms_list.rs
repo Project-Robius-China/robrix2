@@ -203,6 +203,11 @@ pub enum RoomsListUpdate {
     TombstonedRoom {
         room_id: OwnedRoomId
     },
+    /// Update whether the given room has an active call.
+    UpdateActiveCall {
+        room_id: OwnedRoomId,
+        has_active_call: bool,
+    },
     /// Hide the given room from being displayed.
     ///
     /// This is useful for temporarily preventing a room from being shown,
@@ -298,6 +303,8 @@ pub struct JoinedRoomInfo {
     pub is_direct: bool,
     /// Whether this room is tombstoned (shut down and replaced with a successor room).
     pub is_tombstoned: bool,
+    /// Whether this room has an active video/voice call.
+    pub has_active_call: bool,
 
     // TODO: we could store the parent chain(s) of this room, i.e., which spaces
     //       they are children of. One room can be in multiple spaces.
@@ -761,6 +768,14 @@ impl RoomsList {
                         }
                     } else {
                         warning!("Warning: couldn't find room {room_id} to update the tombstone status");
+                    }
+                }
+                RoomsListUpdate::UpdateActiveCall { room_id, has_active_call } => {
+                    if let Some(room) = self.all_joined_rooms.get_mut(&room_id) {
+                        room.has_active_call = has_active_call;
+                        log!("Updated room {} has_active_call to {}", room_id, has_active_call);
+                    } else {
+                        warning!("Warning: couldn't find room {room_id} to update active call status");
                     }
                 }
                 RoomsListUpdate::HideRoom { room_id } => {

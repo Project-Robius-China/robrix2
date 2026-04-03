@@ -10,7 +10,7 @@ use ruma::OwnedRoomId;
 use tokio::sync::mpsc;
 
 use crate::sliding_sync::get_client;
-use super::VoipGlobalState;
+use super::{VoipGlobalState, VoipAction};
 
 use super::call_state::{Call, CallType, ConnectionState};
 use super::camera::{CameraChoice, CameraManager};
@@ -355,123 +355,186 @@ script_mod! {
             width: Fill
             height: Fill
             flow: Down
-            spacing: 20
-            padding: 40
-            align: Center
-            show_bg: true
-            draw_bg.color: #1a1a2e
             visible: true
+            show_bg: true
+            draw_bg.color: #2a2a4a
 
-            Label {
-                text: "Join Call"
-                draw_text.text_style.font_size: 24
-                draw_text.color: #fff
-            }
-
-            lobby_camera_container := View {
-                width: 320
-                height: 240
-
-                lobby_camera_placeholder := RoundedView {
-                    width: Fill
-                    height: Fill
-                    draw_bg.color: #2a2a4a
-                    draw_bg.radius: 12.0
-                    align: Center
-
-                    Label {
-                        text: "Camera Preview"
-                        draw_text.text_style.font_size: 14
-                        draw_text.color: #666
-                    }
-                }
-
-                lobby_video_host := View {
-                    width: Fill
-                    height: Fill
-                    visible: false
-
-                    lobby_camera_video := Video {
-                        width: Fill
-                        height: Fill
-                        autoplay: false
-                        show_controls: false
-                    }
-                }
-            }
-
-            View {
-                width: Fit
-                height: Fit
-                flow: Down
-                spacing: 12
-                align: Center
-
-                View {
-                    width: Fit
-                    height: Fit
-                    flow: Right
-                    spacing: 8
-                    align: Center
-
-                    Label {
-                        text: "Microphone:"
-                        draw_text.text_style.font_size: 12
-                        draw_text.color: #888
-                    }
-
-                    lobby_mic_button := Button {
-                        text: "Mic On"
-                        width: 80
-                        draw_text.color: #333
-                    }
-                }
-
-                View {
-                    width: Fit
-                    height: Fit
-                    flow: Right
-                    spacing: 8
-                    align: Center
-
-                    Label {
-                        text: "Camera:"
-                        draw_text.text_style.font_size: 12
-                        draw_text.color: #888
-                    }
-
-                    lobby_camera_button := Button {
-                        text: "Cam On"
-                        width: 80
-                        draw_text.color: #333
-                    }
-                }
-            }
-
-            View {
-                width: Fit
+            // Top bar with close button
+            lobby_header := View {
+                width: Fill
                 height: Fit
                 flow: Right
-                spacing: 12
+                padding: Inset{top: 12, right: 12, bottom: 0, left: 12}
+                align: Align{x: 1.0, y: 0.0}
 
-                video_call_button := Button {
-                    text: "Video Call"
-                    width: 120
-                    draw_text.color: #333
-                }
-
-                voice_call_button := Button {
-                    text: "Voice Call"
-                    width: 120
-                    draw_text.color: #333
+                close_button := RobrixIconButton {
+                    width: 40
+                    height: 40
+                    padding: 8
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 20, height: 20}
+                    draw_bg +: {
+                        color: #ffffff20
+                        border_radius: 20.0
+                    }
+                    draw_icon +: {
+                        color: #fff
+                    }
                 }
             }
 
-            lobby_status := Label {
-                text: ""
-                draw_text.text_style.font_size: 12
-                draw_text.color: #888
+            // Main content area with camera preview - use flex to fill remaining space
+            lobby_content := View {
+                width: Fill
+                height: Fill
+                flow: Overlay
+                margin: 0
+
+                // Camera preview background
+                lobby_camera_container := View {
+                    width: Fill
+                    height: Fill
+
+                    lobby_camera_placeholder := View {
+                        width: Fill
+                        height: Fill
+                        show_bg: true
+                        draw_bg.color: #2a2a4a
+                        align: Center
+
+                        // Placeholder logo/icon
+                        RoundedView {
+                            width: 120
+                            height: 120
+                            draw_bg.color: #1a1a2e
+                            draw_bg.radius: 60.0
+                            align: Center
+
+                            Label {
+                                text: "VoIP"
+                                draw_text.text_style.font_size: 24
+                                draw_text.color: #fff
+                            }
+                        }
+                    }
+
+                    lobby_video_host := View {
+                        width: Fill
+                        height: Fill
+                        visible: false
+
+                        lobby_camera_video := Video {
+                            width: Fill
+                            height: Fill
+                            autoplay: false
+                            show_controls: false
+                        }
+                    }
+                }
+
+                // Join Call button overlay - centered vertically and horizontally
+                View {
+                    width: Fill
+                    height: Fill
+                    align: Align{x: 0.5, y: 0.7}
+
+                    join_call_button := Button {
+                        text: "Join call"
+                        width: 160
+                        height: 48
+                        draw_bg +: {
+                            color: #4CAF50
+                            border_radius: 24.0
+                        }
+                        draw_text +: {
+                            color: #fff
+                            text_style.font_size: 16
+                        }
+                    }
+                }
+
+                // Status label at bottom
+                View {
+                    width: Fill
+                    height: Fill
+                    align: Align{x: 0.5, y: 0.85}
+
+                    lobby_status := Label {
+                        text: ""
+                        draw_text.text_style.font_size: 12
+                        draw_text.color: #aaa
+                    }
+                }
             }
+
+            // Bottom control bar with icons
+            lobby_controls := View {
+                width: Fill
+                height: Fit
+                padding: Inset{top: 16 bottom: 24}
+                align: Center
+                show_bg: true
+                draw_bg.color: #fff
+
+                View {
+                    width: Fit
+                    height: Fit
+                    flow: Right
+                    spacing: 16
+                    align: Center
+
+                    lobby_mic_button := RobrixIconButton {
+                        width: 48
+                        height: 48
+                        padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
+                        margin: 0,
+                        draw_icon.svg: (ICON_MICROPHONE)
+                        icon_walk: Walk{width: 24, height: 24}
+                        draw_bg +: {
+                            color: #fff
+                            border_radius: 0.0
+                            border_size: 1.5
+                            border_color: #ccc
+                        }
+                    }
+
+                    // Video icon button
+                    lobby_camera_button :=  RobrixIconButton {
+                        width: 48
+                        height: 48
+                        padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
+                        margin: 0,
+                        draw_icon.svg: (ICON_VIDEO)
+                        icon_walk: Walk{width: 24, height: 24}
+                        draw_bg +: {
+                            color: #fff
+                            border_radius: 0.0
+                            border_size: 1.5
+                            border_color: #ccc
+                        }
+                    }
+
+                    // Settings icon button
+                    lobby_settings_button :=  RobrixIconButton {
+                        width: 48
+                        height: 48
+                        padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
+                        margin: 0,
+                        draw_icon.svg: (ICON_SETTINGS)
+                        icon_walk: Walk{width: 24, height: 24}
+                        draw_bg +: {
+                            color: #000000
+                            border_radius: 0.0
+                            border_size: 1.5
+                            border_color: #ccc
+                        }
+                    }
+                }
+            }
+
+            // Hidden buttons for compatibility
+            video_call_button := Button { visible: false text: "Video Call" }
+            voice_call_button := Button { visible: false text: "Voice Call" }
         }
 
         // Debug panel
@@ -507,6 +570,8 @@ pub struct VoipScreen {
     #[rust] in_lobby: bool,
     #[rust] lobby_mic_enabled: bool,
     #[rust] lobby_camera_enabled: bool,
+    /// Whether the user navigated here from a call notification (to join an existing call)
+    #[rust] from_notification: bool,
     #[rust] show_participants: bool,
     #[rust] show_debug: bool,
 
@@ -574,9 +639,6 @@ impl Widget for VoipScreen {
             Event::VideoPlaybackResourcesReleased(_) => {
                 self.handle_video_resources_released(cx);
             }
-            Event::Actions(actions) => {
-                self.handle_actions(cx, actions);
-            }
             _ => {
                 if self.speaking_check_timer.is_event(event).is_some() {
                     self.check_speaking_state(cx);
@@ -592,7 +654,13 @@ impl Widget for VoipScreen {
             self.update_ui(cx);
         }
 
+        // Let the view process events first (including button clicks)
         self.view.handle_event(cx, event, scope);
+
+        // Then handle actions AFTER the view has processed them
+        if let Event::Actions(actions) = event {
+            self.handle_actions(cx, actions);
+        }
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
@@ -602,14 +670,13 @@ impl Widget for VoipScreen {
 
 impl VoipScreen {
     /// Initialize the VoIP screen
-    pub fn initialize(&mut self, cx: &mut Cx) {
+    pub fn initialize(&mut self, cx: &mut Cx, room_id: OwnedRoomId) {
+        log!("VoipScreen: Initializing for room {}", room_id);
         self.in_lobby = true;
         self.lobby_mic_enabled = true;
         self.lobby_camera_enabled = true;
         self.call = Call::default();
         self.speaking_detector = SpeakingDetector::new();
-
-        log!("VoipScreen initialized");
 
         // Initialize LiveKit client
         let mut client = LiveKitClient::new();
@@ -627,22 +694,20 @@ impl VoipScreen {
         self.camera_permission = VoipGlobalState::get_camera_permission(cx);
         self.camera_choice = VoipGlobalState::get_camera_choice(cx);
 
-        log!("VoipScreen: Read from global state - permission={:?}, choice={:?}",
-            self.camera_permission, self.camera_choice.as_ref().map(|c| &c.name));
-
         // Try to start camera if we already have permission and camera choice
         self.try_start_camera(cx);
 
         // Set default room
-        let room_id: OwnedRoomId = "!rTeTgZzSYKoeJEVosH:matrix.org".try_into().unwrap();
         self.set_room(cx, room_id);
 
         self.update_ui(cx);
     }
 
     /// Set the room for this VoIP call (uses Matrix client from room screen)
+    /// When called from a call notification, this shows the "Join Call" button.
     pub fn set_room(&mut self, cx: &mut Cx, room_id: OwnedRoomId) {
         self.room_id = Some(room_id.clone());
+        self.from_notification = true;  // Show "Join Call" button
 
         // Get room name from client
         if let Some(client) = get_client() {
@@ -777,12 +842,16 @@ impl VoipScreen {
         self.call.connection_state = ConnectionState::Disconnected;
         self.in_lobby = true;
         self.call_start_time = None;
-        self.try_start_camera(cx);
+        //self.try_start_camera(cx);
+        CameraManager::stop_lobby_camera(&self.view, cx);
+        self.pending_call_camera_start = true;
+        self.camera_active = false;
+
+        self.update_ui(cx);
     }
 
     /// Update UI to reflect current state
     fn update_ui(&mut self, cx: &mut Cx) {
-        
         self.view.view(cx, ids!(lobby_view)).set_visible(cx, self.in_lobby);
         self.view.view(cx, ids!(call_view)).set_visible(cx, !self.in_lobby);
 
@@ -820,26 +889,52 @@ impl VoipScreen {
                 .set_text(cx, &format!("{:02}:{:02}", mins, secs));
         }
 
-        // Update lobby buttons
-        let mic_text = if self.lobby_mic_enabled { "Mic On" } else { "Mic Off" };
-        let cam_text = if self.lobby_camera_enabled { "Cam On" } else { "Cam Off" };
-        self.view.button(cx, ids!(lobby_mic_button)).set_text(cx, mic_text);
-        self.view.button(cx, ids!(lobby_camera_button)).set_text(cx, cam_text);
+        // Update lobby icon button styles based on state
+        // When disabled, show different border color
+        if self.in_lobby {
+            let mut mic_btn = self.view.button(cx, ids!(lobby_mic_button));
+            let mut cam_btn = self.view.button(cx, ids!(lobby_camera_button));
+
+            if self.lobby_mic_enabled {
+                script_apply_eval!(cx, mic_btn, {
+                    draw_bg +: { border_color: #ccc }
+                    draw_icon +: { color: #333 }
+                });
+            } else {
+                script_apply_eval!(cx, mic_btn, {
+                    draw_bg +: { border_color: #f00 }
+                    draw_icon +: { color: #f00 }
+                });
+            }
+
+            if self.lobby_camera_enabled {
+                script_apply_eval!(cx, cam_btn, {
+                    draw_bg +: { border_color: #ccc }
+                    draw_icon +: { color: #333 }
+                });
+            } else {
+                script_apply_eval!(cx, cam_btn, {
+                    draw_bg +: { border_color: #f00 }
+                    draw_icon +: { color: #f00 }
+                });
+            }
+        }
+
+        // Show "Join Call" button always in lobby (it's the main action button now)
+        self.view.button(cx, ids!(join_call_button)).set_visible(cx, self.in_lobby);
+
+        // Force redraw to ensure all visibility changes take effect
+        self.view.redraw(cx);
     }
 
     /// Try to start camera
     fn try_start_camera(&mut self, cx: &mut Cx) {
-        log!("try_start_camera: permission={:?}, choice={:?}",
-            self.camera_permission, self.camera_choice.as_ref().map(|c| &c.name));
-
         if !matches!(self.camera_permission, Some(PermissionStatus::Granted)) {
-            log!("Waiting for camera permission...");
             self.view.label(cx, ids!(lobby_status)).set_text(cx, "Waiting for camera permission...");
             return;
         }
 
         let Some(choice) = self.camera_choice.clone() else {
-            log!("Waiting for camera device...");
             self.view.label(cx, ids!(lobby_status)).set_text(cx, "Waiting for camera device...");
             return;
         };
@@ -932,20 +1027,47 @@ impl VoipScreen {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         
         // Lobby buttons
+        // Close button - exit VoIP screen
+        if self.view.button(cx, ids!(close_button)).clicked(actions) {
+            log!("Close button clicked, exiting VoIP screen");
+            if let Some(room_id) = self.room_id.clone() {
+                log!("Emitting VoipAction::Close for room {}", room_id);
+                
+                self.hangup(cx);
+                cx.action(VoipAction::Close(room_id));
+            }
+        }
+        // Join Call button - main action to start the call
+        if self.view.button(cx, ids!(join_call_button)).clicked(actions) {
+            log!("Join call button clicked for room: {:?}", self.room_id);
+            self.from_notification = false;
+            self.start_call(cx, CallType::Video);
+        }
+        // Microphone toggle (icon button)
+        if self.view.button(cx, ids!(lobby_mic_button)).clicked(actions) {
+            self.lobby_mic_enabled = !self.lobby_mic_enabled;
+            log!("Lobby mic toggled: {}", self.lobby_mic_enabled);
+            self.update_ui(cx);
+        }
+        // Camera toggle (icon button)
+        if self.view.button(cx, ids!(lobby_camera_button)).clicked(actions) {
+            self.lobby_camera_enabled = !self.lobby_camera_enabled;
+            log!("Lobby camera toggled: {}", self.lobby_camera_enabled);
+            self.update_ui(cx);
+        }
+        // Settings button (icon button)
+        if self.view.button(cx, ids!(lobby_settings_button)).clicked(actions) {
+            log!("Settings button clicked");
+            // Toggle debug panel for now
+            self.show_debug = !self.show_debug;
+            self.update_ui(cx);
+        }
+        // Legacy buttons (hidden, for compatibility)
         if self.view.button(cx, ids!(video_call_button)).clicked(actions) {
-            log!("Video call button clicked");
             self.start_call(cx, CallType::Video);
         }
         if self.view.button(cx, ids!(voice_call_button)).clicked(actions) {
             self.start_call(cx, CallType::Voice);
-        }
-        if self.view.button(cx, ids!(lobby_mic_button)).clicked(actions) {
-            self.lobby_mic_enabled = !self.lobby_mic_enabled;
-            self.update_ui(cx);
-        }
-        if self.view.button(cx, ids!(lobby_camera_button)).clicked(actions) {
-            self.lobby_camera_enabled = !self.lobby_camera_enabled;
-            self.update_ui(cx);
         }
 
         // Call controls
@@ -1006,9 +1128,9 @@ impl VoipScreen {
 
 impl VoipScreenRef {
     /// Initialize the VoIP screen
-    pub fn initialize(&self, cx: &mut Cx) {
+    pub fn initialize(&self, cx: &mut Cx, room_id: OwnedRoomId) {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.initialize(cx);
+            inner.initialize(cx, room_id);
         }
     }
 
@@ -1044,6 +1166,12 @@ impl VoipScreenRef {
     pub fn clear_participants(&self, cx: &mut Cx) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.clear_participants(cx);
+        }
+    }
+
+    pub fn hangup(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.hangup(cx);
         }
     }
 }

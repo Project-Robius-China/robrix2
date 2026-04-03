@@ -10,6 +10,7 @@
 use makepad_widgets::*;
 use makepad_widgets::makepad_platform::video::VideoInputsEvent;
 use makepad_widgets::makepad_platform::permission::PermissionStatus;
+use matrix_sdk::ruma::OwnedRoomId;
 
 pub mod call_state;
 pub mod camera;
@@ -21,6 +22,15 @@ pub mod voip_screen;
 pub use voip_screen::VoipScreenWidgetRefExt;
 pub use participants_list::{Participant, ParticipantsListWidgetRefExt};
 pub use camera::CameraChoice;
+
+/// Actions emitted by VoIP screens
+#[derive(Clone, Debug, Default)]
+pub enum VoipAction {
+    /// Close the VoIP screen and return to the room
+    Close(OwnedRoomId),
+    #[default]
+    None,
+}
 
 /// Global VoIP state stored in Makepad's Cx context.
 /// This allows camera permission and video inputs events to be captured
