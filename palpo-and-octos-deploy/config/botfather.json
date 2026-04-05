@@ -1,0 +1,29 @@
+{
+  "id": "botfather",
+  "name": "BotFather",
+  "enabled": true,
+  "config": {
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "channels": [
+      {
+        "type": "matrix",
+        "homeserver": "http://palpo:8008",
+        "as_token": "d1f46062a08e4833b18286d95c5e09a5f3e4a1b2c3d4e5f6a7b8c9d0e1f2a3b4",
+        "hs_token": "e2a57173b19f5944c29397ea6d6f1ab6a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9",
+        "server_name": "127.0.0.1:8128",
+        "sender_localpart": "octosbot",
+        "user_prefix": "octosbot_",
+        "port": 8009,
+        "allowed_senders": []
+      }
+    ],
+    "gateway": {
+      "max_history": 50,
+      "queue_mode": "followup"
+    }
+  },
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z"
+}

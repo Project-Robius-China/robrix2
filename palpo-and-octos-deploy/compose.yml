@@ -1,0 +1,83 @@
+# ============================================================
+# Robrix + Palpo + Octos — Docker Compose
+# ============================================================
+# Starts Palpo (Matrix homeserver), Octos (AI bot), and PostgreSQL.
+# Robrix runs natively on your machine — it is NOT in this file.
+#
+# Before first run, clone the source repos:
+#   git clone https://github.com/palpo-im/palpo.git repos/palpo
+#   git clone https://github.com/octos-org/octos.git repos/octos
+#
+# Then:
+#   cp .env.example .env        # fill in your API key
+#   docker compose up -d        # start all services
+#   docker compose logs -f      # watch logs
+#   docker compose down         # stop all services
+# ============================================================
+
+services:
+  # ---------- PostgreSQL (Palpo's database) ----------
+  palpo_postgres:
+    image: postgres:17
+    restart: always
+    volumes:
+      - ./data/pgsql:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-palpo_dev_password}
+      POSTGRES_USER: palpo
+      POSTGRES_DB: palpo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U palpo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ---------- Palpo (Matrix homeserver) ----------
+  # Built from source to support all architectures (x86_64, ARM64, etc.).
+  palpo:
+    build:
+      context: .
+      dockerfile: palpo.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8128:8008"    # Client-Server API (Robrix connects here)
+    environment:
+      PALPO_CONFIG: "/var/palpo/palpo.toml"
+    volumes:
+      - ./palpo.toml:/var/palpo/palpo.toml:ro
+      - ./appservices:/var/palpo/appservices:ro
+      - ./data/media:/var/palpo/media
+    depends_on:
+      palpo_postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ---------- Octos (AI Bot Appservice) ----------
+  # Built from source with the "matrix" feature enabled.
+  octos:
+    build:
+      context: ./repos/octos
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8009:8009"    # Appservice listener (receives events from Palpo)
+      - "8010:8080"    # Octos dashboard / admin API
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      RUST_LOG: ${RUST_LOG:-octos=debug,info}
+    volumes:
+      - ./data/octos:/root/.octos
+      - ./config/botfather.json:/root/.octos/profiles/botfather.json:ro
+      - ./config/octos.json:/config/octos.json:ro
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080", "--config", "/config/octos.json"]
+    depends_on:
+      - palpo
+    networks:
+      - internal
+
+networks:
+  internal:
+    attachable: true
