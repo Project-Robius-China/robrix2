@@ -1150,9 +1150,20 @@ impl Widget for AddRoomScreen {
                                     Some(4.0),
                                 );
                             } else {
+                                let create_encrypted = scope
+                                    .data
+                                    .get::<AppState>()
+                                    .map(|app_state| {
+                                        app_state.bot_settings.should_create_encrypted_dm(
+                                            user_id.as_ref(),
+                                            current_user_id().as_deref(),
+                                        )
+                                    })
+                                    .unwrap_or(true);
                                 self.adding_friend = true;
                                 add_friend_button.set_enabled(cx, false);
                                 submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
+                                    create_encrypted,
                                     user_profile: UserProfile {
                                         user_id,
                                         username: None,

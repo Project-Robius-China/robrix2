@@ -4,7 +4,6 @@ use crate::{
     app::{AppState, BotSettingsState},
     i18n::{AppLanguage, tr_key},
     persistence,
-    shared::popup_list::{PopupKind, enqueue_popup_notification},
     sliding_sync::current_user_id,
 };
 
@@ -29,72 +28,57 @@ script_mod! {
         flow: Down
         spacing: 10
 
-        app_service_title := TitleLabel {
-            text: "App Service"
-        }
+        app_service_header := View {
+            width: Fill
+            height: Fit
+            flow: Right
+            align: Align{y: 1.0}
+            spacing: 8
+            margin: Inset{left: 5, right: 8, bottom: 2}
 
-        description := mod.widgets.BotSettingsInfoLabel {
-            margin: Inset{left: 5, right: 8, bottom: 4}
-            text: "Enable Matrix app service support here. Robrix stays a normal Matrix client: it binds BotFather to a room and sends the matching slash commands."
+            app_service_title := TitleLabel {
+                width: Fit
+                text: "App Service"
+            }
+
+            description := mod.widgets.BotSettingsInfoLabel {
+                width: Fill
+                margin: 0
+                draw_text +: {
+                    color: #7A7A7A
+                    text_style: REGULAR_TEXT { font_size: 9.5 }
+                }
+                text: "Enable Matrix app service support here. Robrix stays a normal Matrix client: it binds BotFather to a room and sends the matching slash commands."
+            }
         }
 
         toggle_row := View {
             width: Fill
             height: Fit
             flow: Right
-            align: Align{y: 0.5}
-            spacing: 12
+            align: Align{x: 0.0, y: 0.5}
+            spacing: 8
             margin: Inset{left: 5, bottom: 2}
 
-            enable_label := SubsectionLabel {
+            app_service_switch := Toggle {
                 width: Fit
                 height: Fit
-                margin: 0
-                text: "Enable App Service"
-            }
-
-            toggle_button := RobrixNeutralIconButton {
-                width: Fit
-                height: Fit
-                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                draw_icon.svg: (ICON_HIERARCHY)
-                icon_walk: Walk{width: 16, height: 16}
-                text: "Enable App Service"
-            }
-        }
-
-        bot_details := View {
-            visible: false
-            width: Fill
-            height: Fit
-            flow: Down
-
-            bot_user_id_label := SubsectionLabel {
-                text: "BotFather User ID:"
-            }
-
-            bot_user_id_input := RobrixTextInput {
-                margin: Inset{top: 2, left: 5, right: 5, bottom: 8}
-                width: 280
-                height: Fit
-                empty_text: "bot or @bot:server"
-            }
-
-            buttons := View {
-                width: Fill
-                height: Fit
-                flow: Right
-                spacing: 10
-
-                save_button := RobrixPositiveIconButton {
-                    width: Fit
-                    height: Fit
-                    padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                    margin: Inset{left: 5}
-                    draw_icon.svg: (ICON_CHECKMARK)
-                    icon_walk: Walk{width: 16, height: 16}
-                    text: "Save"
+                padding: Inset{top: 8, right: 8, bottom: 8, left: 8}
+                text: ""
+                active: false
+                draw_bg +: {
+                    size: 20.0
                 }
+            }
+
+            switch_state_label := Label {
+                width: Fit
+                height: Fit
+                draw_text +: {
+                    color: #999
+                    text_style: REGULAR_TEXT { font_size: 10.5 }
+                }
+                text: "Disabled"
             }
         }
     }
@@ -133,38 +117,41 @@ impl Widget for BotSettings {
 
 impl WidgetMatchEvent for BotSettings {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
-        let toggle_button = self.view.button(cx, ids!(toggle_button));
-        let bot_details = self.view.view(cx, ids!(bot_details));
-        let bot_user_id_input = self.view.text_input(cx, ids!(bot_user_id_input));
-        let save_button = self.view.button(cx, ids!(buttons.save_button));
+        let app_service_switch = self.view.check_box(cx, ids!(app_service_switch));
 
         let Some(app_state) = _scope.data.get_mut::<AppState>() else {
             return;
         };
 
-        if toggle_button.clicked(actions) {
-            let enabled = !app_state.bot_settings.enabled;
+        if let Some(enabled) = app_service_switch.changed(actions) {
             app_state.bot_settings.enabled = enabled;
             persist_bot_settings(app_state);
             self.sync_ui(cx, &app_state.bot_settings);
-            bot_details.set_visible(cx, enabled);
             self.view.redraw(cx);
-        }
-
-        if save_button.clicked(actions) || bot_user_id_input.returned(actions).is_some() {
-            app_state.bot_settings.botfather_user_id = bot_user_id_input.text().trim().to_string();
-            persist_bot_settings(app_state);
-            enqueue_popup_notification(
-                tr_key(self.app_language, "settings.labs.app_service.popup.saved"),
-                PopupKind::Success,
-                Some(3.0),
-            );
-            self.sync_ui(cx, &app_state.bot_settings);
         }
     }
 }
 
 impl BotSettings {
+    fn set_switch_state_label(&mut self, cx: &mut Cx, enabled: bool) {
+        let mut switch_state_label = self.view.label(cx, ids!(switch_state_label));
+        if enabled {
+            script_apply_eval!(cx, switch_state_label, {
+                text: #(tr_key(self.app_language, "settings.labs.app_service.status.enabled")),
+                draw_text +: {
+                    color: mod.widgets.COLOR_FG_ACCEPT_GREEN
+                }
+            });
+        } else {
+            script_apply_eval!(cx, switch_state_label, {
+                text: #(tr_key(self.app_language, "settings.labs.app_service.status.disabled")),
+                draw_text +: {
+                    color: #999
+                }
+            });
+        }
+    }
+
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.sync_app_language(cx);
@@ -177,41 +164,18 @@ impl BotSettings {
         self.view
             .label(cx, ids!(description))
             .set_text(cx, tr_key(self.app_language, "settings.labs.app_service.description"));
-        self.view
-            .label(cx, ids!(enable_label))
-            .set_text(cx, tr_key(self.app_language, "settings.labs.app_service.enable_label"));
-        self.view
-            .label(cx, ids!(bot_user_id_label))
-            .set_text(cx, tr_key(self.app_language, "settings.labs.app_service.botfather_user_id"));
-        self.view
-            .text_input(cx, ids!(bot_user_id_input))
-            .set_empty_text(cx, tr_key(self.app_language, "settings.labs.app_service.botfather_placeholder").to_string());
-        self.view
-            .button(cx, ids!(buttons.save_button))
-            .set_text(cx, tr_key(self.app_language, "settings.labs.app_service.button.save"));
+        self.set_switch_state_label(
+            cx,
+            self.view.check_box(cx, ids!(app_service_switch)).active(cx),
+        );
         self.view.redraw(cx);
     }
 
     fn sync_ui(&mut self, cx: &mut Cx, bot_settings: &BotSettingsState) {
         self.view
-            .view(cx, ids!(bot_details))
-            .set_visible(cx, bot_settings.enabled);
-        self.view
-            .text_input(cx, ids!(bot_user_id_input))
-            .set_text(cx, &bot_settings.botfather_user_id);
-
-        let toggle_text = if bot_settings.enabled {
-            tr_key(self.app_language, "settings.labs.app_service.button.disable")
-        } else {
-            tr_key(self.app_language, "settings.labs.app_service.button.enable")
-        };
-        self.view
-            .button(cx, ids!(toggle_button))
-            .set_text(cx, toggle_text);
-        self.view.button(cx, ids!(toggle_button)).reset_hover(cx);
-        self.view
-            .button(cx, ids!(buttons.save_button))
-            .reset_hover(cx);
+            .check_box(cx, ids!(app_service_switch))
+            .set_active(cx, bot_settings.enabled);
+        self.set_switch_state_label(cx, bot_settings.enabled);
         self.view.redraw(cx);
     }
 

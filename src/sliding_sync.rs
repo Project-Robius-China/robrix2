@@ -803,6 +803,7 @@ pub enum MatrixRequest {
     OpenOrCreateDirectMessage {
         user_profile: UserProfile,
         allow_create: bool,
+        create_encrypted: bool,
     },
     /// Request to create a new room, optionally underneath a selected parent space.
     CreateRoom {
@@ -1905,7 +1906,7 @@ async fn matrix_worker_task(
                 );
             }
 
-            MatrixRequest::OpenOrCreateDirectMessage { user_profile, allow_create } => {
+            MatrixRequest::OpenOrCreateDirectMessage { user_profile, allow_create, create_encrypted } => {
                 let Some(client) = get_client() else { continue };
                 let _create_dm_task = Handle::current().spawn(async move {
                     if let Some(room) = client.get_dm_room(&user_profile.user_id) {
@@ -1921,7 +1922,16 @@ async fn matrix_worker_task(
                         return;
                     }
                     log!("Creating new DM room with {user_profile:?}...");
-                    match client.create_dm(&user_profile.user_id).await {
+                    let create_dm_result = if create_encrypted {
+                        client.create_dm(&user_profile.user_id).await
+                    } else {
+                        let mut request = CreateRoomRequest::new();
+                        request.invite = vec![user_profile.user_id.clone()];
+                        request.is_direct = true;
+                        request.preset = Some(RoomPreset::TrustedPrivateChat);
+                        client.create_room(request).await
+                    };
+                    match create_dm_result {
                         Ok(room) => {
                             log!("Successfully created DM room: {}", room.room_id());
                             Cx::post_action(DirectMessageRoomAction::NewlyCreated {

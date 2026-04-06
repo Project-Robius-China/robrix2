@@ -777,11 +777,6 @@ impl RoomInputBar {
                 "Enable App Service in Settings before using /bot.",
                 PopupKind::Warning,
             ))
-        } else if !room_screen_props.app_service_room_bound {
-            Some((
-                "Bind BotFather to this room before using /bot.",
-                PopupKind::Warning,
-            ))
         } else {
             None
         };
