@@ -894,7 +894,7 @@ impl RoomsList {
                     }
                     else { continue };
                     // Scroll to just above the room to make it more obviously visible.
-                    portal_list.smooth_scroll_to(cx, portal_list_index.saturating_sub(1), speed, Some(15));
+                    portal_list.smooth_scroll_to(cx, portal_list_index.saturating_sub(1), speed, Some(15), 0.0);
                 }
                 RoomsListUpdate::SpaceRequestSender(sender) => {
                     self.space_request_sender = Some(sender);
