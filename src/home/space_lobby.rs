@@ -18,6 +18,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::shared::avatar::AvatarState;
 use crate::shared::expand_arrow::ExpandArrow;
 use crate::utils::replace_linebreaks_separators;
+/// The horizontal indent width (in pixels) per tree level.
+const TREE_INDENT_WIDTH: f64 = 44.0;
+
 use crate::{
     app::{AppState, AppStateAction},
     avatar_cache::{self, AvatarCacheEntry},
