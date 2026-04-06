@@ -31,7 +31,7 @@
 use makepad_widgets::*;
 use serde::{Deserialize, Serialize};
 use crate::{
-    avatar_cache::{self, AvatarCacheEntry}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
+    app::AppState, avatar_cache::{self, AvatarCacheEntry}, i18n::{AppLanguage, tr_fmt}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
         user_profile::UserProfile,
         user_profile_cache::{self, UserProfileUpdate},
     }, home::spaces_bar::SpacesBarWidgetExt, shared::{
@@ -230,6 +230,7 @@ script_mod! {
 pub struct ProfileIcon {
     #[deref] view: View,
     #[rust] own_profile: Option<UserProfile>,
+    #[rust] app_language: AppLanguage,
 }
 
 impl ScriptHook for ProfileIcon {
@@ -244,6 +245,11 @@ impl ScriptHook for ProfileIcon {
 
 impl Widget for ProfileIcon {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        self.app_language = app_language;
+
         if self.own_profile.is_none() {
             self.own_profile = get_own_profile(cx);
         }
@@ -348,10 +354,15 @@ impl Widget for ProfileIcon {
             Hit::FingerLongPress(_) | Hit::FingerHoverIn(_) => {
                 let (verification_str, bg_color) = self.view
                     .verification_badge(cx, ids!(verification_badge))
-                    .tooltip_content();
+                    .tooltip_content(self.app_language);
                 let text = self.own_profile.as_ref().map_or_else(
-                    || format!("Not logged in.\n\n{}", verification_str),
-                    |p| format!("Logged in as \"{}\".\n\n{}", p.displayable_name(), verification_str)
+                    || tr_fmt(self.app_language, "navigation_tab_bar.profile.tooltip.not_logged_in", &[
+                        ("verification", verification_str.as_str()),
+                    ]),
+                    |p| tr_fmt(self.app_language, "navigation_tab_bar.profile.tooltip.logged_in_as", &[
+                        ("display_name", p.displayable_name()),
+                        ("verification", verification_str.as_str()),
+                    ]),
                 );
                 let mut options = CalloutTooltipOptions {
                     position: if cx.display_context.is_desktop() { TooltipPosition::Right} else { TooltipPosition::Top},

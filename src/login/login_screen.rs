@@ -418,7 +418,7 @@ impl WidgetMatchEvent for LoginScreen {
         if cancel_button.clicked(actions) {
             self.adding_account = false;
             // Reset the UI back to normal login mode
-            self.view.label(cx, ids!(title)).set_text(cx, "Login to Robrix");
+            self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
             cancel_button.set_visible(cx, false);
             self.view.view(cx, ids!(sso_view)).set_visible(cx, true);
             mode_toggle_button.set_visible(cx, true);
@@ -541,7 +541,7 @@ impl WidgetMatchEvent for LoginScreen {
                     confirm_password_input.set_text(cx, "");
                     homeserver_input.set_text(cx, "");
                     // Reset title and buttons in case we were in add-account mode
-                    self.view.label(cx, ids!(title)).set_text(cx, "Login to Robrix");
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
                     cancel_button.set_visible(cx, false);
                     mode_toggle_button.set_visible(cx, true);
                     login_status_modal.close(cx);
@@ -584,7 +584,7 @@ impl WidgetMatchEvent for LoginScreen {
                 Some(LoginAction::ShowAddAccountScreen) => {
                     self.adding_account = true;
                     // Update UI to "add account" mode
-                    self.view.label(cx, ids!(title)).set_text(cx, "Add Another Account");
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "settings.account.button.add_another_account"));
                     cancel_button.set_visible(cx, true);
                     // Hide signup button in add-account mode (user already has an account)
                     mode_toggle_button.set_visible(cx, false);
@@ -597,7 +597,7 @@ impl WidgetMatchEvent for LoginScreen {
                     password_input.set_text(cx, "");
                     homeserver_input.set_text(cx, "");
                     // Reset title and buttons
-                    self.view.label(cx, ids!(title)).set_text(cx, "Login to Robrix");
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
                     cancel_button.set_visible(cx, false);
                     mode_toggle_button.set_visible(cx, true);
                     login_status_modal.close(cx);
@@ -613,10 +613,10 @@ impl WidgetMatchEvent for LoginScreen {
                     self.redraw(cx);
                 }
                 Some(AccountSwitchAction::Failed(error)) => {
-                    login_status_modal_inner.set_title(cx, "Account Switch Failed");
+                    login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login.status.account_switch_failed"));
                     login_status_modal_inner.set_status(cx, error);
                     let login_status_modal_button = login_status_modal_inner.button_ref(cx);
-                    login_status_modal_button.set_text(cx, "Okay");
+                    login_status_modal_button.set_text(cx, tr_key(self.app_language, "login.status.okay"));
                     login_status_modal_button.set_enabled(cx, true);
                     self.redraw(cx);
                 }

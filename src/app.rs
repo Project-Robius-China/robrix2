@@ -890,7 +890,9 @@ impl MatchEvent for App {
                     if self.room_filter_modal_results.is_empty() {
                         self.set_room_filter_modal_empty_state(
                             cx,
-                            &format!("No server results for \"{}\".", query),
+                            &tr_fmt(self.app_state.app_language, "app.room_filter.no_server_results", &[
+                                ("query", query),
+                            ]),
                             true,
                         );
                     } else {
@@ -908,7 +910,9 @@ impl MatchEvent for App {
                     self.refresh_room_filter_modal_result_buttons(cx);
                     self.set_room_filter_modal_empty_state(
                         cx,
-                        &format!("Server search failed: {}", error),
+                        &tr_fmt(self.app_state.app_language, "app.room_filter.search_remote_failed", &[
+                            ("error", error),
+                        ]),
                         true,
                     );
                     continue;
@@ -928,7 +932,7 @@ impl MatchEvent for App {
             if let MessageAction::OpenMessageContextMenu { details, abs_pos } = action.as_widget_action().cast() {
                 self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
                 let new_message_context_menu = self.ui.new_message_context_menu(cx, ids!(new_message_context_menu));
-                let expected_dimensions = new_message_context_menu.show(cx, details);
+                let expected_dimensions = new_message_context_menu.show(cx, details, self.app_state.app_language);
                 // Ensure the context menu does not spill over the window's bounds.
                 let rect = self.ui.window(cx, ids!(main_window)).area().rect(cx);
                 let pos_x = min(abs_pos.x, rect.size.x - expected_dimensions.x);
@@ -1152,7 +1156,7 @@ impl MatchEvent for App {
                 Some(JoinLeaveRoomModalAction::Open { kind, show_tip }) => {
                     self.ui
                         .join_leave_room_modal(cx, ids!(join_leave_modal_inner))
-                        .set_kind(cx, kind.clone(), *show_tip);
+                        .set_kind(cx, kind.clone(), *show_tip, self.app_state.app_language);
                     self.ui.modal(cx, ids!(join_leave_modal)).open(cx);
                     continue;
                 }

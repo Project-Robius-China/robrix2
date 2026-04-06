@@ -6,7 +6,7 @@ use makepad_widgets::*;
 use matrix_sdk::ruma::OwnedEventId;
 use matrix_sdk_ui::timeline::{EventTimelineItem, MsgLikeContent, TimelineEventItemId};
 
-use crate::sliding_sync::UserPowerLevels;
+use crate::{i18n::{AppLanguage, tr_key}, sliding_sync::UserPowerLevels};
 
 use super::room_screen::MessageAction;
 
@@ -300,6 +300,7 @@ pub struct NewMessageContextMenu {
     #[deref] view: View,
     #[source] source: ScriptObjectRef,
     #[rust] details: Option<MessageDetails>,
+    #[rust] app_language: AppLanguage,
 }
 
 impl Widget for NewMessageContextMenu {
@@ -485,6 +486,30 @@ impl WidgetMatchEvent for NewMessageContextMenu {
 }
 
 impl NewMessageContextMenu {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.view.button(cx, ids!(react_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.add_reaction"));
+        self.view.text_input(cx, ids!(reaction_input_view.reaction_text_input))
+            .set_empty_text(cx, tr_key(self.app_language, "new_message_context_menu.input.reaction_placeholder").to_string());
+        self.view.button(cx, ids!(reply_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.reply"));
+        self.view.button(cx, ids!(edit_message_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.edit_message"));
+        self.view.button(cx, ids!(copy_text_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_text"));
+        self.view.button(cx, ids!(copy_html_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_text_html"));
+        self.view.button(cx, ids!(copy_link_to_message_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_link"));
+        self.view.button(cx, ids!(view_source_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.view_source"));
+        self.view.button(cx, ids!(jump_to_related_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.jump_related"));
+        self.view.button(cx, ids!(delete_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.delete"));
+    }
+
     /// Returns `true` if this menu is currently being shown.
     pub fn is_currently_shown(&self, _cx: &mut Cx) -> bool {
         self.visible
@@ -494,7 +519,8 @@ impl NewMessageContextMenu {
     ///
     /// Returns the expected (approximate) dimensions of the context menu,
     /// which can be used to proactively reposition it such that it fits on screen.
-    pub fn show(&mut self, cx: &mut Cx, details: MessageDetails) -> DVec2 {
+    pub fn show(&mut self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage) -> DVec2 {
+        self.set_app_language(cx, app_language);
         self.details = Some(details);
         self.visible = true;
         cx.set_key_focus(self.view.area());
@@ -550,15 +576,15 @@ impl NewMessageContextMenu {
         self.view.view(cx, ids!(divider_after_react_reply)).set_visible(cx, show_divider_after_react_reply);
         edit_button.set_visible(cx, show_edit);
         if details.thread_root_event_id.is_some() {
-            thread_button.set_text(cx, "Open Thread");
+            thread_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.open_thread"));
         } else {
-            thread_button.set_text(cx, "Reply in Thread");
+            thread_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.reply_in_thread"));
         }
         if details.abilities.contains(MessageAbilities::CanPin) {
-            pin_button.set_text(cx, "Pin Message");
+            pin_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.pin_message"));
             show_pin = true;
         } else if details.abilities.contains(MessageAbilities::CanUnpin) {
-            pin_button.set_text(cx, "Unpin Message");
+            pin_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.unpin_message"));
             show_pin = true;
         } else {
             show_pin = false;
@@ -628,8 +654,8 @@ impl NewMessageContextMenuRef {
     }
 
     /// See [`NewMessageContextMenu::show()`].
-    pub fn show(&self, cx: &mut Cx, details: MessageDetails) -> DVec2 {
+    pub fn show(&self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage) -> DVec2 {
         let Some(mut inner) = self.borrow_mut() else { return DVec2::default()};
-        inner.show(cx, details)
+        inner.show(cx, details, app_language)
     }
 }
