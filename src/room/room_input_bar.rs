@@ -22,6 +22,8 @@ use matrix_sdk_ui::timeline::{EmbeddedEvent, EventTimelineItem, TimelineEventIte
 use ruma::{events::room::message::{LocationMessageEventContent, MessageType, ReplyWithinThread, RoomMessageEventContent}, OwnedRoomId, OwnedUserId};
 use crate::{home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}}, i18n::AppLanguage, location::init_location_subscriber, shared::{avatar::AvatarWidgetRefExt, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::MentionableTextInputWidgetExt, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
 
+const ROOM_INFO_CARD_MOBILE_BREAKPOINT: f32 = 700.0;
+
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
@@ -108,6 +110,33 @@ script_mod! {
                     flow: Right{wrap: true}
                     spacing: 6
                     align: Align{x: 0.0, y: 0.5}
+
+                    room_info_card_button := RobrixIconButton {
+                        width: Fit
+                        align: Align{x: 0.0, y: 0.5}
+                        margin: Inset{top: 1, bottom: 1}
+                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
+                        spacing: 8
+                        draw_icon +: {
+                            svg: (ICON_INFO)
+                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
+                        },
+                        draw_bg +: {
+                            color: (COLOR_BG_PREVIEW)
+                            color_hover: #E0E8F0
+                            color_down: #D0D8E8
+                            border_size: 1.0
+                            border_color: (COLOR_SECONDARY)
+                        }
+                        draw_text +: {
+                            color: (COLOR_TEXT)
+                            color_hover: (COLOR_TEXT)
+                            color_down: (COLOR_TEXT)
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                        }
+                        icon_walk: Walk{width: 20, height: 20}
+                        text: "info",
+                    }
 
                     location_card_button := RobrixIconButton {
                         width: Fit
@@ -340,6 +369,9 @@ impl Widget for RoomInputBar {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let width = self.view.area().rect(cx).size.x as f32;
+        let show_room_info_card = !(width > 1.0 && width < ROOM_INFO_CARD_MOBILE_BREAKPOINT);
+        self.button(cx, ids!(room_info_card_button)).set_visible(cx, show_room_info_card);
         self.view.draw_walk(cx, scope, walk)
     }
 }
@@ -450,6 +482,14 @@ impl RoomInputBar {
             cx.widget_action(
                 room_screen_props.room_screen_widget_uid,
                 MessageAction::ShowThreadsPane,
+            );
+            self.redraw(cx);
+        }
+
+        if self.button(cx, ids!(room_info_card_button)).clicked(actions) {
+            cx.widget_action(
+                room_screen_props.room_screen_widget_uid,
+                MessageAction::ShowRoomInfoPane,
             );
             self.redraw(cx);
         }

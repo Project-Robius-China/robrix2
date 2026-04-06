@@ -44,7 +44,7 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     account_manager::{self, Account},
     app::{AppStateAction, RoomFilterRemoteSearchAction}, app_data_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
-        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{InviteResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
     }, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
@@ -761,6 +761,11 @@ pub enum MatrixRequest {
     /// Request to leave the given room.
     LeaveRoom {
         room_id: OwnedRoomId,
+    },
+    /// Request to report the given room.
+    ReportRoom {
+        room_id: OwnedRoomId,
+        reason: String,
     },
     /// Request to get the actual list of members in a room.
     ///
@@ -1640,8 +1645,21 @@ async fn matrix_worker_task(
                             });
                         }
                         Err(error) => {
-                            let membership_exists =
-                                room.get_member_no_sync(&bot_user_id).await.ok().flatten().is_some();
+                            let membership_exists = if bound {
+                                room.get_member_no_sync(&bot_user_id).await.ok().flatten().is_some()
+                                    || room
+                                        .members_no_sync(RoomMemberships::ACTIVE)
+                                        .await
+                                        .ok()
+                                        .is_some_and(|members| members.iter().any(|member| member.user_id().as_str() == bot_user_id.as_str()))
+                                    || room
+                                        .members(RoomMemberships::ACTIVE)
+                                        .await
+                                        .ok()
+                                        .is_some_and(|members| members.iter().any(|member| member.user_id().as_str() == bot_user_id.as_str()))
+                            } else {
+                                false
+                            };
                             let should_mark_bound = if bound { membership_exists } else { false };
 
                             if should_mark_bound != bound {
@@ -1723,6 +1741,31 @@ async fn matrix_worker_task(
                         LeaveRoomResultAction::Failed {
                             room_id,
                             error: matrix_sdk::Error::UnknownError("Client couldn't locate room to leave it.".into()),
+                        }
+                    };
+                    Cx::post_action(result_action);
+                });
+            }
+
+            MatrixRequest::ReportRoom { room_id, reason } => {
+                let Some(client) = get_client() else { continue };
+                let _report_room_task = Handle::current().spawn(async move {
+                    log!("Sending request to report room {room_id}...");
+                    let result_action = if let Some(room) = client.get_room(&room_id) {
+                        match room.report_room(reason).await {
+                            Ok(_) => {
+                                ReportRoomResultAction::Sent { room_id }
+                            }
+                            Err(e) => {
+                                error!("Error reporting room {room_id}: {e:?}");
+                                ReportRoomResultAction::Failed { room_id, error: e }
+                            }
+                        }
+                    } else {
+                        error!("BUG: client could not get room with ID {room_id}");
+                        ReportRoomResultAction::Failed {
+                            room_id,
+                            error: matrix_sdk::Error::UnknownError("Client couldn't locate room to report it.".into()),
                         }
                     };
                     Cx::post_action(result_action);

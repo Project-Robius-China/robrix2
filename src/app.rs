@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     avatar_cache::{self, AvatarCacheEntry, clear_avatar_cache}, home::{
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt},
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
+        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::{user_profile::UserProfile, user_profile_cache::clear_user_profile_cache}, room::{BasicRoomDetails, FetchedRoomAvatar}, shared::{avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::RoomFilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, TimelineKind, AccountSwitchAction, current_user_id, submit_async_request}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
@@ -730,6 +730,14 @@ impl MatchEvent for App {
             return;
         }
 
+        if let Some(room_screen_id) = self.clicked_mobile_room_info_button(cx, actions) {
+            let room_screen_widget_uid = self.ui.room_screen(cx, &[room_screen_id]).widget_uid();
+            cx.widget_action(
+                room_screen_widget_uid,
+                MessageAction::ShowRoomInfoPane,
+            );
+        }
+
         for action in actions {
             match action.downcast_ref() {
                 Some(LogoutConfirmModalAction::Open) => {
@@ -1242,6 +1250,7 @@ impl MatchEvent for App {
                     continue;
                 }
                 Some(InviteModalAction::Close) => {
+                    mark_invite_modal_closed();
                     self.ui.modal(cx, ids!(invite_modal)).close(cx);
                     continue;
                 }
@@ -1515,6 +1524,22 @@ impl App {
         }
         if options_view.button(cx, ids!(remote_search_spaces_button)).clicked(actions) {
             return Some(RemoteDirectorySearchKind::Spaces);
+        }
+        None
+    }
+
+    fn clicked_mobile_room_info_button(&self, cx: &mut Cx, actions: &Actions) -> Option<LiveId> {
+        for (view_id, room_screen_id) in Self::ROOM_VIEW_IDS.iter().zip(Self::ROOM_SCREEN_IDS.iter()) {
+            let button_path = &[
+                *view_id,
+                live_id!(header),
+                live_id!(content),
+                live_id!(button_container),
+                live_id!(right_button),
+            ];
+            if self.ui.button(cx, button_path).clicked(actions) {
+                return Some(*room_screen_id);
+            }
         }
         None
     }
@@ -1860,6 +1885,18 @@ impl App {
         // Set the header title for the view being pushed.
         let title_path = &[view_id, live_id!(header), live_id!(content), live_id!(title_container), live_id!(title)];
         self.ui.label(cx, title_path).set_text(cx, &selected_room.display_name());
+        let right_button_path = &[view_id, live_id!(header), live_id!(content), live_id!(button_container), live_id!(right_button)];
+        let show_info_button = matches!(
+            selected_room,
+            SelectedRoom::JoinedRoom { .. }
+            | SelectedRoom::Thread { .. }
+        );
+        let right_button = self.ui.button(cx, right_button_path);
+        right_button.set_visible(cx, show_info_button);
+        if show_info_button {
+            right_button.set_text(cx, "");
+            right_button.reset_hover(cx);
+        }
 
         // Save the current selected_room onto the navigation stack before replacing it.
         if let Some(prev) = self.app_state.selected_room.take() {

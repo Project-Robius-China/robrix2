@@ -100,22 +100,39 @@ script_mod! {
             padding: Inset{top: 30, bottom: 0}
             height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT),
 
-            content +: {
-                height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT)
-                button_container +: {
-                    padding: 0,
-                    margin: 0
-                    left_button +: {
-                        width: Fit, height: Fit,
-                        padding: Inset{left: 20, right: 23, top: 10, bottom: 10}
-                        margin: Inset{left: 8, right: 0, top: 0, bottom: 0}
-                        draw_icon +: { color: (ROOM_NAME_TEXT_COLOR) }
-                        icon_walk: Walk{width: 13, height: Fit}
-                        spacing: 0
-                        text: ""
+                content +: {
+                    height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT)
+                    button_container +: {
+                        width: Fill
+                        flow: Overlay
+                        padding: 0,
+                        margin: 0
+                        left_button +: {
+                            align: Align{x: 0.0, y: 0.5}
+                            width: Fit, height: Fit,
+                            padding: Inset{left: 20, right: 23, top: 10, bottom: 10}
+                            margin: Inset{left: 8, right: 0, top: 0, bottom: 0}
+                            draw_icon +: { color: (ROOM_NAME_TEXT_COLOR) }
+                            icon_walk: Walk{width: 13, height: Fit}
+                            spacing: 0
+                            text: ""
+                        }
+                        right_button := ButtonFlatterIcon {
+                            visible: false
+                            align: Align{x: 1.0, y: 0.5}
+                            width: Fit, height: Fit,
+                            padding: Inset{left: 23, right: 20, top: 10, bottom: 10}
+                            margin: Inset{left: 0, right: 8, top: 0, bottom: 0}
+                            draw_icon +: {
+                                color: (ROOM_NAME_TEXT_COLOR)
+                                svg: (ICON_INFO)
+                            }
+                            icon_walk: Walk{width: 14, height: Fit}
+                            spacing: 0
+                            text: ""
+                        }
                     }
-                }
-                title_container +: {
+                    title_container +: {
                     padding: Inset{top: 8}
                     title +: {
                         draw_text +: {

@@ -8,7 +8,7 @@ use hashbrown::{HashMap, HashSet};
 use imbl::Vector;
 use makepad_widgets::{image_cache::ImageBuffer, *};
 use matrix_sdk::{
-    OwnedServerName, media::{MediaFormat, MediaRequestParameters}, room::RoomMember, ruma::{
+    OwnedServerName, media::{MediaFormat, MediaRequestParameters}, room::{RoomMember, RoomMemberRole}, ruma::{
         EventId, MatrixToUri, MatrixUri, OwnedEventId, OwnedMxcUri, OwnedRoomId, UserId, events::{
             receipt::Receipt,
             room::{
@@ -26,13 +26,13 @@ use matrix_sdk_ui::timeline::{
 use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent}, owned_room_id};
 
 use crate::{
-    app::{AppState, AppStateAction, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
+    app::{AppState, AppStateAction, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, invite_modal::InviteModalAction, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
         user_profile::{ShowUserProfileAction, UserProfile, UserProfileAndRoomId, UserProfilePaneInfo, UserProfileSlidingPaneRef, UserProfileSlidingPaneWidgetExt},
         user_profile_cache,
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -43,7 +43,7 @@ use crate::shared::mentionable_text_input::MentionableTextInputAction;
 
 use rangemap::RangeSet;
 
-use super::{event_reaction_list::ReactionData, loading_pane::LoadingPaneRef, new_message_context_menu::{MessageAbilities, MessageDetails}, room_read_receipt::{self, populate_read_receipts, MAX_VISIBLE_AVATARS_IN_READ_RECEIPT}};
+use super::{event_reaction_list::ReactionData, invite_modal::is_invite_modal_open, loading_pane::LoadingPaneRef, new_message_context_menu::{MessageAbilities, MessageDetails}, room_read_receipt::{self, populate_read_receipts, MAX_VISIBLE_AVATARS_IN_READ_RECEIPT}};
 
 /// The maximum number of timeline items to search through
 /// when looking for a particular event.
@@ -58,6 +58,9 @@ const BLURHASH_IMAGE_MAX_SIZE: u32 = 500;
 /// Use a larger batch when we are trying to fill the initial viewport,
 /// otherwise many short messages can trigger a long chain of tiny paginations.
 const VIEWPORT_FILL_PAGINATION_SIZE: u16 = 150;
+const TOPIC_PREVIEW_CHARS: usize = 140;
+const ROOM_INFO_PANE_DESKTOP_WIDTH: f32 = 320.0;
+const ROOM_INFO_PANE_MOBILE_BREAKPOINT: f32 = 700.0;
 
 
 /// #FFF4E5
@@ -960,6 +963,529 @@ script_mod! {
         }
     }
 
+    mod.widgets.RoomInfoPeopleEntry = #(RoomInfoPeopleEntry::register_widget(vm)) {
+        width: Fill
+        height: Fit
+        flow: Right
+        align: Align{y: 0.5}
+        spacing: 9
+        padding: Inset{left: 10, right: 10, top: 10, bottom: 10}
+        margin: Inset{left: 0, right: 0, top: 0, bottom: 6}
+        cursor: MouseCursor.Hand
+
+        show_bg: true
+        draw_bg +: {
+            color: #F8FAFD
+            border_radius: 4.0
+            border_size: 1.0
+            border_color: #D8E0EA
+        }
+
+        avatar := Avatar {
+            width: 34
+            height: 34
+        }
+
+        display_name := Label {
+            width: Fill
+            height: Fit
+            flow: Flow.Right{wrap: true}
+            draw_text +: {
+                text_style: USERNAME_TEXT_STYLE { font_size: 11.2 }
+                color: #1F1F1F
+            }
+            text: ""
+        }
+
+        level := Label {
+            width: Fit
+            height: Fit
+            draw_text +: {
+                text_style: MESSAGE_TEXT_STYLE { font_size: 10.2 }
+                color: #6D7682
+            }
+            text: ""
+        }
+    }
+
+    mod.widgets.RoomInfoSlidingPane = #(RoomInfoSlidingPane::register_widget(vm)) {
+        visible: false,
+        flow: Overlay,
+        width: Fill,
+        height: Fill,
+        align: Align{x: 1.0, y: 0}
+
+        bg_view := SolidView {
+            width: Fill
+            height: Fill
+            visible: false,
+            show_bg: true
+            draw_bg.color: #000000BB
+        }
+
+        main_content := SolidView {
+            width: 320,
+            height: Fill
+            flow: Down,
+            align: Align{x: 1.0}
+
+            show_bg: true,
+            draw_bg.color: (COLOR_PRIMARY)
+
+            header := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                padding: Inset{top: 12, right: 10, bottom: 12, left: 15}
+
+                back_button := RobrixNeutralIconButton {
+                    visible: false
+                    width: Fit,
+                    height: Fit,
+                    spacing: 0,
+                    padding: 12,
+                    draw_icon.svg: (ICON_JUMP)
+                    icon_walk: Walk{width: 14, height: 14}
+                    text: ""
+                }
+
+                title := Label {
+                    width: Fit
+                    height: Fit
+                    draw_text +: {
+                        text_style: USERNAME_TEXT_STYLE { font_size: 12.5 }
+                        color: #000
+                    }
+                    text: "Info"
+                }
+
+                spacer := View {
+                    width: Fill
+                    height: Fit
+                }
+
+                close_button := RobrixNeutralIconButton {
+                    width: Fit,
+                    height: Fit,
+                    spacing: 0,
+                    padding: 15,
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 14, height: 14}
+                    text: ""
+                }
+            }
+
+            content_scroll := ScrollYView {
+                width: Fill
+                height: Fill
+                flow: Down
+
+                info_view := View {
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 10
+                    padding: Inset{left: 12, right: 12, top: 12, bottom: 12}
+
+                    summary_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        spacing: 10
+                        align: Align{y: 0.5}
+                        padding: Inset{left: 10, right: 10, top: 10, bottom: 10}
+
+                        show_bg: true
+                        draw_bg +: {
+                            color: #F8FAFD
+                            border_radius: 4.0
+                            border_size: 1.0
+                            border_color: #D8E0EA
+                        }
+
+                        room_avatar := Avatar {
+                            width: 40
+                            height: 40
+                        }
+
+                        room_meta := View {
+                            width: Fill
+                            height: Fit
+                            flow: Down
+                            spacing: 4
+
+                            room_name_value := Label {
+                                width: Fill
+                                height: Fit
+                                flow: Flow.Right{wrap: true}
+                                draw_text +: {
+                                    text_style: USERNAME_TEXT_STYLE { font_size: 11.0 }
+                                    color: #1F1F1F
+                                }
+                                text: ""
+                            }
+
+                            room_id_row := View {
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: 5
+
+                                room_id_value := Label {
+                                    width: Fill
+                                    height: Fit
+                                    flow: Flow.Right{wrap: true}
+                                    draw_text +: {
+                                        text_style: MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                        color: #6A6A6A
+                                    }
+                                    text: ""
+                                }
+
+                                copy_room_id_button := RobrixNeutralIconButton {
+                                    width: 24
+                                    height: 22
+                                    padding: 4
+                                    spacing: 0
+                                    draw_icon.svg: (ICON_COPY)
+                                    icon_walk: Walk{width: 11, height: 11}
+                                    text: ""
+                                }
+                            }
+                        }
+                    }
+
+                    topic_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 5
+                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
+
+                        show_bg: true
+                        draw_bg +: {
+                            color: #F8FAFD
+                            border_radius: 4.0
+                            border_size: 1.0
+                            border_color: #D8E0EA
+                        }
+
+                        topic_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
+                                color: #4A4A4A
+                            }
+                            text: "Topic"
+                        }
+
+                        topic_value := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            draw_text +: {
+                                text_style: MESSAGE_TEXT_STYLE { font_size: 10.2 }
+                                color: #6A6A6A
+                            }
+                            text: ""
+                        }
+
+                        topic_toggle_button := RobrixNeutralIconButton {
+                            visible: false
+                            width: Fit
+                            height: 30
+                            align: Align{x: 0.0, y: 0.5}
+                            padding: Inset{left: 9, right: 9, top: 6, bottom: 6}
+                            spacing: 0
+                            icon_walk: Walk{width: 0, height: 0}
+                            text: "Expand"
+                        }
+                    }
+
+                    facts_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 6
+                        padding: Inset{left: 10, right: 10, top: 9, bottom: 9}
+
+                        show_bg: true
+                        draw_bg +: {
+                            color: #F8FAFD
+                            border_radius: 4.0
+                            border_size: 1.0
+                            border_color: #D8E0EA
+                        }
+
+                        visibility_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+
+                            visibility_label := Label {
+                                width: 78
+                                height: Fit
+                                draw_text +: {
+                                    text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
+                                    color: #4A4A4A
+                                }
+                                text: "Visibility"
+                            }
+
+                            visibility_value := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                                    color: (COLOR_TEXT)
+                                }
+                                text: ""
+                            }
+                        }
+
+                        encryption_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+
+                            encryption_label := Label {
+                                width: 78
+                                height: Fit
+                                draw_text +: {
+                                    text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
+                                    color: #4A4A4A
+                                }
+                                text: "Encryption"
+                            }
+
+                            encryption_value := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                                    color: (COLOR_TEXT)
+                                }
+                                text: ""
+                            }
+                        }
+                    }
+
+                    actions_row := View {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 8
+
+                        invite_button := RobrixNeutralIconButton {
+                            width: Fill
+                            height: 40
+                            padding: 10
+                            draw_icon.svg: (ICON_ADD_USER)
+                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                            text: "Invite"
+                        }
+
+                        people_button := RobrixNeutralIconButton {
+                            width: Fill
+                            height: 40
+                            padding: 10
+                            draw_icon.svg: (ICON_ADD_USER)
+                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                            text: "People"
+                        }
+
+                        report_room_button := RobrixNeutralIconButton {
+                            width: Fill
+                            height: 40
+                            padding: 10
+                            draw_icon.svg: (ICON_INFO)
+                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                            text: "Report room"
+                        }
+
+                        leave_room_button := RobrixNegativeIconButton {
+                            width: Fill
+                            height: 40
+                            padding: 10
+                            draw_icon.svg: (ICON_CLOSE)
+                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                            text: "Leave Room"
+                        }
+                    }
+                }
+
+            }
+
+            people_view := View {
+                visible: false
+                width: Fill
+                height: Fill
+                flow: Down
+                spacing: 6
+                padding: Inset{left: 12, right: 12, top: 12, bottom: 10}
+
+                member_count := Label {
+                    width: Fill
+                    height: Fit
+                    draw_text +: {
+                        text_style: USERNAME_TEXT_STYLE { font_size: 10.5 }
+                        color: #4A4A4A
+                    }
+                    text: ""
+                }
+
+                loading_label := Label {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    draw_text +: {
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                        color: #6D7682
+                    }
+                    text: "Loading members..."
+                }
+
+                empty_label := Label {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    draw_text +: {
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                        color: #6D7682
+                    }
+                    text: "No members found."
+                }
+
+                people_list := PortalList {
+                    width: Fill
+                    height: Fill
+                    flow: Down
+                    max_pull_down: 0.0
+
+                    PersonEntry := mod.widgets.RoomInfoPeopleEntry {}
+                }
+            }
+        }
+
+        slide: 1.0,
+
+        animator: Animator {
+            panel: {
+                default: @hide
+                show: AnimatorState{
+                    redraw: true,
+                    from: {all: Forward {duration: 0.5}}
+                    ease: Ease.ExpDecay {d1: 0.80, d2: 0.97}
+                    apply: {
+                        slide: 0.0
+                    }
+                }
+                hide: AnimatorState{
+                    redraw: true,
+                    from: {all: Forward {duration: 0.5}}
+                    ease: Ease.ExpDecay {d1: 0.80, d2: 0.97}
+                    apply: {
+                        slide: 1.0
+                    }
+                }
+            }
+        }
+    }
+
+    mod.widgets.ReportRoomModalLabel = Label {
+        width: Fill
+        height: Fit
+        draw_text +: {
+            text_style: REGULAR_TEXT { font_size: 10.5 }
+            color: #333
+        }
+        text: ""
+    }
+
+    mod.widgets.ReportRoomModal = #(ReportRoomModal::register_widget(vm)) {
+        width: Fit
+        height: Fit
+
+        RoundedView {
+            width: 430
+            height: Fit
+            align: Align{x: 0.5}
+            flow: Down
+            padding: Inset{top: 26, right: 22, bottom: 18, left: 22}
+            spacing: 14
+
+            show_bg: true
+            draw_bg +: {
+                color: (COLOR_PRIMARY)
+                border_radius: 6.0
+            }
+
+            title := Label {
+                width: Fill
+                height: Fit
+                draw_text +: {
+                    text_style: TITLE_TEXT { font_size: 13 }
+                    color: #000
+                }
+                text: "Report Room"
+            }
+
+            body := mod.widgets.ReportRoomModalLabel {
+                text: ""
+            }
+
+            reason_input := RobrixTextInput {
+                width: Fill
+                height: Fit
+                padding: 10
+                draw_text +: {
+                    text_style: REGULAR_TEXT { font_size: 11.5 }
+                    color: #000
+                }
+                empty_text: "Describe why you are reporting this room"
+            }
+
+            status_label := Label {
+                width: Fill
+                height: Fit
+                draw_text +: {
+                    text_style: REGULAR_TEXT { font_size: 10.2 }
+                    color: #000
+                }
+                text: ""
+            }
+
+            buttons := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{x: 1.0, y: 0.5}
+                spacing: 16
+
+                cancel_button := RobrixNeutralIconButton {
+                    width: 110
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 12
+                    draw_icon.svg: (ICON_FORBIDDEN)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1}}
+                    text: "Cancel"
+                }
+
+                report_button := RobrixNegativeIconButton {
+                    width: 130
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 12
+                    draw_icon.svg: (ICON_INFO)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1}}
+                    text: "Report room"
+                }
+            }
+        }
+    }
+
     mod.widgets.AppServicePanel = #(AppServicePanel::register_widget(vm)) {
         width: Fill
         height: Fit
@@ -1225,11 +1751,12 @@ script_mod! {
             // The top space should be displayed as an overlay at the top of the timeline.
             top_space := mod.widgets.TopSpace { }
 
+            threads_sliding_pane := mod.widgets.ThreadsSlidingPane { }
+            room_info_sliding_pane := mod.widgets.RoomInfoSlidingPane { }
+
             // The user profile sliding pane should be displayed on top of other "static" subviews
             // (on top of all other views that are always visible).
             user_profile_sliding_pane := mod.widgets.UserProfileSlidingPane { }
-
-            threads_sliding_pane := mod.widgets.ThreadsSlidingPane { }
 
             // The loading pane appears while the user is waiting for something in the room screen
             // to finish loading, e.g., when loading an older replied-to message.
@@ -1244,6 +1771,18 @@ script_mod! {
             delete_bot_modal := Modal {
                 content +: {
                     delete_bot_modal_inner := mod.widgets.DeleteBotModal {}
+                }
+            }
+
+            report_room_modal := Modal {
+                content +: {
+                    report_room_modal_inner := mod.widgets.ReportRoomModal {}
+                }
+            }
+
+            leave_room_confirm_modal := Modal {
+                content +: {
+                    leave_room_confirm_modal_inner := mod.widgets.NegativeConfirmationModal {}
                 }
             }
 
@@ -1285,6 +1824,24 @@ impl ActionDefaultRef for ThreadsPaneAction {
     }
 }
 
+#[derive(Clone, Default, Debug)]
+pub enum RoomInfoPaneAction {
+    InviteUser,
+    ShowPeoplePage,
+    OpenPeopleProfile(OwnedUserId),
+    ReportRoom,
+    LeaveRoom,
+    #[default]
+    None,
+}
+
+impl ActionDefaultRef for RoomInfoPaneAction {
+    fn default_ref() -> &'static Self {
+        static DEFAULT: RoomInfoPaneAction = RoomInfoPaneAction::None;
+        &DEFAULT
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ThreadsPaneEntryInfo {
     thread_root_event_id: OwnedEventId,
@@ -1302,6 +1859,30 @@ struct ThreadsPaneInfo {
     show_entries: bool,
     loading_text: String,
     show_loading: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RoomInfoPaneInfo {
+    room_name: String,
+    room_id: String,
+    topic: String,
+    visibility: String,
+    encryption: String,
+    room_avatar_uri: Option<OwnedMxcUri>,
+    room_avatar_fallback_text: String,
+    people_entries: Vec<RoomInfoPeopleEntryInfo>,
+    people_count_text: String,
+    show_people_loading: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RoomInfoPeopleEntryInfo {
+    user_id: OwnedUserId,
+    display_name: String,
+    level: String,
+    is_bot: bool,
+    avatar_uri: Option<OwnedMxcUri>,
+    avatar_fallback_text: String,
 }
 
 #[derive(Default)]
@@ -1355,6 +1936,72 @@ impl ThreadsPaneEntry {
 
 impl ThreadsPaneEntryRef {
     fn set_entry(&self, cx: &mut Cx, entry: &ThreadsPaneEntryInfo) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_entry(cx, entry);
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct RoomInfoPeopleEntry {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+
+    #[rust] user_id: Option<OwnedUserId>,
+}
+
+impl Widget for RoomInfoPeopleEntry {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+
+        let Some(user_id) = self.user_id.clone() else { return };
+        match event.hits(cx, self.view.area()) {
+            Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::OpenPeopleProfile(user_id),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl RoomInfoPeopleEntry {
+    fn set_entry(&mut self, cx: &mut Cx, entry: &RoomInfoPeopleEntryInfo) {
+        self.user_id = Some(entry.user_id.clone());
+        let display_name = if entry.is_bot {
+            format!("{} [bot]", entry.display_name)
+        } else {
+            entry.display_name.clone()
+        };
+        self.label(cx, ids!(display_name)).set_text(cx, &display_name);
+        self.label(cx, ids!(level)).set_text(cx, &entry.level);
+        self.label(cx, ids!(level)).set_visible(cx, !entry.level.is_empty());
+
+        let avatar = self.avatar(cx, ids!(avatar));
+        if let Some(uri) = entry.avatar_uri.as_ref()
+            && let avatar_cache::AvatarCacheEntry::Loaded(image_data) = avatar_cache::get_or_fetch_avatar(cx, uri)
+        {
+            let res = avatar.show_image(
+                cx,
+                None,
+                |cx, img_ref| utils::load_png_or_jpg(&img_ref, cx, &image_data),
+            );
+            if res.is_err() {
+                avatar.show_text(cx, None, None, &entry.avatar_fallback_text);
+            }
+        } else {
+            avatar.show_text(cx, None, None, &entry.avatar_fallback_text);
+        }
+    }
+}
+
+impl RoomInfoPeopleEntryRef {
+    fn set_entry(&self, cx: &mut Cx, entry: &RoomInfoPeopleEntryInfo) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.set_entry(cx, entry);
     }
@@ -1435,10 +2082,16 @@ impl Widget for ThreadsSlidingPane {
             return self.view.draw_walk(cx, scope, walk);
         };
 
-        let panel_width = 320.0;
+        let container_width = self.view.area().rect(cx).size.x as f32;
+        let panel_width = if container_width > 1.0 && container_width < ROOM_INFO_PANE_MOBILE_BREAKPOINT {
+            container_width
+        } else {
+            ROOM_INFO_PANE_DESKTOP_WIDTH
+        };
         let right_margin = -(self.slide * panel_width);
         let mut main_content = self.view(cx, ids!(main_content));
         script_apply_eval!(cx, main_content, {
+            width: #(panel_width)
             margin.right: #(right_margin)
         });
         let bg_alpha = (1.0 - self.slide) * 0.733;
@@ -1522,6 +2175,390 @@ impl ThreadsSlidingPaneRef {
     }
 }
 
+#[derive(Script, ScriptHook, Widget, Animator)]
+pub struct RoomInfoSlidingPane {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+    #[apply_default] animator: Animator,
+    #[live] slide: f32,
+
+    #[rust] info: Option<RoomInfoPaneInfo>,
+    #[rust] is_animating_out: bool,
+    #[rust] show_people_page: bool,
+    #[rust] topic_expanded: bool,
+    #[rust] people_display_count: usize,
+}
+
+impl Widget for RoomInfoSlidingPane {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+
+        if !self.visible { return; }
+
+        let animator_action = self.animator_handle_event(cx, event);
+        if animator_action.must_redraw() {
+            self.redraw(cx);
+        }
+
+        if self.is_animating_out && !self.animator.is_track_animating(id!(panel)) {
+            self.visible = false;
+            self.is_animating_out = false;
+            cx.revert_key_focus();
+            self.view(cx, ids!(bg_view)).set_visible(cx, false);
+            self.redraw(cx);
+            return;
+        }
+
+        let area = self.view.area();
+        let close_pane = if is_invite_modal_open() {
+            matches!(
+                event,
+                Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
+            )
+        } else {
+            matches!(
+                event,
+                Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
+            )
+            || event.back_pressed()
+            || match event.hits_with_capture_overload(cx, area, true) {
+                Hit::KeyUp(key) => key.key_code == KeyCode::Escape,
+                Hit::FingerDown(_fde) => {
+                    cx.set_key_focus(area);
+                    false
+                }
+                Hit::FingerUp(fue) if fue.is_over => {
+                    fue.mouse_button().is_some_and(|b| b.is_back())
+                    || !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                }
+                _ => false,
+            }
+        };
+        if close_pane {
+            self.hide(cx);
+        }
+
+        if let Event::Actions(actions) = event {
+            if self.button(cx, ids!(header.back_button)).clicked(actions) {
+                self.show_people_page = false;
+                self.redraw(cx);
+            }
+            if self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).clicked(actions) {
+                self.topic_expanded = !self.topic_expanded;
+                self.redraw(cx);
+            }
+            if self.button(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_id_row.copy_room_id_button)).clicked(actions)
+                && let Some(info) = self.info.as_ref()
+            {
+                cx.copy_to_clipboard(&info.room_id);
+                enqueue_popup_notification(
+                    "Room ID copied.",
+                    PopupKind::Success,
+                    Some(2.0),
+                );
+            }
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.invite_button)).clicked(actions) {
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::InviteUser,
+                );
+            }
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.people_button)).clicked(actions) {
+                self.show_people_page = true;
+                self.people_display_count = self.info.as_ref()
+                    .map(|info| info.people_entries.len().min(40))
+                    .unwrap_or(0);
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::ShowPeoplePage,
+                );
+                self.redraw(cx);
+            }
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.report_room_button)).clicked(actions) {
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::ReportRoom,
+                );
+            }
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.leave_room_button)).clicked(actions) {
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::LeaveRoom,
+                );
+            }
+
+            if self.show_people_page
+                && let Some(info) = self.info.as_ref()
+                && self.people_display_count < info.people_entries.len()
+            {
+                let people_list = self.portal_list(cx, ids!(people_view.people_list));
+                if people_list.scrolled(actions) {
+                    let threshold = self.people_display_count.saturating_sub(5);
+                    if people_list.first_id() + people_list.visible_items() >= threshold {
+                        self.people_display_count = (self.people_display_count + 40).min(info.people_entries.len());
+                        self.redraw(cx);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let Some(info) = self.info.as_ref() else {
+            self.visible = false;
+            return self.view.draw_walk(cx, scope, walk);
+        };
+
+        let panel_width = 320.0;
+        let right_margin = -(self.slide * panel_width);
+        let mut main_content = self.view(cx, ids!(main_content));
+        script_apply_eval!(cx, main_content, {
+            margin.right: #(right_margin)
+        });
+        let bg_alpha = (1.0 - self.slide) * 0.733;
+        let bg_color = vec4(0.0, 0.0, 0.0, bg_alpha);
+        let mut bg_view = self.view(cx, ids!(bg_view));
+        script_apply_eval!(cx, bg_view, {
+            draw_bg +: { color: #(bg_color) }
+        });
+
+        self.button(cx, ids!(header.back_button)).set_visible(cx, self.show_people_page);
+        self.label(cx, ids!(header.title)).set_text(cx, if self.show_people_page { "People" } else { "Info" });
+        self.view(cx, ids!(content_scroll)).set_visible(cx, !self.show_people_page);
+        self.view(cx, ids!(content_scroll.info_view)).set_visible(cx, !self.show_people_page);
+        self.view(cx, ids!(people_view)).set_visible(cx, self.show_people_page);
+
+        self.label(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_name_value)).set_text(cx, &info.room_name);
+        self.label(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_id_row.room_id_value)).set_text(cx, &info.room_id);
+        self.label(cx, ids!(content_scroll.info_view.facts_card.visibility_row.visibility_value)).set_text(cx, &info.visibility);
+        self.label(cx, ids!(content_scroll.info_view.facts_card.encryption_row.encryption_value)).set_text(cx, &info.encryption);
+
+        let topic_chars_len = info.topic.chars().count();
+        let topic_has_more = topic_chars_len > TOPIC_PREVIEW_CHARS;
+        let topic_display_text = if topic_has_more && !self.topic_expanded {
+            let mut preview: String = info.topic.chars().take(TOPIC_PREVIEW_CHARS).collect();
+            preview.push_str("...");
+            preview
+        } else {
+            info.topic.clone()
+        };
+        self.label(cx, ids!(content_scroll.info_view.topic_card.topic_value)).set_text(cx, &topic_display_text);
+        self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).set_visible(cx, topic_has_more);
+        self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).set_text(
+            cx,
+            if self.topic_expanded { "Collapse" } else { "Expand" },
+        );
+
+        let room_avatar = self.avatar(cx, ids!(content_scroll.info_view.summary_card.room_avatar));
+        if let Some(uri) = info.room_avatar_uri.as_ref()
+            && let avatar_cache::AvatarCacheEntry::Loaded(image_data) = avatar_cache::get_or_fetch_avatar(cx, uri)
+        {
+            let res = room_avatar.show_image(
+                cx,
+                None,
+                |cx, img_ref| utils::load_png_or_jpg(&img_ref, cx, &image_data),
+            );
+            if res.is_err() {
+                room_avatar.show_text(cx, None, None, &info.room_avatar_fallback_text);
+            }
+        } else {
+            room_avatar.show_text(cx, None, None, &info.room_avatar_fallback_text);
+        }
+
+        if self.show_people_page && self.people_display_count == 0 {
+            self.people_display_count = info.people_entries.len().min(40);
+        }
+        let visible_people_count = self.people_display_count.min(info.people_entries.len());
+        self.label(cx, ids!(people_view.member_count)).set_text(cx, &info.people_count_text);
+        self.view(cx, ids!(people_view.loading_label)).set_visible(cx, info.show_people_loading);
+        self.view(cx, ids!(people_view.empty_label)).set_visible(cx, !info.show_people_loading && info.people_entries.is_empty());
+        self.view(cx, ids!(people_view.people_list)).set_visible(cx, visible_people_count > 0);
+
+        while let Some(widget) = self.view.draw_walk(cx, scope, walk).step() {
+            let portal_list_ref = widget.as_portal_list();
+            let Some(mut list) = portal_list_ref.borrow_mut() else { continue };
+
+            list.set_item_range(cx, 0, visible_people_count);
+            while let Some(item_id) = list.next_visible_item(cx) {
+                let Some(entry) = info.people_entries.get(item_id) else { continue };
+                let item = list.item(cx, item_id, id!(PersonEntry));
+                item.as_room_info_people_entry().set_entry(cx, entry);
+                item.draw_all(cx, &mut Scope::empty());
+            }
+        }
+        DrawStep::done()
+    }
+}
+
+impl RoomInfoSlidingPane {
+    pub fn is_currently_shown(&self, _cx: &mut Cx) -> bool {
+        self.visible
+    }
+
+    fn set_info(&mut self, cx: &mut Cx, info: RoomInfoPaneInfo) {
+        self.info = Some(info);
+        if self.show_people_page {
+            if let Some(info) = self.info.as_ref() {
+                self.people_display_count = self.people_display_count
+                    .max(40.min(info.people_entries.len()))
+                    .min(info.people_entries.len());
+            }
+        }
+        self.redraw(cx);
+    }
+
+    pub fn show(&mut self, cx: &mut Cx) {
+        self.visible = true;
+        self.is_animating_out = false;
+        self.show_people_page = false;
+        self.topic_expanded = false;
+        self.people_display_count = 0;
+        cx.set_key_focus(self.view.area());
+        self.animator_play(cx, ids!(panel.show));
+        self.view(cx, ids!(bg_view)).set_visible(cx, true);
+        self.view.button(cx, ids!(close_button)).reset_hover(cx);
+        self.redraw(cx);
+    }
+
+    pub fn hide(&mut self, cx: &mut Cx) {
+        if !self.visible {
+            return;
+        }
+        self.is_animating_out = true;
+        self.animator_play(cx, ids!(panel.hide));
+        self.redraw(cx);
+    }
+}
+
+impl RoomInfoSlidingPaneRef {
+    pub fn is_currently_shown(&self, cx: &mut Cx) -> bool {
+        let Some(inner) = self.borrow() else { return false };
+        inner.is_currently_shown(cx)
+    }
+
+    fn set_info(&self, cx: &mut Cx, info: RoomInfoPaneInfo) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_info(cx, info);
+    }
+
+    pub fn show(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show(cx);
+    }
+
+    pub fn hide(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.hide(cx);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ReportRoomModalAction {
+    Close,
+    Submit(String),
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct ReportRoomModal {
+    #[deref]
+    view: View,
+    #[rust]
+    is_showing_error: bool,
+}
+
+impl Widget for ReportRoomModal {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+        self.widget_match_event(cx, event, scope);
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl WidgetMatchEvent for ReportRoomModal {
+    fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        let cancel_button = self.view.button(cx, ids!(buttons.cancel_button));
+        let report_button = self.view.button(cx, ids!(buttons.report_button));
+        let reason_input = self.view.text_input(cx, ids!(reason_input));
+        let mut status_label = self.view.label(cx, ids!(status_label));
+
+        if cancel_button.clicked(actions)
+            || actions
+                .iter()
+                .any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed)))
+        {
+            cx.action(ReportRoomModalAction::Close);
+            return;
+        }
+
+        if self.is_showing_error && reason_input.changed(actions).is_some() {
+            self.is_showing_error = false;
+            status_label.set_text(cx, "");
+            self.view.redraw(cx);
+        }
+
+        if report_button.clicked(actions) || reason_input.returned(actions).is_some() {
+            let reason = reason_input.text().trim().to_string();
+            if reason.is_empty() {
+                self.is_showing_error = true;
+                script_apply_eval!(cx, status_label, {
+                    text: "Please enter a reason before reporting."
+                    draw_text +: {
+                        color: mod.widgets.COLOR_FG_DANGER_RED
+                    }
+                });
+                self.view.redraw(cx);
+                return;
+            }
+            cx.action(ReportRoomModalAction::Submit(reason));
+        }
+    }
+}
+
+impl ReportRoomModal {
+    pub fn show(&mut self, cx: &mut Cx, room_name_id: &RoomNameId) {
+        self.is_showing_error = false;
+        self.view
+            .label(cx, ids!(title))
+            .set_text(cx, "Report Room");
+        self.view.label(cx, ids!(body)).set_text(
+            cx,
+            &format!(
+                "Report {} to your homeserver administrators. Please provide a reason.",
+                room_name_id
+            ),
+        );
+        self.view
+            .text_input(cx, ids!(reason_input))
+            .set_text(cx, "");
+        self.view.label(cx, ids!(status_label)).set_text(cx, "");
+        self.view
+            .button(cx, ids!(buttons.report_button))
+            .set_enabled(cx, true);
+        self.view
+            .button(cx, ids!(buttons.cancel_button))
+            .set_enabled(cx, true);
+        self.view
+            .button(cx, ids!(buttons.report_button))
+            .reset_hover(cx);
+        self.view
+            .button(cx, ids!(buttons.cancel_button))
+            .reset_hover(cx);
+        self.view.redraw(cx);
+    }
+}
+
+impl ReportRoomModalRef {
+    pub fn show(&self, cx: &mut Cx, room_name_id: &RoomNameId) {
+        let Some(mut inner) = self.borrow_mut() else {
+            return;
+        };
+        inner.show(cx, room_name_id);
+    }
+}
+
 /// The main widget that displays a single Matrix room.
 #[derive(Script, Widget)]
 pub struct RoomScreen {
@@ -1552,6 +2589,7 @@ pub struct RoomScreen {
     #[rust] threads_pane_state: ThreadsPaneState,
     #[rust] app_language: AppLanguage,
     #[rust] app_language_initialized: bool,
+    #[rust] pending_invited_users: HashSet<OwnedUserId>,
 }
 
 impl Drop for RoomScreen {
@@ -1591,6 +2629,7 @@ impl Widget for RoomScreen {
         let portal_list = self.portal_list(cx, ids!(timeline.list));
         let user_profile_sliding_pane = self.user_profile_sliding_pane(cx, ids!(user_profile_sliding_pane));
         let threads_sliding_pane = self.threads_sliding_pane(cx, ids!(threads_sliding_pane));
+        let room_info_sliding_pane = self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane));
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
 
         // Streaming animation frame handler
@@ -1816,19 +2855,43 @@ impl Widget for RoomScreen {
                 }
 
                 // Handle InviteResultAction to show popup notifications.
-                if let Some(InviteResultAction::Sent { room_id, .. }) = action.downcast_ref() {
+                if let Some(InviteResultAction::Sent { room_id, user_id }) = action.downcast_ref() {
                     // Only handle if this is for the current room.
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pending_invited_users.insert(user_id.clone());
                         enqueue_popup_notification(
-                            tr_key(self.app_language, "room_screen.popup.invite.sent_success"),
-                            PopupKind::Success,
+                            "Invite sent. Waiting for acceptance.",
+                            PopupKind::Info,
                             Some(4.0),
                         );
+                        if let Some(app_state) = scope.data.get::<AppState>()
+                            && app_state.bot_settings.enabled
+                        {
+                            if let Ok(bot_user_id) = app_state
+                                .bot_settings
+                                .resolved_bot_user_id_for_room(room_id, current_user_id().as_deref())
+                            {
+                                if &bot_user_id == user_id
+                                    && !app_state
+                                        .bot_settings
+                                        .bound_bot_user_id(room_id.as_ref())
+                                        .is_some_and(|existing_bot_user_id| existing_bot_user_id.as_str() == user_id.as_str())
+                                {
+                                    cx.action(AppStateAction::BotRoomBindingUpdated {
+                                        room_id: room_id.clone(),
+                                        bound: true,
+                                        bot_user_id: Some(user_id.clone()),
+                                        warning: None,
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
-                if let Some(InviteResultAction::Failed { room_id, error, .. }) = action.downcast_ref() {
+                if let Some(InviteResultAction::Failed { room_id, user_id, error }) = action.downcast_ref() {
                     // Only handle if this is for the current room.
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pending_invited_users.remove(user_id);
                         let error_text = error.to_string();
                         enqueue_popup_notification(
                             tr_fmt(self.app_language, "room_screen.popup.invite.failed", &[
@@ -1836,6 +2899,24 @@ impl Widget for RoomScreen {
                             ]),
                             PopupKind::Error,
                             None,
+                        );
+                    }
+                }
+                if let Some(ReportRoomResultAction::Sent { room_id }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        enqueue_popup_notification(
+                            "Room reported successfully.",
+                            PopupKind::Success,
+                            Some(4.0),
+                        );
+                    }
+                }
+                if let Some(ReportRoomResultAction::Failed { room_id, error }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        enqueue_popup_notification(
+                            format!("Failed to report room.\n\nError: {error}"),
+                            PopupKind::Error,
+                            Some(5.0),
                         );
                     }
                 }
@@ -1856,6 +2937,61 @@ impl Widget for RoomScreen {
                         self.request_more_threads(cx, true);
                     }
                     ThreadsPaneAction::None => {}
+                }
+
+                match action.as_widget_action().cast_ref() {
+                    RoomInfoPaneAction::InviteUser => {
+                        if let Some(room_name_id) = self.room_name_id.as_ref().cloned() {
+                            cx.action(InviteModalAction::Open(room_name_id));
+                        }
+                    }
+                    RoomInfoPaneAction::ShowPeoplePage => {
+                        if let Some(tl) = self.tl_state.as_ref()
+                            && tl.room_members.is_none()
+                        {
+                            submit_async_request(MatrixRequest::GetRoomMembers {
+                                timeline_kind: tl.kind.clone(),
+                                memberships: matrix_sdk::RoomMemberships::JOIN,
+                                local_only: false,
+                            });
+                        }
+                    }
+                    RoomInfoPaneAction::OpenPeopleProfile(user_id) => {
+                        let Some(room_name_id) = self.room_name_id.as_ref().cloned() else { continue };
+                        let room_member = self.tl_state.as_ref()
+                            .and_then(|tl| tl.room_members.as_ref())
+                            .and_then(|members| members.iter().find(|member| member.user_id() == user_id).cloned());
+                        let username = room_member.as_ref()
+                            .and_then(|member| member.display_name().map(ToOwned::to_owned));
+                        let avatar_state = AvatarState::Known(
+                            room_member
+                                .as_ref()
+                                .and_then(|member| member.avatar_url().map(ToOwned::to_owned))
+                        );
+                        self.show_user_profile(
+                            cx,
+                            &user_profile_sliding_pane,
+                            UserProfilePaneInfo {
+                                profile_and_room_id: UserProfileAndRoomId {
+                                    user_profile: UserProfile {
+                                        user_id: user_id.clone(),
+                                        username,
+                                        avatar_state,
+                                    },
+                                    room_id: room_name_id.room_id().clone(),
+                                },
+                                room_name: room_name_id.to_string(),
+                                room_member,
+                            },
+                        );
+                    }
+                    RoomInfoPaneAction::ReportRoom => {
+                        self.open_report_room_modal(cx);
+                    }
+                    RoomInfoPaneAction::LeaveRoom => {
+                        self.open_leave_room_confirm_modal(cx);
+                    }
+                    RoomInfoPaneAction::None => {}
                 }
 
                 if let Some(RoomThreadsAction::Loaded { room_id, from, threads, prev_batch_token }) = action.downcast_ref() {
@@ -1941,6 +3077,9 @@ impl Widget for RoomScreen {
             if threads_sliding_pane.is_currently_shown(cx) {
                 self.refresh_threads_pane(cx);
             }
+            if room_info_sliding_pane.is_currently_shown(cx) {
+                self.refresh_room_info_pane(cx);
+            }
 
             // Ideally we would do this elsewhere on the main thread, because it's not room-specific,
             // but it doesn't hurt to do it here.
@@ -1974,6 +3113,12 @@ impl Widget for RoomScreen {
             is_pane_shown = true;
             if is_interactive_hit {
                 user_profile_sliding_pane.handle_event(cx, event, scope);
+            }
+        }
+        else if room_info_sliding_pane.is_currently_shown(cx) {
+            is_pane_shown = true;
+            if is_interactive_hit {
+                room_info_sliding_pane.handle_event(cx, event, scope);
             }
         }
         else {
@@ -2059,6 +3204,9 @@ impl Widget for RoomScreen {
                 }
             };
             let mut room_scope = Scope::with_props(&room_props);
+            let leave_room_confirm_modal_uid = self
+                .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
+                .widget_uid();
 
 
             // Forward the event to the inner timeline view, but capture any actions it produces
@@ -2314,6 +3462,42 @@ impl Widget for RoomScreen {
                         return false;
                     }
                     None => {}
+                }
+
+                match action.downcast_ref::<ReportRoomModalAction>() {
+                    Some(ReportRoomModalAction::Close) => {
+                        self.close_report_room_modal(cx);
+                        return false;
+                    }
+                    Some(ReportRoomModalAction::Submit(reason)) => {
+                        let Some(room_id) = self.room_id().cloned() else {
+                            self.close_report_room_modal(cx);
+                            return false;
+                        };
+                        submit_async_request(MatrixRequest::ReportRoom {
+                            room_id,
+                            reason: reason.clone(),
+                        });
+                        self.close_report_room_modal(cx);
+                        return false;
+                    }
+                    None => {}
+                }
+
+                if let ConfirmationModalAction::Close(accepted) = action
+                    .as_widget_action()
+                    .widget_uid_eq(leave_room_confirm_modal_uid)
+                    .cast()
+                {
+                    self.close_leave_room_confirm_modal(cx);
+                    if accepted {
+                        if let Some(room_id) = self.room_id().cloned() {
+                            submit_async_request(MatrixRequest::LeaveRoom {
+                                room_id,
+                            });
+                        }
+                    }
+                    return false;
                 }
 
                 if let MessageAction::ToggleAppServiceActions = action
@@ -2678,6 +3862,14 @@ impl RoomScreen {
         self.view.modal(cx, ids!(delete_bot_modal)).close(cx);
     }
 
+    fn close_report_room_modal(&self, cx: &mut Cx) {
+        self.view.modal(cx, ids!(report_room_modal)).close(cx);
+    }
+
+    fn close_leave_room_confirm_modal(&self, cx: &mut Cx) {
+        self.view.modal(cx, ids!(leave_room_confirm_modal)).close(cx);
+    }
+
     fn open_create_bot_modal(&mut self, cx: &mut Cx) {
         let Some(room_name_id) = self.room_name_id.clone() else {
             return;
@@ -2700,10 +3892,38 @@ impl RoomScreen {
         self.view.modal(cx, ids!(delete_bot_modal)).open(cx);
     }
 
+    fn open_report_room_modal(&mut self, cx: &mut Cx) {
+        let Some(room_name_id) = self.room_name_id.as_ref() else {
+            return;
+        };
+        self.view
+            .report_room_modal(cx, ids!(report_room_modal_inner))
+            .show(cx, room_name_id);
+        self.view.modal(cx, ids!(report_room_modal)).open(cx);
+    }
+
+    fn open_leave_room_confirm_modal(&mut self, cx: &mut Cx) {
+        let Some(room_name_id) = self.room_name_id.as_ref() else {
+            return;
+        };
+        self.view
+            .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
+            .show(cx, ConfirmationModalContent {
+                title_text: String::from("Leave Room").into(),
+                body_text: format!("Are you sure you want to leave {}?", room_name_id).into(),
+                accept_button_text: Some(String::from("Leave").into()),
+                cancel_button_text: Some(String::from("Cancel").into()),
+                ..Default::default()
+            });
+        self.view.modal(cx, ids!(leave_room_confirm_modal)).open(cx);
+    }
+
     fn reset_app_service_ui(&mut self, cx: &mut Cx) {
         self.set_app_service_actions_visible(cx, false);
         self.close_create_bot_modal(cx);
         self.close_delete_bot_modal(cx);
+        self.close_report_room_modal(cx);
+        self.close_leave_room_confirm_modal(cx);
     }
 
     fn is_app_service_room_bound(&self, app_state: &AppState, room_id: &OwnedRoomId) -> bool {
@@ -2975,6 +4195,36 @@ impl RoomScreen {
                             submit_async_request(MatrixRequest::GetNumberUnreadMessages{
                                 timeline_kind: tl.kind.clone(),
                             });
+                        }
+                    }
+
+                    if !self.pending_invited_users.is_empty() {
+                        let start = changed_indices.start.min(new_items.len());
+                        let end = changed_indices.end.min(new_items.len());
+                        let mut accepted_users: Vec<OwnedUserId> = Vec::new();
+                        for idx in start..end {
+                            let Some(new_item) = new_items.get(idx) else { continue };
+                            let TimelineItemKind::Event(event_tl_item) = new_item.kind() else { continue };
+                            let TimelineItemContent::MembershipChange(membership_change) = event_tl_item.content() else { continue };
+                            let accepted = matches!(
+                                membership_change.change(),
+                                Some(MembershipChange::InvitationAccepted)
+                                | Some(MembershipChange::Joined)
+                            );
+                            if accepted {
+                                let invited_user_id = event_tl_item.sender().to_owned();
+                                if self.pending_invited_users.contains(&invited_user_id) {
+                                    accepted_users.push(invited_user_id);
+                                }
+                            }
+                        }
+                        for accepted_user in accepted_users {
+                            self.pending_invited_users.remove(&accepted_user);
+                            enqueue_popup_notification(
+                                format!("{accepted_user} accepted the invite and joined."),
+                                PopupKind::Success,
+                                Some(4.0),
+                            );
                         }
                     }
 
@@ -3798,6 +5048,9 @@ impl RoomScreen {
                 MessageAction::ShowThreadsPane => {
                     self.show_threads_pane(cx);
                 }
+                MessageAction::ShowRoomInfoPane => {
+                    self.show_room_info_pane(cx);
+                }
                 MessageAction::Redact { details, reason } => {
                     let Some(tl) = self.tl_state.as_ref() else { return };
                     let timeline_event_id = details.timeline_event_id.clone();
@@ -3935,6 +5188,7 @@ impl RoomScreen {
     }
 
     fn show_threads_pane(&mut self, cx: &mut Cx) {
+        self.hide_room_info_pane(cx);
         self.ensure_threads_state_for_current_room();
         if !self.threads_pane_state.initialized && !self.threads_pane_state.is_loading {
             self.request_more_threads(cx, false);
@@ -3977,6 +5231,131 @@ impl RoomScreen {
 
     fn hide_threads_pane(&mut self, cx: &mut Cx) {
         self.threads_sliding_pane(cx, ids!(threads_sliding_pane)).hide(cx);
+    }
+
+    fn refresh_room_info_pane(&mut self, cx: &mut Cx) {
+        let Some(room_id) = self.room_id().cloned() else { return };
+        let room_name = self.room_name_id.as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| room_id.to_string());
+        let room_avatar_fallback_text = self.room_name_id.as_ref()
+            .and_then(|room_name_id| room_name_id.name_for_avatar().map(ToOwned::to_owned))
+            .unwrap_or_else(|| String::from("?"));
+        let room_avatar_uri = self.room_avatar_url.clone();
+        let (topic, visibility, encryption) = get_client()
+            .and_then(|client| client.get_room(&room_id))
+            .map(|room| {
+                let topic = room.topic()
+                    .unwrap_or_else(|| String::from("No topic"));
+                let visibility = match room.is_public() {
+                    Some(true) => String::from("Public room"),
+                    Some(false) => String::from("Private room"),
+                    None => String::from("Unknown"),
+                };
+                let encryption_state = room.encryption_state();
+                let encryption = if encryption_state.is_unknown() {
+                    String::from("Unknown")
+                } else if encryption_state.is_encrypted() {
+                    String::from("Encrypted")
+                } else {
+                    String::from("Unencrypted")
+                };
+                (topic, visibility, encryption)
+            })
+            .unwrap_or_else(|| (
+                String::from("No topic"),
+                String::from("Unknown"),
+                String::from("Unknown"),
+            ));
+
+        let (people_entries, people_count_text, show_people_loading) = self.tl_state.as_ref()
+            .map(|tl| {
+                let Some(room_members) = tl.room_members.as_ref() else {
+                    return (
+                        Vec::new(),
+                        String::from("People"),
+                        true,
+                    );
+                };
+
+                let mut people_entries: Vec<RoomInfoPeopleEntryInfo> = room_members.iter()
+                    .map(|member| {
+                        let display_name = member.display_name()
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| member.user_id().to_string());
+                        let is_bot = is_likely_bot_member(member, None);
+                        let level = match member.suggested_role_for_power_level() {
+                            RoomMemberRole::Creator => String::from("Creator"),
+                            RoomMemberRole::Administrator => String::from("Admin"),
+                            RoomMemberRole::Moderator => String::from("Moderator"),
+                            RoomMemberRole::User => String::new(),
+                        };
+                        let avatar_fallback_text = utils::user_name_first_letter(&display_name)
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| String::from("?"));
+                        RoomInfoPeopleEntryInfo {
+                            user_id: member.user_id().to_owned(),
+                            display_name,
+                            level,
+                            is_bot,
+                            avatar_uri: member.avatar_url().map(ToOwned::to_owned),
+                            avatar_fallback_text,
+                        }
+                    })
+                    .collect();
+
+                let level_weight = |level: &str| -> u8 {
+                    match level {
+                        "Creator" => 0,
+                        "Admin" => 1,
+                        "Moderator" => 2,
+                        _ => 3,
+                    }
+                };
+                people_entries.sort_by(|a, b| {
+                    level_weight(&a.level)
+                        .cmp(&level_weight(&b.level))
+                        .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+                });
+
+                (
+                    people_entries,
+                    format!("{} Members", room_members.len()),
+                    false,
+                )
+            })
+            .unwrap_or_else(|| (
+                Vec::new(),
+                String::from("People"),
+                true,
+            ));
+
+        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).set_info(
+            cx,
+            RoomInfoPaneInfo {
+                room_name,
+                room_id: room_id.to_string(),
+                topic,
+                visibility,
+                encryption,
+                room_avatar_uri,
+                room_avatar_fallback_text,
+                people_entries,
+                people_count_text,
+                show_people_loading,
+            },
+        );
+    }
+
+    fn show_room_info_pane(&mut self, cx: &mut Cx) {
+        self.hide_threads_pane(cx);
+        self.refresh_room_info_pane(cx);
+        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).show(cx);
+        self.redraw(cx);
+    }
+
+    fn hide_room_info_pane(&mut self, cx: &mut Cx) {
+        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).hide(cx);
     }
 
     fn ensure_threads_state_for_current_room(&mut self) {
@@ -4256,6 +5635,7 @@ impl RoomScreen {
             subscribe: false,
         });
         self.room_avatar_url = None;
+        self.pending_invited_users.clear();
     }
 
     /// Removes the current room's visual UI state from this widget
@@ -4365,6 +5745,7 @@ impl RoomScreen {
         self.hide_timeline();
         self.reset_app_service_ui(cx);
         self.hide_threads_pane(cx);
+        self.hide_room_info_pane(cx);
         self.threads_pane_state = Default::default();
         // Reset the the state of the inner loading pane.
         self.loading_pane(cx, ids!(loading_pane)).take_state();
@@ -6539,6 +7920,18 @@ pub enum InviteResultAction {
     },
 }
 
+/// The result of reporting a room.
+#[derive(Debug)]
+pub enum ReportRoomResultAction {
+    Sent {
+        room_id: OwnedRoomId,
+    },
+    Failed {
+        room_id: OwnedRoomId,
+        error: matrix_sdk::Error,
+    },
+}
+
 
 /// Actions related to a specific message within a room timeline.
 #[derive(Clone, Default, Debug)]
@@ -6607,6 +8000,7 @@ pub enum MessageAction {
     /// The user requested toggling the in-room app service quick actions card.
     ToggleAppServiceActions,
     ShowThreadsPane,
+    ShowRoomInfoPane,
     #[default]
     None,
 }
