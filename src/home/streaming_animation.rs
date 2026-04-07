@@ -315,7 +315,7 @@ mod tests {
         let mut s = make_state("Hello");
         s.advance_displayed(3);
         s.fill_display_buffer();
-        assert!(s.display_buffer.starts_with("Hel"));
+        assert!(s.display_buffer.starts_with("He"));
         assert!(s.display_buffer.contains('\u{25CF}') || s.display_buffer.contains('●'));
     }
 

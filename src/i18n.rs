@@ -87,7 +87,7 @@ fn dictionary(language: AppLanguage) -> &'static HashMap<String, String> {
     }
 }
 
-pub fn tr_key<'a>(language: AppLanguage, key: &'a str) -> &'a str {
+pub fn tr_key(language: AppLanguage, key: &str) -> &str {
     dictionary(language)
         .get(key)
         .map(String::as_str)

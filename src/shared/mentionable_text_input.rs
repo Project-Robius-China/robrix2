@@ -1691,7 +1691,7 @@ impl MentionableTextInput {
 
         // Ensure cache is up-to-date (rebuild only if text changed)
         let needs_rebuild = self.cached_text_analysis.as_ref()
-            .map_or(true, |(cached_text, _, _)| cached_text != text);
+            .is_none_or(|(cached_text, _, _)| cached_text != text);
         if needs_rebuild {
             let graphemes_owned: Vec<String> = text.graphemes(true).map(|s| s.to_string()).collect();
             let positions = utils::build_grapheme_byte_positions(text);

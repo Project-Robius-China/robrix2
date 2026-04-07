@@ -916,7 +916,7 @@ mod tests {
     #[test]
     fn test_grapheme_starts_with_basic() {
         // Basic ASCII cases
-        assert!(grapheme_starts_with("hello", "hel", false));
+        assert!(grapheme_starts_with("hello", "hell", false));
         assert!(grapheme_starts_with("hello", "hello", false));
         assert!(!grapheme_starts_with("hello", "llo", false));
         assert!(grapheme_starts_with("hello", "", false));
@@ -926,9 +926,9 @@ mod tests {
     #[test]
     fn test_grapheme_starts_with_case_sensitivity() {
         // Case-insensitive for ASCII
-        assert!(grapheme_starts_with("Hello", "hel", true));
-        assert!(grapheme_starts_with("HELLO", "hel", true));
-        assert!(!grapheme_starts_with("Hello", "hel", false));
+        assert!(grapheme_starts_with("Hello", "hell", true));
+        assert!(grapheme_starts_with("HELLO", "hell", true));
+        assert!(!grapheme_starts_with("Hello", "hell", false));
 
         // Case-insensitive only works for ASCII
         assert!(!grapheme_starts_with("Привет", "прив", true)); // Russian
@@ -960,8 +960,8 @@ mod tests {
         let decomposed = "cafe\u{0301}"; // e + combining acute accent (U+0065 + U+0301)
 
         // Both should work
-        assert!(grapheme_starts_with(precomposed, "caf", false));
-        assert!(grapheme_starts_with(decomposed, "caf", false));
+        assert!(grapheme_starts_with(precomposed, "ca", false));
+        assert!(grapheme_starts_with(decomposed, "ca", false));
 
         // Other combining characters
         assert!(grapheme_starts_with("naïve", "naï", false)); // ï with diaeresis

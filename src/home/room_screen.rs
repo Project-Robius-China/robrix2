@@ -319,11 +319,11 @@ fn detected_bot_binding_for_members(
 
     if non_self_members
         .iter()
-        .any(|room_member| room_member.user_id().localpart().to_ascii_lowercase() == "botfather")
+        .any(|room_member| room_member.user_id().localpart().eq_ignore_ascii_case("botfather"))
     {
         return non_self_members
             .iter()
-            .find(|room_member| room_member.user_id().localpart().to_ascii_lowercase() == "botfather")
+            .find(|room_member| room_member.user_id().localpart().eq_ignore_ascii_case("botfather"))
             .map(|room_member| room_member.user_id().to_owned());
     };
     None
@@ -2995,10 +2995,10 @@ impl Widget for RoomScreen {
                                 .resolved_bot_user_id_for_room(room_id, current_user_id().as_deref())
                             {
                                 if &bot_user_id == user_id
-                                    && !app_state
+                                    && app_state
                                         .bot_settings
                                         .bound_bot_user_id(room_id.as_ref())
-                                        .is_some_and(|existing_bot_user_id| existing_bot_user_id.as_str() == user_id.as_str())
+                                        .is_none_or(|existing_bot_user_id| existing_bot_user_id.as_str() != user_id.as_str())
                                 {
                                     cx.action(AppStateAction::BotRoomBindingUpdated {
                                         room_id: room_id.clone(),
