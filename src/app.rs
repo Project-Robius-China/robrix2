@@ -911,12 +911,117 @@ impl App {
                     cx.action(NavigationBarAction::GoToHome);
                     self.ui.redraw(cx);
                 }
+                "joincall" => {
+                    log!("Stdin command: triggering JoinCall action");
+                    cx.action(VoipAction::JoinCall);
+                    self.ui.redraw(cx);
+                }
+                "testvoip" => {
+                    // Get the first available joined room and show VoIP for it
+                    let rooms_list = cx.get_global::<RoomsListRef>();
+                    if let Some(room_name_id) = rooms_list.get_first_joined_room() {
+                        log!("Stdin command: testvoip - using first room: {}",
+                            room_name_id.room_id());
+                        cx.widget_action(
+                            WidgetUid(0),
+                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                        );
+                        self.ui.redraw(cx);
+                    } else {
+                        log!("Stdin command: testvoip - no joined rooms available");
+                    }
+                }
+                "showp" | "showparticipants" => {
+                    log!("Stdin command: toggling participants sidebar");
+                    cx.action(VoipAction::TestToggleParticipantsSidebar);
+                    self.ui.redraw(cx);
+                }
+                "clearp" | "clearparticipants" => {
+                    log!("Stdin command: clearing all participants");
+                    cx.action(VoipAction::TestClearParticipants);
+                    self.ui.redraw(cx);
+                }
+                "rooms" => {
+                    log!("=== Joined Rooms ===");
+                    let rooms_list = cx.get_global::<RoomsListRef>();
+                    for (name, id) in rooms_list.list_rooms() {
+                        log!("  {} ({})", name, id);
+                    }
+                    log!("====================");
+                }
                 "help" => {
                     log!("=== Stdin Commands ===");
-                    log!("  voip  - Switch to VoIP call screen");
-                    log!("  home  - Switch to Home screen");
-                    log!("  help  - Show this help");
+                    log!("  voip       - Switch to VoIP call screen (requires selected room)");
+                    log!("  testvoip   - Open VoIP with first available room (for testing)");
+                    log!("  join <name> - Open VoIP and join call for room by name");
+                    log!("  joincall   - Trigger Join Call button");
+                    log!("  rooms      - List all joined rooms");
+                    log!("  home       - Switch to Home screen");
+                    log!("  showp      - Toggle participants sidebar");
+                    log!("  addp <name> [video] - Add participant (with optional video)");
+                    log!("  togglev <id>        - Toggle participant video (id=1,2,3...)");
+                    log!("  removep <id>        - Remove participant by id");
+                    log!("  clearp              - Clear all participants");
+                    log!("  help       - Show this help");
                     log!("======================");
+                }
+                _ if cmd.starts_with("join ") => {
+                    if let Some(room_name) = cmd.strip_prefix("join ").map(|s| s.trim()) {
+                        log!("Stdin command: joining call in room '{}'", room_name);
+                        let rooms_list = cx.get_global::<RoomsListRef>();
+                        if let Some(room_name_id) = rooms_list.find_room_by_name(room_name) {
+                            log!("Found room: {} ({})", room_name_id.display_name(), room_name_id.room_id());
+                            // Open VoIP screen
+                            cx.widget_action(
+                                WidgetUid(0),
+                                RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                            );
+                            self.ui.redraw(cx);
+                            // Schedule JoinCall action after a short delay to let VoIP screen initialize
+                            // We'll trigger it immediately - the VoIP screen should handle it
+                            cx.action(VoipAction::JoinCall);
+                        } else {
+                            log!("Room '{}' not found. Use 'rooms' to list available rooms.", room_name);
+                        }
+                    } else {
+                        log!("Usage: join <room_name>");
+                    }
+                }
+                _ if cmd.starts_with("addp ") => {
+                    let args: Vec<&str> = cmd.strip_prefix("addp ").unwrap().split_whitespace().collect();
+                    if let Some(name) = args.first() {
+                        let is_video_on = args.get(1).map_or(false, |&v| v == "video" || v == "v" || v == "1");
+                        log!("Stdin command: adding participant '{}' with video={}", name, is_video_on);
+                        cx.action(VoipAction::TestAddParticipant {
+                            name: name.to_string(),
+                            is_video_on,
+                        });
+                        self.ui.redraw(cx);
+                    } else {
+                        log!("Usage: addp <name> [video]");
+                    }
+                }
+                _ if cmd.starts_with("togglev ") => {
+                    if let Some(id) = cmd.strip_prefix("togglev ").map(|s| s.trim()) {
+                        log!("Stdin command: toggling video for participant id={}", id);
+                        cx.action(VoipAction::TestToggleParticipantVideo {
+                            id: id.to_string(),
+                        });
+                        self.ui.redraw(cx);
+                    } else {
+                        log!("Usage: togglev <id>");
+                    }
+                }
+                _ if cmd.starts_with("removep ") => {
+                    if let Some(id) = cmd.strip_prefix("removep ").map(|s| s.trim()) {
+                        log!("Stdin command: removing participant id={}", id);
+                        cx.action(VoipAction::TestRemoveParticipant {
+                            id: id.to_string(),
+                        });
+                        self.ui.redraw(cx);
+                    } else {
+                        log!("Usage: removep <id>");
+                    }
                 }
                 _ if !cmd.is_empty() => {
                     log!("Unknown command: '{}'. Type 'help' for available commands.", cmd);

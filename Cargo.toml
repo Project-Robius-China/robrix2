@@ -14,8 +14,8 @@ version = "0.0.1-pre-alpha-4"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
 [dependencies]
-# makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
-# makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
+#makepad-widgets = { path = "/Users/alanpoon/Documents/rust/makepad/widgets",  features = ["serde"] }
+#makepad-code-editor = { path = "/Users/alanpoon/Documents/rust/makepad/code_editor" }
 
 makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "stack_nav_improvements", features = ["serde"] }
 makepad-code-editor = { git = "https://github.com/kevinaboos/makepad", branch = "stack_nav_improvements" }
@@ -66,6 +66,7 @@ matrix-sdk-ui = { git = "https://github.com/matrix-org/matrix-rust-sdk", branch 
 ruma = { version = "0.14.1", features = [
     "compat-optional",
     "compat-unset-avatar",
+    "unstable-msc3401",
 ] }
 rand = "0.8.5"
 rangemap = "1.5.0"
@@ -74,6 +75,7 @@ serde = "1.0"
 serde_json = "1.0"
 thiserror = "2.0.16"
 tokio = { version = "1.43.1", features = ["macros", "rt-multi-thread"] }
+# livekit = "0.7" # Requires native libwebrtc build - enable when ready
 tracing-subscriber = "0.3.17"
 unicode-segmentation = "1.11.0"
 url = "2.5.0"

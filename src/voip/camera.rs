@@ -171,6 +171,7 @@ impl CameraManager {
         }
         ui.view(cx, ids!(lobby_video_host)).set_visible(cx, false);
         ui.view(cx, ids!(lobby_camera_placeholder)).set_visible(cx, true);
+        ui.view(cx, ids!(join_call_button_view)).set_visible(cx, true);
     }
 
     /// Stop in-call camera

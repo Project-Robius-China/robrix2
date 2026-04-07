@@ -1,7 +1,11 @@
 //! LiveKit client integration for WebRTC
+//!
+//! This is currently a stub implementation. When the livekit crate is enabled,
+//! it will provide actual WebRTC connectivity.
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use makepad_widgets::{SignalToUI, log};
 
 use super::call_state::CallParticipant;
 
@@ -31,11 +35,25 @@ pub enum LiveKitMessage {
     Error(String),
     ParticipantJoined(CallParticipant),
     ParticipantLeft(String),
+    /// I420 video frame received from remote participant
+    RemoteVideoFrame {
+        participant_id: String,
+        /// Y plane data
+        y: Vec<u8>,
+        /// U plane data
+        u: Vec<u8>,
+        /// V plane data
+        v: Vec<u8>,
+        width: u32,
+        height: u32,
+        /// Presentation timestamp in milliseconds
+        pts_ms: u64,
+    },
 }
 
 /// Commands sent from UI to LiveKit client
 pub enum LiveKitCommand {
-    Connect { url: String },
+    Connect { url: String, token: String },
     Disconnect,
     SetMicrophoneMuted(bool),
     SetCameraMuted(bool),
@@ -82,39 +100,49 @@ impl LiveKitClient {
         msg_tx: mpsc::UnboundedSender<LiveKitMessage>,
         is_connected: Arc<Mutex<bool>>,
     ) {
+        // Stub implementation - simulates LiveKit behavior
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
-                LiveKitCommand::Connect { url } => {
-                    println!("Connecting to LiveKit: {}", url);
+                LiveKitCommand::Connect { url, token: _ } => {
+                    log!("LiveKit (stub): Connecting to {}", url);
+
+                    // Simulate successful connection
                     if let Ok(mut connected) = is_connected.lock() {
                         *connected = true;
                     }
                     let _ = msg_tx.send(LiveKitMessage::Connected);
+                    SignalToUI::set_ui_signal();
+
+                    // Note: In a real implementation, we would:
+                    // 1. Connect to LiveKit using Room::connect(&url, &token, RoomOptions::default())
+                    // 2. Listen for RoomEvent::ParticipantConnected, TrackSubscribed, etc.
+                    // 3. Extract I420 frames from video tracks using:
+                    //    let i420 = frame.buffer.to_i420();
+                    //    let (data_y, data_u, data_v) = i420.data();
+                    log!("LiveKit (stub): Connection simulated. Enable 'livekit' crate for real WebRTC.");
                 }
                 LiveKitCommand::Disconnect => {
-                    println!("Disconnecting from LiveKit");
+                    log!("LiveKit (stub): Disconnecting");
                     if let Ok(mut connected) = is_connected.lock() {
                         *connected = false;
                     }
                     let _ = msg_tx.send(LiveKitMessage::Disconnected);
+                    SignalToUI::set_ui_signal();
                 }
                 LiveKitCommand::SetMicrophoneMuted(muted) => {
-                    println!("Set microphone muted: {}", muted);
+                    log!("LiveKit (stub): Set microphone muted: {}", muted);
                 }
                 LiveKitCommand::SetCameraMuted(muted) => {
-                    println!("Set camera muted: {}", muted);
+                    log!("LiveKit (stub): Set camera muted: {}", muted);
                 }
                 LiveKitCommand::StartScreenShare => {
-                    println!("Starting screen share");
+                    log!("LiveKit (stub): Starting screen share");
                 }
                 LiveKitCommand::StopScreenShare => {
-                    println!("Stopping screen share");
+                    log!("LiveKit (stub): Stopping screen share");
                 }
                 LiveKitCommand::PublishVideoFrame(frame) => {
-                    println!(
-                        "Publishing video frame: {}x{} ({} bytes)",
-                        frame.width, frame.height, frame.data.len()
-                    );
+                    log!("LiveKit (stub): Publishing video frame: {}x{}", frame.width, frame.height);
                 }
             }
         }
@@ -126,8 +154,8 @@ impl LiveKitClient {
         }
     }
 
-    pub fn connect(&self, url: String, _token: String) {
-        self.send_command(LiveKitCommand::Connect { url });
+    pub fn connect(&self, url: String, token: String) {
+        self.send_command(LiveKitCommand::Connect { url, token });
     }
 
     pub fn disconnect(&self) {

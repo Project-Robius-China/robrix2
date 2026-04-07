@@ -3,3 +3,7 @@
 [target.'cfg(all())']
 rustflags = ["--cfg", "ruma_identifiers_storage=\"Arc\""]
 
+## LiveKit/libwebrtc requires -ObjC linker flag on macOS
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-args=-Wl,-ObjC"]
+

@@ -24,6 +24,11 @@ pub enum CallType {
 #[derive(Debug, Clone)]
 pub struct CallParticipant {
     pub user_id: String,
+    pub display_name: String,
+    pub is_muted: bool,
+    pub is_video_on: bool,
+    pub is_speaking: bool,
+    pub is_screen_sharing: bool,
 }
 
 /// Main call state structure

@@ -1597,6 +1597,45 @@ impl RoomsListRef {
             .get(space_id)
             .map(|smv| smv.parent_chain.clone())
     }
+
+    /// Returns the RoomNameId of the first joined room, if any.
+    /// This is primarily for testing purposes.
+    pub fn get_first_joined_room(&self) -> Option<RoomNameId> {
+        self.borrow()?
+            .all_joined_rooms
+            .values()
+            .next()
+            .map(|jr| jr.room_name_id.clone())
+    }
+
+    /// Find a room by name (case-insensitive partial match).
+    /// Returns the RoomNameId if found.
+    pub fn find_room_by_name(&self, name: &str) -> Option<RoomNameId> {
+        let inner = self.borrow()?;
+        let name_lower = name.to_lowercase();
+        inner.all_joined_rooms
+            .values()
+            .find(|jr| {
+                let display_name = jr.room_name_id.display_name().to_string().to_lowercase();
+                display_name.contains(&name_lower)
+            })
+            .map(|jr| jr.room_name_id.clone())
+    }
+
+    /// List all joined rooms (for debugging).
+    pub fn list_rooms(&self) -> Vec<(String, String)> {
+        self.borrow()
+            .map(|inner| {
+                inner.all_joined_rooms
+                    .values()
+                    .map(|jr| (
+                        jr.room_name_id.display_name().to_string(),
+                        jr.room_name_id.room_id().to_string(),
+                    ))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 pub struct RoomsListScopeProps {

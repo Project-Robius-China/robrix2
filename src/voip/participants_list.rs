@@ -9,6 +9,7 @@ pub struct Participant {
     pub avatar_letter: String,
     pub is_muted: bool,
     pub is_speaking: bool,
+    pub is_video_on: bool,
 }
 
 impl Default for Participant {
@@ -19,6 +20,7 @@ impl Default for Participant {
             avatar_letter: String::from("?"),
             is_muted: false,
             is_speaking: false,
+            is_video_on: false,
         }
     }
 }
@@ -41,7 +43,12 @@ impl Widget for ParticipantsList {
                         widget.label(cx, ids!(avatar_letter)).set_text(cx, &participant.avatar_letter);
                         widget.label(cx, ids!(name_label)).set_text(cx, &participant.name);
                         widget.label(cx, ids!(mute_icon)).set_text(cx, if participant.is_muted { "M" } else { "" });
-                        widget.label(cx, ids!(status_label)).set_text(cx, if participant.is_speaking { "Speaking..." } else { "" });
+                        widget.label(cx, ids!(status_label)).set_text(cx, if participant.is_speaking { "Speaking" } else { "" });
+
+                        // Toggle video/avatar visibility based on is_video_on
+                        widget.view(cx, ids!(participant_video_host)).set_visible(cx, participant.is_video_on);
+                        widget.view(cx, ids!(avatar_container)).set_visible(cx, !participant.is_video_on);
+
                         widget.draw_all(cx, scope);
                     }
                 }

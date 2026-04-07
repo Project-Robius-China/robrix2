@@ -15,6 +15,7 @@ use matrix_sdk::ruma::OwnedRoomId;
 pub mod call_state;
 pub mod camera;
 pub mod livekit_client;
+pub mod remote_video_session;
 pub mod speaking;
 pub mod participants_list;
 pub mod voip_screen;
@@ -23,11 +24,67 @@ pub use voip_screen::VoipScreenWidgetRefExt;
 pub use participants_list::{Participant, ParticipantsListWidgetRefExt};
 pub use camera::CameraChoice;
 
+/// Represents a call member from Matrix state events
+#[derive(Clone, Debug)]
+pub struct CallMember {
+    pub user_id: String,
+    pub device_id: String,
+    pub display_name: Option<String>,
+}
+
 /// Actions emitted by VoIP screens
 #[derive(Clone, Debug, Default)]
 pub enum VoipAction {
     /// Close the VoIP screen and return to the room
     Close(OwnedRoomId),
+    /// Join the call (triggers the join_call_button click)
+    JoinCall,
+    /// Notification that call member state was sent (or failed)
+    CallMemberStateSent {
+        room_id: OwnedRoomId,
+        success: bool,
+    },
+    /// Call members list updated from Matrix state events
+    CallMembersUpdated {
+        room_id: OwnedRoomId,
+        members: Vec<CallMember>,
+    },
+    /// OpenID token fetched from Matrix
+    OpenIdTokenFetched {
+        room_id: OwnedRoomId,
+        access_token: String,
+        token_type: String,
+        matrix_server_name: String,
+        expires_in: u64,
+    },
+    /// LiveKit JWT fetched
+    LiveKitJwtFetched {
+        room_id: OwnedRoomId,
+        url: String,
+        jwt: String,
+    },
+    /// LiveKit connection failed
+    LiveKitConnectionFailed {
+        room_id: OwnedRoomId,
+        error: String,
+    },
+    /// Test action: Add a participant
+    TestAddParticipant {
+        name: String,
+        is_video_on: bool,
+    },
+    /// Test action: Toggle participant video
+    TestToggleParticipantVideo {
+        id: String,
+    },
+    /// Test action: Remove a participant
+    TestRemoveParticipant {
+        id: String,
+    },
+    /// Test action: Clear all participants
+    TestClearParticipants,
+    /// Test action: Toggle participants sidebar
+    TestToggleParticipantsSidebar,
     #[default]
     None,
 }
