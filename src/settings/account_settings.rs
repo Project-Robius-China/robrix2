@@ -1,11 +1,9 @@
-use std::cell::RefCell;
-
 use makepad_widgets::{text::selection::Cursor, *};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use rfd::FileDialog;
 use matrix_sdk::ruma::OwnedUserId;
 
-use crate::{account_manager, app::{AppState, ConfirmDeleteAction}, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, confirmation_modal::ConfirmationModalContent, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{AccountDataAction, AccountSwitchAction, MatrixRequest, submit_async_request}, utils};
+use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{AccountDataAction, AccountSwitchAction, MatrixRequest, submit_async_request}, utils};
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -577,6 +575,8 @@ impl MatchEvent for AccountSettings {
         if delete_avatar_button.clicked(actions) {
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             {
+            use std::cell::RefCell;
+            use crate::app::ConfirmDeleteAction;
             // Don't immediately disable the buttons. Instead, we wait for the user
             // to confirm the action in the confirmation modal,
             // and then we disable the buttons in the AvatarDeleteStarted action handler.
