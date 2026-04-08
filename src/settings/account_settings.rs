@@ -577,6 +577,7 @@ impl MatchEvent for AccountSettings {
             {
             use std::cell::RefCell;
             use crate::app::ConfirmDeleteAction;
+            use crate::shared::confirmation_modal::ConfirmationModalContent;
             // Don't immediately disable the buttons. Instead, we wait for the user
             // to confirm the action in the confirmation modal,
             // and then we disable the buttons in the AvatarDeleteStarted action handler.
@@ -585,7 +586,7 @@ impl MatchEvent for AccountSettings {
                 title_text: tr_key(app_language, "settings.account.modal.delete_avatar.title").into(),
                 body_text: tr_key(app_language, "settings.account.modal.delete_avatar.body").into(),
                 accept_button_text: Some(tr_key(app_language, "settings.account.modal.delete_avatar.accept").into()),
-                on_accept_clicked: Some(Box::new(move |cx| {
+                on_accept_clicked: Some(Box::new(move |cx: &mut Cx| {
                     submit_async_request(MatrixRequest::SetAvatar { avatar_url: None });
                     cx.action(AccountSettingsAction::AvatarDeleteStarted);
                     enqueue_popup_notification(
