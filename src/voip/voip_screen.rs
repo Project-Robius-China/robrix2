@@ -10,7 +10,7 @@ use ruma::OwnedRoomId;
 use tokio::sync::mpsc;
 
 use crate::sliding_sync::{get_client, submit_async_request, MatrixRequest};
-use super::{VoipGlobalState, VoipAction, CallMember};
+use super::{VoipGlobalState, VoipAction, CallMember, ActiveCallState, ParticipantInfo};
 
 use super::call_state::{Call, CallType, ConnectionState};
 use super::camera::{CameraChoice, CameraManager};
@@ -880,6 +880,121 @@ impl Widget for VoipScreen {
                             log!("VoipScreen: TestStopVideoStream");
                             self.stop_test_video_stream(cx);
                         }
+                        VoipAction::PipMicToggle { room_id } => {
+                            if self.room_id.as_ref() == Some(room_id) {
+                                log!("VoipScreen: PipMicToggle from PiP");
+                                self.toggle_microphone();
+                                self.update_ui(cx);
+                            }
+                        }
+                        VoipAction::PipCameraToggle { room_id } => {
+                            if self.room_id.as_ref() == Some(room_id) {
+                                log!("VoipScreen: PipCameraToggle from PiP");
+                                self.toggle_camera(cx);
+                                self.update_ui(cx);
+                            }
+                        }
+                        VoipAction::PipScreenShareToggle { room_id } => {
+                            if self.room_id.as_ref() == Some(room_id) {
+                                log!("VoipScreen: PipScreenShareToggle from PiP");
+                                self.toggle_screenshare();
+                                self.update_ui(cx);
+                            }
+                        }
+                        VoipAction::PipHangup { room_id } => {
+                            if self.room_id.as_ref() == Some(room_id) {
+                                log!("VoipScreen: PipHangup from PiP");
+                                self.hangup(cx);
+                            }
+                        }
+                        VoipAction::ShowPip { room_id } => {
+                            if self.room_id.as_ref() == Some(room_id) {
+                                log!("VoipScreen: ShowPip - stopping local camera for PiP");
+                                // Stop the call camera so PiP can use it
+                                if !self.call.local_video_muted {
+                                    CameraManager::stop_call_camera(&self.view, cx);
+                                    self.camera_active = false;
+                                }
+                            }
+                        }
+                        VoipAction::HidePip => {
+                            // When PiP is hidden (user returned to VoIP tab), restart camera
+                            if !self.in_lobby && !self.call.local_video_muted {
+                                log!("VoipScreen: HidePip - attempting to restart camera");
+
+                                if let Some(choice) = self.camera_choice.clone() {
+                                    let video = self.view.video(cx, &[live_id!(local_camera_video)]);
+                                    let is_unprepared = video.is_unprepared();
+                                    let is_cleaning_up = video.is_cleaning_up();
+                                    log!("VoipScreen: local_camera_video state - unprepared={}, cleaning_up={}",
+                                        is_unprepared, is_cleaning_up);
+
+                                    if is_unprepared {
+                                        // Camera is ready to start
+                                        log!("VoipScreen: Starting camera immediately");
+                                        if CameraManager::start_call_camera(&self.view, cx, &choice) {
+                                            log!("VoipScreen: Call camera started successfully");
+                                            self.camera_active = true;
+                                        } else {
+                                            log!("VoipScreen: Failed to start camera, will retry on release event");
+                                            self.pending_call_camera_start = true;
+                                            self.camera_active = false;
+                                        }
+                                    } else if is_cleaning_up {
+                                        // Camera is still cleaning up, wait for release event
+                                        log!("VoipScreen: Camera is cleaning up, will wait for release");
+                                        self.pending_call_camera_start = true;
+                                        self.camera_active = false;
+                                    } else {
+                                        // Video is in some other state - force stop and restart
+                                        log!("VoipScreen: Camera in unexpected state, forcing stop and restart");
+                                        CameraManager::stop_call_camera(&self.view, cx);
+                                        self.pending_call_camera_start = true;
+                                        self.camera_active = false;
+                                    }
+                                }
+                            }
+                        }
+                        VoipAction::ReturnToVoipTab { room_id } => {
+                            if self.room_id.as_ref() == Some(room_id) {
+                                // When returning to VoIP tab from PiP, restart camera
+                                if !self.in_lobby && !self.call.local_video_muted {
+                                    log!("VoipScreen: ReturnToVoipTab - attempting to restart camera");
+
+                                    if let Some(choice) = self.camera_choice.clone() {
+                                        let video = self.view.video(cx, &[live_id!(local_camera_video)]);
+                                        let is_unprepared = video.is_unprepared();
+                                        let is_cleaning_up = video.is_cleaning_up();
+                                        log!("VoipScreen: local_camera_video state - unprepared={}, cleaning_up={}",
+                                            is_unprepared, is_cleaning_up);
+
+                                        if is_unprepared {
+                                            // Camera is ready to start
+                                            log!("VoipScreen: Starting camera immediately");
+                                            if CameraManager::start_call_camera(&self.view, cx, &choice) {
+                                                log!("VoipScreen: Call camera started successfully");
+                                                self.camera_active = true;
+                                            } else {
+                                                log!("VoipScreen: Failed to start camera, will retry on release event");
+                                                self.pending_call_camera_start = true;
+                                                self.camera_active = false;
+                                            }
+                                        } else if is_cleaning_up {
+                                            // Camera is still cleaning up, wait for release event
+                                            log!("VoipScreen: Camera is cleaning up, will wait for release");
+                                            self.pending_call_camera_start = true;
+                                            self.camera_active = false;
+                                        } else {
+                                            // Video is in some other state - force stop and restart
+                                            log!("VoipScreen: Camera in unexpected state, forcing stop and restart");
+                                            CameraManager::stop_call_camera(&self.view, cx);
+                                            self.pending_call_camera_start = true;
+                                            self.camera_active = false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1194,6 +1309,9 @@ impl VoipScreen {
         self.pending_call_camera_start = true;
         self.camera_active = false;
 
+        // Clear global state for PiP
+        VoipGlobalState::clear_active_call(cx);
+
         self.update_ui(cx);
     }
 
@@ -1332,6 +1450,64 @@ impl VoipScreen {
 
         // Force redraw to ensure all visibility changes take effect
         self.view.redraw(cx);
+
+        // Sync state to global for PiP display
+        self.sync_to_global_state(cx);
+    }
+
+    /// Sync current call state to global state for PiP overlay access
+    fn sync_to_global_state(&mut self, cx: &mut Cx) {
+        // Only sync if we have a room and are in a call (not lobby)
+        if self.in_lobby {
+            // Clear global state when in lobby
+            VoipGlobalState::clear_active_call(cx);
+            return;
+        }
+
+        let status_text = match self.call.connection_state {
+            ConnectionState::Disconnected => "Not connected".to_string(),
+            ConnectionState::Connecting => "Connecting...".to_string(),
+            ConnectionState::Connected => "In call".to_string(),
+            ConnectionState::Disconnecting => "Disconnecting...".to_string(),
+        };
+
+        // Get local participant info
+        let local_participant = if let Some(client) = get_client() {
+            if let Some(session) = client.session_meta() {
+                let user_id = session.user_id.to_string();
+                let display_name = user_id
+                    .strip_prefix('@')
+                    .and_then(|s| s.split(':').next())
+                    .unwrap_or(&user_id)
+                    .to_string();
+                let avatar_letter = display_name.chars().next()
+                    .unwrap_or('?')
+                    .to_uppercase()
+                    .to_string();
+                ParticipantInfo {
+                    user_id,
+                    display_name,
+                    avatar_letter,
+                }
+            } else {
+                ParticipantInfo::default()
+            }
+        } else {
+            ParticipantInfo::default()
+        };
+
+        let active_call = ActiveCallState {
+            room_id: self.room_id.clone(),
+            status_text,
+            in_call: !self.in_lobby && self.call.connection_state != ConnectionState::Disconnected,
+            mic_muted: self.call.local_audio_muted,
+            camera_muted: self.call.local_video_muted,
+            screen_sharing: self.call.is_screen_sharing,
+            local_participant,
+            participant_count: self.call.participants.len() + 1,
+        };
+
+        VoipGlobalState::update_active_call(cx, active_call);
     }
 
     /// Try to start camera
@@ -1418,19 +1594,40 @@ impl VoipScreen {
         }
     }
 
-    /// Handle video resources released (camera handoff from lobby to call)
+    /// Handle video resources released (camera handoff from lobby/PiP to call)
     fn handle_video_resources_released(&mut self, cx: &mut Cx) {
         if self.pending_call_camera_start {
-            log!("Lobby camera released, starting call camera...");
+            log!("VoipScreen: Camera resources released, attempting to start call camera...");
             self.pending_call_camera_start = false;
             if let Some(choice) = self.camera_choice.clone() {
-                if CameraManager::start_call_camera(&self.view, cx, &choice) {
-                    log!("Call camera started successfully");
-                    self.camera_active = true;
+                let video = self.view.video(cx, &[live_id!(local_camera_video)]);
+                let is_unprepared = video.is_unprepared();
+                let is_cleaning_up = video.is_cleaning_up();
+                log!("VoipScreen: local_camera_video state - unprepared={}, cleaning_up={}",
+                    is_unprepared, is_cleaning_up);
+
+                if is_unprepared {
+                    // Camera is ready to start
+                    if CameraManager::start_call_camera(&self.view, cx, &choice) {
+                        log!("VoipScreen: Call camera started successfully");
+                        self.camera_active = true;
+                    } else {
+                        log!("VoipScreen: Failed to start camera even though unprepared");
+                        self.pending_call_camera_start = true;
+                    }
+                } else if is_cleaning_up {
+                    // Still cleaning up, wait for next release event
+                    log!("VoipScreen: Camera still cleaning up, will retry on next release");
+                    self.pending_call_camera_start = true;
+                } else {
+                    // Unexpected state - force stop and retry
+                    log!("VoipScreen: Camera in unexpected state, forcing stop");
+                    CameraManager::stop_call_camera(&self.view, cx);
+                    self.pending_call_camera_start = true;
                 }
             }
         } else {
-            log!("Video resources released");
+            log!("VoipScreen: Video resources released (no pending start)");
         }
     }
 

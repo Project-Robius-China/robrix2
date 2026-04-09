@@ -16,7 +16,7 @@ use crate::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     },
-    voip::{VoipGlobalState, VoipAction},
+    voip::{VoipGlobalState, VoipAction, PipVoipOverlayWidgetRefExt},
 };
 
 script_mod! {
@@ -149,6 +149,9 @@ script_mod! {
                                 delete_confirmation_modal_inner := NegativeConfirmationModal { }
                             }
                         }
+
+                        // PiP overlay for VoIP calls (shown when switching away from active call)
+                        pip_voip_overlay := PipVoipOverlay {}
 
                         PopupList {}
 
@@ -402,15 +405,41 @@ impl MatchEvent for App {
                 _ => {}
             }
 
-            // Handle VoIP close action - reset the VoIP visibility on the mobile RoomScreen
-            // if let Some(VoipAction::Close(_room_id)) = action.downcast_ref() {
-            //     log!("App: VoipAction::Close received, resetting VoIP visibility");
-            //     // Reset VoIP visibility on room_screen_0 (mobile path)
-            //     let room_screen = self.ui.room_screen(cx, ids!(room_screen_0));
-            //     room_screen.set_voip_visible(cx, false, None);
-            //     self.ui.redraw(cx);
-            //     continue;
-            // }
+            // Handle VoIP PiP overlay actions
+            match action.downcast_ref() {
+                Some(VoipAction::ShowPip { room_id }) => {
+                    log!("App: VoipAction::ShowPip received for room {}", room_id);
+                    self.ui.pip_voip_overlay(cx, ids!(pip_voip_overlay)).show(cx, room_id.clone());
+                    continue;
+                }
+                Some(VoipAction::HidePip) => {
+                    log!("App: VoipAction::HidePip received");
+                    self.ui.pip_voip_overlay(cx, ids!(pip_voip_overlay)).hide(cx);
+                    continue;
+                }
+                Some(VoipAction::ReturnToVoipTab { room_id }) => {
+                    log!("App: VoipAction::ReturnToVoipTab received for room {}", room_id);
+                    // Hide the PiP overlay
+                    self.ui.pip_voip_overlay(cx, ids!(pip_voip_overlay)).hide(cx);
+                    // Navigate back to the VoIP tab by emitting a RoomsListAction::Selected
+                    // We need to look up the room name from RoomsList
+                    if let Some(room_name_id) = cx.get_global::<RoomsListRef>().get_room_name(room_id) {
+                        cx.widget_action(
+                            self.ui.widget_uid(),
+                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                        );
+                    }
+                    self.ui.redraw(cx);
+                    continue;
+                }
+                Some(VoipAction::PipHangup { room_id }) => {
+                    log!("App: VoipAction::PipHangup received for room {}", room_id);
+                    // Hide the PiP overlay - the VoipScreen will handle the actual hangup
+                    self.ui.pip_voip_overlay(cx, ids!(pip_voip_overlay)).hide(cx);
+                    // The action will continue to propagate to VoipScreen
+                }
+                _ => {}
+            }
 
             // When a stack navigation pop is initiated (back button pressed),
             // pop the mobile nav stack so it stays in sync with StackNavigation.
@@ -784,6 +813,7 @@ impl AppMain for App {
         crate::verification_modal::script_mod(vm);
         crate::profile::script_mod(vm);
         crate::voip::voip_screen::script_mod(vm);
+        crate::voip::pip_overlay::script_mod(vm);
         crate::home::script_mod(vm);
         crate::login::script_mod(vm);
         crate::logout::script_mod(vm);

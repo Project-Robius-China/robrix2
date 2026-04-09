@@ -3,7 +3,7 @@ use ruma::OwnedRoomId;
 use tokio::sync::Notify;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{app::{AppState, AppStateAction, SavedDockState, SelectedRoom}, home::{navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef, space_lobby::SpaceLobbyScreenWidgetRefExt}, utils::RoomNameId, voip::{voip_screen::VoipScreenWidgetRefExt, VoipAction}};
+use crate::{app::{AppState, AppStateAction, SavedDockState, SelectedRoom}, home::{navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef, space_lobby::SpaceLobbyScreenWidgetRefExt}, utils::RoomNameId, voip::{voip_screen::VoipScreenWidgetRefExt, VoipAction, VoipGlobalState}};
 use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::RoomScreenWidgetRefExt, rooms_list::RoomsListAction};
 
 script_mod! {
@@ -463,6 +463,25 @@ impl WidgetMatchEvent for MainDesktopUI {
             match widget_action.cast() {
                 // Whenever a tab (except for the home_tab) is pressed, notify the app state.
                 DockAction::TabWasPressed(tab_id) => {
+                    // Check if we're switching FROM a VoIP tab with active call -> show PiP
+                    // Or if we're switching TO a VoIP tab -> hide PiP
+                    let prev_room = self.most_recently_selected_room.clone();
+                    let new_room = self.open_rooms.get(&tab_id).cloned();
+
+                    // Detect switch TO VoIP tab -> hide PiP
+                    if let Some(SelectedRoom::Voip { .. }) = &new_room {
+                        log!("MainDesktopUI: Switching TO VoIP tab, hiding PiP");
+                        cx.action(VoipAction::HidePip);
+                    }
+                    // Detect switch FROM VoIP tab with active call -> show PiP
+                    else if let Some(SelectedRoom::Voip { room_name_id }) = &prev_room {
+                        let room_id = room_name_id.room_id();
+                        if VoipGlobalState::is_call_active(cx, room_id) {
+                            log!("MainDesktopUI: Switching FROM VoIP tab with active call, showing PiP");
+                            cx.action(VoipAction::ShowPip { room_id: room_id.clone() });
+                        }
+                    }
+
                     if tab_id == id!(home_tab) {
                         cx.action(AppStateAction::FocusNone);
                         self.most_recently_selected_room = None;
@@ -474,12 +493,14 @@ impl WidgetMatchEvent for MainDesktopUI {
                     should_save_dock_action = true;
                 }
                 DockAction::TabCloseWasPressed(tab_id) => {
-                    // If closing a VoIP tab, call hangup on the VoipScreen first
+                    // If closing a VoIP tab, call hangup on the VoipScreen first and hide PiP
                     if let Some(SelectedRoom::Voip { .. }) = self.open_rooms.get(&tab_id) {
-                        log!("MainDesktopUI: Closing VoIP tab via dock X button, calling hangup");
+                        log!("MainDesktopUI: Closing VoIP tab via dock X button, calling hangup and hiding PiP");
                         let dock = self.view.dock(cx, ids!(dock));
                         let widget = dock.item(tab_id);
                         widget.as_voip_screen().hangup(cx);
+                        // Hide PiP when VoIP tab is closed
+                        cx.action(VoipAction::HidePip);
                     }
                     self.tab_to_close = Some(tab_id);
                     self.close_tab(cx, tab_id);

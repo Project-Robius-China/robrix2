@@ -16,6 +16,7 @@ use matrix_sdk::ruma::OwnedRoomId;
 pub mod call_state;
 pub mod camera;
 pub mod livekit_client;
+pub mod pip_overlay;
 pub mod remote_video_session;
 pub mod speaking;
 pub mod participants_list;
@@ -26,6 +27,7 @@ pub use voip_screen::VoipScreenWidgetRefExt;
 pub use participants_list::{Participant, ParticipantsListWidgetRefExt};
 pub use camera::CameraChoice;
 pub use token_cache::{CachedOpenIdToken, CachedLiveKitJwt, VoipTokenState};
+pub use pip_overlay::PipVoipOverlayWidgetRefExt;
 
 /// Represents a call member from Matrix state events
 #[derive(Clone, Debug)]
@@ -33,6 +35,35 @@ pub struct CallMember {
     pub user_id: String,
     pub device_id: String,
     pub display_name: Option<String>,
+}
+
+/// Information about a participant in an active call (for PiP display)
+#[derive(Clone, Debug, Default)]
+pub struct ParticipantInfo {
+    pub user_id: String,
+    pub display_name: String,
+    pub avatar_letter: String,
+}
+
+/// State of an active VoIP call (stored in VoipGlobalState for PiP access)
+#[derive(Clone, Debug, Default)]
+pub struct ActiveCallState {
+    /// The room ID where the call is happening
+    pub room_id: Option<OwnedRoomId>,
+    /// Connection state description
+    pub status_text: String,
+    /// Whether we are in lobby or in an active call
+    pub in_call: bool,
+    /// Whether the local microphone is muted
+    pub mic_muted: bool,
+    /// Whether the local camera is off
+    pub camera_muted: bool,
+    /// Whether screen sharing is active
+    pub screen_sharing: bool,
+    /// Information about the local participant
+    pub local_participant: ParticipantInfo,
+    /// Number of remote participants
+    pub participant_count: usize,
 }
 
 /// Actions emitted by VoIP screens
@@ -98,6 +129,20 @@ pub enum VoipAction {
     },
     /// Test action: Stop continuous test video frames
     TestStopVideoStream,
+    /// Show the PiP overlay for an active call
+    ShowPip { room_id: OwnedRoomId },
+    /// Hide the PiP overlay
+    HidePip,
+    /// Toggle microphone from PiP
+    PipMicToggle { room_id: OwnedRoomId },
+    /// Toggle camera from PiP
+    PipCameraToggle { room_id: OwnedRoomId },
+    /// Toggle screen share from PiP
+    PipScreenShareToggle { room_id: OwnedRoomId },
+    /// Hangup from PiP
+    PipHangup { room_id: OwnedRoomId },
+    /// Return to the VoIP tab from clicking on PiP
+    ReturnToVoipTab { room_id: OwnedRoomId },
     #[default]
     None,
 }
@@ -118,6 +163,8 @@ pub struct VoipGlobalState {
     pub cached_openid_token: Option<CachedOpenIdToken>,
     /// Cached LiveKit JWTs (per-room, since JWTs are room-specific)
     pub cached_livekit_jwts: Vec<CachedLiveKitJwt>,
+    /// Active call state for PiP overlay display
+    pub active_call: Option<ActiveCallState>,
 }
 
 impl VoipGlobalState {
@@ -275,5 +322,44 @@ impl VoipGlobalState {
                 }
             }
         }
+    }
+
+    /// Check if there is an active call for the given room
+    pub fn is_call_active(cx: &mut Cx, room_id: &OwnedRoomId) -> bool {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            if let Some(ref active) = state.active_call {
+                return active.in_call && active.room_id.as_ref() == Some(room_id);
+            }
+        }
+        false
+    }
+
+    /// Update the active call state
+    pub fn update_active_call(cx: &mut Cx, call: ActiveCallState) {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            log!("VoipGlobalState: Updating active call state for room {:?}, in_call={}",
+                call.room_id, call.in_call);
+            state.active_call = Some(call);
+        }
+    }
+
+    /// Clear the active call state
+    pub fn clear_active_call(cx: &mut Cx) {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            log!("VoipGlobalState: Clearing active call state");
+            state.active_call = None;
+        }
+    }
+
+    /// Get the active call state
+    pub fn get_active_call(cx: &mut Cx) -> Option<ActiveCallState> {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            return state.active_call.clone();
+        }
+        None
     }
 }
