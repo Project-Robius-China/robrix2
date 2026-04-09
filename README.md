@@ -134,10 +134,20 @@ The following table shows which host systems can currently be used to build Robr
      --profile=<unique-starting-hex-string> \
      --cert=<UNIQUE_STARTING_HEX_STRING> \
      --device=<UNIQUE-STARTING-HEX-STRING> \
-     --org=rs.robius \
+    --org=rs.robius \
      --app=robrix \
      run-device -p robrix –release
    ```
+
+#### Add iOS AppIcon assets to the built `.app` bundle
+5. After building the iOS app bundle, compile and apply the AppIcon asset catalog:
+   ```sh
+   ./packaging/ios/apply_ios_app_icons.sh \
+     ./target/makepad-apple-app/aarch64-apple-ios/release/robrix.app \
+     1
+   ```
+   * This step adds `Assets.car` and required icon metadata into `Info.plist`.
+   * If you already signed the app before this step, you must re-sign it afterwards.
 
 # Feature status tracker
 
