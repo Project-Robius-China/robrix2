@@ -147,7 +147,7 @@ script_mod! {
                 room_name := Label {
                     text: "Call Room"
                     draw_text.text_style.font_size: 18
-                    draw_text.color: #ddd
+                    draw_text.color: #888
                 }
 
                 call_status := Label {
@@ -184,16 +184,16 @@ script_mod! {
                 participants_panel := View {
                     width: 200
                     height: Fill
-                    padding: 8
+                    padding: 0
                     show_bg: true
                     draw_bg.color: #1e1e3a
                     flow: Down
-                    spacing: 4
+                    spacing: 0
 
                     Label {
                         text: "Participants"
                         draw_text.text_style.font_size: 13
-                        draw_text.color: #aaa
+                        draw_text.color: #888
                         margin: Inset{bottom: 4}
                     }
 

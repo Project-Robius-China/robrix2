@@ -474,6 +474,13 @@ impl WidgetMatchEvent for MainDesktopUI {
                     should_save_dock_action = true;
                 }
                 DockAction::TabCloseWasPressed(tab_id) => {
+                    // If closing a VoIP tab, call hangup on the VoipScreen first
+                    if let Some(SelectedRoom::Voip { .. }) = self.open_rooms.get(&tab_id) {
+                        log!("MainDesktopUI: Closing VoIP tab via dock X button, calling hangup");
+                        let dock = self.view.dock(cx, ids!(dock));
+                        let widget = dock.item(tab_id);
+                        widget.as_voip_screen().hangup(cx);
+                    }
                     self.tab_to_close = Some(tab_id);
                     self.close_tab(cx, tab_id);
                     self.redraw(cx);
