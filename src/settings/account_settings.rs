@@ -24,135 +24,161 @@ script_mod! {
             text: "Account Settings"
         }
 
-        avatar_section_label := SubsectionLabel {
-            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
-            text: "Your Avatar:"
-        }
-
-        View {
+        // --- Avatar card ---
+        RoundedView {
             width: Fill, height: Fit
-            // TODO: I'd like to use RightWrap here, but Makepad doesn't yet
-            //       support RightWrap with align: Align{y: 0.5}.
-            flow: Right,
-            align: Align{y: 0.5}
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
+            }
 
-            our_own_avatar := Avatar {
-                width: 100,
-                height: 100,
-                margin: 10,
-                text_view +: {
-                    text +: {
-                        draw_text +: {
-                            text_style: theme.font_regular { font_size: 35.0 }
+            avatar_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Your Avatar:"
+            }
+
+            View {
+                width: Fill, height: Fit
+                // TODO: I'd like to use RightWrap here, but Makepad doesn't yet
+                //       support RightWrap with align: Align{y: 0.5}.
+                flow: Right,
+                align: Align{y: 0.5}
+
+                our_own_avatar := Avatar {
+                    width: 100,
+                    height: 100,
+                    margin: 10,
+                    text_view +: {
+                        text +: {
+                            draw_text +: {
+                                text_style: theme.font_regular { font_size: 35.0 }
+                            }
+                        }
+                    }
+                }
+
+                View {
+                    width: Fit, height: Fit
+                    flow: Down,
+                    align: Align{y: 0.5}
+                    padding: Inset{ left: (SPACE_SM), right: (SPACE_SM) }
+                    spacing: (SPACE_SM)
+
+                    View {
+                        width: Fit, height: Fit
+                        flow: Right,
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_SM)
+
+                        upload_avatar_button := RobrixIconButton {
+                            width: 140,
+                            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
+                            padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
+                            margin: 0,
+                            draw_bg +: { border_radius: (RADIUS_MD) }
+                            draw_icon.svg: (ICON_UPLOAD)
+                            icon_walk: Walk{width: 16, height: 16}
+                            text: "Upload Avatar"
+                        }
+
+                        upload_avatar_spinner := LoadingSpinner {
+                            width: 16, height: 16
+                            visible: false
+                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                        }
+                    }
+
+                    View {
+                        width: Fit, height: Fit
+                        flow: Right,
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_SM)
+
+                        delete_avatar_button := RobrixNegativeIconButton {
+                            width: 140,
+                            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
+                            padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
+                            margin: 0,
+                            draw_bg +: { border_radius: (RADIUS_MD) }
+                            draw_icon.svg: (ICON_TRASH)
+                            icon_walk: Walk{ width: 16, height: 16 }
+                            text: "Delete Avatar"
+                        }
+
+                        delete_avatar_spinner := LoadingSpinner {
+                            width: 16, height: 16
+                            visible: false
+                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
                         }
                     }
                 }
             }
+        }
+
+        // --- Display Name card ---
+        RoundedView {
+            width: Fill, height: Fit
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
+            }
+
+            display_name_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Your Display Name:"
+            }
+
+            display_name_input := RobrixTextInput {
+                margin: Inset{top: 3, left: (SPACE_XS), right: (SPACE_XS), bottom: (SPACE_SM)},
+                width: 216, height: Fit
+                empty_text: "Add a display name..."
+            }
 
             View {
-                width: Fit, height: Fit
-                flow: Down,
-                align: Align{y: 0.5}
-                padding: Inset{ left: (SPACE_SM), right: (SPACE_SM) }
+                width: Fill, height: Fit
+                flow: Flow.Right{wrap: true},
+                align: Align{y: 0.5},
                 spacing: (SPACE_SM)
 
-                View {
-                    width: Fit, height: Fit
-                    flow: Right,
-                    align: Align{y: 0.5}
-                    spacing: (SPACE_SM)
-
-                    upload_avatar_button := RobrixIconButton {
-                        width: 140,
-                        height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
-                        padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                        margin: 0,
-                        draw_bg +: { border_radius: (RADIUS_MD) }
-                        draw_icon.svg: (ICON_UPLOAD)
-                        icon_walk: Walk{width: 16, height: 16}
-                        text: "Upload Avatar"
-                    }
-
-                    upload_avatar_spinner := LoadingSpinner {
-                        width: 16, height: 16
-                        visible: false
-                        draw_bg.color: (COLOR_ACTIVE_PRIMARY)
-                    }
+                // These buttons are disabled by default, and enabled when the user
+                // changes the `display_name_input` text.
+                // These buttons start disabled; Rust code enables them and swaps
+                // their styles to RobrixNeutralIconButton / RobrixPositiveIconButton.
+                cancel_display_name_button := RobrixNeutralIconButton {
+                    enabled: false,
+                    width: Fit, height: Fit,
+                    padding: 10,
+                    margin: Inset{left: (SPACE_XS)},
+                    draw_icon.svg: (ICON_FORBIDDEN)
+                    icon_walk: Walk{width: 16, height: 16, margin: 0}
+                    text: "Cancel"
                 }
 
-                View {
-                    width: Fit, height: Fit
-                    flow: Right,
-                    align: Align{y: 0.5}
-                    spacing: (SPACE_SM)
-
-                    delete_avatar_button := RobrixNegativeIconButton {
-                        width: 140,
-                        height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
-                        padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                        margin: 0,
-                        draw_bg +: { border_radius: (RADIUS_MD) }
-                        draw_icon.svg: (ICON_TRASH)
-                        icon_walk: Walk{ width: 16, height: 16 }
-                        text: "Delete Avatar"
-                    }
-
-                    delete_avatar_spinner := LoadingSpinner {
-                        width: 16, height: 16
-                        visible: false
-                        draw_bg.color: (COLOR_ACTIVE_PRIMARY)
-                    }
+                accept_display_name_button := RobrixPositiveIconButton {
+                    enabled: false,
+                    width: Fit, height: Fit,
+                    padding: 10,
+                    margin: Inset{left: (SPACE_XS)},
+                    draw_bg.border_radius: (RADIUS_MD)
+                    draw_icon.svg: (ICON_CHECKMARK)
+                    icon_walk: Walk{width: 16, height: 16, margin: 0}
+                    text: "Save Name"
                 }
-            }
-        }
 
-        display_name_section_label := SubsectionLabel {
-            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
-            text: "Your Display Name:"
-        }
-
-        display_name_input := RobrixTextInput {
-            margin: Inset{top: 3, left: (SPACE_XS), right: (SPACE_XS), bottom: (SPACE_SM)},
-            width: 216, height: Fit
-            empty_text: "Add a display name..."
-        }
-
-        View {
-            width: Fill, height: Fit
-            flow: Flow.Right{wrap: true},
-            align: Align{y: 0.5},
-            spacing: (SPACE_SM)
-
-            // These buttons are disabled by default, and enabled when the user
-            // changes the `display_name_input` text.
-            // These buttons start disabled; Rust code enables them and swaps
-            // their styles to RobrixNeutralIconButton / RobrixPositiveIconButton.
-            cancel_display_name_button := RobrixNeutralIconButton {
-                enabled: false,
-                width: Fit, height: Fit,
-                padding: 10,
-                margin: Inset{left: (SPACE_XS)},
-                draw_icon.svg: (ICON_FORBIDDEN)
-                icon_walk: Walk{width: 16, height: 16, margin: 0}
-                text: "Cancel"
-            }
-
-            accept_display_name_button := RobrixPositiveIconButton {
-                enabled: false,
-                width: Fit, height: Fit,
-                padding: 10,
-                margin: Inset{left: (SPACE_XS)},
-                draw_bg.border_radius: (RADIUS_MD)
-                draw_icon.svg: (ICON_CHECKMARK)
-                icon_walk: Walk{width: 16, height: 16, margin: 0}
-                text: "Save Name"
-            }
-
-            save_name_spinner := LoadingSpinner {
-                width: 16, height: 16
-                margin: Inset{left: 5, top: 13} // vertically center with buttons
-                visible: false
-                draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                save_name_spinner := LoadingSpinner {
+                    width: 16, height: 16
+                    margin: Inset{left: 5, top: 13} // vertically center with buttons
+                    visible: false
+                    draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                }
             }
         }
 
@@ -187,16 +213,27 @@ script_mod! {
             }
         }
 
-        multiple_accounts_section_label := SubsectionLabel {
-            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
-            text: "Multiple Accounts:"
-        }
-
-        View {
+        // --- Multiple Accounts card ---
+        RoundedView {
             width: Fill, height: Fit
-            flow: Down,
-            spacing: (SPACE_SM),
-            margin: Inset{left: (SPACE_XS), right: (SPACE_XS), bottom: (SPACE_SM)}
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
+            }
+
+            multiple_accounts_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Multiple Accounts:"
+            }
+
+            View {
+                width: Fill, height: Fit
+                flow: Down,
+                spacing: (SPACE_SM),
 
             // Account entries will be shown here
             // Active account (current)
@@ -308,7 +345,8 @@ script_mod! {
                 icon_walk: Walk{width: 16, height: 16}
                 text: "Add Another Account"
             }
-        }
+            }
+        } // end Multiple Accounts card
 
         other_actions_section_label := SubsectionLabel {
             margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
