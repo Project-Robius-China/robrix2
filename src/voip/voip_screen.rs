@@ -36,24 +36,17 @@ script_mod! {
 
             ParticipantItem := RoundedView {
                 width: Fill
-                height: 120
-                margin: Inset{bottom: 8}
+                height: 100
+                margin: Inset{bottom: 4}
                 draw_bg.color: #3a3a5a
-                draw_bg.radius: 8.0
+                draw_bg.radius: 6.0
                 flow: Overlay
 
                 // Video view (shown when video is on)
-                participant_video_host := View {
+                participant_video := WebRtcVideo {
                     width: Fill
                     height: Fill
                     visible: false
-
-                    participant_video := Video {
-                        width: Fill
-                        height: Fill
-                        autoplay: false
-                        show_controls: false
-                    }
                 }
 
                 // Avatar view (shown when video is off)
@@ -63,15 +56,15 @@ script_mod! {
                     align: Center
 
                     avatar := RoundedView {
-                        width: 48
-                        height: 48
+                        width: 40
+                        height: 40
                         draw_bg.color: #a0d0a0
-                        draw_bg.radius: 24.0
+                        draw_bg.radius: 20.0
                         align: Center
 
                         avatar_letter := Label {
                             text: "?"
-                            draw_text.text_style.font_size: 20
+                            draw_text.text_style.font_size: 18
                             draw_text.color: #2a6a2a
                         }
                     }
@@ -81,34 +74,45 @@ script_mod! {
                 View {
                     width: Fill
                     height: Fill
-                    align: Align{x: 0.0 y: 1.0}
-                    padding: 8
+                    align: Align{x: 0.5 y: 1.0}
+                    padding: 6
 
                     RoundedView {
                         width: Fit
                         height: Fit
-                        padding: Inset{left: 8 right: 8 top: 4 bottom: 4}
-                        draw_bg.color: #000000aa
-                        draw_bg.radius: 4.0
+                        padding: Inset{left: 8 right: 10 top: 4 bottom: 4}
+                        draw_bg.color: #1a1a3a
+                        draw_bg.radius: 12.0
                         flow: Right
-                        spacing: 6
+                        spacing: 4
+                        align: Center
 
-                        mute_icon := Label {
-                            text: ""
-                            draw_text.text_style.font_size: 10
-                            draw_text.color: #fff
+                        mute_icon := RobrixIconButton {
+                            width: 14
+                            height: 14
+                            padding: 0
+                            draw_icon.svg: (ICON_MICROPHONE)
+                            icon_walk: Walk{width: 12, height: 12}
+                            draw_bg +: {
+                                color: #00000000
+                                border_radius: 0.0
+                            }
+                            draw_icon +: {
+                                color: #aaa
+                            }
                         }
 
                         name_label := Label {
                             text: "Participant"
                             draw_text.text_style.font_size: 10
-                            draw_text.color: #fff
+                            draw_text.color: #ddd
                         }
 
                         status_label := Label {
                             text: ""
                             draw_text.text_style.font_size: 10
                             draw_text.color: #4CAF50
+                            visible: false
                         }
                     }
                 }
@@ -137,25 +141,20 @@ script_mod! {
                 height: Fit
                 padding: 16
                 flow: Right
-                spacing: 12
+                spacing: 8
+                align: Center
 
-                View {
-                    width: Fit
-                    height: Fit
-                    flow: Down
-                    spacing: 4
+                room_name := Label {
+                    text: "Call Room"
+                    draw_text.text_style.font_size: 18
+                    draw_text.color: #ddd
+                }
 
-                    room_name := Label {
-                        text: "Call Room"
-                        draw_text.text_style.font_size: 18
-                        draw_text.color: #fff
-                    }
-
-                    call_status := Label {
-                        text: "Not connected"
-                        draw_text.text_style.font_size: 12
-                        draw_text.color: #888
-                    }
+                call_status := Label {
+                    text: "Not connected"
+                    draw_text.text_style.font_size: 12
+                    draw_text.color: #888
+                    margin: Inset{left: 4}
                 }
 
                 View { width: Fill height: 1 }
@@ -164,6 +163,7 @@ script_mod! {
                     text: ""
                     draw_text.text_style.font_size: 14
                     draw_text.color: #888
+                    margin: Inset{right: 8}
                 }
 
                 participant_count := Label {
@@ -182,19 +182,19 @@ script_mod! {
 
                 // Participants list on the left
                 participants_panel := View {
-                    width: 220
+                    width: 200
                     height: Fill
-                    padding: 12
+                    padding: 8
                     show_bg: true
                     draw_bg.color: #1e1e3a
                     flow: Down
-                    spacing: 8
+                    spacing: 4
 
                     Label {
                         text: "Participants"
-                        draw_text.text_style.font_size: 14
-                        draw_text.color: #fff
-                        margin: Inset{bottom: 8}
+                        draw_text.text_style.font_size: 13
+                        draw_text.color: #aaa
+                        margin: Inset{bottom: 4}
                     }
 
                     participants_list := mod.widgets.VoipParticipantsList {}
@@ -252,32 +252,42 @@ script_mod! {
                         }
                     }
 
-                    // Name badge overlay at bottom left
+                    // Name badge overlay at bottom center (always visible)
                     View {
                         width: Fill
                         height: Fill
-                        align: Align{x: 0.0 y: 1.0}
-                        padding: 16
+                        align: Align{x: 0.5 y: 1.0}
+                        padding: 12
 
                         RoundedView {
                             width: Fit
                             height: Fit
-                            padding: Inset{left: 12 right: 12 top: 6 bottom: 6}
-                            draw_bg.color: #000000aa
-                            draw_bg.radius: 6.0
+                            padding: Inset{left: 10 right: 14 top: 6 bottom: 6}
+                            draw_bg.color: #1a1a3a
+                            draw_bg.radius: 14.0
                             flow: Right
                             spacing: 6
+                            align: Center
 
-                            local_mute_icon := Label {
-                                text: ""
-                                draw_text.text_style.font_size: 14
-                                draw_text.color: #fff
+                            local_mute_icon := RobrixIconButton {
+                                width: 16
+                                height: 16
+                                padding: 0
+                                draw_icon.svg: (ICON_MICROPHONE)
+                                icon_walk: Walk{width: 14, height: 14}
+                                draw_bg +: {
+                                    color: #00000000
+                                    border_radius: 0.0
+                                }
+                                draw_icon +: {
+                                    color: #aaa
+                                }
                             }
 
                             local_name_label := Label {
                                 text: "You"
-                                draw_text.text_style.font_size: 14
-                                draw_text.color: #fff
+                                draw_text.text_style.font_size: 12
+                                draw_text.color: #ddd
                             }
                         }
                     }
@@ -298,12 +308,82 @@ script_mod! {
                     draw_bg.color: #2a2a4a
                     draw_bg.radius: 24.0
                     flow: Right
-                    spacing: 8
+                    spacing: 12
 
-                    mic_button := Button { text: "Mic" width: 60 }
-                    camera_button := Button { text: "Cam" width: 60 }
-                    screenshare_button := Button { text: "Share" width: 60 }
-                    hangup_button := Button { text: "End" width: 60 }
+                    mic_button := RobrixIconButton {
+                        width: 48
+                        height: 48
+                        padding: 10
+                        draw_icon.svg: (ICON_MICROPHONE)
+                        icon_walk: Walk{width: 24, height: 24}
+                        draw_bg +: {
+                            color: #3a3a5a
+                            border_radius: 24.0
+                        }
+                        draw_icon +: {
+                            color: #fff
+                        }
+                    }
+
+                    camera_button := RobrixIconButton {
+                        width: 48
+                        height: 48
+                        padding: 10
+                        draw_icon.svg: (ICON_VIDEO)
+                        icon_walk: Walk{width: 24, height: 24}
+                        draw_bg +: {
+                            color: #3a3a5a
+                            border_radius: 24.0
+                        }
+                        draw_icon +: {
+                            color: #fff
+                        }
+                    }
+
+                    screenshare_button := RobrixIconButton {
+                        width: 48
+                        height: 48
+                        padding: 10
+                        draw_icon.svg: (ICON_SQUARES)
+                        icon_walk: Walk{width: 24, height: 24}
+                        draw_bg +: {
+                            color: #3a3a5a
+                            border_radius: 24.0
+                        }
+                        draw_icon +: {
+                            color: #fff
+                        }
+                    }
+
+                    participants_button := RobrixIconButton {
+                        width: 48
+                        height: 48
+                        padding: 10
+                        draw_icon.svg: (ICON_ADD_USER)
+                        icon_walk: Walk{width: 24, height: 24}
+                        draw_bg +: {
+                            color: #3a3a5a
+                            border_radius: 24.0
+                        }
+                        draw_icon +: {
+                            color: #fff
+                        }
+                    }
+
+                    hangup_button := RobrixIconButton {
+                        width: 48
+                        height: 48
+                        padding: 10
+                        draw_icon.svg: (ICON_CLOSE)
+                        icon_walk: Walk{width: 24, height: 24}
+                        draw_bg +: {
+                            color: #e53935
+                            border_radius: 24.0
+                        }
+                        draw_icon +: {
+                            color: #fff
+                        }
+                    }
                 }
             }
         }
@@ -410,12 +490,13 @@ script_mod! {
                 align: Align{x: 0.5, y: 0.7}
 
                 join_call_button := Button {
+                    padding: Inset{left: 24, right: 24, top: 12, bottom: 12}
                     text: "Join call"
-                    width: 100
-                    height: 48
+                    width: Fit
+                    height: Fit
                     draw_bg +: {
                         color: #4CAF50
-                        border_radius: 20.0
+                        border_radius: 24.0
                     }
                     draw_text +: {
                         color: #fff
@@ -561,6 +642,14 @@ pub struct VoipScreen {
 
     // Timer for refreshing call members from Matrix
     #[rust] call_members_refresh_timer: Timer,
+
+    // Timer for updating call duration display
+    #[rust] call_duration_timer: Timer,
+
+    // Test mode: timer for pushing test video frames
+    #[rust] test_video_frame_timer: Timer,
+    // Test mode: participant ID to push frames to
+    #[rust] test_video_participant_id: Option<String>,
 }
 
 impl Widget for VoipScreen {
@@ -605,12 +694,22 @@ impl Widget for VoipScreen {
                 if self.video_publish_timer.is_event(event).is_some() {
                     // Video publishing handled here if needed
                 }
+                if self.call_duration_timer.is_event(event).is_some() {
+                    // Update call duration display
+                    self.update_call_duration(cx);
+                }
                 if self.call_members_refresh_timer.is_event(event).is_some() {
                     // Refresh call members from Matrix (only when in a call)
                     if !self.in_lobby {
                         if let Some(room_id) = self.room_id.clone() {
                             submit_async_request(MatrixRequest::GetCallMembers { room_id });
                         }
+                    }
+                }
+                // Test mode: push video frames at ~30fps
+                if self.test_video_frame_timer.is_event(event).is_some() {
+                    if let Some(ref participant_id) = self.test_video_participant_id.clone() {
+                        self.push_test_video_frame(cx, &participant_id);
                     }
                 }
             }
@@ -648,6 +747,9 @@ impl Widget for VoipScreen {
                                     self.in_lobby = false;
                                     self.call_start_time = Some(Cx::time_now());
 
+                                    // Start call duration timer (updates every second)
+                                    self.call_duration_timer = cx.start_interval(1.0);
+
                                     // Stop lobby camera and prepare for call camera
                                     CameraManager::stop_lobby_camera(&self.view, cx);
                                     self.pending_call_camera_start = true;
@@ -656,9 +758,26 @@ impl Widget for VoipScreen {
                                     // Fetch call members immediately after joining
                                     submit_async_request(MatrixRequest::GetCallMembers { room_id: room_id.clone() });
 
-                                    // Start LiveKit connection flow: fetch OpenID token
-                                    log!("VoipScreen: Fetching OpenID token for LiveKit auth");
-                                    submit_async_request(MatrixRequest::FetchOpenIdToken { room_id: room_id.clone() });
+                                    // Start LiveKit connection flow with token caching
+                                    // Check if we have a valid cached LiveKit JWT for this room
+                                    if let Some(cached_jwt) = VoipGlobalState::get_valid_livekit_jwt(cx, room_id) {
+                                        log!("VoipScreen: Using cached LiveKit JWT ({} seconds remaining)", cached_jwt.remaining_seconds());
+                                        self.connect_livekit(cx, &cached_jwt.url, &cached_jwt.jwt);
+                                    } else if let Some(cached_openid) = VoipGlobalState::get_valid_openid_token(cx) {
+                                        // Have valid OpenID token, skip to JWT fetch
+                                        log!("VoipScreen: Using cached OpenID token ({} seconds remaining), fetching LiveKit JWT", cached_openid.remaining_seconds());
+                                        submit_async_request(MatrixRequest::FetchLiveKitJwt {
+                                            room_id: room_id.clone(),
+                                            access_token: cached_openid.access_token.clone(),
+                                            token_type: cached_openid.token_type.clone(),
+                                            matrix_server_name: cached_openid.matrix_server_name.clone(),
+                                            expires_in: cached_openid.expires_in,
+                                        });
+                                    } else {
+                                        // No cached tokens, start fresh
+                                        log!("VoipScreen: No cached tokens, fetching OpenID token for LiveKit auth");
+                                        submit_async_request(MatrixRequest::FetchOpenIdToken { room_id: room_id.clone() });
+                                    }
                                 } else {
                                     log!("VoipScreen: Failed to send call member state");
                                     self.call.connection_state = ConnectionState::Disconnected;
@@ -671,6 +790,15 @@ impl Widget for VoipScreen {
                                 log!("VoipScreen: OpenID token fetched, now fetching LiveKit JWT");
                                 log!("  server_name: {}", matrix_server_name);
                                 log!("  expires_in: {} seconds", expires_in);
+
+                                // Cache the OpenID token for future use
+                                let cached_token = super::CachedOpenIdToken::new(
+                                    access_token.clone(),
+                                    token_type.clone(),
+                                    matrix_server_name.clone(),
+                                    *expires_in,
+                                );
+                                VoipGlobalState::store_openid_token(cx, cached_token);
 
                                 // Next step: fetch LiveKit JWT from SFU
                                 // POST https://livekit-jwt.call.matrix.org/sfu/get
@@ -687,6 +815,15 @@ impl Widget for VoipScreen {
                             if self.room_id.as_ref() == Some(room_id) {
                                 log!("VoipScreen: LiveKit JWT fetched, connecting to LiveKit");
                                 log!("  url: {}", url);
+
+                                // Cache the LiveKit JWT for future use
+                                let cached_jwt = super::CachedLiveKitJwt::new(
+                                    jwt.clone(),
+                                    url.clone(),
+                                    room_id.clone(),
+                                );
+                                VoipGlobalState::store_livekit_jwt(cx, cached_jwt);
+
                                 self.connect_livekit(cx, url, jwt);
                             }
                         }
@@ -730,6 +867,19 @@ impl Widget for VoipScreen {
                             self.show_participants = !self.show_participants;
                             self.update_ui(cx);
                         }
+                        VoipAction::TestPushVideoFrame { participant_id } => {
+                            log!("VoipScreen: TestPushVideoFrame - participant_id={}", participant_id);
+                            self.push_test_video_frame(cx, participant_id);
+                            self.update_ui(cx);
+                        }
+                        VoipAction::TestStartVideoStream { participant_id } => {
+                            log!("VoipScreen: TestStartVideoStream - participant_id={}", participant_id);
+                            self.start_test_video_stream(cx, participant_id);
+                        }
+                        VoipAction::TestStopVideoStream => {
+                            log!("VoipScreen: TestStopVideoStream");
+                            self.stop_test_video_stream(cx);
+                        }
                         _ => {}
                     }
                 }
@@ -749,6 +899,7 @@ impl VoipScreen {
         self.in_lobby = true;
         self.lobby_mic_enabled = true;
         self.lobby_camera_enabled = true;
+        self.show_participants = true;
         self.call = Call::default();
         self.speaking_detector = SpeakingDetector::new();
 
@@ -789,11 +940,27 @@ impl VoipScreen {
         self.room_id = Some(room_id.clone());
         self.from_notification = true;  // Show "Join Call" button
 
-        // Get room name from client
+        // Get room name and user display name from client
         if let Some(client) = get_client() {
             if let Some(room) = client.get_room(&room_id) {
                 let room_name = room.name().unwrap_or_else(|| room_id.to_string());
                 self.view.label(cx, ids!(room_name)).set_text(cx, &room_name);
+            }
+
+            // Set local user's display name
+            if let Some(session) = client.session_meta() {
+                let user_id = session.user_id.to_string();
+                // Extract display name from user_id (remove @ prefix and domain)
+                let display_name = user_id
+                    .strip_prefix('@')
+                    .and_then(|s| s.split(':').next())
+                    .unwrap_or(&user_id);
+                // Set name on local user badge
+                self.view.label(cx, ids!(local_name_label)).set_text(cx, display_name);
+
+                // Also set avatar letter
+                let letter = display_name.chars().next().unwrap_or('?').to_uppercase().to_string();
+                self.view.label(cx, ids!(local_avatar_letter)).set_text(cx, &letter);
             }
         }
 
@@ -831,7 +998,7 @@ impl VoipScreen {
     }
 
     /// Poll for LiveKit messages
-    fn poll_livekit_messages(&mut self, _cx: &mut Cx) -> bool {
+    fn poll_livekit_messages(&mut self, cx: &mut Cx) -> bool {
         let messages: Vec<LiveKitMessage> = if let Some(rx) = &mut self.livekit_rx {
             let mut msgs = Vec::new();
             while let Ok(msg) = rx.try_recv() {
@@ -849,6 +1016,8 @@ impl VoipScreen {
                     self.call.connection_state = ConnectionState::Connected;
                     self.in_lobby = false;
                     self.call_start_time = Some(Cx::time_now());
+                    // Start call duration timer (updates every second)
+                    self.call_duration_timer = cx.start_interval(1.0);
                     log!("LiveKit connected");
                     needs_update = true;
                 }
@@ -858,25 +1027,93 @@ impl VoipScreen {
                     needs_update = true;
                 }
                 LiveKitMessage::ParticipantJoined(p) => {
+                    log!("Participant joined: {}", p.user_id);
+
+                    // Add to participants list UI
+                    let name = if p.display_name.is_empty() {
+                        p.user_id.clone()
+                    } else {
+                        p.display_name.clone()
+                    };
+                    let letter = name.chars().next().unwrap_or('?').to_uppercase().to_string();
+
+                    let participant = Participant {
+                        id: p.user_id.clone(),
+                        name,
+                        avatar_letter: letter,
+                        is_muted: p.is_muted,
+                        is_speaking: p.is_speaking,
+                        is_video_on: p.is_video_on,
+                    };
+
+                    let list = self.view.participants_list(cx, ids!(participants_list));
+                    list.add_participant(cx, participant);
+
                     self.call.participants.insert(p.user_id.clone(), p);
-                    log!("Participant joined");
                     needs_update = true;
                 }
                 LiveKitMessage::ParticipantLeft(id) => {
+                    log!("Participant left: {}", id);
+
+                    // Remove from participants list UI
+                    let list = self.view.participants_list(cx, ids!(participants_list));
+                    list.remove_participant(cx, &id);
+
                     self.call.participants.remove(&id);
-                    log!("Participant left");
                     needs_update = true;
                 }
                 LiveKitMessage::Error(e) => {
                     log!("LiveKit error: {}", e);
+                    self.call.connection_state = ConnectionState::Disconnected;
+                    needs_update = true;
+                }
+                LiveKitMessage::VideoTrackSubscribed { participant_id } => {
+                    log!("Video track subscribed for participant: {}", participant_id);
+
+                    // Update participant's video state
+                    let list = self.view.participants_list(cx, ids!(participants_list));
+                    list.update_participant(cx, &participant_id, |p| {
+                        p.is_video_on = true;
+                    });
+
+                    if let Some(p) = self.call.participants.get_mut(&participant_id) {
+                        p.is_video_on = true;
+                    }
+                    needs_update = true;
+                }
+                LiveKitMessage::VideoTrackUnsubscribed { participant_id } => {
+                    log!("Video track unsubscribed for participant: {}", participant_id);
+
+                    // Update participant's video state
+                    let list = self.view.participants_list(cx, ids!(participants_list));
+                    list.update_participant(cx, &participant_id, |p| {
+                        p.is_video_on = false;
+                    });
+
+                    if let Some(p) = self.call.participants.get_mut(&participant_id) {
+                        p.is_video_on = false;
+                    }
                     needs_update = true;
                 }
                 LiveKitMessage::RemoteVideoFrame { participant_id, y, u, v, width, height, pts_ms } => {
-                    // TODO: Update participant's video texture with the I420 frame data
-                    // This would use RemoteVideoSession to push frames to a Video widget
-                    log!("Remote video frame from {}: {}x{} (Y:{} U:{} V:{} bytes) pts={}ms",
-                        participant_id, width, height, y.len(), u.len(), v.len(), pts_ms);
-                    // For now, just mark needs_update to trigger UI refresh
+                    // Push the I420 frame to the participant's video session
+                    // Only log periodically to avoid spam
+                    if pts_ms % 1000 < 33 {
+                        log!("Remote video frame from {}: {}x{} pts={}ms", participant_id, width, height, pts_ms);
+                    }
+
+                    // Get the participants list and push the frame
+                    let participants_list = self.view.participants_list(cx, ids!(participants_list));
+                    participants_list.push_video_frame(
+                        cx,
+                        &participant_id,
+                        y,
+                        u,
+                        v,
+                        width,
+                        height,
+                        pts_ms,
+                    );
                     needs_update = true;
                 }
             }
@@ -951,11 +1188,25 @@ impl VoipScreen {
         self.call.connection_state = ConnectionState::Disconnected;
         self.in_lobby = true;
         self.call_start_time = None;
+        // Stop call duration timer
+        self.call_duration_timer = Timer::default();
         CameraManager::stop_lobby_camera(&self.view, cx);
         self.pending_call_camera_start = true;
         self.camera_active = false;
 
         self.update_ui(cx);
+    }
+
+    /// Update call duration display
+    fn update_call_duration(&mut self, cx: &mut Cx) {
+        if let Some(start) = self.call_start_time {
+            let elapsed = (Cx::time_now() - start) as u64;
+            let mins = elapsed / 60;
+            let secs = elapsed % 60;
+            self.view.label(cx, ids!(call_duration))
+                .set_text(cx, &format!("{:02}:{:02}", mins, secs));
+            self.redraw(cx);
+        }
     }
 
     /// Update UI to reflect current state
@@ -975,27 +1226,74 @@ impl VoipScreen {
         self.view.label(cx, ids!(participant_count))
             .set_text(cx, &format!("{} participant{}", count, if count == 1 { "" } else { "s" }));
 
-        let mic_text = if self.call.local_audio_muted { "Muted" } else { "Mic" };
-        let cam_text = if self.call.local_video_muted { "Cam Off" } else { "Cam" };
-        let screen_text = if self.call.is_screen_sharing { "Stop" } else { "Share" };
+        // Update call control icon button styles based on state
+        let mut mic_btn = self.view.button(cx, ids!(mic_button));
+        let mut cam_btn = self.view.button(cx, ids!(camera_button));
+        let mut screen_btn = self.view.button(cx, ids!(screenshare_button));
+        let mut users_btn = self.view.button(cx, ids!(participants_button));
 
-        self.view.button(cx, ids!(mic_button)).set_text(cx, mic_text);
-        self.view.button(cx, ids!(camera_button)).set_text(cx, cam_text);
-        self.view.button(cx, ids!(screenshare_button)).set_text(cx, screen_text);
+        // Mic button - red when muted
+        if self.call.local_audio_muted {
+            script_apply_eval!(cx, mic_btn, {
+                draw_bg +: { color: #e53935 }
+            });
+        } else {
+            script_apply_eval!(cx, mic_btn, {
+                draw_bg +: { color: #3a3a5a }
+            });
+        }
 
-        let mute_icon = if self.call.local_audio_muted { "M" } else { "" };
-        self.view.label(cx, ids!(local_mute_icon)).set_text(cx, mute_icon);
+        // Camera button - red when off
+        if self.call.local_video_muted {
+            script_apply_eval!(cx, cam_btn, {
+                draw_bg +: { color: #e53935 }
+            });
+        } else {
+            script_apply_eval!(cx, cam_btn, {
+                draw_bg +: { color: #3a3a5a }
+            });
+        }
 
-        // Participants panel is now always visible on the left (no toggle needed)
+        // Screen share button - green when sharing
+        if self.call.is_screen_sharing {
+            script_apply_eval!(cx, screen_btn, {
+                draw_bg +: { color: #4CAF50 }
+            });
+        } else {
+            script_apply_eval!(cx, screen_btn, {
+                draw_bg +: { color: #3a3a5a }
+            });
+        }
+
+        // Participants button - highlighted when panel is visible
+        if self.show_participants {
+            script_apply_eval!(cx, users_btn, {
+                draw_bg +: { color: #4a4a6a }
+            });
+        } else {
+            script_apply_eval!(cx, users_btn, {
+                draw_bg +: { color: #3a3a5a }
+            });
+        }
+
+        // Update local mute icon - red when muted, gray when unmuted
+        let mut local_mute_btn = self.view.button(cx, ids!(local_mute_icon));
+        if self.call.local_audio_muted {
+            script_apply_eval!(cx, local_mute_btn, {
+                draw_icon +: { color: #e53935 }
+            });
+        } else {
+            script_apply_eval!(cx, local_mute_btn, {
+                draw_icon +: { color: #aaa }
+            });
+        }
+
+        // Toggle participants panel visibility
+        self.view.view(cx, ids!(participants_panel)).set_visible(cx, self.show_participants);
         self.view.view(cx, ids!(debug_panel)).set_visible(cx, self.show_debug);
 
-        if let Some(start) = self.call_start_time {
-            let elapsed = (Cx::time_now() - start) as u64;
-            let mins = elapsed / 60;
-            let secs = elapsed % 60;
-            self.view.label(cx, ids!(call_duration))
-                .set_text(cx, &format!("{:02}:{:02}", mins, secs));
-        }
+        // Update call duration display (timer handles continuous updates)
+        self.update_call_duration(cx);
 
         // Update lobby icon button styles based on state
         // When disabled, show different border color
@@ -1207,21 +1505,25 @@ impl VoipScreen {
     }
 
     /// Add a test participant (with optional video on)
-    pub fn add_participant(&mut self, cx: &mut Cx, name: &str, is_video_on: bool) {
+    /// Returns the participant ID for use with push_test_video_frame
+    pub fn add_participant(&mut self, cx: &mut Cx, name: &str, is_video_on: bool) -> String {
         self.participant_counter += 1;
         let letter = name.chars().next().unwrap_or('?').to_uppercase().to_string();
+        // Use a predictable ID format: "test_<name>" for easy testing
+        let participant_id = format!("test_{}", name.to_lowercase().replace(' ', "_"));
         let participant = Participant {
-            id: format!("{}", self.participant_counter),
+            id: participant_id.clone(),
             name: name.to_string(),
             avatar_letter: letter,
             is_muted: false,
             is_speaking: false,
             is_video_on,
         };
-        log!("Adding participant: {} (id={}, video={})", name, self.participant_counter, is_video_on);
+        log!("Adding participant: {} (id={}, video={})", name, participant_id, is_video_on);
 
         let list = self.view.participants_list(cx, ids!(participants_list));
         list.add_participant(cx, participant);
+        participant_id
     }
 
     /// Toggle participant video state
@@ -1241,20 +1543,103 @@ impl VoipScreen {
         list.remove_participant(cx, id);
     }
 
-    /// Clear all participants
+    /// Clear all participants and their video textures
     pub fn clear_participants(&mut self, cx: &mut Cx) {
         log!("Clearing all participants");
         let list = self.view.participants_list(cx, ids!(participants_list));
-        list.clear(cx);
+        list.clear_all(cx);  // Use clear_all to also remove video textures
         self.participant_counter = 0;
+    }
+
+    /// Start continuous test video frames to a participant (~30fps)
+    pub fn start_test_video_stream(&mut self, cx: &mut Cx, participant_id: &str) {
+        log!("Starting test video stream for participant: {}", participant_id);
+        self.test_video_participant_id = Some(participant_id.to_string());
+        self.test_video_frame_timer = cx.start_interval(1.0 / 30.0);  // ~30fps
+
+        // Also ensure the participant has video enabled
+        let list = self.view.participants_list(cx, ids!(participants_list));
+        list.update_participant(cx, participant_id, |p| {
+            p.is_video_on = true;
+        });
+    }
+
+    /// Stop continuous test video frames
+    pub fn stop_test_video_stream(&mut self, cx: &mut Cx) {
+        log!("Stopping test video stream");
+        self.test_video_frame_timer = Timer::default();  // Stop the timer
+        self.test_video_participant_id = None;
+        self.redraw(cx);
+    }
+
+    /// Push a test video frame to a participant for debugging
+    /// Generates a colored gradient pattern in I420 format
+    pub fn push_test_video_frame(&mut self, cx: &mut Cx, participant_id: &str) {
+        let width: u32 = 320;
+        let height: u32 = 240;
+
+        // Generate I420 test pattern (colored gradient)
+        let y_size = (width * height) as usize;
+        let uv_size = ((width / 2) * (height / 2)) as usize;
+
+        let mut y_plane = vec![0u8; y_size];
+        let mut u_plane = vec![128u8; uv_size];  // Neutral U
+        let mut v_plane = vec![128u8; uv_size];  // Neutral V
+
+        // Create a gradient pattern - Y varies horizontally, U/V create color
+        // Use time-based offset to animate the pattern
+        let time_offset = (Cx::time_now() * 100.0) as u32 % 256;
+
+        for j in 0..height {
+            for i in 0..width {
+                let y_idx = (j * width + i) as usize;
+                // Luminance gradient (bright in center, dark at edges)
+                let cx_dist = ((i as i32 - width as i32 / 2).abs() as f32) / (width as f32 / 2.0);
+                let cy_dist = ((j as i32 - height as i32 / 2).abs() as f32) / (height as f32 / 2.0);
+                let dist = (cx_dist * cx_dist + cy_dist * cy_dist).sqrt().min(1.0);
+                let luma = ((1.0 - dist * 0.5) * 200.0 + time_offset as f32) as u8;
+                y_plane[y_idx] = luma.wrapping_add(((i + j) % 32) as u8);
+            }
+        }
+
+        // Create color pattern in UV planes (blue-ish tint that shifts over time)
+        for j in 0..(height / 2) {
+            for i in 0..(width / 2) {
+                let uv_idx = (j * (width / 2) + i) as usize;
+                // U controls blue-yellow, V controls red-cyan
+                u_plane[uv_idx] = (128u8).wrapping_add((time_offset / 2) as u8).wrapping_add((i * 2) as u8);
+                v_plane[uv_idx] = (128u8).wrapping_sub((time_offset / 3) as u8).wrapping_add((j * 2) as u8);
+            }
+        }
+
+        let pts_ms = (Cx::time_now() * 1000.0) as u64;
+
+        log!("Pushing test video frame to participant {}: {}x{} pts={}ms",
+            participant_id, width, height, pts_ms);
+
+        let list = self.view.participants_list(cx, ids!(participants_list));
+        list.push_video_frame(
+            cx,
+            participant_id,
+            y_plane,
+            u_plane,
+            v_plane,
+            width,
+            height,
+            pts_ms,
+        );
     }
 
     /// Update participants list from Matrix call member state events
     fn update_participants_from_call_members(&mut self, cx: &mut Cx, members: &[CallMember]) {
         log!("update_participants_from_call_members: received {} members", members.len());
 
-        // Clear existing participants and rebuild from call members
+        // Get the participants list reference
         let list = self.view.participants_list(cx, ids!(participants_list));
+
+        // Clear existing participants but preserve video textures
+        // Video textures are keyed by participant ID (user_id) and will be matched
+        // when participants are re-added with the same IDs
         list.clear(cx);
         self.participant_counter = 0;
 
@@ -1263,33 +1648,50 @@ impl VoipScreen {
             .and_then(|c| c.session_meta().map(|m| m.user_id.to_string()));
         log!("Current user ID: {:?}", current_user_id);
 
+        // Track added user_ids to avoid duplicates (multiple devices same user)
+        let mut added_user_ids = std::collections::HashSet::new();
+
         for member in members {
             // Skip self
             if current_user_id.as_ref() == Some(&member.user_id) {
                 continue;
             }
 
+            // Skip if we already added this user (multiple devices)
+            if added_user_ids.contains(&member.user_id) {
+                log!("Skipping duplicate user: {} (device={})", member.user_id, member.device_id);
+                continue;
+            }
+            added_user_ids.insert(member.user_id.clone());
+
             self.participant_counter += 1;
             let name = member.display_name.clone()
                 .unwrap_or_else(|| member.user_id.clone());
             let letter = name.chars().next().unwrap_or('?').to_uppercase().to_string();
 
+            // Use just user_id as the participant ID to match LiveKit identity format
+            // LiveKit identity is set from the JWT which uses the Matrix user_id
+            let participant_id = member.user_id.clone();
+
+            // Check if this participant already has video texture (from LiveKit video frames)
+            let has_video = list.has_video_texture(&participant_id);
+
             let participant = Participant {
-                id: format!("{}_{}", member.user_id, member.device_id),
+                id: participant_id.clone(),
                 name,
                 avatar_letter: letter,
                 is_muted: false,  // We don't have this info from state events
                 is_speaking: false,
-                is_video_on: false,  // We don't have this info from state events
+                is_video_on: has_video,  // Preserve video state from LiveKit
             };
 
-            log!("Adding call member: {} (user={}, device={})",
-                participant.name, member.user_id, member.device_id);
+            log!("Adding call member: {} (id={}, video={})",
+                participant.name, participant_id, has_video);
             list.add_participant(cx, participant);
         }
 
         // Update participant count display
-        let count = members.len();
+        let count = self.participant_counter;
         self.view.label(cx, ids!(participant_count))
             .set_text(cx, &format!("{} participant{}", count, if count == 1 { "" } else { "s" }));
 
@@ -1299,6 +1701,17 @@ impl VoipScreen {
     /// Connect to LiveKit with the given URL and JWT token
     fn connect_livekit(&mut self, cx: &mut Cx, url: &str, jwt: &str) {
         log!("connect_livekit: url={}", url);
+        log!("connect_livekit: jwt length={}, empty={}", jwt.len(), jwt.is_empty());
+        if jwt.len() > 20 {
+            log!("connect_livekit: jwt starts with: {}", &jwt[..20]);
+        }
+
+        if jwt.is_empty() {
+            log!("ERROR: JWT token is empty, cannot connect to LiveKit");
+            self.call.connection_state = ConnectionState::Disconnected;
+            self.update_ui(cx);
+            return;
+        }
 
         if let Some(client) = &self.livekit_client {
             // Connect to LiveKit
@@ -1338,10 +1751,12 @@ impl VoipScreenRef {
         }
     }
 
-    /// Add a participant
-    pub fn add_participant(&self, cx: &mut Cx, name: &str, is_video_on: bool) {
+    /// Add a participant, returns the participant ID
+    pub fn add_participant(&self, cx: &mut Cx, name: &str, is_video_on: bool) -> Option<String> {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.add_participant(cx, name, is_video_on);
+            Some(inner.add_participant(cx, name, is_video_on))
+        } else {
+            None
         }
     }
 
@@ -1369,6 +1784,27 @@ impl VoipScreenRef {
     pub fn hangup(&self, cx: &mut Cx) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.hangup(cx);
+        }
+    }
+
+    /// Push a test video frame to a participant for debugging
+    pub fn push_test_video_frame(&self, cx: &mut Cx, participant_id: &str) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.push_test_video_frame(cx, participant_id);
+        }
+    }
+
+    /// Start continuous test video frames to a participant
+    pub fn start_test_video_stream(&self, cx: &mut Cx, participant_id: &str) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.start_test_video_stream(cx, participant_id);
+        }
+    }
+
+    /// Stop continuous test video frames
+    pub fn stop_test_video_stream(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.stop_test_video_stream(cx);
         }
     }
 }

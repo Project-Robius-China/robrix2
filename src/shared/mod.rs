@@ -20,7 +20,7 @@ pub mod unread_badge;
 pub mod verification_badge;
 pub mod restore_status_view;
 pub mod image_viewer;
-
+pub mod webrtc_video;
 
 pub fn script_mod(vm: &mut ScriptVm) {
     // Order matters here, as some widget definitions depend on others.
@@ -44,4 +44,5 @@ pub fn script_mod(vm: &mut ScriptVm) {
     restore_status_view::script_mod(vm);
     confirmation_modal::script_mod(vm);
     image_viewer::script_mod(vm);
+    webrtc_video::script_mod(vm);
 }

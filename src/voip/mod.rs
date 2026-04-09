@@ -6,6 +6,7 @@
 //! - LiveKit WebRTC integration
 //! - Speaking detection
 //! - Participants list
+//! - Token caching for OpenID and LiveKit JWT
 
 use makepad_widgets::*;
 use makepad_widgets::makepad_platform::video::VideoInputsEvent;
@@ -18,11 +19,13 @@ pub mod livekit_client;
 pub mod remote_video_session;
 pub mod speaking;
 pub mod participants_list;
+pub mod token_cache;
 pub mod voip_screen;
 
 pub use voip_screen::VoipScreenWidgetRefExt;
 pub use participants_list::{Participant, ParticipantsListWidgetRefExt};
 pub use camera::CameraChoice;
+pub use token_cache::{CachedOpenIdToken, CachedLiveKitJwt, VoipTokenState};
 
 /// Represents a call member from Matrix state events
 #[derive(Clone, Debug)]
@@ -85,6 +88,16 @@ pub enum VoipAction {
     TestClearParticipants,
     /// Test action: Toggle participants sidebar
     TestToggleParticipantsSidebar,
+    /// Test action: Push a test video frame to a participant
+    TestPushVideoFrame {
+        participant_id: String,
+    },
+    /// Test action: Start continuous test video frames to a participant
+    TestStartVideoStream {
+        participant_id: String,
+    },
+    /// Test action: Stop continuous test video frames
+    TestStopVideoStream,
     #[default]
     None,
 }
@@ -92,6 +105,7 @@ pub enum VoipAction {
 /// Global VoIP state stored in Makepad's Cx context.
 /// This allows camera permission and video inputs events to be captured
 /// at app startup before VoipScreen is shown.
+/// Also stores cached tokens for OpenID and LiveKit JWT.
 #[derive(Default)]
 pub struct VoipGlobalState {
     /// Camera permission status (captured at app level)
@@ -100,6 +114,10 @@ pub struct VoipGlobalState {
     pub camera_choice: Option<CameraChoice>,
     /// Whether video inputs have been requested
     pub video_inputs_requested: bool,
+    /// Cached OpenID token (valid for any room, tied to user session)
+    pub cached_openid_token: Option<CachedOpenIdToken>,
+    /// Cached LiveKit JWTs (per-room, since JWTs are room-specific)
+    pub cached_livekit_jwts: Vec<CachedLiveKitJwt>,
 }
 
 impl VoipGlobalState {
@@ -164,6 +182,98 @@ impl VoipGlobalState {
             cx.get_global::<VoipGlobalState>().camera_choice.clone()
         } else {
             None
+        }
+    }
+
+    /// Store a cached OpenID token in global state
+    pub fn store_openid_token(cx: &mut Cx, token: CachedOpenIdToken) {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            log!("VoipGlobalState: Storing OpenID token (expires in {} seconds)", token.remaining_seconds());
+            state.cached_openid_token = Some(token);
+        }
+    }
+
+    /// Get a valid cached OpenID token from global state
+    pub fn get_valid_openid_token(cx: &mut Cx) -> Option<CachedOpenIdToken> {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            if let Some(ref token) = state.cached_openid_token {
+                if token.is_valid() {
+                    log!("VoipGlobalState: Using cached OpenID token ({} seconds remaining)", token.remaining_seconds());
+                    return Some(token.clone());
+                } else {
+                    log!("VoipGlobalState: Cached OpenID token expired, clearing");
+                    state.cached_openid_token = None;
+                }
+            }
+        }
+        None
+    }
+
+    /// Store a cached LiveKit JWT in global state
+    pub fn store_livekit_jwt(cx: &mut Cx, jwt: CachedLiveKitJwt) {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            log!("VoipGlobalState: Storing LiveKit JWT for room {} (expires in {} seconds)",
+                jwt.room_id, jwt.remaining_seconds());
+            // Remove any existing JWT for this room
+            state.cached_livekit_jwts.retain(|j| j.room_id != jwt.room_id);
+            // Add the new JWT
+            state.cached_livekit_jwts.push(jwt);
+            // Clean up expired JWTs
+            state.cached_livekit_jwts.retain(|j| j.is_valid());
+        }
+    }
+
+    /// Get a valid cached LiveKit JWT for the given room from global state
+    pub fn get_valid_livekit_jwt(cx: &mut Cx, room_id: &OwnedRoomId) -> Option<CachedLiveKitJwt> {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            // Clean up expired JWTs first
+            state.cached_livekit_jwts.retain(|j| j.is_valid());
+            // Find a valid JWT for this room
+            if let Some(jwt) = state.cached_livekit_jwts.iter().find(|j| j.is_valid_for_room(room_id)) {
+                log!("VoipGlobalState: Using cached LiveKit JWT for room {} ({} seconds remaining)",
+                    room_id, jwt.remaining_seconds());
+                return Some(jwt.clone());
+            }
+        }
+        None
+    }
+
+    /// Get the token state for persistence (to be called when saving app state)
+    pub fn get_token_state(cx: &mut Cx) -> VoipTokenState {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            VoipTokenState {
+                cached_openid_token: state.cached_openid_token.clone(),
+                cached_livekit_jwts: state.cached_livekit_jwts.clone(),
+            }
+        } else {
+            VoipTokenState::default()
+        }
+    }
+
+    /// Restore token state from persistence (to be called when loading app state)
+    pub fn restore_token_state(cx: &mut Cx, token_state: VoipTokenState) {
+        if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            // Only restore valid tokens
+            if let Some(ref token) = token_state.cached_openid_token {
+                if token.is_valid() {
+                    log!("VoipGlobalState: Restoring cached OpenID token ({} seconds remaining)", token.remaining_seconds());
+                    state.cached_openid_token = Some(token.clone());
+                }
+            }
+            // Restore valid JWTs
+            for jwt in token_state.cached_livekit_jwts {
+                if jwt.is_valid() {
+                    log!("VoipGlobalState: Restoring cached LiveKit JWT for room {} ({} seconds remaining)",
+                        jwt.room_id, jwt.remaining_seconds());
+                    state.cached_livekit_jwts.push(jwt);
+                }
+            }
         }
     }
 }

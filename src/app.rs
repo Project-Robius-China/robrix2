@@ -447,6 +447,10 @@ impl MatchEvent for App {
                     let logged_in_actual = self.app_state.logged_in;
                     self.app_state = app_state.clone();
                     self.app_state.logged_in = logged_in_actual;
+
+                    // Restore VoIP token state to global state for caching
+                    VoipGlobalState::restore_token_state(cx, self.app_state.voip_tokens.clone());
+
                     cx.action(MainDesktopUiAction::LoadDockFromAppState);
                     continue;
                 }
@@ -794,6 +798,8 @@ impl AppMain for App {
                 error!("Failed to save window state. Error: {e}");
             }
             if let Some(user_id) = current_user_id() {
+                // Get the latest VoIP token state from global state before saving
+                self.app_state.voip_tokens = VoipGlobalState::get_token_state(cx);
                 let app_state = self.app_state.clone();
                 if let Err(e) = persistence::save_app_state(app_state, user_id) {
                     error!("Failed to save app state. Error: {e}");
@@ -1248,6 +1254,9 @@ pub struct AppState {
     /// The room ID for VoIP calls, set when navigating to VoIP screen from a call notification.
     #[serde(skip)]
     pub voip_room_id: Option<OwnedRoomId>,
+    /// Cached VoIP tokens (OpenID and LiveKit JWT) for faster reconnection.
+    #[serde(default)]
+    pub voip_tokens: crate::voip::VoipTokenState,
 }
 
 /// Local bot integration settings persisted per Matrix account.

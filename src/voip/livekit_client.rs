@@ -1,7 +1,8 @@
 //! LiveKit client integration for WebRTC
 //!
-//! This is currently a stub implementation. When the livekit crate is enabled,
-//! it will provide actual WebRTC connectivity.
+//! This module provides LiveKit WebRTC connectivity for VoIP calls.
+//! When the `livekit` feature is enabled, it uses the real LiveKit SDK.
+//! Otherwise, it provides a stub implementation for development.
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -49,6 +50,10 @@ pub enum LiveKitMessage {
         /// Presentation timestamp in milliseconds
         pts_ms: u64,
     },
+    /// Remote participant's video track subscribed
+    VideoTrackSubscribed { participant_id: String },
+    /// Remote participant's video track unsubscribed
+    VideoTrackUnsubscribed { participant_id: String },
 }
 
 /// Commands sent from UI to LiveKit client
@@ -60,6 +65,7 @@ pub enum LiveKitCommand {
     StartScreenShare,
     StopScreenShare,
     PublishVideoFrame(VideoFrame),
+    PublishData { payload: Vec<u8>, reliable: bool },
 }
 
 /// LiveKit client state
@@ -86,6 +92,12 @@ impl LiveKitClient {
         let is_connected = self.is_connected.clone();
 
         std::thread::spawn(move || {
+            #[cfg(feature = "livekit")]
+            {
+                // Initialize env_logger for log::info!, log::error!, etc.
+                let _ = env_logger::try_init();
+            }
+
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 Self::run_event_loop(cmd_rx, msg_tx, is_connected).await;
@@ -95,6 +107,291 @@ impl LiveKitClient {
         msg_rx
     }
 
+    #[cfg(feature = "livekit")]
+    async fn run_event_loop(
+        mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
+        msg_tx: mpsc::UnboundedSender<LiveKitMessage>,
+        is_connected: Arc<Mutex<bool>>,
+    ) {
+        use livekit::prelude::*;
+        use livekit::RoomOptions;
+        use livekit::webrtc::video_stream::native::NativeVideoStream;
+        use livekit::webrtc::prelude::VideoBuffer;
+        use futures_util::StreamExt;
+
+        let mut room: Option<Arc<Room>> = None;
+
+        while let Some(cmd) = cmd_rx.recv().await {
+            match cmd {
+                LiveKitCommand::Connect { url, token } => {
+                    log!("LiveKit: Connecting to {}", url);
+                    log!("LiveKit: Token length: {}, starts with: {}",
+                        token.len(),
+                        if token.len() > 20 { &token[..20] } else { &token });
+
+                    // Validate token is not empty and looks like a JWT (three dot-separated parts)
+                    if token.is_empty() {
+                        log!("LiveKit: ERROR - Token is empty!");
+                        let _ = msg_tx.send(LiveKitMessage::Error("Token is empty".to_string()));
+                        SignalToUI::set_ui_signal();
+                        continue;
+                    }
+
+                    let jwt_parts: Vec<&str> = token.split('.').collect();
+                    if jwt_parts.len() != 3 {
+                        log!("LiveKit: WARNING - Token doesn't look like a JWT (expected 3 parts, got {})", jwt_parts.len());
+                    } else {
+                        log!("LiveKit: Token appears to be valid JWT format");
+                    }
+
+                    // First validate the RTC connection using Authorization header
+                    let validate_url = format!(
+                        "{}/rtc/validate?auto_subscribe=1&sdk=rust&version=0.7.36&protocol=16&adaptive_stream=1",
+                        url.replace("wss://", "https://").replace("ws://", "http://"),
+                    );
+
+                    log!("LiveKit: Validating RTC connection: {}", validate_url);
+
+                    let client = reqwest::Client::new();
+                    match client.get(&validate_url)
+                        .header("Authorization", format!("Bearer {}", token))
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status();
+                            let body = response.text().await.unwrap_or_default();
+                            log!("LiveKit: RTC validation response: {} - {}", status, body);
+
+                            if !status.is_success() {
+                                log!("LiveKit: RTC validation failed: {} - {}", status, body);
+                                let _ = msg_tx.send(LiveKitMessage::Error(format!("RTC validation failed: {} - {}", status, body)));
+                                SignalToUI::set_ui_signal();
+                                continue;
+                            }
+                        }
+                        Err(e) => {
+                            log!("LiveKit: RTC validation request failed: {}", e);
+                            // Continue anyway - validation might not be required
+                        }
+                    }
+
+                    log!("LiveKit: Calling Room::connect with url={} and token length={}", url, token.len());
+                    match Room::connect(&url, &token, RoomOptions::default()).await {
+                        Ok((r, mut room_events)) => {
+                            let room_name = r.name().to_string();
+                            let room_sid = String::from(r.sid().await);
+
+                            log!("LiveKit: Connected to room: {} - {}", room_name, room_sid);
+
+                            let r = Arc::new(r);
+                            room = Some(r.clone());
+
+                            if let Ok(mut connected) = is_connected.lock() {
+                                *connected = true;
+                            }
+                            let _ = msg_tx.send(LiveKitMessage::Connected);
+                            SignalToUI::set_ui_signal();
+
+                            // Spawn task to handle room events
+                            let msg_tx_clone = msg_tx.clone();
+                            tokio::spawn(async move {
+                                while let Some(event) = room_events.recv().await {
+                                    log!("LiveKit: Room event: {:?}", event);
+                                    match event {
+                                        RoomEvent::ParticipantConnected(participant) => {
+                                            log!("LiveKit: Participant connected: {}", participant.identity());
+                                            let name = participant.name();
+                                            let display_name = if name.is_empty() {
+                                                participant.identity().to_string()
+                                            } else {
+                                                name.to_string()
+                                            };
+                                            let participant_info = CallParticipant {
+                                                user_id: participant.identity().to_string(),
+                                                display_name,
+                                                is_muted: false,
+                                                is_video_on: false,
+                                                is_speaking: false,
+                                                is_screen_sharing: false,
+                                            };
+                                            let _ = msg_tx_clone.send(LiveKitMessage::ParticipantJoined(participant_info));
+                                            SignalToUI::set_ui_signal();
+                                        }
+                                        RoomEvent::ParticipantDisconnected(participant) => {
+                                            log!("LiveKit: Participant disconnected: {}", participant.identity());
+                                            let _ = msg_tx_clone.send(LiveKitMessage::ParticipantLeft(
+                                                participant.identity().to_string()
+                                            ));
+                                            SignalToUI::set_ui_signal();
+                                        }
+                                        RoomEvent::TrackSubscribed { track, publication: _, participant } => {
+                                            let participant_id = participant.identity().to_string();
+                                            log!("LiveKit: Track subscribed from {}: kind={:?}", participant_id, track.kind());
+
+                                            if let RemoteTrack::Video(video_track) = track {
+                                                log!("LiveKit: Video track subscribed from {}", participant_id);
+                                                let _ = msg_tx_clone.send(LiveKitMessage::VideoTrackSubscribed {
+                                                    participant_id: participant_id.clone(),
+                                                });
+                                                SignalToUI::set_ui_signal();
+
+                                                // Start receiving video frames
+                                                let msg_tx_video = msg_tx_clone.clone();
+                                                let participant_id_clone = participant_id.clone();
+                                                let rtc_track = video_track.rtc_track();
+
+                                                tokio::spawn(async move {
+                                                    let mut video_stream = NativeVideoStream::new(rtc_track);
+                                                    let mut frame_count = 0u64;
+                                                    let mut pts_counter = 0u64;
+
+                                                    log!("LiveKit: Starting video frame reception for {}", participant_id_clone);
+
+                                                    while let Some(frame) = video_stream.next().await {
+                                                        frame_count += 1;
+
+                                                        // Convert to I420 buffer
+                                                        let buffer = frame.buffer.to_i420();
+                                                        let width = buffer.width();
+                                                        let height = buffer.height();
+
+                                                        // Log first frame and then periodically
+                                                        if frame_count == 1 {
+                                                            log!("LiveKit: Received first video frame from {}: {}x{}", participant_id_clone, width, height);
+                                                        } else if frame_count % 60 == 0 {
+                                                            log!("LiveKit: Video frame #{} from {}: {}x{}", frame_count, participant_id_clone, width, height);
+                                                        }
+
+                                                        // Get I420 plane data
+                                                        let (data_y, data_u, data_v) = buffer.data();
+
+                                                        // Calculate presentation timestamp (30fps assumed)
+                                                        pts_counter += 33; // ~33ms per frame at 30fps
+
+                                                        // Send I420 frame directly (let the UI handle conversion)
+                                                        let _ = msg_tx_video.send(LiveKitMessage::RemoteVideoFrame {
+                                                            participant_id: participant_id_clone.clone(),
+                                                            y: data_y.to_vec(),
+                                                            u: data_u.to_vec(),
+                                                            v: data_v.to_vec(),
+                                                            width,
+                                                            height,
+                                                            pts_ms: pts_counter,
+                                                        });
+                                                        SignalToUI::set_ui_signal();
+                                                    }
+                                                    log!("LiveKit: Video stream ended for {} after {} frames", participant_id_clone, frame_count);
+                                                });
+                                            }
+                                        }
+                                        RoomEvent::TrackUnsubscribed { track, publication: _, participant } => {
+                                            let participant_id = participant.identity().to_string();
+                                            log!("LiveKit: Track unsubscribed from {}: kind={:?}", participant_id, track.kind());
+
+                                            if matches!(track, RemoteTrack::Video(_)) {
+                                                let _ = msg_tx_clone.send(LiveKitMessage::VideoTrackUnsubscribed {
+                                                    participant_id,
+                                                });
+                                                SignalToUI::set_ui_signal();
+                                            }
+                                        }
+                                        RoomEvent::Disconnected { reason } => {
+                                            log!("LiveKit: Room disconnected: {:?}", reason);
+                                            let _ = msg_tx_clone.send(LiveKitMessage::Disconnected);
+                                            SignalToUI::set_ui_signal();
+                                            break;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            log!("LiveKit: Failed to connect: {}", e);
+                            let _ = msg_tx.send(LiveKitMessage::Error(e.to_string()));
+                            SignalToUI::set_ui_signal();
+                        }
+                    }
+                }
+                LiveKitCommand::Disconnect => {
+                    log!("LiveKit: Disconnecting");
+                    if let Some(r) = room.take() {
+                        r.close().await.ok();
+                    }
+                    if let Ok(mut connected) = is_connected.lock() {
+                        *connected = false;
+                    }
+                    let _ = msg_tx.send(LiveKitMessage::Disconnected);
+                    SignalToUI::set_ui_signal();
+                }
+                LiveKitCommand::SetMicrophoneMuted(muted) => {
+                    log!("LiveKit: Set microphone muted: {}", muted);
+                    // Note: Muting requires publishing/unpublishing tracks or using LocalAudioTrack::set_enabled
+                    // For now, just log the request. Full implementation requires track management.
+                    if let Some(r) = &room {
+                        let local = r.local_participant();
+                        for (_, publication) in local.track_publications().iter() {
+                            if matches!(publication.kind(), TrackKind::Audio) {
+                                log!("LiveKit: Audio track found, muted state: {}", publication.is_muted());
+                                // publication.mute() is async in newer versions
+                            }
+                        }
+                    }
+                }
+                LiveKitCommand::SetCameraMuted(muted) => {
+                    log!("LiveKit: Set camera muted: {}", muted);
+                    // Note: Muting requires publishing/unpublishing tracks or using LocalVideoTrack::set_enabled
+                    // For now, just log the request. Full implementation requires track management.
+                    if let Some(r) = &room {
+                        let local = r.local_participant();
+                        for (_, publication) in local.track_publications().iter() {
+                            if matches!(publication.kind(), TrackKind::Video) {
+                                log!("LiveKit: Video track found, muted state: {}", publication.is_muted());
+                                // publication.mute() is async in newer versions
+                            }
+                        }
+                    }
+                }
+                LiveKitCommand::StartScreenShare => {
+                    log!("LiveKit: Starting screen share");
+                    // Screen sharing requires platform-specific implementation
+                    // For now, just log the request
+                }
+                LiveKitCommand::StopScreenShare => {
+                    log!("LiveKit: Stopping screen share");
+                }
+                LiveKitCommand::PublishVideoFrame(frame) => {
+                    log!("LiveKit: Publishing video frame: {}x{}, format: {:?}, data_len: {}",
+                        frame.width, frame.height, frame.format, frame.data.len());
+                    // Video frame publishing requires creating a video track source
+                    // For now, this is a placeholder for future implementation
+                }
+                LiveKitCommand::PublishData { payload, reliable } => {
+                    if let Some(r) = &room {
+                        let data_packet = livekit::DataPacket {
+                            payload: payload.into(),
+                            reliable,
+                            ..Default::default()
+                        };
+
+                        match r.local_participant().publish_data(data_packet).await {
+                            Ok(_) => {
+                                log!("LiveKit: Published data packet");
+                            }
+                            Err(e) => {
+                                log!("LiveKit: Failed to publish data: {}", e);
+                            }
+                        }
+                    } else {
+                        log!("LiveKit: Cannot publish data: not connected to room");
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "livekit"))]
     async fn run_event_loop(
         mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
         msg_tx: mpsc::UnboundedSender<LiveKitMessage>,
@@ -113,13 +410,7 @@ impl LiveKitClient {
                     let _ = msg_tx.send(LiveKitMessage::Connected);
                     SignalToUI::set_ui_signal();
 
-                    // Note: In a real implementation, we would:
-                    // 1. Connect to LiveKit using Room::connect(&url, &token, RoomOptions::default())
-                    // 2. Listen for RoomEvent::ParticipantConnected, TrackSubscribed, etc.
-                    // 3. Extract I420 frames from video tracks using:
-                    //    let i420 = frame.buffer.to_i420();
-                    //    let (data_y, data_u, data_v) = i420.data();
-                    log!("LiveKit (stub): Connection simulated. Enable 'livekit' crate for real WebRTC.");
+                    log!("LiveKit (stub): Connection simulated. Enable 'livekit' feature for real WebRTC.");
                 }
                 LiveKitCommand::Disconnect => {
                     log!("LiveKit (stub): Disconnecting");
@@ -143,6 +434,9 @@ impl LiveKitClient {
                 }
                 LiveKitCommand::PublishVideoFrame(frame) => {
                     log!("LiveKit (stub): Publishing video frame: {}x{}", frame.width, frame.height);
+                }
+                LiveKitCommand::PublishData { payload, reliable } => {
+                    log!("LiveKit (stub): Publishing data: {} bytes, reliable: {}", payload.len(), reliable);
                 }
             }
         }
@@ -172,6 +466,10 @@ impl LiveKitClient {
 
     pub fn publish_video_frame(&self, frame: VideoFrame) {
         self.send_command(LiveKitCommand::PublishVideoFrame(frame));
+    }
+
+    pub fn publish_data(&self, payload: Vec<u8>, reliable: bool) {
+        self.send_command(LiveKitCommand::PublishData { payload, reliable });
     }
 }
 
