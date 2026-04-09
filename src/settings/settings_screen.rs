@@ -104,24 +104,37 @@ script_mod! {
                         visible: false
                         width: Fill, height: Fit
                         flow: Down
-                        spacing: 8
+                        spacing: (SPACE_SM)
 
                         preferences_language_title := TitleLabel {
                             text: "Language"
                         }
 
-                        preferences_application_language_label := SubsectionLabel {
-                            text: "Application language"
-                        }
+                        // --- Language card ---
+                        RoundedView {
+                            width: Fill, height: Fit
+                            flow: Down
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+                            margin: Inset{top: (SPACE_XS)}
+                            show_bg: true
+                            draw_bg +: {
+                                color: #F8F8FA
+                                border_radius: (RADIUS_LG)
+                            }
 
-                        // Custom language selector: button + popup list
-                        // (replaces DropDown which has unsolvable arrow shader artifact)
-                        language_selector_button := RoundedView {
-                            width: 200, height: Fit
-                            flow: Right
-                            align: Align{y: 0.5}
-                            padding: Inset{left: 12, right: 10, top: 10, bottom: 10}
-                            margin: Inset{left: 5, top: 2, bottom: 2}
+                            preferences_application_language_label := SubsectionLabel {
+                                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                                text: "Application language"
+                            }
+
+                            // Custom language selector: button + popup list
+                            // (replaces DropDown which has unsolvable arrow shader artifact)
+                            language_selector_button := RoundedView {
+                                width: 200, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                padding: Inset{left: (SPACE_MD), right: 10, top: 10, bottom: 10}
+                                margin: Inset{left: (SPACE_XS), top: 2, bottom: 2}
                             cursor: MouseCursor.Hand
                             show_bg: true
                             draw_bg +: {
@@ -198,33 +211,64 @@ script_mod! {
                             }
                         }
 
-                        preferences_language_hint_label := Label {
-                            width: Fill
-                            height: Fit
-                            margin: Inset{left: 5, right: 8, top: 3, bottom: 4}
-                            draw_text +: {
-                                color: (MESSAGE_TEXT_COLOR)
-                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                            preferences_language_hint_label := Label {
+                                width: Fill
+                                height: Fit
+                                margin: Inset{left: (SPACE_XS), right: (SPACE_SM), top: 3, bottom: (SPACE_XS)}
+                                draw_text +: {
+                                    color: (MESSAGE_TEXT_COLOR)
+                                    text_style: REGULAR_TEXT { font_size: 10.5 }
+                                }
+                                text: "The app will reload after selecting another language"
                             }
-                            text: "The app will reload after selecting another language"
-                        }
+                        } // end Language card
                     }
 
                     labs_settings_section := View {
                         visible: false
                         width: Fill, height: Fit
                         flow: Down
+                        spacing: (SPACE_SM)
 
-                        bot_settings := BotSettings {}
+                        // --- App Service card ---
+                        RoundedView {
+                            width: Fill, height: Fit
+                            flow: Down
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+                            show_bg: true
+                            draw_bg +: {
+                                color: #F8F8FA
+                                border_radius: (RADIUS_LG)
+                            }
+                            bot_settings := BotSettings {}
+                        }
 
-                        LineH { width: 400, padding: 10, margin: Inset{top: 20, bottom: 5} }
+                        // --- Translation card ---
+                        RoundedView {
+                            width: Fill, height: Fit
+                            flow: Down
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+                            show_bg: true
+                            draw_bg +: {
+                                color: #F8F8FA
+                                border_radius: (RADIUS_LG)
+                            }
+                            translation_settings := TranslationSettings {}
+                        }
 
-                        translation_settings := TranslationSettings {}
-
-                        LineH { width: 400, padding: 10, margin: Inset{top: 20, bottom: 5} }
-
-                        // The TSP wallet settings section.
-                        tsp_settings_screen := TspSettingsScreen {}
+                        // --- TSP card ---
+                        RoundedView {
+                            width: Fill, height: Fit
+                            flow: Down
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+                            show_bg: true
+                            draw_bg +: {
+                                color: #F8F8FA
+                                border_radius: (RADIUS_LG)
+                            }
+                            // The TSP wallet settings section.
+                            tsp_settings_screen := TspSettingsScreen {}
+                        }
                     }
                 }
             }

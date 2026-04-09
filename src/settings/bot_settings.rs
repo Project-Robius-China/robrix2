@@ -14,7 +14,7 @@ script_mod! {
     mod.widgets.BotSettingsInfoLabel = Label {
         width: Fill
         height: Fit
-        margin: Inset{left: 5, top: 2, bottom: 2}
+        margin: Inset{left: (SPACE_XS), top: 2, bottom: 2}
         draw_text +: {
             color: (MESSAGE_TEXT_COLOR)
             text_style: REGULAR_TEXT { font_size: 10.5 }
@@ -26,15 +26,14 @@ script_mod! {
         width: Fill
         height: Fit
         flow: Down
-        spacing: 10
+        spacing: (SPACE_SM)
 
         app_service_header := View {
             width: Fill
             height: Fit
-            flow: Right
-            align: Align{y: 1.0}
-            spacing: 8
-            margin: Inset{left: 5, right: 8, bottom: 2}
+            flow: Down
+            spacing: (SPACE_XS)
+            margin: Inset{left: (SPACE_XS), right: (SPACE_SM), bottom: 2}
 
             app_service_title := TitleLabel {
                 width: Fit
@@ -45,7 +44,7 @@ script_mod! {
                 width: Fill
                 margin: 0
                 draw_text +: {
-                    color: #7A7A7A
+                    color: (COLOR_DESCRIPTION_TEXT)
                     text_style: REGULAR_TEXT { font_size: 9.5 }
                 }
                 text: "Enable Matrix app service support here. Robrix stays a normal Matrix client: it binds BotFather to a room and sends the matching slash commands."
@@ -57,17 +56,20 @@ script_mod! {
             height: Fit
             flow: Right
             align: Align{x: 0.0, y: 0.5}
-            spacing: 8
-            margin: Inset{left: 5, bottom: 2}
+            spacing: (SPACE_SM)
+            margin: Inset{left: (SPACE_XS), bottom: 2}
 
             app_service_switch := Toggle {
                 width: Fit
                 height: Fit
-                padding: Inset{top: 8, right: 8, bottom: 8, left: 8}
+                padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
                 text: ""
                 active: false
                 draw_bg +: {
                     size: 20.0
+                    color_active: (COLOR_ACTIVE_PRIMARY)
+                    border_color_active: (COLOR_ACTIVE_PRIMARY)
+                    mark_color_active: #fff
                 }
             }
 
@@ -75,7 +77,7 @@ script_mod! {
                 width: Fit
                 height: Fit
                 draw_text +: {
-                    color: #999
+                    color: (COLOR_DISABLED_TEXT)
                     text_style: REGULAR_TEXT { font_size: 10.5 }
                 }
                 text: "Disabled"
@@ -139,7 +141,7 @@ impl BotSettings {
             script_apply_eval!(cx, switch_state_label, {
                 text: #(tr_key(self.app_language, "settings.labs.app_service.status.enabled")),
                 draw_text +: {
-                    color: mod.widgets.COLOR_FG_ACCEPT_GREEN
+                    color: mod.widgets.COLOR_ACTIVE_PRIMARY
                 }
             });
         } else {

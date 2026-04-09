@@ -205,6 +205,9 @@ script_mod! {
     mod.widgets.COLOR_DROPDOWN_POPUP_BORDER = #xD3E1F6 // popup border (slightly lighter)
     mod.widgets.COLOR_DROPDOWN_ARROW = #x888888        // dropdown arrow icon
     mod.widgets.COLOR_INACTIVE_BORDER = #xBBBBBB       // inactive account entry border
+    mod.widgets.COLOR_DESCRIPTION_TEXT = #x7A7A7A      // secondary description text
+    mod.widgets.COLOR_FIELD_LABEL = #x555555           // form field labels
+    mod.widgets.COLOR_DISABLED_TEXT = #x999999          // disabled/inactive state text
 
     // Settings screen layout
     mod.widgets.SETTINGS_CONTENT_PADDING = 16
