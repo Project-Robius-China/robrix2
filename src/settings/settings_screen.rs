@@ -16,19 +16,19 @@ script_mod! {
         flow: Overlay
 
         View {
-            padding: Inset{top: 5, left: 15, right: 15, bottom: 0},
+            padding: Inset{top: (SPACE_SM), left: (SETTINGS_CONTENT_PADDING), right: (SETTINGS_CONTENT_PADDING), bottom: (SETTINGS_CONTENT_PADDING)},
             flow: Down
 
             // The settings header shows a title, with a close button to the right.
             settings_header := View {
                 flow: Right,
                 width: Fill, height: Fit
-                margin: Inset{top: 5, left: 5, right: 5}
-                spacing: 10,
+                margin: Inset{top: (SPACE_SM), left: (SPACE_XS), right: (SPACE_XS)}
+                spacing: (SPACE_SM),
 
                 settings_header_title := TitleLabel {
                     padding: 0,
-                    margin: Inset{ left: 1, top: 11 },
+                    margin: Inset{ left: 0, top: (SPACE_SM) },
                     text: "Add/Explore Rooms"
                     draw_text +: {
                         text_style: theme.font_regular {font_size: 18},
@@ -41,43 +41,46 @@ script_mod! {
                     height: Fit,
                     spacing: 0,
                     margin: 0,
-                    padding: 15,
+                    padding: (SPACE_LG),
                     draw_icon.svg: (ICON_CLOSE)
-                    icon_walk: Walk{width: 14, height: 14}
+                    icon_walk: Walk{width: 12, height: 12}
                 }
             }
 
             // Make sure the dividing line is aligned with the close_button
-            LineH { padding: 10, margin: Inset{top: 10, right: 2} }
+            LineH { padding: 0, margin: Inset{top: (SPACE_SM), bottom: (SPACE_SM)} }
 
             settings_category_cards := View {
                 width: Fill, height: Fit
                 flow: Flow.Right{wrap: true}
                 align: Align{y: 0.5}
-                spacing: 10
-                margin: Inset{left: 5, right: 5, bottom: 8}
+                spacing: (SPACE_SM)
+                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), bottom: (SPACE_SM)}
 
                 category_account_button := RobrixNeutralIconButton {
                     width: Fit, height: Fit,
-                    padding: Inset{top: 9, bottom: 9, left: 14, right: 14}
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
                     text: "Account"
                 }
 
                 category_preferences_button := RobrixNeutralIconButton {
                     width: Fit, height: Fit,
-                    padding: Inset{top: 9, bottom: 9, left: 14, right: 14}
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
                     text: "Preferences"
                 }
 
                 category_labs_button := RobrixNeutralIconButton {
                     width: Fit, height: Fit,
-                    padding: Inset{top: 9, bottom: 9, left: 14, right: 14}
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
                     text: "Labs"
                 }
             }
@@ -123,15 +126,15 @@ script_mod! {
                             show_bg: true
                             draw_bg +: {
                                 color: (COLOR_PRIMARY)
-                                border_radius: 4.0
+                                border_radius: (RADIUS_SM)
                                 border_size: 1.0
-                                border_color: #xC8D9F2
+                                border_color: (COLOR_DROPDOWN_BORDER)
                             }
 
                             language_selector_label := Label {
                                 width: Fill, height: Fit
                                 draw_text +: {
-                                    color: #x333333
+                                    color: (COLOR_DROPDOWN_TEXT)
                                     text_style: REGULAR_TEXT { font_size: 11 }
                                 }
                                 text: "English"
@@ -140,7 +143,7 @@ script_mod! {
                             language_arrow := ExpandArrow {
                                 width: 14, height: 14
                                 draw_bg +: {
-                                    color: instance(#x888888)
+                                    color: instance((COLOR_DROPDOWN_ARROW))
                                 }
                             }
                         }
@@ -154,9 +157,9 @@ script_mod! {
                             new_batch: true
                             draw_bg +: {
                                 color: (COLOR_PRIMARY)
-                                border_radius: 6.0
+                                border_radius: (RADIUS_MD)
                                 border_size: 1.0
-                                border_color: #xD3E1F6
+                                border_color: (COLOR_DROPDOWN_POPUP_BORDER)
                             }
 
                             lang_option_en := View {
@@ -170,7 +173,7 @@ script_mod! {
                                 Label {
                                     width: Fit, height: Fit
                                     draw_text +: {
-                                        color: #x333333
+                                        color: (COLOR_DROPDOWN_TEXT)
                                         text_style: REGULAR_TEXT { font_size: 11 }
                                     }
                                     text: "English"
@@ -187,7 +190,7 @@ script_mod! {
                                 Label {
                                     width: Fit, height: Fit
                                     draw_text +: {
-                                        color: #x333333
+                                        color: (COLOR_DROPDOWN_TEXT)
                                         text_style: REGULAR_TEXT { font_size: 11 }
                                     }
                                     text: "简体中文"

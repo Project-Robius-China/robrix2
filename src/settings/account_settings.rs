@@ -25,6 +25,7 @@ script_mod! {
         }
 
         avatar_section_label := SubsectionLabel {
+            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
             text: "Your Avatar:"
         }
 
@@ -52,20 +53,21 @@ script_mod! {
                 width: Fit, height: Fit
                 flow: Down,
                 align: Align{y: 0.5}
-                padding: Inset{ left: 10, right: 10 }
-                spacing: 10
+                padding: Inset{ left: (SPACE_SM), right: (SPACE_SM) }
+                spacing: (SPACE_SM)
 
                 View {
                     width: Fit, height: Fit
                     flow: Right,
                     align: Align{y: 0.5}
-                    spacing: 10
+                    spacing: (SPACE_SM)
 
                     upload_avatar_button := RobrixIconButton {
                         width: 140,
                         height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
                         padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
                         margin: 0,
+                        draw_bg +: { border_radius: (RADIUS_MD) }
                         draw_icon.svg: (ICON_UPLOAD)
                         icon_walk: Walk{width: 16, height: 16}
                         text: "Upload Avatar"
@@ -82,13 +84,14 @@ script_mod! {
                     width: Fit, height: Fit
                     flow: Right,
                     align: Align{y: 0.5}
-                    spacing: 10
+                    spacing: (SPACE_SM)
 
                     delete_avatar_button := RobrixNegativeIconButton {
                         width: 140,
                         height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
                         padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
                         margin: 0,
+                        draw_bg +: { border_radius: (RADIUS_MD) }
                         draw_icon.svg: (ICON_TRASH)
                         icon_walk: Walk{ width: 16, height: 16 }
                         text: "Delete Avatar"
@@ -104,11 +107,12 @@ script_mod! {
         }
 
         display_name_section_label := SubsectionLabel {
+            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
             text: "Your Display Name:"
         }
 
         display_name_input := RobrixTextInput {
-            margin: Inset{top: 3, left: 5, right: 5, bottom: 8},
+            margin: Inset{top: 3, left: (SPACE_XS), right: (SPACE_XS), bottom: (SPACE_SM)},
             width: 216, height: Fit
             empty_text: "Add a display name..."
         }
@@ -117,7 +121,7 @@ script_mod! {
             width: Fill, height: Fit
             flow: Flow.Right{wrap: true},
             align: Align{y: 0.5},
-            spacing: 10
+            spacing: (SPACE_SM)
 
             // These buttons are disabled by default, and enabled when the user
             // changes the `display_name_input` text.
@@ -127,7 +131,7 @@ script_mod! {
                 enabled: false,
                 width: Fit, height: Fit,
                 padding: 10,
-                margin: Inset{left: 5},
+                margin: Inset{left: (SPACE_XS)},
                 draw_icon.svg: (ICON_FORBIDDEN)
                 icon_walk: Walk{width: 16, height: 16, margin: 0}
                 text: "Cancel"
@@ -137,8 +141,8 @@ script_mod! {
                 enabled: false,
                 width: Fit, height: Fit,
                 padding: 10,
-                margin: Inset{left: 5},
-                draw_bg.border_radius: 5.0
+                margin: Inset{left: (SPACE_XS)},
+                draw_bg.border_radius: (RADIUS_MD)
                 draw_icon.svg: (ICON_CHECKMARK)
                 icon_walk: Walk{width: 16, height: 16, margin: 0}
                 text: "Save Name"
@@ -153,18 +157,19 @@ script_mod! {
         }
 
         user_id_section_label := SubsectionLabel {
+            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
             text: "Your User ID:"
         }
 
         View {
             width: Fill, height: Fit
             flow: Right,
-            spacing: 10
+            spacing: (SPACE_SM)
 
             copy_user_id_button := RobrixNeutralIconButton {
                 enable_long_press: true,
-                margin: Inset{left: 5}
-                padding: 12,
+                margin: Inset{left: (SPACE_XS)}
+                padding: (SPACE_MD),
                 spacing: 0,
                 draw_icon.svg: (ICON_COPY)
                 icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
@@ -173,7 +178,7 @@ script_mod! {
             user_id := Label {
                 width: Fill, height: Fit
                 flow: Flow.Right{wrap: true},
-                margin: Inset{top: 10}
+                margin: Inset{top: (SPACE_SM)}
                 draw_text +: {
                     color: (MESSAGE_TEXT_COLOR),
                     text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
@@ -183,14 +188,15 @@ script_mod! {
         }
 
         multiple_accounts_section_label := SubsectionLabel {
+            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
             text: "Multiple Accounts:"
         }
 
         View {
             width: Fill, height: Fit
             flow: Down,
-            spacing: 8,
-            margin: Inset{left: 5, right: 5, bottom: 10}
+            spacing: (SPACE_SM),
+            margin: Inset{left: (SPACE_XS), right: (SPACE_XS), bottom: (SPACE_SM)}
 
             // Account entries will be shown here
             // Active account (current)
@@ -198,12 +204,12 @@ script_mod! {
                 width: Fill, height: Fit
                 flow: Right,
                 align: Align{y: 0.5}
-                padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                spacing: 10
+                padding: Inset{left: (SPACE_MD), right: (SPACE_LG), top: (SPACE_SM), bottom: (SPACE_SM)}
+                spacing: (SPACE_SM)
                 show_bg: true
                 draw_bg +: {
-                    color: (COLOR_ACTIVE_PRIMARY)
-                    border_radius: 4.0
+                    color: (COLOR_ACCOUNT_ACTIVE_BG)
+                    border_radius: (RADIUS_LG)
                 }
 
                 View {
@@ -214,7 +220,7 @@ script_mod! {
                     active_account_label := Label {
                         width: Fill, height: Fit
                         draw_text +: {
-                            color: (COLOR_TEXT),
+                            color: (COLOR_PRIMARY),
                             text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
                         }
                         text: "@user:server"
@@ -223,7 +229,7 @@ script_mod! {
                     active_account_status_label := Label {
                         width: Fit, height: Fit
                         draw_text +: {
-                            color: (COLOR_FG_ACCEPT_GREEN),
+                            color: (COLOR_PRIMARY),
                             text_style: MESSAGE_TEXT_STYLE { font_size: 9 },
                         }
                         text: "Active"
@@ -234,7 +240,7 @@ script_mod! {
             // Other accounts section (populated dynamically)
             other_accounts_label := Label {
                 width: Fill, height: Fit
-                margin: Inset{top: 5, left: 2}
+                margin: Inset{top: (SPACE_XS), left: 2}
                 visible: false
                 draw_text +: {
                     color: (MESSAGE_TEXT_COLOR),
@@ -248,15 +254,15 @@ script_mod! {
                 width: Fill, height: Fit
                 flow: Right,
                 align: Align{y: 0.5}
-                padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                spacing: 10
+                padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
+                spacing: (SPACE_SM)
                 visible: false
                 show_bg: true
                 draw_bg +: {
                     color: (COLOR_SECONDARY)
-                    border_radius: 4.0
+                    border_radius: (RADIUS_LG)
                     border_size: 1.0
-                    border_color: #555
+                    border_color: (COLOR_INACTIVE_BORDER)
                 }
 
                 View {
@@ -285,7 +291,7 @@ script_mod! {
 
             account_count_label := Label {
                 width: Fill, height: Fit
-                margin: Inset{top: 5, bottom: 5, left: 5}
+                margin: Inset{top: (SPACE_XS), bottom: (SPACE_XS), left: (SPACE_XS)}
                 draw_text +: {
                     color: (MESSAGE_TEXT_COLOR),
                     text_style: MESSAGE_TEXT_STYLE { font_size: 10 },
@@ -295,8 +301,9 @@ script_mod! {
 
             add_account_button := RobrixIconButton {
                 width: Fit,
-                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                margin: Inset{top: 5}
+                padding: Inset{top: 10, bottom: 10, left: (SPACE_MD), right: 15}
+                margin: Inset{top: (SPACE_XS)}
+                draw_bg +: { border_radius: (RADIUS_MD) }
                 draw_icon.svg: (ICON_ADD)
                 icon_walk: Walk{width: 16, height: 16}
                 text: "Add Another Account"
@@ -304,27 +311,30 @@ script_mod! {
         }
 
         other_actions_section_label := SubsectionLabel {
+            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
             text: "Other actions:"
         }
 
         View {
-            // margin: Inset{top: 20},
             width: Fill, height: Fit
             flow: Flow.Right{wrap: true},
             align: Align{y: 0.5},
-            spacing: 10
+            spacing: (SPACE_SM)
+            margin: Inset{bottom: (SPACE_LG)}
 
             manage_account_button := RobrixIconButton {
-                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                margin: Inset{left: 5}
+                padding: Inset{top: 10, bottom: 10, left: (SPACE_MD), right: 15}
+                margin: Inset{left: (SPACE_XS)}
+                draw_bg +: { border_radius: (RADIUS_MD) }
                 draw_icon.svg: (ICON_EXTERNAL_LINK)
                 icon_walk: Walk{width: 16, height: 16}
                 text: "Manage Account"
             }
 
             logout_button := RobrixNegativeIconButton {
-                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                margin: Inset{left: 5}
+                padding: Inset{top: 10, bottom: 10, left: (SPACE_MD), right: 15}
+                margin: Inset{left: (SPACE_XS)}
+                draw_bg +: { border_radius: (RADIUS_MD) }
                 draw_icon.svg: (ICON_LOGOUT)
                 icon_walk: Walk{ width: 16, height: 16, margin: Inset{right: -2} }
                 text: "Log out"

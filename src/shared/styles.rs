@@ -185,6 +185,31 @@ script_mod! {
     mod.widgets.COLOR_NAVIGATION_TAB_BG_HOVER = (mod.widgets.COLOR_SECONDARY * 0.85)
     mod.widgets.COLOR_NAVIGATION_TAB_BG_ACTIVE = #9
 
+    // Layout spacing constants (4px grid)
+    mod.widgets.SPACE_XS  = 4
+    mod.widgets.SPACE_SM  = 8
+    mod.widgets.SPACE_MD  = 12
+    mod.widgets.SPACE_LG  = 16
+    mod.widgets.SPACE_XL  = 20
+    mod.widgets.SPACE_XXL = 24
+
+    // Border radius constants
+    mod.widgets.RADIUS_SM = 4.0
+    mod.widgets.RADIUS_MD = 6.0
+    mod.widgets.RADIUS_LG = 8.0
+
+    // Settings screen colors
+    mod.widgets.COLOR_ACCOUNT_ACTIVE_BG = #3B8CFF  // softer blue for active account bar
+    mod.widgets.COLOR_DROPDOWN_TEXT = #x333333        // text in dropdown selectors
+    mod.widgets.COLOR_DROPDOWN_BORDER = #xC8D9F2      // dropdown border (light blue-gray)
+    mod.widgets.COLOR_DROPDOWN_POPUP_BORDER = #xD3E1F6 // popup border (slightly lighter)
+    mod.widgets.COLOR_DROPDOWN_ARROW = #x888888        // dropdown arrow icon
+    mod.widgets.COLOR_INACTIVE_BORDER = #xBBBBBB       // inactive account entry border
+
+    // Settings screen layout
+    mod.widgets.SETTINGS_CONTENT_PADDING = 16
+    mod.widgets.SETTINGS_BUTTON_HEIGHT = 36
+
     mod.widgets.COLOR_IMAGE_VIEWER_BACKGROUND = #333333CC // 80% Opacity
 
     mod.widgets.COLOR_IMAGE_VIEWER_META_BACKGROUND = #E8E8E8

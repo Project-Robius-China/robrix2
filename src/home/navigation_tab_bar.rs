@@ -49,8 +49,8 @@ script_mod! {
     mod.widgets.NavigationTabButton = RadioButtonTab {
         width: Fill,
         height: (NAVIGATION_TAB_BAR_SIZE - 5),
-        padding: 5,
-        margin: 3,
+        padding: (SPACE_XS),
+        margin: (SPACE_XS),
         align: Align{x: 0.5, y: 0.5}
         flow: Down,
         text: "",
@@ -72,7 +72,7 @@ script_mod! {
             color_focus: (COLOR_NAVIGATION_TAB_BG_ACTIVE)
 
             border_size: 0.0
-            border_radius: 4.0
+            border_radius: (RADIUS_MD)
             border_color: #0000
             border_color_hover: #0000
             border_color_down: #0000
@@ -155,19 +155,19 @@ script_mod! {
         draw_icon +: { svg: (ICON_ADD) }
     }
 
-    mod.widgets.Separator = LineH { margin: 8 }
+    mod.widgets.Separator = LineH { margin: (SPACE_SM) }
 
     mod.widgets.NavigationTabBar = #(NavigationTabBar::register_widget(vm)) {
         Desktop := RoundedView {
             flow: Down,
             align: Align{x: 0.5}
-            padding: Inset{top: 8., bottom: 8}
+            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_XS), right: (SPACE_XS)}
             width: (NAVIGATION_TAB_BAR_SIZE), 
             height: Fill
 
             draw_bg +: {
                 color: (COLOR_SECONDARY)
-                border_radius: 4.0
+                border_radius: (RADIUS_LG)
             }
 
             CachedWidget {
@@ -201,7 +201,7 @@ script_mod! {
 
             draw_bg +: {
                 color: (COLOR_SECONDARY)
-                border_radius: 4.0
+                border_radius: (RADIUS_LG)
             }
 
             CachedWidget {
