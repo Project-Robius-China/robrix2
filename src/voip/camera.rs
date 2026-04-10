@@ -70,7 +70,7 @@ impl CameraManager {
             if fmt.width > 1920 || fmt.height > 1080 {
                 continue;
             }
-            if best.as_ref().map_or(true, |b| better(fmt, b)) {
+            if best.as_ref().is_none_or(|b| better(fmt, b)) {
                 best = Some(*fmt);
             }
         }
@@ -81,7 +81,7 @@ impl CameraManager {
                 if fmt.pixel_format != VideoPixelFormat::NV12 {
                     continue;
                 }
-                if best.as_ref().map_or(true, |b| better(fmt, b)) {
+                if best.as_ref().is_none_or(|b| better(fmt, b)) {
                     best = Some(*fmt);
                 }
             }
@@ -93,7 +93,7 @@ impl CameraManager {
                 if !matches!(fmt.pixel_format, VideoPixelFormat::YUY2 | VideoPixelFormat::YUV420) {
                     continue;
                 }
-                if best.as_ref().map_or(true, |b| better(fmt, b)) {
+                if best.as_ref().is_none_or(|b| better(fmt, b)) {
                     best = Some(*fmt);
                 }
             }

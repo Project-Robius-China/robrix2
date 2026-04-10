@@ -709,7 +709,7 @@ impl Widget for VoipScreen {
                 // Test mode: push video frames at ~30fps
                 if self.test_video_frame_timer.is_event(event).is_some() {
                     if let Some(ref participant_id) = self.test_video_participant_id.clone() {
-                        self.push_test_video_frame(cx, &participant_id);
+                        self.push_test_video_frame(cx, participant_id);
                     }
                 }
             }
@@ -1950,11 +1950,7 @@ impl VoipScreenRef {
 
     /// Add a participant, returns the participant ID
     pub fn add_participant(&self, cx: &mut Cx, name: &str, is_video_on: bool) -> Option<String> {
-        if let Some(mut inner) = self.borrow_mut() {
-            Some(inner.add_participant(cx, name, is_video_on))
-        } else {
-            None
-        }
+        self.borrow_mut().map(|mut inner| inner.add_participant(cx, name, is_video_on))
     }
 
     /// Toggle participant video state

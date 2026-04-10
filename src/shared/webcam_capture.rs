@@ -90,7 +90,7 @@ impl CameraChoice {
         for fmt in &desc.formats {
             if fmt.pixel_format == VideoPixelFormat::NV12
                 && fmt.width <= 1920 && fmt.height <= 1080
-                && best.as_ref().map_or(true, |b| better(fmt, b))
+                && best.as_ref().is_none_or(|b| better(fmt, b))
             {
                 best = Some(*fmt);
             }
@@ -100,7 +100,7 @@ impl CameraChoice {
         if best.is_none() {
             for fmt in &desc.formats {
                 if fmt.pixel_format == VideoPixelFormat::NV12
-                    && best.as_ref().map_or(true, |b| better(fmt, b))
+                    && best.as_ref().is_none_or(|b| better(fmt, b))
                 {
                     best = Some(*fmt);
                 }
@@ -111,7 +111,7 @@ impl CameraChoice {
         if best.is_none() {
             for fmt in &desc.formats {
                 if matches!(fmt.pixel_format, VideoPixelFormat::YUY2 | VideoPixelFormat::YUV420)
-                    && best.as_ref().map_or(true, |b| better(fmt, b))
+                    && best.as_ref().is_none_or(|b| better(fmt, b))
                 {
                     best = Some(*fmt);
                 }

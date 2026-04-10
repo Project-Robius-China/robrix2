@@ -15,13 +15,19 @@ pub struct RemoteVideoSession {
     state: Arc<Mutex<VideoSessionState>>,
 }
 
-impl RemoteVideoSession {
-    pub fn new() -> Self {
+impl Default for RemoteVideoSession {
+    fn default() -> Self {
         Self {
             frames: Arc::new(Mutex::new(VecDeque::new())),
             dimensions: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(VideoSessionState::Connecting)),
         }
+    }
+}
+
+impl RemoteVideoSession {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Get a handle to push frames into this session

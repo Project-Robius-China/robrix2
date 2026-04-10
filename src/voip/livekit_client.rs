@@ -250,7 +250,7 @@ impl LiveKitClient {
                                                         // Log first frame and then periodically
                                                         if frame_count == 1 {
                                                             log!("LiveKit: Received first video frame from {}: {}x{}", participant_id_clone, width, height);
-                                                        } else if frame_count % 60 == 0 {
+                                                        } else if frame_count.is_multiple_of(60) {
                                                             log!("LiveKit: Video frame #{} from {}: {}x{}", frame_count, participant_id_clone, width, height);
                                                         }
 
@@ -361,7 +361,7 @@ impl LiveKitClient {
                 LiveKitCommand::PublishData { payload, reliable } => {
                     if let Some(r) = &room {
                         let data_packet = livekit::DataPacket {
-                            payload: payload.into(),
+                            payload,
                             reliable,
                             ..Default::default()
                         };
