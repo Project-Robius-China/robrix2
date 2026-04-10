@@ -1,8 +1,9 @@
 //! LiveKit client integration for WebRTC
 //!
 //! This module provides LiveKit WebRTC connectivity for VoIP calls.
-//! On desktop platforms (macOS, Windows, Linux), it uses the real LiveKit SDK.
-//! On Android and iOS, it provides a stub implementation (VoIP not supported).
+//! On macOS and Linux, it uses the real LiveKit SDK.
+//! On Android, iOS, and Windows, it provides a stub implementation (VoIP not supported).
+//! Windows is excluded due to MSVC runtime library mismatch with webrtc-sys.
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -101,14 +102,14 @@ impl LiveKitClient {
         msg_rx
     }
 
-    /// Stub implementation for Android/iOS where LiveKit is not supported.
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    /// Stub implementation for Android/iOS/Windows where LiveKit is not supported.
+    #[cfg(any(target_os = "android", target_os = "ios", target_os = "windows"))]
     async fn run_event_loop(
         mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
         msg_tx: mpsc::UnboundedSender<LiveKitMessage>,
         _is_connected: Arc<Mutex<bool>>,
     ) {
-        // On Android/iOS, VoIP is not supported. Just drain commands and send error.
+        // On Android/iOS/Windows, VoIP is not supported. Just drain commands and send error.
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 LiveKitCommand::Connect { .. } => {
@@ -129,8 +130,8 @@ impl LiveKitClient {
         }
     }
 
-    /// Full LiveKit implementation for desktop platforms (macOS, Windows, Linux).
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    /// Full LiveKit implementation for desktop platforms (macOS, Linux).
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
     async fn run_event_loop(
         mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
         msg_tx: mpsc::UnboundedSender<LiveKitMessage>,

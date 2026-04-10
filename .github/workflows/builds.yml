@@ -107,13 +107,23 @@ jobs:
       matrix:
         include:
           # Apple Silicon Macs (M1/M2/M3/M4 chips)
+          # Use Xcode 15.2 for webrtc-sys compatibility
           - os: macos-14
             arch: arm64
+            xcode: "15.2"
           # Intel Macs (x86_64 architecture)
+          # Use Xcode 15.4 (oldest available on macos-15)
           - os: macos-15-intel
             arch: x86_64
+            xcode: "15.4"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Xcode version
+        run: |
+          # Use older Xcode for webrtc-sys compatibility
+          sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
+          xcodebuild -version
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
