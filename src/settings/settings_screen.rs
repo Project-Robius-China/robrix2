@@ -133,7 +133,7 @@ script_mod! {
                                 width: 200, height: Fit
                                 flow: Right
                                 align: Align{y: 0.5}
-                                padding: Inset{left: (SPACE_MD), right: 10, top: 10, bottom: 10}
+                                padding: Inset{left: (SPACE_MD), right: (SPACE_SM), top: (SPACE_SM), bottom: (SPACE_SM)}
                                 margin: Inset{left: (SPACE_XS), top: 2, bottom: 2}
                             cursor: MouseCursor.Hand
                             show_bg: true
@@ -165,7 +165,7 @@ script_mod! {
                             visible: false
                             width: 200, height: Fit
                             flow: Down
-                            padding: Inset{top: 4, bottom: 4}
+                            padding: Inset{top: (SPACE_XS), bottom: (SPACE_XS)}
                             show_bg: true
                             new_batch: true
                             draw_bg +: {
@@ -179,7 +179,7 @@ script_mod! {
                                 width: Fill, height: 36
                                 flow: Right
                                 align: Align{y: 0.5}
-                                padding: Inset{left: 12, right: 12}
+                                padding: Inset{left: (SPACE_MD), right: (SPACE_MD)}
                                 cursor: MouseCursor.Hand
                                 show_bg: true
                                 draw_bg +: { color: #0000 }
@@ -196,7 +196,7 @@ script_mod! {
                                 width: Fill, height: 36
                                 flow: Right
                                 align: Align{y: 0.5}
-                                padding: Inset{left: 12, right: 12}
+                                padding: Inset{left: (SPACE_MD), right: (SPACE_MD)}
                                 cursor: MouseCursor.Hand
                                 show_bg: true
                                 draw_bg +: { color: #0000 }
@@ -214,7 +214,7 @@ script_mod! {
                             preferences_language_hint_label := Label {
                                 width: Fill
                                 height: Fit
-                                margin: Inset{left: (SPACE_XS), right: (SPACE_SM), top: 3, bottom: (SPACE_XS)}
+                                margin: Inset{left: (SPACE_XS), right: (SPACE_SM), top: (SPACE_XS), bottom: (SPACE_XS)}
                                 draw_text +: {
                                     color: (MESSAGE_TEXT_COLOR)
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
