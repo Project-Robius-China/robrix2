@@ -122,7 +122,7 @@ reqwest = { version = "0.12", default-features = false, optional = true, feature
 [features]
 default = []
 ## Enables experimental support for using TSP wallets.
-tsp = ["dep:tsp_sdk", "dep:quinn", "dep:aws-lc-rs", "dep:percent-encoding"]
+tsp = ["dep:tsp_sdk", "dep:quinn", "dep:aws-lc-rs", "dep:percent-encoding", "dep:reqwest"]
 
 ## Hides the command prompt console on Windows.
 hide_windows_console = []
