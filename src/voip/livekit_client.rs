@@ -1,14 +1,13 @@
 //! LiveKit client integration for WebRTC
 //!
 //! This module provides LiveKit WebRTC connectivity for VoIP calls.
-//! On Android and iOS, it uses the real LiveKit SDK.
-//! On other platforms, it provides a stub implementation.
+//! On desktop platforms (macOS, Windows, Linux), it uses the real LiveKit SDK.
+//! On Android and iOS, it provides a stub implementation (VoIP not supported).
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use makepad_widgets::{SignalToUI, log};
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
 use super::call_state::CallParticipant;
 
 /// Video frame data for publishing
@@ -102,7 +101,36 @@ impl LiveKitClient {
         msg_rx
     }
 
+    /// Stub implementation for Android/iOS where LiveKit is not supported.
     #[cfg(any(target_os = "android", target_os = "ios"))]
+    async fn run_event_loop(
+        mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
+        msg_tx: mpsc::UnboundedSender<LiveKitMessage>,
+        _is_connected: Arc<Mutex<bool>>,
+    ) {
+        // On Android/iOS, VoIP is not supported. Just drain commands and send error.
+        while let Some(cmd) = cmd_rx.recv().await {
+            match cmd {
+                LiveKitCommand::Connect { .. } => {
+                    log!("LiveKit: VoIP not supported on this platform");
+                    let _ = msg_tx.send(LiveKitMessage::Error(
+                        "VoIP calls are not supported on this platform".to_string()
+                    ));
+                    SignalToUI::set_ui_signal();
+                }
+                LiveKitCommand::Disconnect => {
+                    let _ = msg_tx.send(LiveKitMessage::Disconnected);
+                    SignalToUI::set_ui_signal();
+                }
+                _ => {
+                    // Ignore other commands on unsupported platforms
+                }
+            }
+        }
+    }
+
+    /// Full LiveKit implementation for desktop platforms (macOS, Windows, Linux).
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     async fn run_event_loop(
         mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
         msg_tx: mpsc::UnboundedSender<LiveKitMessage>,
