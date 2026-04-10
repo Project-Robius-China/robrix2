@@ -7,3 +7,8 @@ rustflags = ["--cfg", "ruma_identifiers_storage=\"Arc\""]
 [target.'cfg(target_os = "macos")']
 rustflags = ["-C", "link-args=-Wl,-ObjC"]
 
+[target.x86_64-pc-windows-msvc]                                                                                                                 
+rustflags = ["-C", "target-feature=-crt-static"]                                                                                                
+                                                                                                                                                
+[target.aarch64-pc-windows-msvc]                                                                                                                
+rustflags = ["-C", "target-feature=-crt-static"]
