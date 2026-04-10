@@ -1,13 +1,14 @@
 //! LiveKit client integration for WebRTC
 //!
 //! This module provides LiveKit WebRTC connectivity for VoIP calls.
-//! When the `livekit` feature is enabled, it uses the real LiveKit SDK.
-//! Otherwise, it provides a stub implementation for development.
+//! On Android and iOS, it uses the real LiveKit SDK.
+//! On other platforms, it provides a stub implementation.
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use makepad_widgets::{SignalToUI, log};
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
 use super::call_state::CallParticipant;
 
 /// Video frame data for publishing
@@ -101,6 +102,7 @@ impl LiveKitClient {
         msg_rx
     }
 
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     async fn run_event_loop(
         mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
         msg_tx: mpsc::UnboundedSender<LiveKitMessage>,

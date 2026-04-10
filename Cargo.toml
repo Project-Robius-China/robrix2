@@ -14,8 +14,8 @@ version = "0.0.1-pre-alpha-4"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
 [dependencies]
-#makepad-widgets = { path = "/Users/alanpoon/Documents/rust/makepad/widgets",  features = ["serde"] }
-#makepad-code-editor = { path = "/Users/alanpoon/Documents/rust/makepad/code_editor" }
+# makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
+# makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
 
 makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "cargo_makepad_ndk_fix", features = ["serde"] }
 makepad-code-editor = { git = "https://github.com/kevinaboos/makepad", branch = "cargo_makepad_ndk_fix" }
@@ -78,15 +78,17 @@ serde = "1.0"
 serde_json = "1.0"
 thiserror = "2.0.16"
 tokio = { version = "1.43.1", features = ["macros", "rt-multi-thread"] }
-## LiveKit WebRTC SDK - requires native libwebrtc build
-## rustls-tls-native-roots is required for WSS connections
-livekit = { version = "0.7", features = ["rustls-tls-native-roots"] }
 tracing-subscriber = "0.3.17"
 unicode-segmentation = "1.11.0"
 url = "2.5.0"
 nokhwa = { version = "0.10", features = ["input-native"] }
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 rfd = "0.15"
+
+## LiveKit WebRTC SDK - only for Android and iOS
+## rustls-tls-native-roots is required for WSS connections
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+livekit = { version = "0.7", features = ["rustls-tls-native-roots"] }
 
 ## Dependencies for TSP support.
 ## Commit "f0bc4625dcd729e07e4a36257df2f1d94c81cef4" is the most recent one without the invalid change to pin serde to 1.0.219.

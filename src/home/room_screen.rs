@@ -3242,6 +3242,16 @@ impl Widget for RoomScreen {
                 if wr.button(cx, ids!(join_call_button)).clicked(actions) {
                     let Some(room_name_id) = self.room_name_id.clone() else { continue };
                     log!("Join call button clicked for room: {}", room_name_id.room_id());
+                    #[cfg(any(target_os = "android", target_os = "ios"))]
+                    {
+                        let _ = room_name_id;
+                        enqueue_popup_notification(
+                            "VoIP calls are not supported on this platform.",
+                            PopupKind::Warning,
+                            Some(4.0),
+                        );
+                    }
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     cx.widget_action(
                         self.widget_uid(),
                         RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
@@ -3253,6 +3263,16 @@ impl Widget for RoomScreen {
             if self.view.button(cx, ids!(video_call_button)).clicked(actions) {
                 if let Some(room_name_id) = self.room_name_id.clone() {
                     log!("Video call button clicked for room: {}", room_name_id.room_id());
+                    #[cfg(any(target_os = "android", target_os = "ios"))]
+                    {
+                        let _ = room_name_id;
+                        enqueue_popup_notification(
+                            "VoIP calls are not supported on this platform.",
+                            PopupKind::Warning,
+                            Some(4.0),
+                        );
+                    }
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     cx.widget_action(
                         self.widget_uid(),
                         RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
@@ -3264,6 +3284,16 @@ impl Widget for RoomScreen {
             if self.view.button(cx, ids!(join_call_banner_button)).clicked(actions) {
                 if let Some(room_name_id) = self.room_name_id.clone() {
                     log!("Join call banner button clicked for room: {}", room_name_id.room_id());
+                    #[cfg(any(target_os = "android", target_os = "ios"))]
+                    {
+                        let _ = room_name_id;
+                        enqueue_popup_notification(
+                            "VoIP calls are not supported on this platform.",
+                            PopupKind::Warning,
+                            Some(4.0),
+                        );
+                    }
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     cx.widget_action(
                         self.widget_uid(),
                         RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
