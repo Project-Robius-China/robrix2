@@ -138,11 +138,6 @@ log_space_service_diffs = []
 
 
 [patch.crates-io]
-## Pin cxx to 1.0.117 to avoid the contiguous_range static_assert issue
-## with Xcode 15.x's libc++. See: https://github.com/dtolnay/cxx/issues/1332
-cxx = { git = "https://github.com/dtolnay/cxx", tag = "1.0.117" }
-cxx-build = { git = "https://github.com/dtolnay/cxx", tag = "1.0.117" }
-
 ## This is required to avoid a version conflict on the libsqlite3-sys crate,
 ## which is a native crate that can only exist once in the dependency graph.
 ## The `matrix-sdk` crate's dependencies require a specific version of `libsqlite3-sys`

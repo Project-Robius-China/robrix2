@@ -107,23 +107,13 @@ jobs:
       matrix:
         include:
           # Apple Silicon Macs (M1/M2/M3/M4 chips)
-          # Use Xcode 15.2 for webrtc-sys compatibility
           - os: macos-14
             arch: arm64
-            xcode: "15.2"
           # Intel Macs (x86_64 architecture)
-          # Use Xcode 15.4 (oldest available on macos-15)
           - os: macos-15-intel
             arch: x86_64
-            xcode: "15.4"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Select Xcode version
-        run: |
-          # Use older Xcode for webrtc-sys compatibility
-          sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
-          xcodebuild -version
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -133,9 +123,16 @@ jobs:
         with:
           key: macos-${{ matrix.arch }}-build-${{ hashFiles('Cargo.lock') }}
 
+      - name: Install LLVM
+        run: brew install llvm
+
       - name: Build
         env:
           RUSTFLAGS: "-D warnings"
+          # Use Homebrew LLVM for C++ compilation to avoid cxx contiguous_range
+          # static_assert issue with Apple's libc++
+          CXX: ${{ matrix.arch == 'arm64' && '/opt/homebrew/opt/llvm/bin/clang++' || '/usr/local/opt/llvm/bin/clang++' }}
+          CC: ${{ matrix.arch == 'arm64' && '/opt/homebrew/opt/llvm/bin/clang' || '/usr/local/opt/llvm/bin/clang' }}
         run: |
           cargo build --profile fast
 
