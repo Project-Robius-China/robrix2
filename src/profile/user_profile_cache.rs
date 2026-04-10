@@ -27,6 +27,18 @@ enum UserProfileCacheEntry {
     },
 }
 
+/// Removes all `Requested` entries from the cache, allowing them to be re-fetched.
+///
+/// This should be called when the app transitions from offline back to online,
+/// because any in-flight requests that were submitted while offline have likely
+/// failed without updating the cache, leaving stale `Requested` entries that
+/// permanently block re-fetching.
+pub fn clear_all_pending_requests() {
+    USER_PROFILE_CACHE.with_borrow_mut(|cache| {
+        cache.retain(|_, entry| !matches!(entry, UserProfileCacheEntry::Requested));
+    });
+}
+
 /// The queue of user profile updates waiting to be processed by the UI thread's event handler.
 static PENDING_USER_PROFILE_UPDATES: SegQueue<UserProfileUpdate> = SegQueue::new();
 
@@ -252,6 +264,44 @@ pub fn get_user_display_name_for_room(
         )
     });
     opt.unwrap_or(CachedName::NotFound)
+}
+
+/// Returns user profiles from the local cache that match the given query.
+///
+/// Matching is case-insensitive against both user ID and display name.
+pub fn search_user_profiles(
+    _cx: &mut Cx,
+    query: &str,
+    limit: usize,
+) -> Vec<UserProfile> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let mut results: Vec<UserProfile> = USER_PROFILE_CACHE.with_borrow(|cache| {
+        cache.values()
+            .filter_map(|entry| match entry {
+                UserProfileCacheEntry::Loaded { user_profile, .. } => Some(user_profile),
+                UserProfileCacheEntry::Requested => None,
+            })
+            .filter(|profile| {
+                profile.user_id.as_str().to_lowercase().contains(&query)
+                    || profile.username.as_deref()
+                        .is_some_and(|name| name.to_lowercase().contains(&query))
+            })
+            .take(limit)
+            .cloned()
+            .collect()
+    });
+
+    results.sort_by(|a, b| {
+        let a_name = a.displayable_name().to_lowercase();
+        let b_name = b.displayable_name().to_lowercase();
+        a_name.cmp(&b_name)
+            .then_with(|| a.user_id.as_str().cmp(b.user_id.as_str()))
+    });
+    results
 }
 
 /// A user's display name in our cache.

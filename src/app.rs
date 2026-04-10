@@ -2,17 +2,21 @@
 //!
 //! See `handle_startup()` for the first code that runs on app startup.
 
-use std::{cell::RefCell, collections::HashMap, sync::mpsc, io::{BufRead, BufReader}};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::{fs::{File, OpenOptions}, io::Write, sync::Mutex};
+use std::{cell::RefCell, collections::HashMap};
 use makepad_widgets::*;
-use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId}};
+use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
 use serde::{Deserialize, Serialize};
 use makepad_widgets::makepad_platform::permission::Permission;
 use crate::{
-    avatar_cache::clear_avatar_cache, home::{
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, space_lobby::SpaceLobbyScreenWidgetRefExt
-    }, join_leave_room_modal::{
+    avatar_cache::{self, AvatarCacheEntry, clear_avatar_cache}, home::{
+        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt},
+        bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
+        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
+    }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, current_user_id, submit_async_request}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::{user_profile::UserProfile, user_profile_cache::clear_user_profile_cache}, room::{BasicRoomDetails, FetchedRoomAvatar}, shared::{avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, TimelineKind, AccountSwitchAction, current_user_id, submit_async_request, get_timeline_update_sender}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     },
@@ -22,6 +26,61 @@ use crate::{
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
+
+    let RoomFilterResultItem = View {
+        visible: false
+        width: Fill
+        height: 48
+        flow: Overlay
+
+        row := View {
+            width: Fill
+            height: Fill
+            flow: Right
+            align: Align{y: 0.5}
+            spacing: 8
+            padding: Inset{left: 8, right: 8, top: 5, bottom: 5}
+
+            avatar := Avatar { width: 30, height: 30 }
+
+            text_col := View {
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 0
+
+                name_label := Label {
+                    width: Fill
+                    height: Fit
+                    draw_text +: {
+                        color: (COLOR_TEXT)
+                        text_style: REGULAR_TEXT {font_size: 10}
+                    }
+                }
+
+                id_label := Label {
+                    width: Fill
+                    height: Fit
+                    draw_text +: {
+                        color: (COLOR_TEXT_INPUT_IDLE)
+                        text_style: REGULAR_TEXT {font_size: 8.5}
+                    }
+                }
+            }
+        }
+
+        click_button := RobrixNeutralIconButton {
+            width: Fill
+            height: Fill
+            text: ""
+            icon_walk: Walk{width: 0, height: 0}
+            draw_bg +: {
+                color: #0000
+                color_hover: #FFFFFF22
+                color_down: #FFFFFF11
+            }
+        }
+    }
 
     load_all_resources() do #(App::script_component(vm)) {
         ui: Root {
@@ -33,32 +92,22 @@ script_mod! {
                     draw_bg.color: #F3F3F3
                     caption_label +: {
                         label +: {
-                            align: Align{x: 0.5},
                             draw_text +: { color: #0 }
                             text: "Robrix"
                         }
-                    }
-                    windows_buttons +: {
-                         // Note: these are the background colors of the buttons used in Windows:
-                        // * idle: Clear, for all three buttons.
-                        // * hover: #E9E9E9 for minimize and maximize, #E81123 for close.
-                        // * down: either darker (on light mode) or lighter (on dark mode).
-                        //
-                        // However, the DesktopButton widget doesn't support drawing a background color yet,
-                        // so these colors are the colors of the icon itself, not the background highlight.
-                        // When it supports that, we will keep the icon color always black,
-                        // and change the background color instead based on the above colors.
-                        min +: { draw_bg +: {color: #0, color_hover: #9, color_down: #3} }
-                        max +: { draw_bg +: {color: #0, color_hover: #9, color_down: #3} }
-                        close +: { draw_bg +: {color: #0, color_hover: #E81123, color_down: #FF0015} }
                     }
                 }
             
 
                 body +: {
-                    padding: 0,
+                    padding: Inset{
+                        top: (mod.widgets.SAFE_INSET_PAD_TOP),
+                        bottom: (mod.widgets.SAFE_INSET_PAD_BOTTOM),
+                        left: (mod.widgets.SAFE_INSET_PAD_LEFT),
+                        right: (mod.widgets.SAFE_INSET_PAD_RIGHT),
+                    }
 
-                    View {
+                    overlay_container := View {
                         width: Fill, height: Fill,
                         flow: Overlay,
 
@@ -82,7 +131,15 @@ script_mod! {
                                 image_viewer_modal_inner := ImageViewer {}
                             }
                         }
-                        
+
+                        file_upload_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
+                                file_upload_modal_inner := FileUploadModal {}
+                            }
+                        }
+
                         // Context menus should be shown in front of other UI elements,
                         // but behind verification modals.
                         new_message_context_menu := NewMessageContextMenu { }
@@ -104,6 +161,112 @@ script_mod! {
                         invite_modal := Modal {
                             content +: {
                                 invite_modal_inner := InviteModal {}
+                            }
+                        }
+                        bot_binding_modal := Modal {
+                            content +: {
+                                bot_binding_modal_inner := BotBindingModal {}
+                            }
+                        }
+                        room_filter_modal := Modal {
+                            content +: {
+                                room_filter_modal_inner := RoundedShadowView {
+                                    width: 420,
+                                    height: Fit
+                                    flow: Down
+                                    spacing: 8
+                                    show_bg: true
+                                    draw_bg +: {
+                                        color: (COLOR_PRIMARY_DARKER)
+                                        border_radius: 4.0
+                                        border_size: 0.0
+                                        shadow_color: #0005
+                                        shadow_radius: 15.0
+                                        shadow_offset: vec2(1.0, 0.0)
+                                    }
+                                    padding: Inset{top: 15, left: 15, right: 15, bottom: 15}
+
+                                    room_filter_input_bar := RoomFilterInputBar {}
+
+                                    search_results_title := Label {
+                                        width: Fill,
+                                        height: Fit,
+                                        margin: Inset{left: 4, top: 2}
+                                        text: ""
+                                        draw_text +: {
+                                            color: (COLOR_TEXT_INPUT_IDLE)
+                                            text_style: REGULAR_TEXT {font_size: 10}
+                                        }
+                                    }
+
+                                    search_results_scroll := ScrollYView {
+                                        width: Fill,
+                                        height: 260
+                                        show_bg: false
+
+                                        search_results := View {
+                                            width: Fill,
+                                            height: Fit,
+                                            flow: Down
+                                            spacing: 4
+
+                                            search_results_empty := Label {
+                                                width: Fill,
+                                                height: Fit,
+                                                flow: Flow.Right{wrap: true},
+                                                text: ""
+                                                draw_text +: {
+                                                    color: (COLOR_TEXT)
+                                                    text_style: REGULAR_TEXT {font_size: 10}
+                                                }
+                                            }
+
+                                            remote_search_options := View {
+                                                visible: false
+                                                width: Fill,
+                                                height: Fit,
+                                                flow: Right
+                                                spacing: 6
+                                                margin: Inset{top: 6}
+
+                                                remote_search_people_button := RobrixNeutralIconButton {
+                                                    width: Fit,
+                                                    text: ""
+                                                }
+                                                remote_search_rooms_button := RobrixNeutralIconButton {
+                                                    width: Fit,
+                                                    text: ""
+                                                }
+                                                remote_search_spaces_button := RobrixNeutralIconButton {
+                                                    width: Fit,
+                                                    text: ""
+                                                }
+                                            }
+
+                                            search_results_list := View {
+                                                width: Fill,
+                                                height: Fit,
+                                                flow: Down
+                                                spacing: 3
+
+                                                result_item_0 := RoomFilterResultItem {}
+                                                result_item_1 := RoomFilterResultItem {}
+                                                result_item_2 := RoomFilterResultItem {}
+                                                result_item_3 := RoomFilterResultItem {}
+                                                result_item_4 := RoomFilterResultItem {}
+                                                result_item_5 := RoomFilterResultItem {}
+                                                result_item_6 := RoomFilterResultItem {}
+                                                result_item_7 := RoomFilterResultItem {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        create_room_modal := Modal {
+                            content +: {
+                                create_room_modal_inner := CreateRoomModal {}
                             }
                         }
 
@@ -167,6 +330,29 @@ script_mod! {
 
 app_main!(App);
 
+#[derive(Clone)]
+enum RoomFilterResultTarget {
+    LocalSpace { room_name_id: RoomNameId, avatar: FetchedRoomAvatar },
+    LocalRoom { room_name_id: RoomNameId, avatar: FetchedRoomAvatar },
+    RemoteSpace { space_name_id: RoomNameId, avatar_uri: Option<OwnedMxcUri> },
+    RemoteRoom { room_name_id: RoomNameId, avatar_uri: Option<OwnedMxcUri> },
+    RemoteUser(UserProfile),
+}
+
+#[derive(Clone, Debug)]
+pub enum RoomFilterRemoteSearchAction {
+    Results {
+        query: String,
+        kind: RemoteDirectorySearchKind,
+        results: Vec<RemoteDirectorySearchResult>,
+    },
+    Failed {
+        query: String,
+        kind: RemoteDirectorySearchKind,
+        error: String,
+    },
+}
+
 #[derive(Script)]
 pub struct App {
     #[live] ui: WidgetRef,
@@ -179,10 +365,9 @@ pub struct App {
     /// A stack of previously-selected rooms for mobile navigation.
     /// When a view is popped off the stack, the previous `selected_room` is restored from here.
     #[rust] mobile_room_nav_stack: Vec<SelectedRoom>,
-    /// Stdin command receiver for switching to VoIP screen
-    #[rust] stdin_rx: Option<mpsc::Receiver<String>>,
-    /// Timer for polling stdin
-    #[rust] stdin_poll_timer: Timer,
+    #[rust] room_filter_modal_results: Vec<RoomFilterResultTarget>,
+    #[rust(Timer::empty())] room_filter_debounce_timer: Timer,
+    #[rust] pending_room_filter_keywords: String,
 }
 
 impl ScriptHook for App {
@@ -201,11 +386,223 @@ impl ScriptHook for App {
     }
 }
 
+// =============================================================================
+// File Logging for Packaged Builds (non-mobile platforms)
+// =============================================================================
+
+/// Global log file handle for packaged builds.
+/// Only used on desktop platforms when running as a packaged application.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static LOG_FILE: std::sync::OnceLock<Option<Mutex<File>>> = std::sync::OnceLock::new();
+
+/// Detects if the application is running as a packaged build (not via `cargo run`).
+///
+/// Detection methods per platform:
+/// - macOS: Check if executable is inside a `.app/Contents/MacOS/` bundle
+/// - Windows: Check if executable is in `Program Files` or similar installation directory
+/// - Linux: Check if executable is in `/usr`, `/opt`, or is an AppImage
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn is_packaged_build() -> bool {
+    let Ok(exe_path) = std::env::current_exe() else {
+        return false;
+    };
+    let exe_path_str = exe_path.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        // Check if running from a .app bundle
+        exe_path_str.contains(".app/Contents/MacOS/")
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Check if running from Program Files or a typical installation directory
+        let exe_lower = exe_path_str.to_lowercase();
+        exe_lower.contains("program files")
+            || exe_lower.contains("programfiles")
+            || exe_lower.contains("appdata\\local\\programs")
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Check if running from system directories or AppImage
+        exe_path_str.starts_with("/usr/")
+            || exe_path_str.starts_with("/opt/")
+            || exe_path_str.contains(".AppImage")
+            || std::env::var("APPIMAGE").is_ok()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        false
+    }
+}
+
+/// Initializes file logging for packaged builds.
+/// Creates a log file in the app data directory with timestamp.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn init_file_logging() -> Option<()> {
+    if !is_packaged_build() {
+        LOG_FILE.get_or_init(|| None);
+        return None;
+    }
+
+    // Get platform-specific logs directory
+    let logs_dir = logs_dir();
+    std::fs::create_dir_all(&logs_dir).ok()?;
+
+    // Create log file with timestamp
+    let now = chrono::Local::now();
+    let log_filename = format!("robrix_{}.log", now.format("%Y-%m-%d_%H-%M-%S"));
+    let log_path = logs_dir.join(&log_filename);
+
+    // Also create/update a symlink to the latest log file for convenience
+    // Remove old symlink if it exists and create a new one (unix only)
+    #[cfg(unix)]
+    {
+        let latest_log_path = logs_dir.join("robrix_latest.log");
+        let _ = std::fs::remove_file(&latest_log_path);
+        let _ = std::os::unix::fs::symlink(&log_filename, &latest_log_path);
+    }
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .ok()?;
+
+    LOG_FILE.get_or_init(|| Some(Mutex::new(file)));
+
+    // Print to stderr so user knows where logs are going
+    eprintln!("[Robrix] Logging to file: {}", log_path.display());
+
+    Some(())
+}
+
+/// Writes a log message to the log file (if file logging is enabled).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[allow(dead_code)]
+fn write_to_log_file(message: &str) {
+    if let Some(Some(file_mutex)) = LOG_FILE.get() {
+        if let Ok(mut file) = file_mutex.lock() {
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let _ = writeln!(file, "[{}] {}", timestamp, message);
+            let _ = file.flush();
+        }
+    }
+}
+
+/// Returns the path to the logs directory using platform-standard locations.
+///
+/// Platform-specific paths:
+/// - macOS: `~/Library/Logs/Robrix/`
+/// - Windows: `%APPDATA%/Robrix/logs/`
+/// - Linux: `~/.local/share/robrix/logs/` (or `$XDG_DATA_HOME/robrix/logs/`)
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn logs_dir() -> std::path::PathBuf {
+    use std::path::PathBuf;
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS standard log location: ~/Library/Logs/Robrix/
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Logs")
+                .join("Robrix");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: %APPDATA%/Robrix/logs/
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return PathBuf::from(appdata).join("Robrix").join("logs");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: Use XDG_DATA_HOME if set, otherwise ~/.local/share/
+        if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
+            return PathBuf::from(xdg_data).join("robrix").join("logs");
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("robrix")
+                .join("logs");
+        }
+    }
+
+    // Fallback to app data directory
+    crate::app_data_dir().join("logs")
+}
+
+/// Cleans up old log files, keeping only the most recent N log files.
+/// This should be called periodically to prevent disk space issues.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn cleanup_old_logs(max_logs_to_keep: usize) {
+    let logs_dir = logs_dir();
+    if !logs_dir.exists() {
+        return;
+    }
+
+    // Collect all log files (excluding the symlink)
+    let mut log_files: Vec<_> = match std::fs::read_dir(&logs_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name_str = name.to_string_lossy();
+                name_str.starts_with("robrix_")
+                    && name_str.ends_with(".log")
+                    && name_str != "robrix_latest.log"
+            })
+            .collect(),
+        Err(_) => return,
+    };
+
+    // Sort by modification time (oldest first)
+    log_files.sort_by(|a, b| {
+        let a_time = a.metadata().and_then(|m| m.modified()).ok();
+        let b_time = b.metadata().and_then(|m| m.modified()).ok();
+        a_time.cmp(&b_time)
+    });
+
+    // Remove old log files
+    if log_files.len() > max_logs_to_keep {
+        let files_to_remove = log_files.len() - max_logs_to_keep;
+        for entry in log_files.into_iter().take(files_to_remove) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Maximum number of log files to keep
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const MAX_LOG_FILES_TO_KEEP: usize = 10;
+
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
         // only init logging/tracing once
-        let _ = tracing_subscriber::fmt::try_init();
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing_subscriber::filter::LevelFilter::ERROR)
+            .try_init();
+        // Initialize the project directory here from the main UI thread
+        // such that background threads/tasks will be able to access it.
+        // This must be done before initializing file logging.
+        let _app_data_dir = crate::app_data_dir();
 
+        // Initialize file logging for packaged builds (non-mobile platforms).
+        // This must be done before setting up the log handler.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            init_file_logging();
+            // Clean up old log files to prevent disk space issues
+            cleanup_old_logs(MAX_LOG_FILES_TO_KEEP);
+        }
         // Override Makepad's new default-JSON logger. We just want regular formatting.
         fn regular_log(file_name: &str, line_start: u32, column_start: u32, _line_end: u32, _column_end: u32, message: String, level: LogLevel) {
             let l = match level {
@@ -228,16 +625,8 @@ impl MatchEvent for App {
             error!("Failed to load window state: {}", e);
         }
 
-        // Hide the caption bar on macOS and Linux, which use native window chrome.
-        // On Windows (with custom chrome), the caption bar is needed.
-        if matches!(cx.os_type(), OsType::Macos | OsType::LinuxWindow(_) | OsType::LinuxDirect) {
-            let mut window = self.ui.window(cx, ids!(main_window));
-            script_apply_eval!(cx, window, {
-                show_caption_bar: false
-            });
-        }
-
         self.update_login_visibility(cx);
+        self.sync_app_language(cx);
 
         log!("App::Startup: starting matrix sdk loop");
         let _tokio_rt_handle = crate::sliding_sync::start_matrix_tokio().unwrap();
@@ -246,30 +635,11 @@ impl MatchEvent for App {
             log!("App::Startup: initializing TSP (Trust Spanning Protocol) module.");
             crate::tsp::tsp_init(_tokio_rt_handle).unwrap();
         }
-
-        // Start stdin reader thread for VoIP screen commands
-        let (tx, rx) = mpsc::channel();
-        self.stdin_rx = Some(rx);
-        std::thread::spawn(move || {
-            let stdin = std::io::stdin();
-            let reader = BufReader::new(stdin);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    let _ = tx.send(line);
-                }
-            }
-        });
-
-        // Start timer to poll stdin (10 times per second)
-        self.stdin_poll_timer = cx.start_interval(0.1);
-
-        // Initialize VoIP global state and request camera permissions/video inputs early
-        VoipGlobalState::initialize(cx);
-
-        log!("App: stdin listener started. Type 'voip' to switch to VoIP screen.");
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        self.sync_app_language(cx);
+
         let invite_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(invite_confirmation_modal_inner));
         if let Some(_accepted) = invite_confirmation_modal_inner.closed(actions) {
             self.ui.modal(cx, ids!(invite_confirmation_modal)).close(cx);
@@ -283,6 +653,79 @@ impl MatchEvent for App {
         let positive_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(positive_confirmation_modal_inner));
         if let Some(_accepted) = positive_confirmation_modal_inner.closed(actions) {
             self.ui.modal(cx, ids!(positive_confirmation_modal)).close(cx);
+        }
+
+        if let Some(clicked_index) = self.clicked_room_filter_result_index(cx, actions) {
+            if let Some(target) = self.room_filter_modal_results.get(clicked_index).cloned() {
+                self.ui.modal(cx, ids!(room_filter_modal)).close(cx);
+                match target {
+                    RoomFilterResultTarget::LocalSpace { room_name_id: space_name_id, .. }
+                    => {
+                        cx.action(NavigationBarAction::GoToSpace { space_name_id });
+                    }
+                    RoomFilterResultTarget::LocalRoom { room_name_id, .. }
+                    => {
+                        self.navigate_to_room(cx, None, &BasicRoomDetails::RoomId(room_name_id));
+                    }
+                    RoomFilterResultTarget::RemoteSpace { space_name_id, .. } => {
+                        self.open_join_from_search_result(
+                            cx,
+                            BasicRoomDetails::Name(space_name_id),
+                            true,
+                        );
+                    }
+                    RoomFilterResultTarget::RemoteRoom { room_name_id, .. } => {
+                        self.open_join_from_search_result(
+                            cx,
+                            BasicRoomDetails::Name(room_name_id),
+                            false,
+                        );
+                    }
+                    RoomFilterResultTarget::RemoteUser(user_profile) => {
+                        submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
+                            create_encrypted: self.app_state.bot_settings.should_create_encrypted_dm(
+                                user_profile.user_id.as_ref(),
+                                current_user_id().as_deref(),
+                            ),
+                            user_profile,
+                            allow_create: false,
+                        });
+                    }
+                }
+                return;
+            }
+        }
+
+        if let Some(kind) = self.clicked_room_filter_remote_option(cx, actions) {
+            let room_filter_input = self.ui.text_input(cx, ids!(room_filter_modal_inner.room_filter_input_bar.input));
+            let query = room_filter_input.text().trim().to_owned();
+            if !query.is_empty() {
+                let kind_text = match &kind {
+                    RemoteDirectorySearchKind::People => tr_key(self.app_state.app_language, "app.room_filter.remote.kind.people"),
+                    RemoteDirectorySearchKind::Rooms => tr_key(self.app_state.app_language, "app.room_filter.remote.kind.rooms"),
+                    RemoteDirectorySearchKind::Spaces => tr_key(self.app_state.app_language, "app.room_filter.remote.kind.spaces"),
+                };
+                let searching_text = tr_fmt(self.app_state.app_language, "app.room_filter.searching_remote", &[("kind", kind_text)]);
+                self.set_room_filter_modal_empty_state(
+                    cx,
+                    &searching_text,
+                    false,
+                );
+                submit_async_request(MatrixRequest::SearchDirectory {
+                    query,
+                    kind,
+                    limit: 16,
+                });
+            }
+            return;
+        }
+
+        if let Some(room_screen_id) = self.clicked_mobile_room_info_button(cx, actions) {
+            let room_screen_widget_uid = self.ui.room_screen(cx, &[room_screen_id]).widget_uid();
+            cx.widget_action(
+                room_screen_widget_uid,
+                MessageAction::ShowRoomInfoPane,
+            );
         }
 
         for action in actions {
@@ -323,21 +766,170 @@ impl MatchEvent for App {
             if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
                 log!("Received LoginAction::LoginSuccess, hiding login view.");
                 self.app_state.logged_in = true;
+                self.app_state.adding_account = false;
                 self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
+            }
+
+            // Handle request to show login screen for adding another account
+            if let Some(LoginAction::ShowAddAccountScreen) = action.downcast_ref() {
+                log!("Received LoginAction::ShowAddAccountScreen, showing login view for adding account.");
+                self.app_state.adding_account = true;
+                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, true);
+                self.ui.redraw(cx);
+                continue;
+            }
+
+            // Handle successful addition of a new account
+            if let Some(LoginAction::AddAccountSuccess) = action.downcast_ref() {
+                log!("Received LoginAction::AddAccountSuccess, hiding login view.");
+                self.app_state.adding_account = false;
+                self.ui
+                    .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
+                    .close(cx);
+                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, false);
+                self.ui.redraw(cx);
+                continue;
+            }
+
+            // Handle cancellation of adding a new account - go back to previous screen
+            if let Some(LoginAction::CancelAddAccount) = action.downcast_ref() {
+                log!("Received LoginAction::CancelAddAccount, hiding login view.");
+                self.app_state.adding_account = false;
+                self.ui
+                    .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
+                    .close(cx);
+                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, false);
+                self.ui.redraw(cx);
+                continue;
+            }
+
+            // Handle account switch actions
+            match action.downcast_ref() {
+                Some(AccountSwitchAction::Starting(user_id)) => {
+                    log!("Account switch starting to: {}", user_id);
+                    // Clear UI state during account switch
+                    clear_all_app_state(cx);
+                    self.app_state.selected_room = None;
+                    // Clear saved dock state so tabs will be closed
+                    self.app_state.saved_dock_state_home = Default::default();
+                    // Reset navigation to Home tab
+                    self.app_state.selected_tab = SelectedTab::Home;
+                    cx.action(NavigationBarAction::TabSelected(SelectedTab::Home));
+                    self.ui.redraw(cx);
+                    continue;
+                }
+                Some(AccountSwitchAction::Switched(user_id)) => {
+                    log!("Account switch completed to: {}", user_id);
+                    enqueue_popup_notification(
+                        format!("Switched to account {}", user_id),
+                        PopupKind::Success,
+                        Some(3.0),
+                    );
+                    self.ui.redraw(cx);
+                    continue;
+                }
+                Some(AccountSwitchAction::Failed(error)) => {
+                    log!("Account switch failed: {}", error);
+                    enqueue_popup_notification(
+                        format!("Failed to switch account: {}", error),
+                        PopupKind::Error,
+                        None,
+                    );
+                    continue;
+                }
+                _ => {}
             }
 
             // If a login failure occurs mid-session (e.g., an expired/revoked token detected
             // by `handle_session_changes`), navigate back to the login screen.
             // When not yet logged in, the login_screen widget handles displaying the failure modal.
             if let Some(LoginAction::LoginFailure(_)) = action.downcast_ref() {
-                if self.app_state.logged_in {
+                if self.app_state.logged_in && !self.app_state.adding_account {
                     log!("Received LoginAction::LoginFailure while logged in; showing login screen.");
                     self.app_state.logged_in = false;
                     self.update_login_visibility(cx);
                     self.ui.redraw(cx);
                 }
+                // Do NOT continue here — let the action propagate to the LoginScreen widget,
+                // which will open the login_status_modal to show the failure message.
+            }
+
+            if let FilterAction::Changed(keywords) = action.as_widget_action().cast_ref() {
+                cx.stop_timer(self.room_filter_debounce_timer);
+                self.pending_room_filter_keywords = keywords.clone();
+                self.room_filter_debounce_timer = cx.start_timeout(0.12);
+                continue;
+            }
+
+            match action.downcast_ref() {
+                Some(RoomFilterRemoteSearchAction::Results { query, kind: _, results }) => {
+                    let room_filter_input = self.ui.text_input(cx, ids!(room_filter_modal_inner.room_filter_input_bar.input));
+                    if room_filter_input.text().trim() != query.trim() {
+                        continue;
+                    }
+                    self.room_filter_modal_results.clear();
+                    for result in results {
+                        match result {
+                            RemoteDirectorySearchResult::User(user_profile) => {
+                                self.room_filter_modal_results.push(RoomFilterResultTarget::RemoteUser(user_profile.clone()));
+                            }
+                            RemoteDirectorySearchResult::Room { room_name_id, avatar_uri } => {
+                                self.room_filter_modal_results.push(RoomFilterResultTarget::RemoteRoom {
+                                    room_name_id: room_name_id.clone(),
+                                    avatar_uri: avatar_uri.clone(),
+                                });
+                            }
+                            RemoteDirectorySearchResult::Space { space_name_id, avatar_uri } => {
+                                self.room_filter_modal_results.push(RoomFilterResultTarget::RemoteSpace {
+                                    space_name_id: space_name_id.clone(),
+                                    avatar_uri: avatar_uri.clone(),
+                                });
+                            }
+                        }
+                        if self.room_filter_modal_results.len() >= Self::ROOM_FILTER_RESULT_ITEM_IDS.len() {
+                            break;
+                        }
+                    }
+                    if self.room_filter_modal_results.is_empty() {
+                        self.set_room_filter_modal_empty_state(
+                            cx,
+                            &tr_fmt(self.app_state.app_language, "app.room_filter.no_server_results", &[
+                                ("query", query),
+                            ]),
+                            true,
+                        );
+                    } else {
+                        self.set_room_filter_modal_empty_state(cx, "", false);
+                    }
+                    self.refresh_room_filter_modal_result_buttons(cx);
+                    continue;
+                }
+                Some(RoomFilterRemoteSearchAction::Failed { query, kind: _, error }) => {
+                    let room_filter_input = self.ui.text_input(cx, ids!(room_filter_modal_inner.room_filter_input_bar.input));
+                    if room_filter_input.text().trim() != query.trim() {
+                        continue;
+                    }
+                    self.room_filter_modal_results.clear();
+                    self.refresh_room_filter_modal_result_buttons(cx);
+                    self.set_room_filter_modal_empty_state(
+                        cx,
+                        &tr_fmt(self.app_state.app_language, "app.room_filter.search_remote_failed", &[
+                            ("error", error),
+                        ]),
+                        true,
+                    );
+                    continue;
+                }
+                _ => {}
+            }
+
+            if let Some(RoomsListHeaderAction::OpenRoomFilterModal) = action.downcast_ref() {
+                self.ui.modal(cx, ids!(room_filter_modal)).open(cx);
+                let room_filter_input = self.ui.text_input(cx, ids!(room_filter_modal_inner.room_filter_input_bar.input));
+                room_filter_input.set_key_focus(cx);
+                self.update_room_filter_modal_results(cx, &room_filter_input.text());
                 continue;
             }
 
@@ -345,11 +937,12 @@ impl MatchEvent for App {
             if let MessageAction::OpenMessageContextMenu { details, abs_pos } = action.as_widget_action().cast() {
                 self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
                 let new_message_context_menu = self.ui.new_message_context_menu(cx, ids!(new_message_context_menu));
-                let expected_dimensions = new_message_context_menu.show(cx, details);
-                // Ensure the context menu does not spill over the window's bounds.
-                let rect = self.ui.window(cx, ids!(main_window)).area().rect(cx);
-                let pos_x = min(abs_pos.x, rect.size.x - expected_dimensions.x);
-                let pos_y = min(abs_pos.y, rect.size.y - expected_dimensions.y);
+                let expected_dimensions = new_message_context_menu.show(cx, details, self.app_state.app_language);
+                // Use the overlay container's rect (not the window's) to correctly position
+                // the context menu relative to the body area, which excludes the caption bar.
+                let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);
+                let pos_x = min(abs_pos.x - rect.pos.x, rect.size.x - expected_dimensions.x);
+                let pos_y = min(abs_pos.y - rect.pos.y, rect.size.y - expected_dimensions.y);
                 let margin = Inset {
                     left: pos_x as f64,
                     top: pos_y as f64,
@@ -368,11 +961,12 @@ impl MatchEvent for App {
             if let RoomsListAction::OpenRoomContextMenu { details, pos } = action.as_widget_action().cast() {
                 self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
                 let room_context_menu = self.ui.room_context_menu(cx, ids!(room_context_menu));
-                let expected_dimensions = room_context_menu.show(cx, details);
-                // Ensure the context menu does not spill over the window's bounds.
-                let rect = self.ui.window(cx, ids!(main_window)).area().rect(cx);
-                let pos_x = min(pos.x, rect.size.x - expected_dimensions.x);
-                let pos_y = min(pos.y, rect.size.y - expected_dimensions.y);
+                let expected_dimensions = room_context_menu.show(cx, details, self.app_state.app_language);
+                // Use the overlay container's rect (not the window's) to correctly position
+                // the context menu relative to the body area, which excludes the caption bar.
+                let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);
+                let pos_x = min(pos.x - rect.pos.x, rect.size.x - expected_dimensions.x);
+                let pos_y = min(pos.y - rect.pos.y, rect.size.y - expected_dimensions.y);
                 let margin = Inset {
                     left: pos_x as f64,
                     top: pos_y as f64,
@@ -474,8 +1068,10 @@ impl MatchEvent for App {
                 Some(AppStateAction::RestoreAppStateFromPersistentState(app_state)) => {
                     // Ignore the `logged_in` state that was stored persistently.
                     let logged_in_actual = self.app_state.logged_in;
-                    self.app_state = app_state.clone();
+                    self.app_state = *app_state.clone();
                     self.app_state.logged_in = logged_in_actual;
+                    // Initialize the global translation config so RoomInputBar can access it.
+                    crate::room::translation::set_global_config(&self.app_state.translation);
 
                     // Restore VoIP token state to global state for caching
                     VoipGlobalState::restore_token_state(cx, self.app_state.voip_tokens.clone());
@@ -499,38 +1095,40 @@ impl MatchEvent for App {
                             error!("Failed to persist app state after updating BotFather room binding. Error: {e}");
                         }
                     }
-                    let kind = if warning.is_some() {
-                        PopupKind::Warning
-                    } else {
-                        PopupKind::Success
-                    };
                     let message = match (*bound, bot_user_id.as_ref(), warning.as_deref()) {
                         (true, Some(bot_user_id), Some(warning)) => {
-                            format!("BotFather {bot_user_id} is available for room {room_id}, but inviting it reported a warning: {warning}")
+                            format!("Bot {bot_user_id} is available for room {room_id}, but adding it reported a warning: {warning}")
                         }
                         (true, Some(bot_user_id), None) => {
-                            format!("Bound room {room_id} to BotFather {bot_user_id}.")
+                            format!("Added bot {bot_user_id} to room {room_id}.")
                         }
                         (false, Some(bot_user_id), Some(warning)) => {
-                            format!("Unbound BotFather {bot_user_id} from room {room_id}, with warning: {warning}")
+                            format!("Removed bot {bot_user_id} from room {room_id}, with warning: {warning}")
                         }
                         (false, Some(bot_user_id), None) => {
-                            format!("Unbound BotFather {bot_user_id} from room {room_id}.")
+                            format!("Removed bot {bot_user_id} from room {room_id}.")
                         }
                         (false, None, Some(warning)) => {
-                            format!("Unbound room {room_id} from BotFather, with warning: {warning}")
+                            format!("Removed bot from room {room_id}, with warning: {warning}")
                         }
                         (false, None, None) => {
-                            format!("Unbound room {room_id} from BotFather.")
+                            format!("Removed bot from room {room_id}.")
                         }
                         (true, None, Some(warning)) => {
-                            format!("BotFather is available for room {room_id}, with warning: {warning}")
+                            format!("Bot is available for room {room_id}, with warning: {warning}")
                         }
                         (true, None, None) => {
-                            format!("Bound room {room_id} to BotFather.")
+                            format!("Added bot to room {room_id}.")
                         }
                     };
-                    enqueue_popup_notification(message, kind, Some(5.0));
+                    submit_async_request(MatrixRequest::SendMessage {
+                        timeline_kind: TimelineKind::MainRoom { room_id: room_id.clone() },
+                        message: RoomMessageEventContent::notice_plain(format!("[App Service] {message}")),
+                        replied_to: None,
+                        target_user_id: None,
+                        #[cfg(feature = "tsp")]
+                        sign_with_tsp: false,
+                    });
                     self.ui.redraw(cx);
                     continue;
                 }
@@ -557,6 +1155,20 @@ impl MatchEvent for App {
                         }
                     }
                     self.ui.redraw(cx);
+                    continue;
+                }
+                Some(AppStateAction::KnownBotUserIdsDiscovered { bot_user_ids }) => {
+                    if self
+                        .app_state
+                        .bot_settings
+                        .record_known_bot_user_ids(bot_user_ids.iter().cloned())
+                    {
+                        if let Some(user_id) = current_user_id() {
+                            if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                                error!("Failed to persist discovered bot user IDs. Error: {e}");
+                            }
+                        }
+                    }
                     continue;
                 }
                 Some(AppStateAction::NavigateToRoom { room_to_close, destination_room }) => {
@@ -607,7 +1219,7 @@ impl MatchEvent for App {
                 Some(JoinLeaveRoomModalAction::Open { kind, show_tip }) => {
                     self.ui
                         .join_leave_room_modal(cx, ids!(join_leave_modal_inner))
-                        .set_kind(cx, kind.clone(), *show_tip);
+                        .set_kind(cx, kind.clone(), *show_tip, self.app_state.app_language);
                     self.ui.modal(cx, ids!(join_leave_modal)).open(cx);
                     continue;
                 }
@@ -641,6 +1253,33 @@ impl MatchEvent for App {
                 }
                 Some(ImageViewerAction::Hide) => {
                     self.ui.modal(cx, ids!(image_viewer_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+            // Handle file upload modal actions
+            match action.downcast_ref() {
+                Some(FilePreviewerAction::Show(file_data)) => {
+                    self.ui.file_upload_modal(cx, ids!(file_upload_modal_inner))
+                        .set_file_data(cx, file_data.clone());
+                    self.ui.modal(cx, ids!(file_upload_modal)).open(cx);
+                    continue;
+                }
+                Some(FilePreviewerAction::Hide) | Some(FilePreviewerAction::Cancelled) => {
+                    self.ui.modal(cx, ids!(file_upload_modal)).close(cx);
+                    continue;
+                }
+                Some(FilePreviewerAction::UploadConfirmed(file_data)) => {
+                    // Send the file upload event to the current room's timeline
+                    if let Some(selected_room) = &self.app_state.selected_room {
+                        if let Some(timeline_kind) = selected_room.timeline_kind() {
+                            if let Some(sender) = get_timeline_update_sender(&timeline_kind) {
+                                let _ = sender.send(TimelineUpdate::FileUploadConfirmed(file_data.clone()));
+                                SignalToUI::set_ui_signal();
+                            }
+                        }
+                    }
+                    self.ui.modal(cx, ids!(file_upload_modal)).close(cx);
                     continue;
                 }
                 _ => {}
@@ -694,12 +1333,47 @@ impl MatchEvent for App {
             // Handle InviteModalAction to open/close the invite modal.
             match action.downcast_ref() {
                 Some(InviteModalAction::Open(room_name_id)) => {
-                    self.ui.invite_modal(cx, ids!(invite_modal_inner)).show(cx, room_name_id.clone());
+                    self.ui.invite_modal(cx, ids!(invite_modal_inner)).show(cx, room_name_id.clone(), self.app_state.app_language);
                     self.ui.modal(cx, ids!(invite_modal)).open(cx); 
                     continue;
                 }
                 Some(InviteModalAction::Close) => {
+                    mark_invite_modal_closed();
                     self.ui.modal(cx, ids!(invite_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
+            // Handle BotBindingModalAction to open/close the bot binding modal.
+            match action.downcast_ref() {
+                Some(BotBindingModalAction::Open(room_name_id)) => {
+                    self.ui
+                        .bot_binding_modal(cx, ids!(bot_binding_modal_inner))
+                        .show(
+                            cx,
+                            room_name_id.clone(),
+                            &self.app_state.bot_settings,
+                            self.app_state.app_language,
+                        );
+                    self.ui.modal(cx, ids!(bot_binding_modal)).open(cx);
+                    continue;
+                }
+                Some(BotBindingModalAction::Close) => {
+                    self.ui.modal(cx, ids!(bot_binding_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
+            match action.downcast_ref() {
+                Some(CreateRoomModalAction::Open { parent_space_id }) => {
+                    self.ui.create_room_modal(cx, ids!(create_room_modal_inner)).show(cx, parent_space_id.clone());
+                    self.ui.modal(cx, ids!(create_room_modal)).open(cx);
+                    continue;
+                }
+                Some(CreateRoomModalAction::Close) => {
+                    self.ui.modal(cx, ids!(create_room_modal)).close(cx);
                     continue;
                 }
                 _ => {}
@@ -727,6 +1401,10 @@ impl MatchEvent for App {
                 }
                 Some(DirectMessageRoomAction::DidNotExist { user_profile }) => {
                     let user_profile = user_profile.clone();
+                    let create_encrypted = self.app_state.bot_settings.should_create_encrypted_dm(
+                        user_profile.user_id.as_ref(),
+                        current_user_id().as_deref(),
+                    );
                     let body_text = match &user_profile.username {
                         Some(un) if !un.is_empty() => format!(
                             "You don't have an existing direct message room with {} ({}).\n\n\
@@ -748,6 +1426,7 @@ impl MatchEvent for App {
                             accept_button_text: Some("Create DM".into()),
                             on_accept_clicked: Some(Box::new(move |_cx| {
                                 submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
+                                    create_encrypted,
                                     user_profile,
                                     allow_create: true,
                                 });
@@ -808,6 +1487,7 @@ impl AppMain for App {
         crate::home::location_preview::script_mod(vm);
         crate::home::tombstone_footer::script_mod(vm);
         crate::home::editing_pane::script_mod(vm);
+        crate::home::upload_progress::script_mod(vm);
         crate::room::script_mod(vm);
         crate::join_leave_room_modal::script_mod(vm);
         crate::verification_modal::script_mod(vm);
@@ -912,159 +1592,40 @@ impl AppMain for App {
 }
 
 impl App {
-    /// Poll stdin for commands to switch screens
-    fn poll_stdin(&mut self, cx: &mut Cx) {
-        let commands: Vec<String> = if let Some(rx) = &self.stdin_rx {
-            let mut cmds = Vec::new();
-            while let Ok(line) = rx.try_recv() {
-                cmds.push(line);
-            }
-            cmds
-        } else {
-            Vec::new()
-        };
+    const ROOM_FILTER_RESULT_ITEM_IDS: [LiveId; 8] = [
+        live_id!(result_item_0), live_id!(result_item_1),
+        live_id!(result_item_2), live_id!(result_item_3),
+        live_id!(result_item_4), live_id!(result_item_5),
+        live_id!(result_item_6), live_id!(result_item_7),
+    ];
 
-        for line in commands {
-            let cmd = line.trim().to_lowercase();
-            match cmd.as_str() {
-                "voip" => {
-                    // Get the currently selected room and show VoIP for it
-                    if let Some(selected) = &self.app_state.selected_room {
-                        let room_name_id = selected.room_name().clone();
-                        log!("Stdin command: showing VoIP for room {}", room_name_id.room_id());
-                        // Use widget_action so it's handled by the widget action handlers
-                        cx.widget_action(
-                            WidgetUid(0),  // Use a placeholder widget_uid
-                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
-                        );
-                        self.ui.redraw(cx);
-                    } else {
-                        log!("Stdin command: no room selected, cannot show VoIP");
-                    }
-                }
-                "home" => {
-                    log!("Stdin command: switching to Home screen");
-                    cx.action(NavigationBarAction::GoToHome);
-                    self.ui.redraw(cx);
-                }
-                "joincall" => {
-                    log!("Stdin command: triggering JoinCall action");
-                    cx.action(VoipAction::JoinCall);
-                    self.ui.redraw(cx);
-                }
-                "testvoip" => {
-                    // Get the first available joined room and show VoIP for it
-                    let rooms_list = cx.get_global::<RoomsListRef>();
-                    if let Some(room_name_id) = rooms_list.get_first_joined_room() {
-                        log!("Stdin command: testvoip - using first room: {}",
-                            room_name_id.room_id());
-                        cx.widget_action(
-                            WidgetUid(0),
-                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
-                        );
-                        self.ui.redraw(cx);
-                    } else {
-                        log!("Stdin command: testvoip - no joined rooms available");
-                    }
-                }
-                "showp" | "showparticipants" => {
-                    log!("Stdin command: toggling participants sidebar");
-                    cx.action(VoipAction::TestToggleParticipantsSidebar);
-                    self.ui.redraw(cx);
-                }
-                "clearp" | "clearparticipants" => {
-                    log!("Stdin command: clearing all participants");
-                    cx.action(VoipAction::TestClearParticipants);
-                    self.ui.redraw(cx);
-                }
-                "rooms" => {
-                    log!("=== Joined Rooms ===");
-                    let rooms_list = cx.get_global::<RoomsListRef>();
-                    for (name, id) in rooms_list.list_rooms() {
-                        log!("  {} ({})", name, id);
-                    }
-                    log!("====================");
-                }
-                "help" => {
-                    log!("=== Stdin Commands ===");
-                    log!("  voip       - Switch to VoIP call screen (requires selected room)");
-                    log!("  testvoip   - Open VoIP with first available room (for testing)");
-                    log!("  join <name> - Open VoIP and join call for room by name");
-                    log!("  joincall   - Trigger Join Call button");
-                    log!("  rooms      - List all joined rooms");
-                    log!("  home       - Switch to Home screen");
-                    log!("  showp      - Toggle participants sidebar");
-                    log!("  addp <name> [video] - Add participant (with optional video)");
-                    log!("  togglev <id>        - Toggle participant video (id=1,2,3...)");
-                    log!("  removep <id>        - Remove participant by id");
-                    log!("  clearp              - Clear all participants");
-                    log!("  help       - Show this help");
-                    log!("======================");
-                }
-                _ if cmd.starts_with("join ") => {
-                    if let Some(room_name) = cmd.strip_prefix("join ").map(|s| s.trim()) {
-                        log!("Stdin command: joining call in room '{}'", room_name);
-                        let rooms_list = cx.get_global::<RoomsListRef>();
-                        if let Some(room_name_id) = rooms_list.find_room_by_name(room_name) {
-                            log!("Found room: {} ({})", room_name_id.display_name(), room_name_id.room_id());
-                            // Open VoIP screen
-                            cx.widget_action(
-                                WidgetUid(0),
-                                RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
-                            );
-                            self.ui.redraw(cx);
-                            // Schedule JoinCall action after a short delay to let VoIP screen initialize
-                            // We'll trigger it immediately - the VoIP screen should handle it
-                            cx.action(VoipAction::JoinCall);
-                        } else {
-                            log!("Room '{}' not found. Use 'rooms' to list available rooms.", room_name);
-                        }
-                    } else {
-                        log!("Usage: join <room_name>");
-                    }
-                }
-                _ if cmd.starts_with("addp ") => {
-                    let args: Vec<&str> = cmd.strip_prefix("addp ").unwrap().split_whitespace().collect();
-                    if let Some(name) = args.first() {
-                        let is_video_on = args.get(1).map_or(false, |&v| v == "video" || v == "v" || v == "1");
-                        log!("Stdin command: adding participant '{}' with video={}", name, is_video_on);
-                        cx.action(VoipAction::TestAddParticipant {
-                            name: name.to_string(),
-                            is_video_on,
-                        });
-                        self.ui.redraw(cx);
-                    } else {
-                        log!("Usage: addp <name> [video]");
-                    }
-                }
-                _ if cmd.starts_with("togglev ") => {
-                    if let Some(id) = cmd.strip_prefix("togglev ").map(|s| s.trim()) {
-                        log!("Stdin command: toggling video for participant id={}", id);
-                        cx.action(VoipAction::TestToggleParticipantVideo {
-                            id: id.to_string(),
-                        });
-                        self.ui.redraw(cx);
-                    } else {
-                        log!("Usage: togglev <id>");
-                    }
-                }
-                _ if cmd.starts_with("removep ") => {
-                    if let Some(id) = cmd.strip_prefix("removep ").map(|s| s.trim()) {
-                        log!("Stdin command: removing participant id={}", id);
-                        cx.action(VoipAction::TestRemoveParticipant {
-                            id: id.to_string(),
-                        });
-                        self.ui.redraw(cx);
-                    } else {
-                        log!("Usage: removep <id>");
-                    }
-                }
-                _ if !cmd.is_empty() => {
-                    log!("Unknown command: '{}'. Type 'help' for available commands.", cmd);
-                }
-                _ => {}
-            }
-        }
+    fn sync_app_language(&self, cx: &mut Cx) {
+        let app_language = self.app_state.app_language;
+        self.ui.label(cx, ids!(room_filter_modal_inner.search_results_title))
+            .set_text(cx, tr_key(app_language, "app.room_filter.search_results_title"));
+        self.ui.label(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.search_results_empty))
+            .set_text(cx, tr_key(app_language, "app.room_filter.empty_hint"));
+        self.ui.button(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_options.remote_search_people_button))
+            .set_text(cx, tr_key(app_language, "app.room_filter.remote.people"));
+        self.ui.button(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_options.remote_search_rooms_button))
+            .set_text(cx, tr_key(app_language, "app.room_filter.remote.rooms"));
+        self.ui.button(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_options.remote_search_spaces_button))
+            .set_text(cx, tr_key(app_language, "app.room_filter.remote.spaces"));
+    }
+
+    fn open_join_from_search_result(
+        &mut self,
+        cx: &mut Cx,
+        details: BasicRoomDetails,
+        is_space: bool,
+    ) {
+        cx.action(JoinLeaveRoomModalAction::Open {
+            kind: JoinLeaveModalKind::JoinRoom {
+                details,
+                is_space,
+            },
+            show_tip: false,
+        });
     }
 
     fn update_login_visibility(&self, cx: &mut Cx) {
@@ -1076,6 +1637,230 @@ impl App {
         }
         self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, show_login);
         self.ui.view(cx, ids!(home_screen_view)).set_visible(cx, !show_login);
+    }
+
+    fn clicked_room_filter_result_index(&self, cx: &mut Cx, actions: &Actions) -> Option<usize> {
+        let list_view = self.ui.view(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.search_results_list));
+        for (index, item_id) in Self::ROOM_FILTER_RESULT_ITEM_IDS.iter().enumerate() {
+            if list_view.button(cx, &[*item_id, live_id!(click_button)]).clicked(actions) {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    fn clicked_room_filter_remote_option(&self, cx: &mut Cx, actions: &Actions) -> Option<RemoteDirectorySearchKind> {
+        let options_view = self.ui.view(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_options));
+        if options_view.button(cx, ids!(remote_search_people_button)).clicked(actions) {
+            return Some(RemoteDirectorySearchKind::People);
+        }
+        if options_view.button(cx, ids!(remote_search_rooms_button)).clicked(actions) {
+            return Some(RemoteDirectorySearchKind::Rooms);
+        }
+        if options_view.button(cx, ids!(remote_search_spaces_button)).clicked(actions) {
+            return Some(RemoteDirectorySearchKind::Spaces);
+        }
+        None
+    }
+
+    fn clicked_mobile_room_info_button(&self, cx: &mut Cx, actions: &Actions) -> Option<LiveId> {
+        for (view_id, room_screen_id) in Self::ROOM_VIEW_IDS.iter().zip(Self::ROOM_SCREEN_IDS.iter()) {
+            let button_path = &[
+                *view_id,
+                live_id!(header),
+                live_id!(content),
+                live_id!(button_container),
+                live_id!(right_button),
+            ];
+            if self.ui.button(cx, button_path).clicked(actions) {
+                return Some(*room_screen_id);
+            }
+        }
+        None
+    }
+
+    fn set_room_filter_modal_empty_state(
+        &self,
+        cx: &mut Cx,
+        text: &str,
+        show_remote_options: bool,
+    ) {
+        let empty_label = self.ui.label(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.search_results_empty));
+        empty_label.set_visible(cx, !text.is_empty());
+        if !text.is_empty() {
+            empty_label.set_text(cx, text);
+        }
+        self.ui.view(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_options))
+            .set_visible(cx, show_remote_options);
+    }
+
+    fn set_room_filter_result_avatar(
+        &self,
+        cx: &mut Cx,
+        avatar_ref: &crate::shared::avatar::AvatarRef,
+        fallback_text: &str,
+        local_avatar: Option<&FetchedRoomAvatar>,
+        remote_avatar_uri: Option<&OwnedMxcUri>,
+        remote_avatar_state: Option<&AvatarState>,
+    ) {
+        if let Some(local_avatar) = local_avatar {
+            match local_avatar {
+                FetchedRoomAvatar::Text(text) => {
+                    avatar_ref.show_text(cx, None, None, text);
+                }
+                FetchedRoomAvatar::Image(image_data) => {
+                    let res = avatar_ref.show_image(
+                        cx,
+                        None,
+                        |cx, img_ref| crate::utils::load_png_or_jpg(&img_ref, cx, image_data),
+                    );
+                    if res.is_err() {
+                        avatar_ref.show_text(cx, None, None, fallback_text);
+                    }
+                }
+            }
+            return;
+        }
+
+        if let Some(avatar_state) = remote_avatar_state {
+            if let Some(image_data) = avatar_state.data() {
+                let res = avatar_ref.show_image(
+                    cx,
+                    None,
+                    |cx, img_ref| crate::utils::load_png_or_jpg(&img_ref, cx, image_data),
+                );
+                if res.is_ok() {
+                    return;
+                }
+            }
+            if let Some(uri) = avatar_state.uri() {
+                if let AvatarCacheEntry::Loaded(image_data) = avatar_cache::get_or_fetch_avatar(cx, uri) {
+                    let res = avatar_ref.show_image(
+                        cx,
+                        None,
+                        |cx, img_ref| crate::utils::load_png_or_jpg(&img_ref, cx, &image_data),
+                    );
+                    if res.is_ok() {
+                        return;
+                    }
+                }
+            }
+        }
+
+        if let Some(uri) = remote_avatar_uri {
+            if let AvatarCacheEntry::Loaded(image_data) = avatar_cache::get_or_fetch_avatar(cx, uri) {
+                let res = avatar_ref.show_image(
+                    cx,
+                    None,
+                    |cx, img_ref| crate::utils::load_png_or_jpg(&img_ref, cx, &image_data),
+                );
+                if res.is_ok() {
+                    return;
+                }
+            }
+        }
+
+        avatar_ref.show_text(cx, None, None, fallback_text);
+    }
+
+    fn refresh_room_filter_modal_result_buttons(&self, cx: &mut Cx) {
+        let list_view = self.ui.view(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.search_results_list));
+        for (index, item_id) in Self::ROOM_FILTER_RESULT_ITEM_IDS.iter().enumerate() {
+            let item = list_view.view(cx, &[*item_id]);
+            if let Some(target) = self.room_filter_modal_results.get(index) {
+                let (name, raw_id) = match target {
+                    RoomFilterResultTarget::LocalSpace { room_name_id, .. }
+                    | RoomFilterResultTarget::LocalRoom { room_name_id, .. } => {
+                        (room_name_id.to_string(), room_name_id.room_id().to_string())
+                    }
+                    RoomFilterResultTarget::RemoteSpace { space_name_id, .. }
+                    | RoomFilterResultTarget::RemoteRoom { room_name_id: space_name_id, .. } => {
+                        (space_name_id.to_string(), space_name_id.room_id().to_string())
+                    }
+                    RoomFilterResultTarget::RemoteUser(user_profile) => {
+                        (user_profile.displayable_name().to_owned(), user_profile.user_id.to_string())
+                    }
+                };
+
+                item.label(cx, ids!(row.text_col.name_label)).set_text(cx, &name);
+                item.label(cx, ids!(row.text_col.id_label)).set_text(cx, &raw_id);
+
+                let avatar_ref = item.avatar(cx, ids!(row.avatar));
+                match target {
+                    RoomFilterResultTarget::LocalSpace { avatar, .. }
+                    | RoomFilterResultTarget::LocalRoom { avatar, .. } => {
+                        self.set_room_filter_result_avatar(cx, &avatar_ref, &name, Some(avatar), None, None);
+                    }
+                    RoomFilterResultTarget::RemoteSpace { avatar_uri, .. }
+                    | RoomFilterResultTarget::RemoteRoom { avatar_uri, .. } => {
+                        self.set_room_filter_result_avatar(cx, &avatar_ref, &name, None, avatar_uri.as_ref(), None);
+                    }
+                    RoomFilterResultTarget::RemoteUser(user_profile) => {
+                        self.set_room_filter_result_avatar(
+                            cx,
+                            &avatar_ref,
+                            &name,
+                            None,
+                            None,
+                            Some(&user_profile.avatar_state),
+                        );
+                    }
+                }
+
+                item.set_visible(cx, true);
+            } else {
+                item.set_visible(cx, false);
+            }
+        }
+    }
+
+    fn update_room_filter_modal_results(&mut self, cx: &mut Cx, keywords: &str) {
+        let keywords = keywords.trim();
+        self.room_filter_modal_results.clear();
+
+        if !keywords.is_empty() {
+            let space_items = cx.get_global::<SpacesBarRef>()
+                .get_matching_space_items(keywords, 4);
+            let room_items = cx.get_global::<RoomsListRef>()
+                .get_matching_room_items(keywords, 8);
+
+            for (room_name_id, avatar) in space_items {
+                self.room_filter_modal_results.push(RoomFilterResultTarget::LocalSpace { room_name_id, avatar });
+                if self.room_filter_modal_results.len() >= Self::ROOM_FILTER_RESULT_ITEM_IDS.len() {
+                    break;
+                }
+            }
+            if self.room_filter_modal_results.len() < Self::ROOM_FILTER_RESULT_ITEM_IDS.len() {
+                for (room_name_id, avatar) in room_items {
+                    self.room_filter_modal_results.push(RoomFilterResultTarget::LocalRoom { room_name_id, avatar });
+                    if self.room_filter_modal_results.len() >= Self::ROOM_FILTER_RESULT_ITEM_IDS.len() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if keywords.is_empty() {
+            self.set_room_filter_modal_empty_state(
+                cx,
+                tr_key(self.app_state.app_language, "app.room_filter.empty_hint"),
+                false,
+            );
+        } else if self.room_filter_modal_results.is_empty() {
+            self.set_room_filter_modal_empty_state(
+                cx,
+                &tr_fmt(
+                    self.app_state.app_language,
+                    "app.room_filter.no_local_results",
+                    &[("keywords", keywords)],
+                ),
+                true,
+            );
+        } else {
+            self.set_room_filter_modal_empty_state(cx, "", false);
+        }
+
+        self.refresh_room_filter_modal_result_buttons(cx);
     }
 
     /// Navigates to the given `destination_room`, optionally closing the `room_to_close`.
@@ -1241,6 +2026,18 @@ impl App {
         // Set the header title for the view being pushed.
         let title_path = &[view_id, live_id!(header), live_id!(content), live_id!(title_container), live_id!(title)];
         self.ui.label(cx, title_path).set_text(cx, &selected_room.display_name());
+        let right_button_path = &[view_id, live_id!(header), live_id!(content), live_id!(button_container), live_id!(right_button)];
+        let show_info_button = matches!(
+            selected_room,
+            SelectedRoom::JoinedRoom { .. }
+            | SelectedRoom::Thread { .. }
+        );
+        let right_button = self.ui.button(cx, right_button_path);
+        right_button.set_visible(cx, show_info_button);
+        if show_info_button {
+            right_button.set_text(cx, "");
+            right_button.reset_hover(cx);
+        }
 
         // Save the current selected_room onto the navigation stack before replacing it.
         if let Some(prev) = self.app_state.selected_room.take() {
@@ -1259,6 +2056,7 @@ impl App {
 /// App-wide state that is stored persistently across multiple app runs
 /// and shared/updated across various parts of the app.
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppState {
     /// The currently-selected room, which is highlighted (selected) in the RoomsList
     /// and considered "active" in the main rooms screen.
@@ -1279,6 +2077,12 @@ pub struct AppState {
     pub saved_dock_state_per_space: HashMap<OwnedRoomId, SavedDockState>,
     /// Whether a user is currently logged in to Robrix or not.
     pub logged_in: bool,
+    /// The preferred app language.
+    pub app_language: AppLanguage,
+    /// Whether the app is currently showing the login screen for adding another account.
+    /// This is transient state and not persisted.
+    #[serde(skip)]
+    pub adding_account: bool,
     /// Local configuration and UI state for bot-assisted room binding.
     pub bot_settings: BotSettingsState,
     /// The room ID for VoIP calls, set when navigating to VoIP screen from a call notification.
@@ -1287,6 +2091,9 @@ pub struct AppState {
     /// Cached VoIP tokens (OpenID and LiveKit JWT) for faster reconnection.
     #[serde(default)]
     pub voip_tokens: crate::voip::VoipTokenState,
+    /// Translation API configuration.
+    #[serde(default)]
+    pub translation: crate::room::translation::TranslationConfig,
 }
 
 /// Local bot integration settings persisted per Matrix account.
@@ -1297,16 +2104,20 @@ pub struct BotSettingsState {
     pub enabled: bool,
     /// The configured botfather user, either as a full MXID or localpart.
     pub botfather_user_id: String,
-    /// Rooms that Robrix currently considers bound to BotFather,
-    /// paired with the exact BotFather MXID used for that room.
+    /// Bots discovered from BotFather `/listbots` replies.
+    pub known_bot_user_ids: Vec<OwnedUserId>,
+    /// Rooms that Robrix currently considers bot-bound,
+    /// paired with the exact bot MXID used for that room.
     pub room_bindings: Vec<RoomBotBindingState>,
 }
 
-/// A persisted room-level BotFather binding.
+/// A persisted room-level bot binding.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RoomBotBindingState {
     pub room_id: OwnedRoomId,
     pub bot_user_id: OwnedUserId,
+    #[serde(default)]
+    pub remark: String,
 }
 
 impl Default for BotSettingsState {
@@ -1314,6 +2125,7 @@ impl Default for BotSettingsState {
         Self {
             enabled: false,
             botfather_user_id: Self::DEFAULT_BOTFATHER_LOCALPART.to_string(),
+            known_bot_user_ids: Vec::new(),
             room_bindings: Vec::new(),
         }
     }
@@ -1322,21 +2134,102 @@ impl Default for BotSettingsState {
 impl BotSettingsState {
     pub const DEFAULT_BOTFATHER_LOCALPART: &'static str = "bot";
 
-    fn room_binding_index(&self, room_id: &RoomId) -> Result<usize, usize> {
+    fn room_binding_index(
+        &self,
+        room_id: &RoomId,
+        bot_user_id: &UserId,
+    ) -> Result<usize, usize> {
         self.room_bindings
-            .binary_search_by(|binding| binding.room_id.as_str().cmp(room_id.as_str()))
+            .binary_search_by(|binding|
+                (
+                    binding.room_id.as_str(),
+                    binding.bot_user_id.as_str(),
+                ).cmp(&(room_id.as_str(), bot_user_id.as_str()))
+            )
+    }
+
+    fn room_binding_range(&self, room_id: &RoomId) -> std::ops::Range<usize> {
+        let start = self
+            .room_bindings
+            .partition_point(|binding| binding.room_id.as_str() < room_id.as_str());
+        let end = self
+            .room_bindings
+            .iter()
+            .skip(start)
+            .position(|binding| binding.room_id.as_str() != room_id.as_str())
+            .map_or(self.room_bindings.len(), |offset| start + offset);
+        start..end
     }
 
     /// Returns `true` if the given room is currently marked as bound locally.
     pub fn is_room_bound(&self, room_id: &RoomId) -> bool {
-        self.room_binding_index(room_id).is_ok()
+        !self.bound_bot_user_ids(room_id).is_empty()
     }
 
     /// Returns the persisted BotFather MXID for the given room, if any.
     pub fn bound_bot_user_id(&self, room_id: &RoomId) -> Option<&UserId> {
-        self.room_binding_index(room_id)
-            .ok()
-            .map(|index| self.room_bindings[index].bot_user_id.as_ref())
+        let room_binding_range = self.room_binding_range(room_id);
+        self.room_bindings
+            .get(room_binding_range.start)
+            .map(|binding| binding.bot_user_id.as_ref())
+    }
+
+    /// Returns all persisted bot MXIDs for the given room.
+    pub fn bound_bot_user_ids(&self, room_id: &RoomId) -> Vec<OwnedUserId> {
+        self.room_bindings[self.room_binding_range(room_id)]
+            .iter()
+            .map(|binding| binding.bot_user_id.clone())
+            .collect()
+    }
+
+    /// Returns all bot bindings for the given room.
+    pub fn room_bindings_for(&self, room_id: &RoomId) -> Vec<RoomBotBindingState> {
+        self.room_bindings[self.room_binding_range(room_id)]
+            .to_vec()
+    }
+
+    /// Returns all known bound bot MXIDs across every room, deduplicated.
+    pub fn all_bound_bot_user_ids(&self) -> Vec<OwnedUserId> {
+        let mut all_bots = self
+            .room_bindings
+            .iter()
+            .map(|binding| binding.bot_user_id.clone())
+            .collect::<Vec<_>>();
+        all_bots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        all_bots.dedup_by(|a, b| a.as_str() == b.as_str());
+        all_bots
+    }
+
+    /// Returns bot MXIDs discovered from BotFather `/listbots` replies.
+    pub fn known_bot_user_ids(&self) -> Vec<OwnedUserId> {
+        self.known_bot_user_ids.clone()
+    }
+
+    /// Merges the given discovered bot IDs into the known bot list.
+    ///
+    /// Returns `true` if the list changed.
+    pub fn record_known_bot_user_ids(
+        &mut self,
+        discovered_bot_user_ids: impl IntoIterator<Item = OwnedUserId>,
+    ) -> bool {
+        let mut changed = false;
+        for bot_user_id in discovered_bot_user_ids {
+            if !self
+                .known_bot_user_ids
+                .iter()
+                .any(|existing| existing.as_str() == bot_user_id.as_str())
+            {
+                self.known_bot_user_ids.push(bot_user_id);
+                changed = true;
+            }
+        }
+        if changed {
+            self.known_bot_user_ids
+                .sort_by(|lhs, rhs| lhs.as_str().cmp(rhs.as_str()));
+            self.known_bot_user_ids
+                .dedup_by(|lhs, rhs| lhs.as_str() == rhs.as_str());
+        }
+        changed
     }
 
     /// Updates the local bound/unbound state for the given room.
@@ -1348,21 +2241,41 @@ impl BotSettingsState {
     ) {
         if bound {
             let Some(bot_user_id) = bot_user_id else { return };
-            match self.room_binding_index(room_id.as_ref()) {
-                Ok(existing_index) => {
-                    self.room_bindings[existing_index].bot_user_id = bot_user_id;
-                }
+            match self.room_binding_index(room_id.as_ref(), bot_user_id.as_ref()) {
+                Ok(_) => {}
                 Err(insert_index) => {
                     self.room_bindings.insert(insert_index, RoomBotBindingState {
                         room_id,
                         bot_user_id,
+                        remark: String::new(),
                     });
                 }
             }
         } else {
-            if let Ok(existing_index) = self.room_binding_index(room_id.as_ref()) {
-                self.room_bindings.remove(existing_index);
+            if let Some(bot_user_id) = bot_user_id {
+                if let Ok(existing_index) = self.room_binding_index(room_id.as_ref(), bot_user_id.as_ref()) {
+                    self.room_bindings.remove(existing_index);
+                }
+            } else {
+                self.room_bindings.retain(|binding| binding.room_id != room_id);
             }
+        }
+    }
+
+    /// Updates the remark for a specific room bot binding.
+    ///
+    /// Returns `true` if a binding existed and was updated.
+    pub fn set_room_bot_remark(
+        &mut self,
+        room_id: &RoomId,
+        bot_user_id: &UserId,
+        remark: String,
+    ) -> bool {
+        if let Ok(index) = self.room_binding_index(room_id, bot_user_id) {
+            self.room_bindings[index].remark = remark;
+            true
+        } else {
+            false
         }
     }
 
@@ -1412,6 +2325,20 @@ impl BotSettingsState {
         }
 
         self.resolved_bot_user_id(current_user_id)
+    }
+
+    /// Returns `true` if new DM rooms for this target user should be encrypted.
+    ///
+    /// BotFather DM rooms are created unencrypted so that appservice bots that do
+    /// not support E2EE can still receive and reply to messages.
+    pub fn should_create_encrypted_dm(
+        &self,
+        target_user_id: &UserId,
+        current_user_id: Option<&UserId>,
+    ) -> bool {
+        self.resolved_bot_user_id(current_user_id)
+            .map(|bot_user_id| bot_user_id.as_str() != target_user_id.as_str())
+            .unwrap_or(true)
     }
 }
 
@@ -1578,7 +2505,7 @@ pub enum AppStateAction {
     UpgradedInviteToJoinedRoom(OwnedRoomId),
     /// The given app state was loaded from persistent storage
     /// and is ready to be restored.
-    RestoreAppStateFromPersistentState(AppState),
+    RestoreAppStateFromPersistentState(Box<AppState>),
     /// A room-level BotFather bind or unbind action completed.
     BotRoomBindingUpdated {
         room_id: OwnedRoomId,
@@ -1590,6 +2517,10 @@ pub enum AppStateAction {
     BotRoomBindingDetected {
         room_id: OwnedRoomId,
         bot_user_id: OwnedUserId,
+    },
+    /// Bot IDs discovered from BotFather replies (for example, `/listbots`).
+    KnownBotUserIdsDiscovered {
+        bot_user_ids: Vec<OwnedUserId>,
     },
     /// The given room was successfully loaded from the homeserver
     /// and is now known to our client.

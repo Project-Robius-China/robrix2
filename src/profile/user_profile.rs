@@ -4,7 +4,7 @@ use std::{borrow::Cow, ops::{Deref, DerefMut}};
 use makepad_widgets::*;
 use matrix_sdk::{room::{RoomMember, RoomMemberRole}, ruma::{events::room::member::MembershipState, OwnedRoomId, OwnedUserId}};
 use crate::{
-    avatar_cache, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, current_user_id, is_user_ignored, submit_async_request}, utils
+    app::AppState, avatar_cache, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, current_user_id, is_user_ignored, submit_async_request}, utils
 };
 use super::user_profile_cache;
 
@@ -464,7 +464,18 @@ impl Widget for UserProfileSlidingPane {
 
         if let Event::Actions(actions) = event {
             if self.button(cx, ids!(direct_message_button)).clicked(actions) {
+                let create_encrypted = scope
+                    .data
+                    .get::<AppState>()
+                    .map(|app_state| {
+                        app_state.bot_settings.should_create_encrypted_dm(
+                            info.user_profile.user_id.as_ref(),
+                            current_user_id().as_deref(),
+                        )
+                    })
+                    .unwrap_or(true);
                 submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
+                    create_encrypted,
                     user_profile: info.user_profile.clone(),
                     // Don't just create a new DM room; we want to first get confirmation from the user.
                     allow_create: false,

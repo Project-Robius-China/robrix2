@@ -200,6 +200,8 @@ script_mod! {
                         width: Fill, height: Fit,
                         flow: Flow.Right{wrap: true},
                         padding: Inset{ left: 0.0 }
+                        max_lines: 2
+                        text_overflow: Ellipsis
                         draw_text +: {
                             text_style: mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE {
                                 font_size: 11.0,
@@ -649,6 +651,22 @@ impl LinkPreviewCache {
             }
             Entry::Occupied(occupied) => occupied.get().lock().unwrap().entry.clone(),
         }
+    }
+
+    /// Removes all `Requested` and `Failed` entries from the link preview cache,
+    /// allowing them to be re-fetched.
+    ///
+    /// This should be called when the app transitions from offline back to online,
+    /// because any in-flight requests that were submitted while offline have likely
+    /// failed, leaving stale entries that permanently block re-fetching.
+    pub fn clear_all_pending_and_failed_requests(&mut self) {
+        self.cache.retain(|_, entry| {
+            if let Ok(guard) = entry.lock() {
+                matches!(guard.entry, LinkPreviewCacheEntry::LoadedLinkPreview(_))
+            } else {
+                true // Keep entries we can't lock
+            }
+        });
     }
 
     /// Removes cache entries older than the specified duration

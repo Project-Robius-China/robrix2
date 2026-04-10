@@ -1,7 +1,7 @@
 //! A `HtmlOrPlaintext` view can display either plaintext or rich HTML content.
 
 use makepad_widgets::*;
-use matrix_sdk::{ruma::{matrix_uri::MatrixId, OwnedMxcUri}, OwnedServerName};
+use matrix_sdk::{ruma::{matrix_uri::{MatrixId, MatrixToUri, MatrixUri}, OwnedMxcUri}, OwnedServerName};
 
 use crate::{avatar_cache::{self, AvatarCacheEntry}, profile::user_profile_cache, sliding_sync::{current_user_id, submit_async_request, MatrixRequest}, utils};
 
@@ -242,10 +242,9 @@ impl Widget for RobrixHtmlLink {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        // TODO: this is currently disabled because Makepad doesn't yet support
-        // partial vertical alignment of inline Html subwidgets with the surrounding text.
-        // Once makepad supports that, we can re-enable this to show the Pill widgets.
-        /*
+        // Try to render Matrix mention pills for matrix:// URIs.
+        // Note: vertical alignment with surrounding text may not be perfect
+        // (known Makepad limitation with inline Html subwidgets).
         if let Ok(matrix_to_uri) = MatrixToUri::parse(&self.url) {
             self.draw_matrix_pill(cx, matrix_to_uri.id(), matrix_to_uri.via());
         } else if let Ok(matrix_uri) = MatrixUri::parse(&self.url) {
@@ -253,8 +252,6 @@ impl Widget for RobrixHtmlLink {
         } else {
             self.draw_html_link(cx);
         }
-        */
-        self.draw_html_link(cx);
         self.view.draw_walk(cx, scope, walk)
     }
 

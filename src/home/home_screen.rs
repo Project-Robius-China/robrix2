@@ -1,6 +1,11 @@
 use makepad_widgets::*;
 
-use crate::{app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, settings::settings_screen::SettingsScreenWidgetRefExt};
+use crate::{
+    app::AppState,
+    home::navigation_tab_bar::{NavigationBarAction, SelectedTab},
+    settings::settings_screen::SettingsScreenWidgetRefExt,
+    shared::room_filter_input_bar::{MainFilterAction, RoomFilterInputBarWidgetExt},
+};
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -10,7 +15,7 @@ script_mod! {
     // Defines the total height of the StackNavigationView's header.
     // This has to be set in multiple places because of how StackNavigation
     // uses an Overlay view internally.
-    mod.widgets.STACK_VIEW_HEADER_HEIGHT = 75
+    mod.widgets.STACK_VIEW_HEADER_HEIGHT = 45
 
     // A reusable base for StackNavigationView children in the mobile layout.
     // Each specific content view (room, invite, space lobby) extends this
@@ -19,6 +24,11 @@ script_mod! {
         width: Fill, height: Fill
         draw_bg.color: (COLOR_PRIMARY)
         header +: {
+            height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT),
+            padding: 0
+            align: Align{y: 0.5}
+
+            // Below is a shader to draw a shadow under the bottom half of the header
             clip_x: false,
             clip_y: false,
             show_bg: true,
@@ -35,8 +45,8 @@ script_mod! {
                 border_color_2: instance(vec4(-1))
 
                 shadow_color: instance(#0005)
-                shadow_radius: uniform(9.0)
-                shadow_offset: uniform(vec2(1.0, 0.0))
+                shadow_radius: uniform(12.0)
+                shadow_offset: uniform(vec2(0.0, 0.0))
 
                 rect_size2: varying(vec2(0))
                 rect_size3: varying(vec2(0))
@@ -85,7 +95,11 @@ script_mod! {
                         let m = self.shadow_radius
                         let o = self.shadow_offset + self.rect_shift
                         let v = GaussShadow.rounded_box_shadow(vec2(m) + o self.rect_size2+o self.pos * (self.rect_size3+vec2(m)) self.shadow_radius*0.5 self.border_radius*2.0)
-                        sdf.clear(self.shadow_color*v)
+                        // Only draw shadow on the bottom half of the view
+                        let pixel_y = self.pos.y * self.rect_size3.y
+                        let mid_y = self.sdf_rect_pos.y + self.sdf_rect_size.y * 0.5
+                        let bottom_mask = smoothstep(mid_y - m * 0.3 mid_y + m * 0.3 pixel_y)
+                        sdf.clear(self.shadow_color * v * bottom_mask)
                     }
 
                     sdf.fill_keep(fill_color)
@@ -100,22 +114,39 @@ script_mod! {
             padding: Inset{top: 30, bottom: 0}
             height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT),
 
-            content +: {
-                height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT)
-                button_container +: {
-                    padding: 0,
-                    margin: 0
-                    left_button +: {
-                        width: Fit, height: Fit,
-                        padding: Inset{left: 20, right: 23, top: 10, bottom: 10}
-                        margin: Inset{left: 8, right: 0, top: 0, bottom: 0}
-                        draw_icon +: { color: (ROOM_NAME_TEXT_COLOR) }
-                        icon_walk: Walk{width: 13, height: Fit}
-                        spacing: 0
-                        text: ""
+                content +: {
+                    height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT)
+                    button_container +: {
+                        width: Fill
+                        flow: Overlay
+                        padding: 0,
+                        margin: 0
+                        left_button +: {
+                            align: Align{x: 0.0, y: 0.5}
+                            width: Fit, height: Fit,
+                            padding: Inset{left: 20, right: 23, top: 10, bottom: 10}
+                            margin: Inset{left: 8, right: 0, top: 0, bottom: 0}
+                            draw_icon +: { color: (ROOM_NAME_TEXT_COLOR) }
+                            icon_walk: Walk{width: 13, height: Fit}
+                            spacing: 0
+                            text: ""
+                        }
+                        right_button := ButtonFlatterIcon {
+                            visible: false
+                            align: Align{x: 1.0, y: 0.5}
+                            width: Fit, height: Fit,
+                            padding: Inset{left: 23, right: 20, top: 10, bottom: 10}
+                            margin: Inset{left: 0, right: 8, top: 0, bottom: 0}
+                            draw_icon +: {
+                                color: (ROOM_NAME_TEXT_COLOR)
+                                svg: (ICON_INFO)
+                            }
+                            icon_walk: Walk{width: 14, height: Fit}
+                            spacing: 0
+                            text: ""
+                        }
                     }
-                }
-                title_container +: {
+                    title_container +: {
                     padding: Inset{top: 8}
                     title +: {
                         draw_text +: {
@@ -206,26 +237,6 @@ script_mod! {
                         width: Fill, height: Fill
                         flow: Down
 
-                        View {
-                            width: Fill,
-                            height: 39,
-                            flow: Right
-                            padding: Inset{top: 2, bottom: 2}
-                            margin: Inset{right: 2}
-                            spacing: 2
-                            align: Align{y: 0.5}
-
-                            CachedWidget {
-                                room_filter_input_bar := RoomFilterInputBar {}
-                            }
-
-                            search_messages_button := SearchMessagesButton {
-                                // make this button match/align with the RoomFilterInputBar
-                                height: 32.5,
-                                margin: Inset{right: 2}
-                            }
-                        }
-
                         mod.widgets.MainDesktopUI {}
                     }
 
@@ -269,43 +280,32 @@ script_mod! {
                 draw_bg.color: (COLOR_PRIMARY)
 
                 view_stack := StackNavigation {
-                        root_view +: {
-                            flow: Down
+                    root_view +: {
+                        flow: Down
+                        width: Fill, height: Fill
+
+                        // At the top of the root view, we use the PageFlip widget to show either
+                        // the main list of rooms or the settings screen.
+                        home_screen_page_flip := PageFlip {
                             width: Fill, height: Fill
 
-                            // At the top of the root view, we use the PageFlip widget to show either
-                            // the main list of rooms or the settings screen.
-                            home_screen_page_flip := PageFlip {
+                            lazy_init: true,
+                            active_page: @home_page
+
+                            home_page := View {
+                                width: Fill, height: Fill
+                                // Note: while the other page views have top padding, we do NOT add that here
+                                // because it is added in the `RoomsSideBar`'s `RoundedShadowView` itself.
+                                flow: Down
+
+                                mod.widgets.RoomsSideBar {}
+                            }
+
+                            settings_page := View {
                                 width: Fill, height: Fill
 
-                                lazy_init: true,
-                                active_page: @home_page
-
-                                home_page := View {
-                                    width: Fill, height: Fill
-                                    // Note: while the other page views have top padding, we do NOT add that here
-                                    // because it is added in the `RoomsSideBar`'s `RoundedShadowView` itself.
-                                    flow: Down
-
-                                    mod.widgets.RoomsSideBar {}
-                                }
-
-                                settings_page := View {
-                                    width: Fill, height: Fill
-                                    padding: Inset{top: 20}
-
-                                    CachedWidget {
-                                        settings_screen := mod.widgets.SettingsScreen {}
-                                    }
-                                }
-
-                                add_room_page := View {
-                                    width: Fill, height: Fill
-                                    padding: Inset{top: 20}
-
-                                    CachedWidget {
-                                        add_room_screen := mod.widgets.AddRoomScreen {}
-                                    }
+                                CachedWidget {
+                                    settings_screen := mod.widgets.SettingsScreen {}
                                 }
 
                                 // voip_page := View {
@@ -318,59 +318,68 @@ script_mod! {
                                 // }
                             }
 
-                            // Show the SpacesBar right above the navigation tab bar.
-                            // We wrap it in the SpacesBarWrapper in order to animate it in or out,
-                            // and wrap *that* in a CachedWidget in order to maintain its shown/hidden state
-                            // across AdaptiveView transitions between Mobile view mode and Desktop view mode.
-                            // 
-                            // ... Then we wrap *that* in a ... <https://www.youtube.com/watch?v=evUWersr7pc>
-                            CachedWidget {
-                                spaces_bar_wrapper := mod.widgets.SpacesBarWrapper {}
-                            }
+                            add_room_page := View {
+                                width: Fill, height: Fill
 
-                            // At the bottom of the root view, show the navigation tab bar horizontally.
-                            CachedWidget {
-                                navigation_tab_bar := mod.widgets.NavigationTabBar {}
+                                CachedWidget {
+                                    add_room_screen := mod.widgets.AddRoomScreen {}
+                                }
                             }
                         }
 
-                        // Room views: multiple instances to support deep stacking
-                        // (e.g., room -> thread -> room -> thread -> ...).
-                        // Each stack depth gets its own dedicated view widget,
-                        // avoiding complex state save/restore when views are reused.
-                        room_view_0  := mod.widgets.RobrixContentView { body +: { room_screen_0  := mod.widgets.RoomScreen {} } }
-                        room_view_1  := mod.widgets.RobrixContentView { body +: { room_screen_1  := mod.widgets.RoomScreen {} } }
-                        room_view_2  := mod.widgets.RobrixContentView { body +: { room_screen_2  := mod.widgets.RoomScreen {} } }
-                        room_view_3  := mod.widgets.RobrixContentView { body +: { room_screen_3  := mod.widgets.RoomScreen {} } }
-                        room_view_4  := mod.widgets.RobrixContentView { body +: { room_screen_4  := mod.widgets.RoomScreen {} } }
-                        room_view_5  := mod.widgets.RobrixContentView { body +: { room_screen_5  := mod.widgets.RoomScreen {} } }
-                        room_view_6  := mod.widgets.RobrixContentView { body +: { room_screen_6  := mod.widgets.RoomScreen {} } }
-                        room_view_7  := mod.widgets.RobrixContentView { body +: { room_screen_7  := mod.widgets.RoomScreen {} } }
-                        room_view_8  := mod.widgets.RobrixContentView { body +: { room_screen_8  := mod.widgets.RoomScreen {} } }
-                        room_view_9  := mod.widgets.RobrixContentView { body +: { room_screen_9  := mod.widgets.RoomScreen {} } }
-                        room_view_10 := mod.widgets.RobrixContentView { body +: { room_screen_10 := mod.widgets.RoomScreen {} } }
-                        room_view_11 := mod.widgets.RobrixContentView { body +: { room_screen_11 := mod.widgets.RoomScreen {} } }
-                        room_view_12 := mod.widgets.RobrixContentView { body +: { room_screen_12 := mod.widgets.RoomScreen {} } }
-                        room_view_13 := mod.widgets.RobrixContentView { body +: { room_screen_13 := mod.widgets.RoomScreen {} } }
-                        room_view_14 := mod.widgets.RobrixContentView { body +: { room_screen_14 := mod.widgets.RoomScreen {} } }
-                        room_view_15 := mod.widgets.RobrixContentView { body +: { room_screen_15 := mod.widgets.RoomScreen {} } }
-
-                        invite_view := mod.widgets.RobrixContentView {
-                            body +: {
-                                invite_screen := mod.widgets.InviteScreen {}
-                            }
+                        // Show the SpacesBar right above the navigation tab bar.
+                        // We wrap it in the SpacesBarWrapper in order to animate it in or out,
+                        // and wrap *that* in a CachedWidget in order to maintain its shown/hidden state
+                        // across AdaptiveView transitions between Mobile view mode and Desktop view mode.
+                        //
+                        // ... Then we wrap *that* in a ... <https://www.youtube.com/watch?v=evUWersr7pc>
+                        CachedWidget {
+                            spaces_bar_wrapper := mod.widgets.SpacesBarWrapper {}
                         }
 
-                        space_lobby_view := mod.widgets.RobrixContentView {
-                            body +: {
-                                space_lobby_screen := mod.widgets.SpaceLobbyScreen {}
-                            }
+                        // At the bottom of the root view, show the navigation tab bar horizontally.
+                        CachedWidget {
+                            navigation_tab_bar := mod.widgets.NavigationTabBar {}
+                        }
+                    }
+
+                    // Room views: multiple instances to support deep stacking
+                    // (e.g., room -> thread -> room -> thread -> ...).
+                    // Each stack depth gets its own dedicated view widget,
+                    // avoiding complex state save/restore when views are reused.
+                    room_view_0  := mod.widgets.RobrixContentView { body +: { room_screen_0  := mod.widgets.RoomScreen {} } }
+                    room_view_1  := mod.widgets.RobrixContentView { body +: { room_screen_1  := mod.widgets.RoomScreen {} } }
+                    room_view_2  := mod.widgets.RobrixContentView { body +: { room_screen_2  := mod.widgets.RoomScreen {} } }
+                    room_view_3  := mod.widgets.RobrixContentView { body +: { room_screen_3  := mod.widgets.RoomScreen {} } }
+                    room_view_4  := mod.widgets.RobrixContentView { body +: { room_screen_4  := mod.widgets.RoomScreen {} } }
+                    room_view_5  := mod.widgets.RobrixContentView { body +: { room_screen_5  := mod.widgets.RoomScreen {} } }
+                    room_view_6  := mod.widgets.RobrixContentView { body +: { room_screen_6  := mod.widgets.RoomScreen {} } }
+                    room_view_7  := mod.widgets.RobrixContentView { body +: { room_screen_7  := mod.widgets.RoomScreen {} } }
+                    room_view_8  := mod.widgets.RobrixContentView { body +: { room_screen_8  := mod.widgets.RoomScreen {} } }
+                    room_view_9  := mod.widgets.RobrixContentView { body +: { room_screen_9  := mod.widgets.RoomScreen {} } }
+                    room_view_10 := mod.widgets.RobrixContentView { body +: { room_screen_10 := mod.widgets.RoomScreen {} } }
+                    room_view_11 := mod.widgets.RobrixContentView { body +: { room_screen_11 := mod.widgets.RoomScreen {} } }
+                    room_view_12 := mod.widgets.RobrixContentView { body +: { room_screen_12 := mod.widgets.RoomScreen {} } }
+                    room_view_13 := mod.widgets.RobrixContentView { body +: { room_screen_13 := mod.widgets.RoomScreen {} } }
+                    room_view_14 := mod.widgets.RobrixContentView { body +: { room_screen_14 := mod.widgets.RoomScreen {} } }
+                    room_view_15 := mod.widgets.RobrixContentView { body +: { room_screen_15 := mod.widgets.RoomScreen {} } }
+
+                    invite_view := mod.widgets.RobrixContentView {
+                        body +: {
+                            invite_screen := mod.widgets.InviteScreen {}
+                        }
+                    }
+
+                    space_lobby_view := mod.widgets.RobrixContentView {
+                        body +: {
+                            space_lobby_screen := mod.widgets.SpaceLobbyScreen {}
                         }
                     }
                 }
             }
         }
     }
+}
 
 
 /// A simple wrapper around the SpacesBar that allows us to animate showing or hiding it.
@@ -430,6 +439,14 @@ pub struct HomeScreen {
 impl Widget for HomeScreen {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         if let Event::Actions(actions) = event {
+            // On desktop, the RoomFilterInputBar is inside this HomeScreen.
+            // Check if it changed and re-emit as a MainFilterAction so that
+            // RoomsList and SpacesBar can respond without cross-talk from
+            // other RoomFilterInputBar instances (e.g., SpaceLobbyScreen's).
+            if let Some(keywords) = self.view.room_filter_input_bar(cx, ids!(room_filter_input_bar)).changed(actions) {
+                cx.action(MainFilterAction::Changed(keywords));
+            }
+
             let app_state = scope.data.get_mut::<AppState>().unwrap();
             for action in actions {
                 match action.downcast_ref() {
@@ -470,7 +487,7 @@ impl Widget for HomeScreen {
                             if let Some(settings_page) = self.update_active_page_from_selection(cx, app_state) {
                                 settings_page
                                     .settings_screen(cx, ids!(settings_screen))
-                                    .populate(cx, None, &app_state.bot_settings);
+                                    .populate(cx, None, &app_state.bot_settings, &app_state.translation, app_state.app_language);
                                 self.view.redraw(cx);
                             } else {
                                 error!("BUG: failed to set active page to show settings screen.");
@@ -551,4 +568,3 @@ impl HomeScreen {
             )
     }
 }
-

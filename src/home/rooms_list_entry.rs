@@ -2,6 +2,8 @@ use makepad_widgets::*;
 use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
+    app::AppState,
+    i18n::{AppLanguage, tr_fmt, tr_key},
     room::FetchedRoomAvatar, shared::{
         avatar::AvatarWidgetExt,
         html_or_plaintext::HtmlOrPlaintextWidgetExt, unread_badge::UnreadBadgeWidgetExt as _,
@@ -50,6 +52,8 @@ script_mod! {
         width: Fill, height: Fit
         flow: Flow.Right{wrap: false},
         padding: 0,
+        max_lines: 1
+        text_overflow: Ellipsis
         draw_text +: {
             color: #000,
             text_style: USERNAME_TEXT_STYLE { font_size: 10. }
@@ -73,6 +77,8 @@ script_mod! {
             html_view +: {
                 html +: {
                     font_size: 9.3
+                    max_lines: 2
+                    text_overflow: Ellipsis
                     text_style_normal +: { font_size: 9.3 }
                     text_style_italic +: { font_size: 9.3 }
                     text_style_bold +: { font_size: 9.3 }
@@ -82,6 +88,8 @@ script_mod! {
             }
             plaintext_view +: {
                 pt_label +: {
+                    max_lines: 2
+                    text_overflow: Ellipsis
                     draw_text +: {
                         text_style: theme.font_regular { font_size: 9.5 },
                     }
@@ -243,10 +251,16 @@ impl RoomsListEntry {
     fn set_adaptive_variant_selector(&self, cx: &mut Cx) {
         self.view
             .adaptive_view(cx, ids!(adaptive_preview))
-            .set_variant_selector(|_cx, parent_size| match parent_size.x {
-                width if width <= 70.0 => id!(OnlyIcon),
-                width if width <= 200.0 => id!(IconAndName),
-                _ => id!(FullPreview),
+            .set_variant_selector(|cx, parent_size| {
+                if cx.display_context.is_desktop() {
+                    id!(FullPreview)
+                } else {
+                    match parent_size.x {
+                        width if width <= 70.0 => id!(OnlyIcon),
+                        width if width <= 200.0 => id!(IconAndName),
+                        _ => id!(FullPreview),
+                    }
+                }
             });
     }
 }
@@ -315,10 +329,13 @@ impl Widget for RoomsListEntryContent {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
         if let Some(joined_room_info) = scope.props.get::<JoinedRoomInfo>() {
             self.draw_joined_room(cx, joined_room_info);
         } else if let Some(invited_room_info) = scope.props.get::<InvitedRoomInfo>() {
-            self.draw_invited_room(cx, invited_room_info);
+            self.draw_invited_room(cx, invited_room_info, app_language);
         }
 
         self.view.draw_walk(cx, scope, walk)
@@ -361,14 +378,30 @@ impl RoomsListEntryContent {
         &mut self,
         cx: &mut Cx,
         room_info: &InvitedRoomInfo,
+        app_language: AppLanguage,
     ) {
         self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
         // Hide the timestamp field, and use the latest message field to show the inviter.
         self.view.label(cx, ids!(timestamp)).set_text(cx, "");
         let inviter_string = match &room_info.inviter_info {
-            Some(InviterInfo { user_id, display_name: Some(dn), .. }) => format!("Invited by <b>{}</b> ({})", htmlize::escape_text(dn), htmlize::escape_text(user_id.as_str())),
-            Some(InviterInfo { user_id, .. }) => format!("Invited by {}", htmlize::escape_text(user_id.as_str())),
-            None => String::from("You were invited"),
+            Some(InviterInfo { user_id, display_name: Some(dn), .. }) => {
+                let display_name = htmlize::escape_text(dn);
+                let user_id = htmlize::escape_text(user_id.as_str());
+                tr_fmt(
+                    app_language,
+                    "rooms_list_entry.invited.by_name_and_user",
+                    &[("display_name", display_name.as_ref()), ("user_id", user_id.as_ref())],
+                )
+            }
+            Some(InviterInfo { user_id, .. }) => {
+                let user_id = htmlize::escape_text(user_id.as_str());
+                tr_fmt(
+                    app_language,
+                    "rooms_list_entry.invited.by_user",
+                    &[("user_id", user_id.as_ref())],
+                )
+            }
+            None => tr_key(app_language, "rooms_list_entry.invited.generic").to_string(),
         };
         self.view.html_or_plaintext(cx, ids!(latest_message)).show_html(cx, &inviter_string);
 

@@ -40,7 +40,6 @@ The following table shows which host systems can currently be used to build Robr
 
 
 ## Known issues
- - Drag-n-drop on Linux isn't implemented by Makepad, so you cannot drag room tabs around yet. (see: https://github.com/makepad/makepad/issues/650)
  - Matrix-specific links (`https://matrix.to/...`) aren't fully handled in-app yet.
  - Ignoring/unignoring a user clears all timelines  (see: https://github.com/matrix-org/matrix-rust-sdk/issues/1703); the timeline will be re-filled gradually via back pagination, but the viewport position is not maintained.
  - Currently, accessing system geolocation on Android may not succeed due to failing to prompt the user for permission. Please enable the location permission in the App Info settings page for Robrix, and then it should work as expected.
@@ -53,16 +52,21 @@ The following table shows which host systems can currently be used to build Robr
 ## Building & Running Robrix on Desktop
 1. First, [install Rust](https://www.rust-lang.org/tools/install).
 
-2. If you're building on **Linux** or **WSL** on Windows, install the required dependencies. Otherwise, proceed to step 3.
-   * `openssl`, `clang`/`libclang`, `binfmt`, `Xcursor`/`X11`, `asound`/`pulse`.
+2. Install `cmake`, which is required for some Matrix SDK dependencies.
+   * macOS: `brew install cmake`
+   * Windows: `choco install cmake` (or install `cmake` using Visual Studio)
+   * Linux: see step 3 below.
+
+3. If you're building on **Linux** or **WSL** on Windows, install the required dependencies. Otherwise, proceed to step 4.
+   * `openssl`, `clang`/`libclang`, `cmake`, `binfmt`, `Xcursor`/`X11`, `asound`/`pulse`.
 
    On a Debian-like Linux distro (e.g., Ubuntu), run the following:
    ```sh
    sudo apt-get update
-   sudo apt-get install libssl-dev libsqlite3-dev pkg-config binfmt-support libxcursor-dev libx11-dev libasound2-dev libpulse-dev libwayland-dev libxkbcommon-dev
+   sudo apt-get install libssl-dev cmake llvm clang libclang-dev libsqlite3-dev pkg-config binfmt-support libxcursor-dev libx11-dev libasound2-dev libpulse-dev libwayland-dev libxkbcommon-dev
    ```
 
-3. Then, build and run Robrix.
+4. Then, build and run Robrix.
    ```sh
    cargo run --release
    ```   
@@ -75,9 +79,9 @@ The following table shows which host systems can currently be used to build Robr
    ```
 
 ### Android
-2. Use `cargo-makepad` to install the Android toolchain:
+2. Use `cargo-makepad` to install the Android toolchain with the full NDK included:
    ```sh
-   cargo makepad android install-toolchain
+   cargo makepad android install-toolchain --full-ndk
    ```
 
 3. Build and run Robrix using `cargo-makepad`:
@@ -130,10 +134,20 @@ The following table shows which host systems can currently be used to build Robr
      --profile=<unique-starting-hex-string> \
      --cert=<UNIQUE_STARTING_HEX_STRING> \
      --device=<UNIQUE-STARTING-HEX-STRING> \
-     --org=rs.robius \
+    --org=rs.robius \
      --app=robrix \
      run-device -p robrix –release
    ```
+
+#### Add iOS AppIcon assets to the built `.app` bundle
+5. After building the iOS app bundle, compile and apply the AppIcon asset catalog:
+   ```sh
+   ./packaging/ios/apply_ios_app_icons.sh \
+     ./target/makepad-apple-app/aarch64-apple-ios/release/robrix.app \
+     1
+   ```
+   * This step adds `Assets.car` and required icon metadata into `Info.plist`.
+   * If you already signed the app before this step, you must re-sign it afterwards.
 
 # Feature status tracker
 

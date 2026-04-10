@@ -1,6 +1,7 @@
 use makepad_widgets::ScriptVm;
 
 pub mod add_room;
+pub mod bot_binding_modal;
 pub mod create_bot_modal;
 pub mod delete_bot_modal;
 pub mod edited_indicator;
@@ -31,12 +32,15 @@ pub mod new_message_context_menu;
 pub mod room_context_menu;
 pub mod link_preview;
 pub mod room_image_viewer;
+pub mod streaming_animation;
+pub mod upload_progress;
 
 pub fn script_mod(vm: &mut ScriptVm) {
     search_messages::script_mod(vm);
     loading_pane::script_mod(vm);
     location_preview::script_mod(vm);
     add_room::script_mod(vm);
+    bot_binding_modal::script_mod(vm);
     create_bot_modal::script_mod(vm);
     delete_bot_modal::script_mod(vm);
     space_lobby::script_mod(vm);
@@ -62,6 +66,8 @@ pub fn script_mod(vm: &mut ScriptVm) {
     main_desktop_ui::script_mod(vm);
     spaces_bar::script_mod(vm);
     navigation_tab_bar::script_mod(vm);
+    // Note: upload_progress::script_mod is called earlier in app.rs
+    // because RoomInputBar depends on it.
     // Keep HomeScreen last, it references many widgets registered above.
     home_screen::script_mod(vm);
 }

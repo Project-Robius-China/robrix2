@@ -9,7 +9,11 @@ use makepad_widgets::*;
 use matrix_sdk_ui::sync_service::State;
 
 use crate::{
+    app::AppState,
+    avatar_cache,
     home::navigation_tab_bar::{NavigationBarAction, SelectedTab},
+    i18n::{AppLanguage, tr_key},
+    profile::user_profile_cache,
     shared::{
         image_viewer::{ImageViewerAction, ImageViewerError, LoadState},
         popup_list::{PopupKind, enqueue_popup_notification},
@@ -26,13 +30,14 @@ script_mod! {
         height: Fit,
         padding: Inset{bottom: 4}
         flow: Right,
+        align: Align{y: 0.5}
         spacing: 3,
 
         header_title := Label {
             width: Fill,
             height: Fit,
             padding: 0
-            margin: Inset{left: 5, top: -1}
+            margin: Inset{left: 5}
             flow: Right, // do not wrap
             text: "All Rooms"
             draw_text +: {
@@ -40,6 +45,47 @@ script_mod! {
                 text_style: TITLE_TEXT {}
             }
         },
+
+        open_room_filter_modal_button := View {
+            width: Fit,
+            height: Fit
+            margin: Inset{right: 1}
+            flow: Overlay,
+
+            Icon {
+                draw_icon +: {
+                    svg: (ICON_SEARCH)
+                    color: (COLOR_TEXT)
+                }
+                icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
+            }
+
+            click_area := Button {
+                width: Fill,
+                height: Fill
+                padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
+                spacing: 0,
+                text: ""
+                draw_bg +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    border_color: #0000
+                    border_color_hover: #0000
+                    border_color_down: #0000
+                    border_color_focus: #0000
+                    border_size: 0.0
+                    border_radius: 0.0
+                }
+                draw_text +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    color_focus: #0000
+                }
+                icon_walk: Walk{width: 0, height: 0}
+            }
+        }
 
         View {
             width: Fit, height: Fit,
@@ -64,7 +110,7 @@ script_mod! {
                         svg: (ICON_CLOUD_OFFLINE),
                         color: (COLOR_FG_DANGER_RED),
                     }
-                    icon_walk: Walk{width: 35, height: Fit, margin: Inset{left: -5, bottom: 4}}
+                    icon_walk: Walk{width: 25, height: Fit, margin: Inset{left: 1, bottom: 1}}
                 }
             }
 
@@ -88,11 +134,23 @@ pub struct RoomsListHeader {
     #[deref] view: View,
 
     #[rust(State::Idle)] sync_state: State,
+    #[rust] app_language: AppLanguage,
+    #[rust] showing_space_title: bool,
 }
 
 impl Widget for RoomsListHeader {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
         if let Event::Actions(actions) = event {
+            if self.view.button(cx, ids!(open_room_filter_modal_button.click_area)).clicked(actions) {
+                cx.action(RoomsListHeaderAction::OpenRoomFilterModal);
+            }
+
             for action in actions {
                 match action.downcast_ref() {
                     Some(RoomsListHeaderAction::SetSyncStatus(is_syncing)) => {
@@ -116,12 +174,29 @@ impl Widget for RoomsListHeader {
                             self.view.view(cx, ids!(synced_icon)).set_visible(cx, false);
                             self.view.view(cx, ids!(offline_icon)).set_visible(cx, true);
                             enqueue_popup_notification(
-                                "Cannot reach the Matrix homeserver. Please check your connection.",
+                                tr_key(self.app_language, "rooms_list_header.popup.offline"),
                                 PopupKind::Error,
-                                None,
+                                Some(4.0),
                             );
                             // Since there is no timeout for fetching media, send an action to ImageViewer when syncing is offline.
                             cx.action(ImageViewerAction::Show(LoadState::Error(ImageViewerError::Offline)));
+                        } else if matches!(self.sync_state, State::Offline) {
+                            // Transitioning away from Offline: reset to the default
+                            // loading state so the sync indicator can take over again.
+                            self.view.view(cx, ids!(loading_spinner)).set_visible(cx, true);
+                            self.view.view(cx, ids!(synced_icon)).set_visible(cx, false);
+                            self.view.view(cx, ids!(offline_icon)).set_visible(cx, false);
+
+                            // Clear stale `Requested`/`Failed` entries from global caches,
+                            // as any requests submitted while offline have likely failed,
+                            // leaving entries that permanently block re-fetching.
+                            // Note: per-room caches (media, link preview) are cleared
+                            // by RoomScreen in response to the StateUpdate action.
+                            user_profile_cache::clear_all_pending_requests();
+                            avatar_cache::clear_all_pending_and_failed_requests();
+                            // Now that we're no longer offline, we also need to tell the
+                            // ProfileIcon to refresh itself and fetch our own user's profile again.
+                            SignalToUI::set_ui_signal();
                         }
                         self.sync_state = new_state.clone();
                         self.redraw(cx);
@@ -135,8 +210,12 @@ impl Widget for RoomsListHeader {
                     match tab {
                         SelectedTab::Space { space_name_id } => {
                             header_title.set_text(cx, &space_name_id.to_string());
+                            self.showing_space_title = true;
                         }
-                        _ => header_title.set_text(cx, "All Rooms"),
+                        _ => {
+                            header_title.set_text(cx, tr_key(self.app_language, "rooms_list_header.title.all_rooms"));
+                            self.showing_space_title = false;
+                        }
                     }
                     continue;
                 }
@@ -145,9 +224,9 @@ impl Widget for RoomsListHeader {
 
         // Show tooltips for the sync status icons.
         for (view, text, bg_color) in [
-            (self.view.view(cx, ids!(loading_spinner)), "Syncing...",   vec4(0.059, 0.533, 0.996, 1.0)), // COLOR_ACTIVE_PRIMARY #0f88fe
-            (self.view.view(cx, ids!(offline_icon)),    "Offline",      vec4(0.863, 0.0, 0.020, 1.0)),   // COLOR_FG_DANGER_RED #DC0005
-            (self.view.view(cx, ids!(synced_icon)),     "Fully synced", vec4(0.075, 0.533, 0.031, 1.0)), // COLOR_FG_ACCEPT_GREEN #138808
+            (self.view.view(cx, ids!(loading_spinner)), tr_key(self.app_language, "rooms_list_header.tooltip.syncing"), vec4(0.059, 0.533, 0.996, 1.0)), // COLOR_ACTIVE_PRIMARY #0f88fe
+            (self.view.view(cx, ids!(offline_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.offline"), vec4(0.863, 0.0, 0.020, 1.0)),   // COLOR_FG_DANGER_RED #DC0005
+            (self.view.view(cx, ids!(synced_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.synced"), vec4(0.075, 0.533, 0.031, 1.0)), // COLOR_FG_ACCEPT_GREEN #138808
         ] {
             if !view.visible() {
                 continue;
@@ -179,13 +258,33 @@ impl Widget for RoomsListHeader {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
         self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl RoomsListHeader {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        if !self.showing_space_title {
+            self.view
+                .label(cx, ids!(header_title))
+                .set_text(cx, tr_key(self.app_language, "rooms_list_header.title.all_rooms"));
+        }
+        self.view.redraw(cx);
     }
 }
 
 /// Actions that can be handled by the `RoomsListHeader`.
 #[derive(Debug)]
 pub enum RoomsListHeaderAction {
+    /// Open the rooms/spaces filter modal.
+    OpenRoomFilterModal,
     /// An action received by the RoomsListHeader that will show or hide
     /// its sync status indicator (and loading spinner) based on the given boolean.
     SetSyncStatus(bool),
