@@ -910,8 +910,7 @@ script_mod! {
             View { width: Fill, height: 1 }
 
             join_call_button := RobrixPositiveIconButton {
-                margin: Inset{ top: -1.5, left: 2, right: 2}
-                padding: Inset{top: 6, bottom: 6, left: 12, right: 12}
+                padding: 6.0
                 draw_bg +: {
                     border_size: 0.75
                     color: #7b1fa2
@@ -2075,6 +2074,51 @@ script_mod! {
             threads_sliding_pane := mod.widgets.ThreadsSlidingPane { }
             room_info_sliding_pane := mod.widgets.RoomInfoSlidingPane { }
 
+            // Active call banner - shown when there's an ongoing call in the room
+            active_call_banner := View {
+                width: Fill
+                height: Fit
+                visible: false
+                padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
+                align: Align{x: 0.5, y: 0.0}
+                show_bg: true
+                draw_bg +: {
+                    color: #7b1fa2
+                }
+
+                <View> {
+                    width: Fit
+                    height: Fit
+                    flow: Right
+                    spacing: 12
+                    align: Align{y: 0.5}
+
+                    <Icon> {
+                        icon_path: dep("crate://self/resources/icons/video.svg")
+                        draw_icon: { color: #fff }
+                        icon_size: vec2(20.0, 20.0)
+                    }
+
+                    <Label> {
+                        text: "Ongoing call in this room"
+                        draw_text: { color: #fff, text_style: { font_size: 11.0 } }
+                    }
+
+                    join_call_banner_button := Button {
+                        text: "Join Call"
+                        padding: Inset{top: 6, bottom: 6, left: 16, right: 16}
+                        draw_bg +: {
+                            color: #fff
+                            border_radius: 2.0
+                        }
+                        draw_text +: {
+                            color: #7b1fa2
+                            text_style: { font_size: 11.0 }
+                        }
+                    }
+                }
+            }
+
             // Video call button - floating in top right corner
             video_call_button_container := View {
                 width: Fill
@@ -2938,6 +2982,8 @@ pub struct RoomScreen {
     #[rust] pending_invited_users: HashSet<OwnedUserId>,
     /// Whether the VoIP call screen is currently visible for this room.
     #[rust] show_voip_screen: bool,
+    /// Whether this room has an active call (from RTC notifications).
+    #[rust] has_active_call: bool,
 }
 
 impl Drop for RoomScreen {
@@ -3207,6 +3253,17 @@ impl Widget for RoomScreen {
             if self.view.button(cx, ids!(video_call_button)).clicked(actions) {
                 if let Some(room_name_id) = self.room_name_id.clone() {
                     log!("Video call button clicked for room: {}", room_name_id.room_id());
+                    cx.widget_action(
+                        self.widget_uid(),
+                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                    );
+                }
+            }
+
+            // Handle the join_call_banner_button (in active call banner) being clicked.
+            if self.view.button(cx, ids!(join_call_banner_button)).clicked(actions) {
+                if let Some(room_name_id) = self.room_name_id.clone() {
+                    log!("Join call banner button clicked for room: {}", room_name_id.room_id());
                     cx.widget_action(
                         self.widget_uid(),
                         RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
@@ -4134,6 +4191,15 @@ impl Widget for RoomScreen {
                                 item_drawn_status,
                             ),
                             TimelineItemContent::CallInvite | TimelineItemContent::RtcNotification => {
+                                // Update active call state and show banner
+                                if !self.has_active_call {
+                                    self.has_active_call = true;
+                                    let banner = self.view.view(cx, ids!(active_call_banner));
+                                    banner.set_visible(cx, true);
+                                    banner.redraw(cx);
+                                    self.view.redraw(cx);
+                                }
+
                                 populate_rtc_notification_event(
                                     cx,
                                     list,
@@ -6359,6 +6425,10 @@ impl RoomScreen {
         // Reset the the state of the inner loading pane.
         self.loading_pane(cx, ids!(loading_pane)).take_state();
 
+        // Reset active call state when switching rooms
+        self.has_active_call = false;
+        self.view.view(cx, ids!(active_call_banner)).set_visible(cx, false);
+
         self.room_name_id = Some(room_name_id.clone());
         self.room_avatar_url = get_client()
             .and_then(|client| client.get_room(room_name_id.room_id()))
@@ -6493,11 +6563,11 @@ impl RoomScreenRef {
 
     /// Shows or hides the VoIP call screen for this room.
     /// When visible, hides the timeline and shows VoIP as the main content.
+    /// Note: On desktop, VoIP is handled via standalone VoipScreen tabs, so this
+    /// may fail to borrow (which is expected and harmless).
     pub fn set_voip_visible(&self, cx: &mut Cx, visible: bool, room_id: Option<OwnedRoomId>) {
-        println!("set_voip_visible visible {:?}", visible);
         let Some(mut inner) = self.borrow_mut() else {
-            // This can happen on mobile path when desktop is active
-            println!("Failed to borrow RoomScreen mutably");
+            // Expected on desktop where MainDesktopUI handles VoIP via standalone VoipScreen tabs
             return;
         };
         inner.show_voip_screen = visible;
@@ -6514,7 +6584,6 @@ impl RoomScreenRef {
             }
         } else {
             let voip_screen = inner.view.voip_screen(cx, ids!(voip_screen));
-            println!("hangup");
             voip_screen.hangup(cx);
         }
 

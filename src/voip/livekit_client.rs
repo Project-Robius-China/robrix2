@@ -92,12 +92,6 @@ impl LiveKitClient {
         let is_connected = self.is_connected.clone();
 
         std::thread::spawn(move || {
-            #[cfg(feature = "livekit")]
-            {
-                // Initialize env_logger for log::info!, log::error!, etc.
-                let _ = env_logger::try_init();
-            }
-
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 Self::run_event_loop(cmd_rx, msg_tx, is_connected).await;
@@ -107,7 +101,6 @@ impl LiveKitClient {
         msg_rx
     }
 
-    #[cfg(feature = "livekit")]
     async fn run_event_loop(
         mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
         msg_tx: mpsc::UnboundedSender<LiveKitMessage>,
@@ -142,38 +135,6 @@ impl LiveKitClient {
                         log!("LiveKit: WARNING - Token doesn't look like a JWT (expected 3 parts, got {})", jwt_parts.len());
                     } else {
                         log!("LiveKit: Token appears to be valid JWT format");
-                    }
-
-                    // First validate the RTC connection using Authorization header
-                    let validate_url = format!(
-                        "{}/rtc/validate?auto_subscribe=1&sdk=rust&version=0.7.36&protocol=16&adaptive_stream=1",
-                        url.replace("wss://", "https://").replace("ws://", "http://"),
-                    );
-
-                    log!("LiveKit: Validating RTC connection: {}", validate_url);
-
-                    let client = reqwest::Client::new();
-                    match client.get(&validate_url)
-                        .header("Authorization", format!("Bearer {}", token))
-                        .send()
-                        .await
-                    {
-                        Ok(response) => {
-                            let status = response.status();
-                            let body = response.text().await.unwrap_or_default();
-                            log!("LiveKit: RTC validation response: {} - {}", status, body);
-
-                            if !status.is_success() {
-                                log!("LiveKit: RTC validation failed: {} - {}", status, body);
-                                let _ = msg_tx.send(LiveKitMessage::Error(format!("RTC validation failed: {} - {}", status, body)));
-                                SignalToUI::set_ui_signal();
-                                continue;
-                            }
-                        }
-                        Err(e) => {
-                            log!("LiveKit: RTC validation request failed: {}", e);
-                            // Continue anyway - validation might not be required
-                        }
                     }
 
                     log!("LiveKit: Calling Room::connect with url={} and token length={}", url, token.len());
@@ -386,57 +347,6 @@ impl LiveKitClient {
                     } else {
                         log!("LiveKit: Cannot publish data: not connected to room");
                     }
-                }
-            }
-        }
-    }
-
-    #[cfg(not(feature = "livekit"))]
-    async fn run_event_loop(
-        mut cmd_rx: mpsc::UnboundedReceiver<LiveKitCommand>,
-        msg_tx: mpsc::UnboundedSender<LiveKitMessage>,
-        is_connected: Arc<Mutex<bool>>,
-    ) {
-        // Stub implementation - simulates LiveKit behavior
-        while let Some(cmd) = cmd_rx.recv().await {
-            match cmd {
-                LiveKitCommand::Connect { url, token: _ } => {
-                    log!("LiveKit (stub): Connecting to {}", url);
-
-                    // Simulate successful connection
-                    if let Ok(mut connected) = is_connected.lock() {
-                        *connected = true;
-                    }
-                    let _ = msg_tx.send(LiveKitMessage::Connected);
-                    SignalToUI::set_ui_signal();
-
-                    log!("LiveKit (stub): Connection simulated. Enable 'livekit' feature for real WebRTC.");
-                }
-                LiveKitCommand::Disconnect => {
-                    log!("LiveKit (stub): Disconnecting");
-                    if let Ok(mut connected) = is_connected.lock() {
-                        *connected = false;
-                    }
-                    let _ = msg_tx.send(LiveKitMessage::Disconnected);
-                    SignalToUI::set_ui_signal();
-                }
-                LiveKitCommand::SetMicrophoneMuted(muted) => {
-                    log!("LiveKit (stub): Set microphone muted: {}", muted);
-                }
-                LiveKitCommand::SetCameraMuted(muted) => {
-                    log!("LiveKit (stub): Set camera muted: {}", muted);
-                }
-                LiveKitCommand::StartScreenShare => {
-                    log!("LiveKit (stub): Starting screen share");
-                }
-                LiveKitCommand::StopScreenShare => {
-                    log!("LiveKit (stub): Stopping screen share");
-                }
-                LiveKitCommand::PublishVideoFrame(frame) => {
-                    log!("LiveKit (stub): Publishing video frame: {}x{}", frame.width, frame.height);
-                }
-                LiveKitCommand::PublishData { payload, reliable } => {
-                    log!("LiveKit (stub): Publishing data: {} bytes, reliable: {}", payload.len(), reliable);
                 }
             }
         }

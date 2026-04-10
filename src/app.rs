@@ -635,6 +635,9 @@ impl MatchEvent for App {
             log!("App::Startup: initializing TSP (Trust Spanning Protocol) module.");
             crate::tsp::tsp_init(_tokio_rt_handle).unwrap();
         }
+
+        // Initialize VoIP global state (camera permissions, video inputs)
+        VoipGlobalState::initialize(cx);
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {

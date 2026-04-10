@@ -79,11 +79,8 @@ serde_json = "1.0"
 thiserror = "2.0.16"
 tokio = { version = "1.43.1", features = ["macros", "rt-multi-thread"] }
 ## LiveKit WebRTC SDK - requires native libwebrtc build
-## Enable the "livekit" feature to use real WebRTC functionality
 ## rustls-tls-native-roots is required for WSS connections
-livekit = { version = "0.7", optional = true, features = ["rustls-tls-native-roots"] }
-env_logger = { version = "0.11", optional = true }
-log = { version = "0.4", optional = true }
+livekit = { version = "0.7", features = ["rustls-tls-native-roots"] }
 tracing-subscriber = "0.3.17"
 unicode-segmentation = "1.11.0"
 url = "2.5.0"
@@ -121,8 +118,6 @@ reqwest = { version = "0.12", default-features = false, optional = true, feature
 default = []
 ## Enables experimental support for using TSP wallets.
 tsp = ["dep:tsp_sdk", "dep:quinn", "dep:aws-lc-rs", "dep:percent-encoding"]
-## Enables real LiveKit WebRTC functionality. Requires native libwebrtc build.
-livekit = ["dep:livekit", "dep:env_logger", "dep:log"]
 
 ## Hides the command prompt console on Windows.
 hide_windows_console = []

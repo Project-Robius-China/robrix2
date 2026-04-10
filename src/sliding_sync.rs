@@ -4863,7 +4863,6 @@ async fn add_new_room(
     if subscribe {
         room_list_service.subscribe_to_rooms(&[&new_room.room_id]).await;
     }
-
     let timeline = Arc::new(
         new_room.room.timeline_builder()
             .with_focus(TimelineFocus::Live {

@@ -496,7 +496,7 @@ script_mod! {
                     height: Fit
                     draw_bg +: {
                         color: #4CAF50
-                        border_radius: 24.0
+                        border_radius: 4.0
                     }
                     draw_text +: {
                         color: #fff
