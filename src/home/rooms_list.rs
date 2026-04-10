@@ -585,6 +585,7 @@ impl RoomsList {
                     is_selected: false,
                     is_direct: false,
                     is_tombstoned: false,
+                    has_active_call: false,
                 });
             }
         }

@@ -3,7 +3,7 @@ use ruma::OwnedRoomId;
 use tokio::sync::Notify;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{app::{AppState, AppStateAction, SavedDockState, SelectedRoom}, home::{navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef, space_lobby::SpaceLobbyScreenWidgetRefExt}, logout::logout_confirm_modal::LogoutAction, sliding_sync::AccountSwitchAction, utils::RoomNameId};
+use crate::{app::{AppState, AppStateAction, SavedDockState, SelectedRoom}, home::{navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef, space_lobby::SpaceLobbyScreenWidgetRefExt}, logout::logout_confirm_modal::LogoutAction, sliding_sync::AccountSwitchAction, utils::RoomNameId, voip::{VoipAction, VoipGlobalState, VoipScreenWidgetRefExt}};
 use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::RoomScreenWidgetRefExt, rooms_list::RoomsListAction};
 
 script_mod! {
@@ -176,6 +176,10 @@ impl MainDesktopUI {
                     cx,
                     space_name_id,
                 );
+            }
+            SelectedRoom::Voip { room_name_id } => {
+                // VoIP tabs use VoipScreen directly, not RoomScreen
+                widget.as_voip_screen().initialize(cx, room_name_id.room_id().clone());
             }
         }
     }

@@ -1547,11 +1547,6 @@ impl AppMain for App {
             _ => {}
         }
 
-        // Poll stdin for VoIP commands
-        if self.stdin_poll_timer.is_event(event).is_some() {
-            self.poll_stdin(cx);
-        }
-
         // Forward events to the MatchEvent trait implementation.
         self.match_event(cx, event);
         let scope = &mut Scope::with_data(&mut self.app_state);
@@ -2406,6 +2401,25 @@ impl SelectedRoom {
             SelectedRoom::Space { space_name_id } => space_name_id,
             SelectedRoom::Thread { room_name_id, .. } => room_name_id,
             SelectedRoom::Voip { room_name_id } => room_name_id,
+        }
+    }
+
+    /// Returns the `TimelineKind` for this room, if applicable.
+    /// Returns `None` for invited rooms, spaces, and VoIP rooms which don't have timelines.
+    pub fn timeline_kind(&self) -> Option<TimelineKind> {
+        match self {
+            SelectedRoom::JoinedRoom { room_name_id } => {
+                Some(TimelineKind::MainRoom { room_id: room_name_id.room_id().clone() })
+            }
+            SelectedRoom::Thread { room_name_id, thread_root_event_id } => {
+                Some(TimelineKind::Thread {
+                    room_id: room_name_id.room_id().clone(),
+                    thread_root_event_id: thread_root_event_id.clone(),
+                })
+            }
+            SelectedRoom::InvitedRoom { .. } => None,
+            SelectedRoom::Space { .. } => None,
+            SelectedRoom::Voip { .. } => None,
         }
     }
 

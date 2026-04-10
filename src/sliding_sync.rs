@@ -3338,47 +3338,59 @@ async fn matrix_worker_task(
                     log!("LiveKit JWT request body: {}", serde_json::to_string_pretty(&request_body).unwrap_or_default());
 
                     // Make HTTP request to LiveKit JWT endpoint
-                    let http_client = reqwest::Client::new();
+                    let http_client = matrix_sdk::reqwest::Client::new();
+                    let request_body_str = serde_json::to_string(&request_body).unwrap_or_default();
                     match http_client
                         .post(jwt_endpoint)
                         .header("Content-Type", "application/json")
-                        .json(&request_body)
+                        .body(request_body_str)
                         .send()
                         .await
                     {
                         Ok(response) => {
                             if response.status().is_success() {
-                                match response.json::<serde_json::Value>().await {
-                                    Ok(json) => {
-                                        let url = json["url"].as_str().unwrap_or("").to_string();
-                                        let jwt = json["jwt"].as_str().unwrap_or("").to_string();
+                                match response.text().await {
+                                    Ok(text) => {
+                                        match serde_json::from_str::<serde_json::Value>(&text) {
+                                            Ok(json) => {
+                                                let url = json["url"].as_str().unwrap_or("").to_string();
+                                                let jwt = json["jwt"].as_str().unwrap_or("").to_string();
 
-                                        if !url.is_empty() && !jwt.is_empty() {
-                                            log!("LiveKit JWT fetched successfully, url: {}", url);
-                                            Cx::post_action(crate::voip::VoipAction::LiveKitJwtFetched {
-                                                room_id: room_id.clone(),
-                                                url,
-                                                jwt,
-                                            });
-                                        } else {
-                                            error!("LiveKit JWT response missing url or jwt");
-                                            Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
-                                                room_id: room_id.clone(),
-                                                error: "Invalid JWT response".to_string(),
-                                            });
+                                                if !url.is_empty() && !jwt.is_empty() {
+                                                    log!("LiveKit JWT fetched successfully, url: {}", url);
+                                                    Cx::post_action(crate::voip::VoipAction::LiveKitJwtFetched {
+                                                        room_id: room_id.clone(),
+                                                        url,
+                                                        jwt,
+                                                    });
+                                                } else {
+                                                    error!("LiveKit JWT response missing url or jwt");
+                                                    Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
+                                                        room_id: room_id.clone(),
+                                                        error: "Invalid JWT response".to_string(),
+                                                    });
+                                                }
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to parse LiveKit JWT response: {e:?}");
+                                                Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
+                                                    room_id: room_id.clone(),
+                                                    error: format!("Failed to parse JWT response: {e}"),
+                                                });
+                                            }
                                         }
                                     }
                                     Err(e) => {
-                                        error!("Failed to parse LiveKit JWT response: {e:?}");
+                                        error!("Failed to read LiveKit JWT response: {e:?}");
                                         Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
                                             room_id: room_id.clone(),
-                                            error: format!("Failed to parse JWT response: {e}"),
+                                            error: format!("Failed to read response: {e}"),
                                         });
                                     }
                                 }
                             } else {
                                 let status = response.status();
-                                let error_text = response.text().await.unwrap_or_default();
+                                let error_text = response.text().await.unwrap_or_else(|_| String::new());
                                 error!("LiveKit JWT request failed: {} - {}", status, error_text);
                                 Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
                                     room_id: room_id.clone(),
