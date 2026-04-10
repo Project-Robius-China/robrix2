@@ -56,7 +56,8 @@ script_mod! {
             height: Fit
             flow: Right
             align: Align{x: 0.0, y: 0.5}
-            spacing: (SPACE_SM)
+            spacing: (SPACE_XS)
+            padding: Inset{left: 6}
             margin: Inset{bottom: 2}
 
             app_service_switch := Toggle {
