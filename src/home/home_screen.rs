@@ -259,16 +259,6 @@ script_mod! {
                             add_room_screen := mod.widgets.AddRoomScreen {}
                         }
                     }
-
-                    // voip_page := SolidView {
-                    //     width: Fill, height: Fill
-                    //     show_bg: true,
-                    //     draw_bg.color: (COLOR_PRIMARY)
-
-                    //     CachedWidget {
-                    //         voip_screen := mod.widgets.VoipScreen {}
-                    //     }
-                    // }
                 }
             }
 
@@ -307,15 +297,6 @@ script_mod! {
                                 CachedWidget {
                                     settings_screen := mod.widgets.SettingsScreen {}
                                 }
-
-                                // voip_page := View {
-                                //     width: Fill, height: Fill
-                                //     padding: Inset{top: 20}
-
-                                //     CachedWidget {
-                                //         voip_screen := mod.widgets.VoipScreen {}
-                                //     }
-                                // }
                             }
 
                             add_room_page := View {
@@ -502,25 +483,6 @@ impl Widget for HomeScreen {
                             self.view.redraw(cx);
                         }
                     }
-                    // Some(NavigationBarAction::GoToVoip) => {
-                    //     if !matches!(app_state.selected_tab, SelectedTab::VoIP) {
-                    //         self.previous_selection = app_state.selected_tab.clone();
-                    //         app_state.selected_tab = SelectedTab::VoIP;
-                    //         cx.action(NavigationBarAction::TabSelected(app_state.selected_tab.clone()));
-                    //         if let Some(voip_page) = self.update_active_page_from_selection(cx, app_state) {
-                    //             let voip_screen = voip_page.voip_screen(cx, ids!(voip_screen));
-                    //             voip_screen.initialize(cx);
-                    //             // If a room_id was set from a call notification, pass it to the VoIP screen
-                    //             if let Some(room_id) = app_state.voip_room_id.take() {
-                    //                 log!("Setting VoIP room from call notification: {}", room_id);
-                    //                 voip_screen.set_room(cx, room_id);
-                    //             }
-                    //             self.view.redraw(cx);
-                    //         } else {
-                    //             error!("BUG: failed to set active page to show VoIP screen.");
-                    //         }
-                    //     }
-                    // }
                     Some(NavigationBarAction::ToggleSpacesBar) => {
                         self.is_spaces_bar_shown = !self.is_spaces_bar_shown;
                         self.view.spaces_bar_wrapper(cx, ids!(spaces_bar_wrapper))

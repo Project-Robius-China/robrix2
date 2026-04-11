@@ -1313,8 +1313,6 @@ impl MatchEvent for App {
                 continue;
             }
 
-            // Note: RtcCallAction::JoinCall is now handled via RoomsListAction::Selected(SelectedRoom::Voip)
-
             // Handle a request to show the generic positive confirmation modal.
             if let Some(PositiveConfirmationModalAction::Show(content_opt)) = action.downcast_ref() {
                 if let Some(content) = content_opt.borrow_mut().take() {
