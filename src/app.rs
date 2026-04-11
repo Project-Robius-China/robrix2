@@ -2263,16 +2263,15 @@ impl BotSettingsState {
 
     /// Returns `true` if new DM rooms for this target user should be encrypted.
     ///
-    /// BotFather DM rooms are created unencrypted so that appservice bots that do
-    /// not support E2EE can still receive and reply to messages.
+    /// New DM rooms are always created unencrypted so appservice bots can
+    /// receive and reply to messages without E2EE support.
     pub fn should_create_encrypted_dm(
         &self,
         target_user_id: &UserId,
         current_user_id: Option<&UserId>,
     ) -> bool {
-        self.resolved_bot_user_id(current_user_id)
-            .map(|bot_user_id| bot_user_id.as_str() != target_user_id.as_str())
-            .unwrap_or(true)
+        let _ = (target_user_id, current_user_id);
+        false
     }
 }
 
