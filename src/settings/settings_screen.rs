@@ -503,7 +503,7 @@ script_mod! {
 
                             contribute_repo_link := LinkLabel {
                                 width: Fit, height: Fit,
-                                padding: Inset{left: 6}
+                                padding: Inset{left: (LINK_LABEL_LEFT_PAD)}
                                 margin: 0
                                 spacing: 0,
                                 align: Align{x: 0.0}
@@ -558,7 +558,7 @@ script_mod! {
 
                             contribute_check_update_button := RobrixIconButton {
                                 width: Fit, height: Fit,
-                                margin: 0
+                                margin: Inset{left: (ICON_BUTTON_LEFT_PAD)}
                                 padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                                 spacing: 0,
                                 icon_walk: Walk{width: 0, height: 0, margin: 0}
