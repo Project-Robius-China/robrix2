@@ -89,9 +89,10 @@ script_mod! {
 
                 category_contribute_button := RobrixNeutralIconButton {
                     width: Fit, height: Fit,
-                    padding: Inset{top: 9, bottom: 9, left: 14, right: 14}
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
                     text: "Contribute"
                 }
             }
@@ -471,70 +472,98 @@ script_mod! {
                         visible: false
                         width: Fill, height: Fit
                         flow: Down
-                        spacing: 8
+                        spacing: (SPACE_SM)
 
-                        contribute_title := TitleLabel {
-                            text: "Contribute"
-                        }
-
-                        contribute_description := Label {
-                            width: Fill
-                            height: Fit
-                            flow: Flow.Right{wrap: true}
-                            margin: Inset{left: 5, right: 8, top: 1, bottom: 2}
-                            draw_text +: {
-                                color: (MESSAGE_TEXT_COLOR)
-                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                        RoundedView {
+                            width: Fill, height: Fit
+                            flow: Down
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+                            margin: Inset{top: (SPACE_XS)}
+                            show_bg: true
+                            draw_bg +: {
+                                color: #F8F8FA
+                                border_radius: (RADIUS_LG)
                             }
-                            text: "Contribute to Robrix on GitHub: https://github.com/Project-Robius-China/robrix2"
-                        }
 
-                        contribute_repo_link := LinkLabel {
-                            width: Fit, height: Fit,
-                            flow: Flow.Right{wrap: true},
-                            margin: Inset{left: 5, right: 8, top: 0, bottom: 4}
-                            draw_text +: {
-                                text_style: REGULAR_TEXT { font_size: 10.5 }
-                                color: #x0000EE,
-                                color_hover: (COLOR_LINK_HOVER),
+                            contribute_title := SubsectionLabel {
+                                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                                text: "Contribute"
                             }
-                            text: "https://github.com/Project-Robius-China/robrix2"
-                        }
 
-                        about_title := TitleLabel {
-                            text: "About Robrix"
-                        }
-
-                        about_description := Label {
-                            width: Fill
-                            height: Fit
-                            flow: Flow.Right{wrap: true}
-                            margin: Inset{left: 5, right: 8, top: 1, bottom: 2}
-                            draw_text +: {
-                                color: (MESSAGE_TEXT_COLOR)
-                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                            contribute_description := Label {
+                                width: Fill
+                                height: Fit
+                                flow: Flow.Right{wrap: true}
+                                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), top: 0, bottom: 2}
+                                draw_text +: {
+                                    color: (COLOR_DESCRIPTION_TEXT)
+                                    text_style: REGULAR_TEXT { font_size: 10.5 }
+                                }
+                                text: "Contribute to Robrix on GitHub: https://github.com/Project-Robius-China/robrix2"
                             }
-                            text: "Robrix is a multi-platform Matrix chat client built with Makepad and Robius."
-                        }
 
-                        contribute_current_version_label := Label {
-                            width: Fill
-                            height: Fit
-                            margin: Inset{left: 5, right: 8, top: 2, bottom: 3}
-                            draw_text +: {
-                                color: (MESSAGE_TEXT_COLOR)
-                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                            contribute_repo_link := LinkLabel {
+                                width: Fit, height: Fit,
+                                flow: Flow.Right{wrap: true},
+                                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), top: 0, bottom: 0}
+                                draw_text +: {
+                                    text_style: REGULAR_TEXT { font_size: 10.5 }
+                                    color: #x0000EE,
+                                    color_hover: (COLOR_LINK_HOVER),
+                                }
+                                text: "https://github.com/Project-Robius-China/robrix2"
                             }
-                            text: "Current version: 0.0.0"
                         }
 
-                        contribute_check_update_button := RobrixNeutralIconButton {
-                            width: Fit, height: Fit,
-                            margin: Inset{left: 5}
-                            padding: Inset{top: 9, bottom: 9, left: 14, right: 14}
-                            spacing: 0,
-                            icon_walk: Walk{width: 0, height: 0, margin: 0}
-                            text: "Check for Updates"
+                        RoundedView {
+                            width: Fill, height: Fit
+                            flow: Down
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+                            show_bg: true
+                            draw_bg +: {
+                                color: #F8F8FA
+                                border_radius: (RADIUS_LG)
+                            }
+
+                            about_title := SubsectionLabel {
+                                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                                text: "About Robrix"
+                            }
+
+                            about_description := Label {
+                                width: Fill
+                                height: Fit
+                                flow: Flow.Right{wrap: true}
+                                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), top: 0, bottom: 2}
+                                draw_text +: {
+                                    color: (COLOR_DESCRIPTION_TEXT)
+                                    text_style: REGULAR_TEXT { font_size: 10.5 }
+                                }
+                                text: "Robrix is a multi-platform Matrix chat client built with Makepad and Robius."
+                            }
+
+                            LineH { margin: Inset{top: (SPACE_SM), bottom: (SPACE_XS)} }
+
+                            contribute_current_version_label := Label {
+                                width: Fill
+                                height: Fit
+                                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), top: 0, bottom: 4}
+                                draw_text +: {
+                                    color: (MESSAGE_TEXT_COLOR)
+                                    text_style: REGULAR_TEXT { font_size: 10.5 }
+                                }
+                                text: "Current version: 0.0.0"
+                            }
+
+                            contribute_check_update_button := RobrixIconButton {
+                                width: Fit, height: Fit,
+                                margin: Inset{left: (SPACE_XS)}
+                                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                                spacing: 0,
+                                icon_walk: Walk{width: 0, height: 0, margin: 0}
+                                draw_bg +: { border_radius: (RADIUS_MD) }
+                                text: "Check for Updates"
+                            }
                         }
                     }
                 }
