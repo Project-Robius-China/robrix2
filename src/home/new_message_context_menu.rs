@@ -8,7 +8,7 @@ use matrix_sdk_ui::timeline::{EventTimelineItem, MsgLikeContent, TimelineEventIt
 
 use crate::{i18n::{AppLanguage, tr_key}, sliding_sync::UserPowerLevels};
 
-use super::room_screen::MessageAction;
+use super::{ContextMenuOpenGesture, consume_context_menu_opening_finger_up, room_screen::MessageAction};
 
 const BUTTON_HEIGHT: f64 = 35.0; // KEEP IN SYNC WITH BUTTON_HEIGHT BELOW
 const MENU_WIDTH: f64 = 215.0;   // KEEP IN SYNC WITH MENU_WIDTH BELOW
@@ -301,6 +301,7 @@ pub struct NewMessageContextMenu {
     #[source] source: ScriptObjectRef,
     #[rust] details: Option<MessageDetails>,
     #[rust] app_language: AppLanguage,
+    #[rust] pending_open_gesture: Option<ContextMenuOpenGesture>,
 }
 
 impl Widget for NewMessageContextMenu {
@@ -337,9 +338,15 @@ impl Widget for NewMessageContextMenu {
                     false
                 }
                 Hit::FingerUp(fue) if fue.is_over => {
-                    !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    if consume_context_menu_opening_finger_up(&mut self.pending_open_gesture, &fue) {
+                        false
+                    } else {
+                        !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    }
                 }
-                Hit::FingerScroll(_) => true,
+                // Ignore zero-scroll events: macOS trackpad generates FingerScroll(0,0)
+                // on two-finger press (right-click), which would incorrectly dismiss the menu.
+                Hit::FingerScroll(fse) => fse.scroll.x != 0.0 || fse.scroll.y != 0.0,
                 _ => false,
             }
         };
@@ -519,9 +526,10 @@ impl NewMessageContextMenu {
     ///
     /// Returns the expected (approximate) dimensions of the context menu,
     /// which can be used to proactively reposition it such that it fits on screen.
-    pub fn show(&mut self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage) -> DVec2 {
+    pub fn show(&mut self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage, opening_gesture: ContextMenuOpenGesture) -> DVec2 {
         self.set_app_language(cx, app_language);
         self.details = Some(details);
+        self.pending_open_gesture = Some(opening_gesture);
         self.visible = true;
         cx.set_key_focus(self.view.area());
 
@@ -641,6 +649,7 @@ impl NewMessageContextMenu {
     fn close(&mut self, cx: &mut Cx) {
         self.visible = false;
         self.details = None;
+        self.pending_open_gesture = None;
         cx.revert_key_focus();
         self.redraw(cx);
     }
@@ -654,8 +663,8 @@ impl NewMessageContextMenuRef {
     }
 
     /// See [`NewMessageContextMenu::show()`].
-    pub fn show(&self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage) -> DVec2 {
+    pub fn show(&self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage, opening_gesture: ContextMenuOpenGesture) -> DVec2 {
         let Some(mut inner) = self.borrow_mut() else { return DVec2::default()};
-        inner.show(cx, details, app_language)
+        inner.show(cx, details, app_language, opening_gesture)
     }
 }

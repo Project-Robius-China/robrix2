@@ -5,6 +5,9 @@
 
 Robrix is a Matrix chat client written in Rust to exemplify the features of [Project Robius](https://github.com/project-robius), a framework for multi-platform application development in Rust. Robrix is written using the [Makepad UI toolkit](https://github.com/makepad/makepad/).
 
+> [!TIP]
+> **Want to deploy Palpo and Octos, then use Robrix to chat with an AI bot?** Check out the [Documentation](docs/README.md) for guides on running [Palpo](https://github.com/palpo-im/palpo) (Matrix homeserver) + [Octos](https://github.com/octos-org/octos) (AI bot), understanding the App Service architecture, using Robrix as the client, and enabling federation. Quick links: [Deployment](docs/robrix-with-palpo-and-octos/01-deploying-palpo-and-octos.md) · [Architecture](docs/robrix-with-palpo-and-octos/02-how-robrix-palpo-octos-work-together.md) · [Usage](docs/robrix-with-palpo-and-octos/03-using-robrix-with-palpo-and-octos.md) · [Federation](docs/robrix-with-palpo-and-octos/04-federation-with-palpo.md)
+
 Check out our most recent talks and presentations for more info:
   * Robrix: a complex, multi-platform app in Rust for secure chat using Matrix ([Rust China Conf 2025](https://rustcc.cn/2025conf/schedule.html))
     * Videos: [YouTube link](https://www.youtube.com/watch?v=kB-JdmG5kE4), [BiliBili Link](https://www.bilibili.com/video/BV1XJnjzKEZQ)

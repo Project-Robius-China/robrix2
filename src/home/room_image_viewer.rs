@@ -2,9 +2,9 @@ use makepad_widgets::*;
 use matrix_sdk_ui::timeline::EventTimelineItem;
 use matrix_sdk::{
     media::MediaFormat,
+    reqwest::StatusCode,
     ruma::events::room::{message::MessageType, MediaSource},
 };
-use matrix_sdk::reqwest::StatusCode;
 
 use crate::{media_cache::{MediaCache, MediaCacheEntry}, shared::image_viewer::{ImageViewerAction, ImageViewerError, LoadState}};
 

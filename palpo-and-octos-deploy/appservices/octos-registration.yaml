@@ -1,0 +1,30 @@
+# Matrix Appservice Registration — Octos
+# ----------------------------------------
+# This file tells Palpo how to communicate with Octos.
+# Palpo auto-loads all .yaml files from the appservice directory on startup.
+#
+# IMPORTANT: as_token and hs_token MUST match the values in config/botfather.json.
+# For production, regenerate tokens with:  openssl rand -hex 32
+
+id: octos-matrix-appservice
+
+# URL where Palpo pushes events to Octos.
+# Uses Docker service name (not localhost) because both run in the same Docker network.
+url: "http://octos:8009"
+
+# Tokens for mutual authentication between Palpo and Octos.
+# These are pre-filled for local development. Replace for production!
+as_token: "d1f46062a08e4833b18286d95c5e09a5f3e4a1b2c3d4e5f6a7b8c9d0e1f2a3b4"
+hs_token: "e2a57173b19f5944c29397ea6d6f1ab6a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9"
+
+sender_localpart: octosbot
+rate_limited: false
+
+namespaces:
+  users:
+    - exclusive: true
+      regex: "@octosbot_.*:127\\.0\\.0\\.1:8128"
+    - exclusive: true
+      regex: "@octosbot:127\\.0\\.0\\.1:8128"
+  aliases: []
+  rooms: []

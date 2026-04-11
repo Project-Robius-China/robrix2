@@ -21,7 +21,7 @@ script_mod! {
         height: Fit
         draw_text +: {
             text_style: REGULAR_TEXT { font_size: 10.5 }
-            color: #333
+            color: #666
         }
         text: ""
     }
@@ -36,7 +36,7 @@ script_mod! {
             align: Align{x: 0.5}
             flow: Down
             padding: Inset{top: 28, right: 24, bottom: 20, left: 24}
-            spacing: 16
+            spacing: 18
 
             show_bg: true
             draw_bg +: {
@@ -48,7 +48,7 @@ script_mod! {
                 width: Fill
                 height: Fit
                 draw_text +: {
-                    text_style: TITLE_TEXT { font_size: 13 }
+                    text_style: TITLE_TEXT { font_size: 14 }
                     color: #000
                 }
                 text: "Manage Room Bots"
@@ -63,12 +63,12 @@ script_mod! {
                 height: Fit
                 flow: Down
                 spacing: 12
-                padding: 14
+                padding: 16
 
                 show_bg: true
                 draw_bg +: {
-                    color: (COLOR_SECONDARY)
-                    border_radius: 4.0
+                    color: #F5F5F7
+                    border_radius: 6.0
                 }
 
                 current_room_bots_label := mod.widgets.BotBindingModalLabel {
@@ -78,6 +78,26 @@ script_mod! {
                 current_room_bots_dropdown := DropDownFlat {
                     width: Fill
                     height: 40
+                    align: Align{y: 0.5}
+                    padding: Inset{left: 12, top: 11, bottom: 11, right: 30}
+                    draw_text +: {
+                        text_style: REGULAR_TEXT { font_size: 11.5 }
+                        color: #333
+                        color_hover: uniform(#222)
+                        color_focus: uniform(#222)
+                        color_down: uniform(#222)
+                    }
+                    draw_bg +: {
+                        color: uniform(#fff)
+                        color_hover: uniform(#F0F0F2)
+                        color_focus: uniform(#F0F0F2)
+                        color_down: uniform(#E8E8EA)
+                        border_color: uniform(#CCC)
+                        border_color_hover: uniform(#AAA)
+                        border_color_focus: uniform((COLOR_ACTIVE_PRIMARY))
+                        arrow_color: uniform(#888)
+                        arrow_color_hover: uniform(#555)
+                    }
                     labels: ["No bots currently added"]
                 }
 
@@ -88,6 +108,26 @@ script_mod! {
                 known_bots_dropdown := DropDownFlat {
                     width: Fill
                     height: 40
+                    align: Align{y: 0.5}
+                    padding: Inset{left: 12, top: 11, bottom: 11, right: 30}
+                    draw_text +: {
+                        text_style: REGULAR_TEXT { font_size: 11.5 }
+                        color: #333
+                        color_hover: uniform(#222)
+                        color_focus: uniform(#222)
+                        color_down: uniform(#222)
+                    }
+                    draw_bg +: {
+                        color: uniform(#fff)
+                        color_hover: uniform(#F0F0F2)
+                        color_focus: uniform(#F0F0F2)
+                        color_down: uniform(#E8E8EA)
+                        border_color: uniform(#CCC)
+                        border_color_hover: uniform(#AAA)
+                        border_color_focus: uniform((COLOR_ACTIVE_PRIMARY))
+                        arrow_color: uniform(#888)
+                        arrow_color_hover: uniform(#555)
+                    }
                     labels: ["Custom bot user ID"]
                 }
 
@@ -98,7 +138,7 @@ script_mod! {
                 user_id_input := RobrixTextInput {
                     width: Fill
                     height: Fit
-                    padding: 10
+                    padding: 12
                     draw_text +: {
                         text_style: REGULAR_TEXT { font_size: 11.5 }
                         color: #000
@@ -113,7 +153,7 @@ script_mod! {
                 remark_input := RobrixTextInput {
                     width: Fill
                     height: Fit
-                    padding: 10
+                    padding: 12
                     draw_text +: {
                         text_style: REGULAR_TEXT { font_size: 11.5 }
                         color: #000
@@ -153,10 +193,10 @@ script_mod! {
                 height: Fit
                 flow: Right
                 align: Align{x: 1.0, y: 0.5}
-                spacing: 12
+                spacing: 14
 
                 cancel_button := RobrixNeutralIconButton {
-                    width: 110
+                    width: 100
                     align: Align{x: 0.5, y: 0.5}
                     padding: 12
                     draw_icon.svg: (ICON_FORBIDDEN)
@@ -165,7 +205,7 @@ script_mod! {
                 }
 
                 unbind_button := RobrixNegativeIconButton {
-                    width: 128
+                    width: 120
                     align: Align{x: 0.5, y: 0.5}
                     padding: 12
                     draw_icon.svg: (ICON_CLOSE)
@@ -174,7 +214,7 @@ script_mod! {
                 }
 
                 bind_button := RobrixPositiveIconButton {
-                    width: 128
+                    width: 120
                     align: Align{x: 0.5, y: 0.5}
                     padding: 12
                     draw_icon.svg: (ICON_ADD_USER)

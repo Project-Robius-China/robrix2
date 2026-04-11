@@ -1,7 +1,9 @@
 
 use makepad_widgets::*;
 
-use crate::{app::{AppState, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr}, persistence, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}, styles::{apply_neutral_button_style, apply_primary_button_style}}, sliding_sync::current_user_id};
+use crate::{app::{AppState, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}, styles::{apply_neutral_button_style, apply_primary_button_style}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
+
+const CONTRIBUTE_REPO_URL: &str = "https://github.com/Project-Robius-China/robrix2";
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -83,6 +85,14 @@ script_mod! {
                     draw_bg +: { border_radius: (RADIUS_MD) }
                     text: "Labs"
                 }
+
+                category_contribute_button := RobrixNeutralIconButton {
+                    width: Fit, height: Fit,
+                    padding: Inset{top: 9, bottom: 9, left: 14, right: 14}
+                    spacing: 0,
+                    icon_walk: Walk{width: 0, height: 0, margin: 0}
+                    text: "Contribute"
+                }
             }
 
             ScrollXYView {
@@ -133,7 +143,7 @@ script_mod! {
                                 width: 200, height: Fit
                                 flow: Right
                                 align: Align{y: 0.5}
-                                padding: Inset{left: (SPACE_MD), right: 10, top: 10, bottom: 10}
+                                padding: Inset{left: (SPACE_MD), right: (SPACE_SM), top: (SPACE_SM), bottom: (SPACE_SM)}
                                 margin: Inset{left: (SPACE_XS), top: 2, bottom: 2}
                             cursor: MouseCursor.Hand
                             show_bg: true
@@ -165,7 +175,7 @@ script_mod! {
                             visible: false
                             width: 200, height: Fit
                             flow: Down
-                            padding: Inset{top: 4, bottom: 4}
+                            padding: Inset{top: (SPACE_XS), bottom: (SPACE_XS)}
                             show_bg: true
                             new_batch: true
                             draw_bg +: {
@@ -179,7 +189,7 @@ script_mod! {
                                 width: Fill, height: 36
                                 flow: Right
                                 align: Align{y: 0.5}
-                                padding: Inset{left: 12, right: 12}
+                                padding: Inset{left: (SPACE_MD), right: (SPACE_MD)}
                                 cursor: MouseCursor.Hand
                                 show_bg: true
                                 draw_bg +: { color: #0000 }
@@ -196,7 +206,7 @@ script_mod! {
                                 width: Fill, height: 36
                                 flow: Right
                                 align: Align{y: 0.5}
-                                padding: Inset{left: 12, right: 12}
+                                padding: Inset{left: (SPACE_MD), right: (SPACE_MD)}
                                 cursor: MouseCursor.Hand
                                 show_bg: true
                                 draw_bg +: { color: #0000 }
@@ -214,7 +224,7 @@ script_mod! {
                             preferences_language_hint_label := Label {
                                 width: Fill
                                 height: Fit
-                                margin: Inset{left: (SPACE_XS), right: (SPACE_SM), top: 3, bottom: (SPACE_XS)}
+                                margin: Inset{left: (SPACE_XS), right: (SPACE_SM), top: (SPACE_XS), bottom: (SPACE_XS)}
                                 draw_text +: {
                                     color: (MESSAGE_TEXT_COLOR)
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
@@ -270,6 +280,77 @@ script_mod! {
                             tsp_settings_screen := TspSettingsScreen {}
                         }
                     }
+
+                    contribute_settings_section := View {
+                        visible: false
+                        width: Fill, height: Fit
+                        flow: Down
+                        spacing: 8
+
+                        contribute_title := TitleLabel {
+                            text: "Contribute"
+                        }
+
+                        contribute_description := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            margin: Inset{left: 5, right: 8, top: 1, bottom: 2}
+                            draw_text +: {
+                                color: (MESSAGE_TEXT_COLOR)
+                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                            }
+                            text: "Contribute to Robrix on GitHub: https://github.com/Project-Robius-China/robrix2"
+                        }
+
+                        contribute_repo_link := LinkLabel {
+                            width: Fit, height: Fit,
+                            flow: Flow.Right{wrap: true},
+                            margin: Inset{left: 5, right: 8, top: 0, bottom: 4}
+                            draw_text +: {
+                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                                color: #x0000EE,
+                                color_hover: (COLOR_LINK_HOVER),
+                            }
+                            text: "https://github.com/Project-Robius-China/robrix2"
+                        }
+
+                        about_title := TitleLabel {
+                            text: "About Robrix"
+                        }
+
+                        about_description := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            margin: Inset{left: 5, right: 8, top: 1, bottom: 2}
+                            draw_text +: {
+                                color: (MESSAGE_TEXT_COLOR)
+                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                            }
+                            text: "Robrix is a multi-platform Matrix chat client built with Makepad and Robius."
+                        }
+
+                        contribute_current_version_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{left: 5, right: 8, top: 2, bottom: 3}
+                            draw_text +: {
+                                color: (MESSAGE_TEXT_COLOR)
+                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                            }
+                            text: "Current version: 0.0.0"
+                        }
+
+                        contribute_check_update_button := RobrixNeutralIconButton {
+                            width: Fit, height: Fit,
+                            margin: Inset{left: 5}
+                            padding: Inset{top: 9, bottom: 9, left: 14, right: 14}
+                            spacing: 0,
+                            icon_walk: Walk{width: 0, height: 0, margin: 0}
+                            text: "Check for Updates"
+                        }
+                    }
                 }
             }
         }
@@ -297,6 +378,12 @@ enum SettingsCategory {
     Account,
     Preferences,
     Labs,
+    Contribute,
+}
+
+#[derive(Debug)]
+enum SettingsUpdateAction {
+    CheckFinished(UpdateCheckOutcome),
 }
 
 /// The top-level widget showing all app and user settings/preferences.
@@ -307,6 +394,7 @@ pub struct SettingsScreen {
     #[rust] selected_category: SettingsCategory,
     #[rust] app_language: AppLanguage,
     #[rust] language_popup_visible: bool,
+    #[rust] is_update_checking: bool,
 }
 
 impl Widget for SettingsScreen {
@@ -405,6 +493,41 @@ impl Widget for SettingsScreen {
             else if self.view.button(cx, ids!(category_labs_button)).clicked(actions) {
                 self.set_selected_category(cx, SettingsCategory::Labs);
             }
+            else if self.view.button(cx, ids!(category_contribute_button)).clicked(actions) {
+                self.set_selected_category(cx, SettingsCategory::Contribute);
+            }
+
+            if !self.is_update_checking && (
+                self.view.button(cx, ids!(contribute_check_update_button)).clicked(actions)
+            ) {
+                self.set_update_checking(cx, true);
+                cx.spawn_thread(move || {
+                    let result = check_for_updates();
+                    Cx::post_action(SettingsUpdateAction::CheckFinished(result));
+                });
+            }
+
+            for action in actions {
+                if let HtmlLinkAction::Clicked { url, .. } = action.as_widget_action().cast() {
+                    if url == CONTRIBUTE_REPO_URL {
+                        if let Err(e) = robius_open::Uri::new(&url).open() {
+                            error!("Failed to open URL {:?}. Error: {:?}", url, e);
+                            enqueue_popup_notification(
+                                tr_fmt(self.app_language, "room_screen.popup.open_url_failed", &[("url", url.as_str())]),
+                                PopupKind::Error,
+                                Some(10.0),
+                            );
+                        }
+                    }
+                }
+                match action.downcast_ref() {
+                    Some(SettingsUpdateAction::CheckFinished(result)) => {
+                        self.set_update_checking(cx, false);
+                        self.show_update_check_result(result);
+                    }
+                    None => { }
+                }
+            }
 
             #[cfg(feature = "tsp")]
             {
@@ -475,6 +598,9 @@ impl SettingsScreen {
             .button(cx, ids!(category_labs_button))
             .set_text(cx, tr(self.app_language, I18nKey::SettingsCategoryLabs));
         self.view
+            .button(cx, ids!(category_contribute_button))
+            .set_text(cx, tr(self.app_language, I18nKey::SettingsCategoryContribute));
+        self.view
             .label(cx, ids!(preferences_language_title))
             .set_text(cx, tr(self.app_language, I18nKey::LanguageTitle));
         self.view
@@ -493,6 +619,24 @@ impl SettingsScreen {
         self.view
             .translation_settings(cx, ids!(translation_settings))
             .set_app_language(cx, self.app_language);
+        self.view
+            .label(cx, ids!(contribute_title))
+            .set_text(cx, tr_key(self.app_language, "settings.contribute.title"));
+        self.view
+            .label(cx, ids!(contribute_description))
+            .set_text(cx, tr_key(self.app_language, "settings.contribute.description"));
+        let contribute_repo_link = self.view.link_label(cx, ids!(contribute_repo_link));
+        contribute_repo_link.set_text(cx, CONTRIBUTE_REPO_URL);
+        if let Some(mut contribute_repo_link) = contribute_repo_link.borrow_mut() {
+            contribute_repo_link.url = CONTRIBUTE_REPO_URL.to_string();
+        }
+        self.view
+            .label(cx, ids!(about_title))
+            .set_text(cx, tr_key(self.app_language, "settings.about.title"));
+        self.view
+            .label(cx, ids!(about_description))
+            .set_text(cx, tr_key(self.app_language, "settings.about.description"));
+        self.sync_update_widgets_text(cx);
         self.view.redraw(cx);
     }
 
@@ -517,14 +661,17 @@ impl SettingsScreen {
         let show_account = self.selected_category == SettingsCategory::Account;
         let show_preferences = self.selected_category == SettingsCategory::Preferences;
         let show_labs = self.selected_category == SettingsCategory::Labs;
+        let show_contribute = self.selected_category == SettingsCategory::Contribute;
 
         self.view.view(cx, ids!(account_settings_section)).set_visible(cx, show_account);
         self.view.view(cx, ids!(preferences_settings_section)).set_visible(cx, show_preferences);
         self.view.view(cx, ids!(labs_settings_section)).set_visible(cx, show_labs);
+        self.view.view(cx, ids!(contribute_settings_section)).set_visible(cx, show_contribute);
 
         let mut category_account_button = self.view.button(cx, ids!(category_account_button));
         let mut category_preferences_button = self.view.button(cx, ids!(category_preferences_button));
         let mut category_labs_button = self.view.button(cx, ids!(category_labs_button));
+        let mut category_contribute_button = self.view.button(cx, ids!(category_contribute_button));
 
         if show_account {
             apply_primary_button_style(cx, &mut category_account_button);
@@ -541,11 +688,87 @@ impl SettingsScreen {
         } else {
             apply_neutral_button_style(cx, &mut category_labs_button);
         }
+        if show_contribute {
+            apply_primary_button_style(cx, &mut category_contribute_button);
+        } else {
+            apply_neutral_button_style(cx, &mut category_contribute_button);
+        }
 
         category_account_button.reset_hover(cx);
         category_preferences_button.reset_hover(cx);
         category_labs_button.reset_hover(cx);
+        category_contribute_button.reset_hover(cx);
         self.view.redraw(cx);
+    }
+
+    fn set_update_checking(&mut self, cx: &mut Cx, is_update_checking: bool) {
+        self.is_update_checking = is_update_checking;
+        self.sync_update_widgets_text(cx);
+        self.view.redraw(cx);
+    }
+
+    fn sync_update_widgets_text(&mut self, cx: &mut Cx) {
+        let current_version_text = tr_fmt(self.app_language, "settings.update.current_version", &[
+            ("version", env!("CARGO_PKG_VERSION")),
+        ]);
+        self.view
+            .label(cx, ids!(contribute_current_version_label))
+            .set_text(cx, &current_version_text);
+        let check_button_text = if self.is_update_checking {
+            tr_key(self.app_language, "settings.update.button.checking")
+        } else {
+            tr_key(self.app_language, "settings.update.button.check")
+        };
+        self.view
+            .button(cx, ids!(contribute_check_update_button))
+            .set_text(cx, check_button_text);
+    }
+
+    fn show_update_check_result(&mut self, result: &UpdateCheckOutcome) {
+        match result {
+            UpdateCheckOutcome::UpToDate { current_version } => {
+                enqueue_popup_notification(
+                    tr_fmt(self.app_language, "settings.update.popup.latest", &[
+                        ("version", current_version.as_str()),
+                    ]),
+                    PopupKind::Info,
+                    Some(4.0),
+                );
+            }
+            UpdateCheckOutcome::UpdateAvailable { current_version, latest_version } => {
+                enqueue_popup_notification(
+                    tr_fmt(self.app_language, "settings.update.popup.available", &[
+                        ("latest", latest_version.as_str()),
+                        ("current", current_version.as_str()),
+                    ]),
+                    PopupKind::Warning,
+                    Some(5.0),
+                );
+            }
+            UpdateCheckOutcome::NotConfigured => {
+                enqueue_popup_notification(
+                    tr_key(self.app_language, "settings.update.popup.not_configured"),
+                    PopupKind::Warning,
+                    Some(4.0),
+                );
+            }
+            UpdateCheckOutcome::UnsupportedPlatform => {
+                enqueue_popup_notification(
+                    tr_key(self.app_language, "settings.update.popup.unsupported"),
+                    PopupKind::Warning,
+                    Some(4.0),
+                );
+            }
+            UpdateCheckOutcome::Error(error) => {
+                enqueue_popup_notification(
+                    tr_fmt(self.app_language, "settings.update.popup.failed", &[
+                        ("error", error.as_str()),
+                    ]),
+                    PopupKind::Error,
+                    Some(6.0),
+                );
+            }
+        }
     }
 
     /// Fetches the current user's profile and uses it to populate the settings screen.
@@ -558,6 +781,7 @@ impl SettingsScreen {
         self.view.bot_settings(cx, ids!(bot_settings)).populate(cx, bot_settings);
         self.view.translation_settings(cx, ids!(translation_settings)).populate(cx, translation_config);
         self.set_app_language(cx, app_language);
+        self.set_update_checking(cx, false);
         self.set_selected_category(cx, SettingsCategory::Account);
         self.view.button(cx, ids!(close_button)).reset_hover(cx);
         cx.set_key_focus(self.view.area());

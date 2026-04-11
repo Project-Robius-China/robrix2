@@ -9,7 +9,7 @@ keywords = ["matrix", "chat", "client", "robius", "makepad"]
 license = "MIT"
 readme = "README.md"
 categories = ["gui"]
-repository = "https://github.com/project-robius/robrix"
+repository = "https://github.com/Project-Robius-China/robrix2"
 version = "0.0.1-pre-alpha-4"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
@@ -84,6 +84,8 @@ url = "2.5.0"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 rfd = "0.15"
+cargo-packager-updater = "0.2"
+semver = "1"
 ## nokhwa camera capture - only for desktop platforms (core-video-sys doesn't work on iOS)
 nokhwa = { version = "0.10", features = ["input-native"] }
 

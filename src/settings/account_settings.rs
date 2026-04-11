@@ -51,7 +51,7 @@ script_mod! {
                 our_own_avatar := Avatar {
                     width: 100,
                     height: 100,
-                    margin: 10,
+                    margin: (SPACE_SM),
                     text_view +: {
                         text +: {
                             draw_text +: {
@@ -77,7 +77,7 @@ script_mod! {
                         upload_avatar_button := RobrixIconButton {
                             width: 140,
                             height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
-                            padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                             margin: 0,
                             draw_bg +: { border_radius: (RADIUS_MD) }
                             draw_icon.svg: (ICON_UPLOAD)
@@ -101,7 +101,7 @@ script_mod! {
                         delete_avatar_button := RobrixNegativeIconButton {
                             width: 140,
                             height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
-                            padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                             margin: 0,
                             draw_bg +: { border_radius: (RADIUS_MD) }
                             draw_icon.svg: (ICON_TRASH)
@@ -155,7 +155,7 @@ script_mod! {
                 cancel_display_name_button := RobrixNeutralIconButton {
                     enabled: false,
                     width: Fit, height: Fit,
-                    padding: 10,
+                    padding: (SPACE_SM),
                     margin: Inset{left: (SPACE_XS)},
                     draw_icon.svg: (ICON_FORBIDDEN)
                     icon_walk: Walk{width: 16, height: 16, margin: 0}
@@ -165,7 +165,7 @@ script_mod! {
                 accept_display_name_button := RobrixPositiveIconButton {
                     enabled: false,
                     width: Fit, height: Fit,
-                    padding: 10,
+                    padding: (SPACE_SM),
                     margin: Inset{left: (SPACE_XS)},
                     draw_bg.border_radius: (RADIUS_MD)
                     draw_icon.svg: (ICON_CHECKMARK)
@@ -175,7 +175,7 @@ script_mod! {
 
                 save_name_spinner := LoadingSpinner {
                     width: 16, height: 16
-                    margin: Inset{left: 5, top: 13} // vertically center with buttons
+                    margin: Inset{left: (SPACE_XS), top: 13} // vertically center with buttons
                     visible: false
                     draw_bg.color: (COLOR_ACTIVE_PRIMARY)
                 }
@@ -277,7 +277,7 @@ script_mod! {
             // Other accounts section (populated dynamically)
             other_accounts_label := Label {
                 width: Fill, height: Fit
-                margin: Inset{top: (SPACE_XS), left: 2}
+                margin: Inset{top: (SPACE_XS), left: (SPACE_XS)}
                 visible: false
                 draw_text +: {
                     color: (MESSAGE_TEXT_COLOR),
@@ -319,7 +319,7 @@ script_mod! {
 
                 switch_account_button := RobrixIconButton {
                     width: Fit, height: Fit
-                    padding: Inset{top: 6, bottom: 6, left: 10, right: 10}
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM), right: (SPACE_SM)}
                     draw_icon.svg: (ICON_JUMP)
                     icon_walk: Walk{width: 14, height: 14}
                     text: "Switch"
@@ -338,7 +338,7 @@ script_mod! {
 
             add_account_button := RobrixIconButton {
                 width: Fit,
-                padding: Inset{top: 10, bottom: 10, left: (SPACE_MD), right: 15}
+                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                 margin: Inset{top: (SPACE_XS)}
                 draw_bg +: { border_radius: (RADIUS_MD) }
                 draw_icon.svg: (ICON_ADD)
@@ -361,7 +361,7 @@ script_mod! {
             margin: Inset{bottom: (SPACE_LG)}
 
             manage_account_button := RobrixIconButton {
-                padding: Inset{top: 10, bottom: 10, left: (SPACE_MD), right: 15}
+                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                 margin: Inset{left: (SPACE_XS)}
                 draw_bg +: { border_radius: (RADIUS_MD) }
                 draw_icon.svg: (ICON_EXTERNAL_LINK)
@@ -370,7 +370,7 @@ script_mod! {
             }
 
             logout_button := RobrixNegativeIconButton {
-                padding: Inset{top: 10, bottom: 10, left: (SPACE_MD), right: 15}
+                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                 margin: Inset{left: (SPACE_XS)}
                 draw_bg +: { border_radius: (RADIUS_MD) }
                 draw_icon.svg: (ICON_LOGOUT)

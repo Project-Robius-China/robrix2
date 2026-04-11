@@ -937,10 +937,10 @@ impl MatchEvent for App {
             }
 
             // Handle an action requesting to open the new message context menu.
-            if let MessageAction::OpenMessageContextMenu { details, abs_pos } = action.as_widget_action().cast() {
+            if let MessageAction::OpenMessageContextMenu { details, abs_pos, opening_gesture } = action.as_widget_action().cast() {
                 self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
                 let new_message_context_menu = self.ui.new_message_context_menu(cx, ids!(new_message_context_menu));
-                let expected_dimensions = new_message_context_menu.show(cx, details, self.app_state.app_language);
+                let expected_dimensions = new_message_context_menu.show(cx, details, self.app_state.app_language, opening_gesture);
                 // Use the overlay container's rect (not the window's) to correctly position
                 // the context menu relative to the body area, which excludes the caption bar.
                 let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);
@@ -961,10 +961,10 @@ impl MatchEvent for App {
             }
 
             // Handle an action requesting to open the room context menu.
-            if let RoomsListAction::OpenRoomContextMenu { details, pos } = action.as_widget_action().cast() {
+            if let RoomsListAction::OpenRoomContextMenu { details, pos, opening_gesture } = action.as_widget_action().cast() {
                 self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
                 let room_context_menu = self.ui.room_context_menu(cx, ids!(room_context_menu));
-                let expected_dimensions = room_context_menu.show(cx, details, self.app_state.app_language);
+                let expected_dimensions = room_context_menu.show(cx, details, self.app_state.app_language, opening_gesture);
                 // Use the overlay container's rect (not the window's) to correctly position
                 // the context menu relative to the body area, which excludes the caption bar.
                 let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);

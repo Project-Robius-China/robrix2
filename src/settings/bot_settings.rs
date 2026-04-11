@@ -14,7 +14,7 @@ script_mod! {
     mod.widgets.BotSettingsInfoLabel = Label {
         width: Fill
         height: Fit
-        margin: Inset{left: (SPACE_XS), top: 2, bottom: 2}
+        margin: Inset{top: 2, bottom: 2}
         draw_text +: {
             color: (MESSAGE_TEXT_COLOR)
             text_style: REGULAR_TEXT { font_size: 10.5 }
@@ -33,7 +33,7 @@ script_mod! {
             height: Fit
             flow: Down
             spacing: (SPACE_XS)
-            margin: Inset{left: (SPACE_XS), right: (SPACE_SM), bottom: 2}
+            margin: Inset{bottom: 2}
 
             app_service_title := TitleLabel {
                 width: Fit
@@ -56,8 +56,9 @@ script_mod! {
             height: Fit
             flow: Right
             align: Align{x: 0.0, y: 0.5}
-            spacing: (SPACE_SM)
-            margin: Inset{left: (SPACE_XS), bottom: 2}
+            spacing: (SPACE_XS)
+            padding: Inset{left: 6}
+            margin: Inset{bottom: 2}
 
             app_service_switch := Toggle {
                 width: Fit

@@ -26,6 +26,7 @@ use matrix_sdk::{RoomState, ruma::{events::tag::Tags, MilliSecondsSinceUnixEpoch
 use crate::{
     app::{AppState, SelectedRoom},
     home::{
+        ContextMenuOpenGesture,
         add_room::CreateRoomAction,
         navigation_tab_bar::{NavigationBarAction, SelectedTab},
         room_context_menu::RoomContextMenuDetails,
@@ -257,6 +258,7 @@ pub enum RoomsListAction {
     OpenRoomContextMenu {
         details: RoomContextMenuDetails,
         pos: DVec2,
+        opening_gesture: ContextMenuOpenGesture,
     },
     #[default]
     None,
@@ -1358,7 +1360,7 @@ impl Widget for RoomsList {
                 self.redraw(cx);
             }
             // Handle a room being right-clicked or long-pressed by opening the room context menu.
-            else if let RoomsListEntryAction::SecondaryClicked(room_id, pos) = action.as_widget_action().cast() {
+            else if let RoomsListEntryAction::SecondaryClicked(room_id, pos, opening_gesture) = action.as_widget_action().cast() {
                 // Determine details for the context menu
                 let Some(jr) = self.all_joined_rooms.get(&room_id) else {
                     error!("BUG: couldn't find right-clicked room details for room {room_id}");
@@ -1375,7 +1377,7 @@ impl Widget for RoomsList {
                 };
                 cx.widget_action(
                     self.widget_uid(), 
-                    RoomsListAction::OpenRoomContextMenu { details, pos },
+                    RoomsListAction::OpenRoomContextMenu { details, pos, opening_gesture },
                 );
             }
             // Handle the space lobby being clicked.

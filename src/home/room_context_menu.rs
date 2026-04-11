@@ -5,6 +5,8 @@ use makepad_widgets::*;
 use matrix_sdk::ruma::OwnedRoomId;
 use crate::{app::AppState, home::{bot_binding_modal::BotBindingModalAction, invite_modal::InviteModalAction}, i18n::{AppLanguage, tr_key}, shared::popup_list::{PopupKind, enqueue_popup_notification}, sliding_sync::{MatrixRequest, submit_async_request}, utils::RoomNameId};
 
+use super::{ContextMenuOpenGesture, consume_context_menu_opening_finger_up};
+
 const BUTTON_HEIGHT: f64 = 35.0;
 const MENU_WIDTH: f64 = 215.0;
 
@@ -148,6 +150,7 @@ pub struct RoomContextMenu {
     #[source] source: ScriptObjectRef,
     #[rust] details: Option<RoomContextMenuDetails>,
     #[rust] app_language: AppLanguage,
+    #[rust] pending_open_gesture: Option<ContextMenuOpenGesture>,
 }
 
 impl Widget for RoomContextMenu {
@@ -177,9 +180,15 @@ impl Widget for RoomContextMenu {
             || match event.hits_with_capture_overload(cx, area, true) {
                 Hit::KeyUp(key) => key.key_code == KeyCode::Escape,
                 Hit::FingerUp(fue) if fue.is_over => {
-                     !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    if consume_context_menu_opening_finger_up(&mut self.pending_open_gesture, &fue) {
+                        false
+                    } else {
+                        !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    }
                 }
-                 Hit::FingerScroll(_) => true,
+                // Ignore zero-scroll events: macOS trackpad generates FingerScroll(0,0)
+                // on two-finger press (right-click), which would incorrectly dismiss the menu.
+                Hit::FingerScroll(fse) => fse.scroll.x != 0.0 || fse.scroll.y != 0.0,
                 _ => false,
             }
         };
@@ -276,10 +285,11 @@ impl RoomContextMenu {
         self.visible
     }
 
-    pub fn show(&mut self, cx: &mut Cx, details: RoomContextMenuDetails, app_language: AppLanguage) -> DVec2 {
+    pub fn show(&mut self, cx: &mut Cx, details: RoomContextMenuDetails, app_language: AppLanguage, opening_gesture: ContextMenuOpenGesture) -> DVec2 {
         self.app_language = app_language;
         let height = self.update_buttons(cx, &details);
         self.details = Some(details);
+        self.pending_open_gesture = Some(opening_gesture);
         self.visible = true;
         cx.set_key_focus(self.view.area());
         dvec2(MENU_WIDTH, height)
@@ -343,6 +353,7 @@ impl RoomContextMenu {
     fn close(&mut self, cx: &mut Cx) {
         self.visible = false;
         self.details = None;
+        self.pending_open_gesture = None;
         cx.revert_key_focus();
         self.redraw(cx);
     }
@@ -354,8 +365,8 @@ impl RoomContextMenuRef {
         inner.is_currently_shown(cx)
     }
 
-    pub fn show(&self, cx: &mut Cx, details: RoomContextMenuDetails, app_language: AppLanguage) -> DVec2 {
+    pub fn show(&self, cx: &mut Cx, details: RoomContextMenuDetails, app_language: AppLanguage, opening_gesture: ContextMenuOpenGesture) -> DVec2 {
         let Some(mut inner) = self.borrow_mut() else { return DVec2::default()};
-        inner.show(cx, details, app_language)
+        inner.show(cx, details, app_language, opening_gesture)
     }
 }

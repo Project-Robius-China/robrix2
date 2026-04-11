@@ -272,9 +272,15 @@ jobs:
         env:
           CARGO_PACKAGER_SIGNING_KEY: ${{ secrets.CARGO_PACKAGER_SIGNING_KEY }}
           CARGO_PACKAGER_SIGNING_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGNING_PASSWORD }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY || secrets.CARGO_PACKAGER_SIGNING_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD || secrets.CARGO_PACKAGER_SIGNING_PASSWORD }}
+          ROBRIX_UPDATER_PUBKEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
+          ROBRIX_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
         with:
           github_token: ${{ secrets.ROBRIX_RELEASE }}
           packager_formats: deb
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
           releaseId: ${{ needs.create_release.outputs.release_id }}
 
   for_macos:
@@ -296,6 +302,10 @@ jobs:
         env:
           CARGO_PACKAGER_SIGNING_KEY: ${{ secrets.CARGO_PACKAGER_SIGNING_KEY }}
           CARGO_PACKAGER_SIGNING_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGNING_PASSWORD }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY || secrets.CARGO_PACKAGER_SIGNING_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD || secrets.CARGO_PACKAGER_SIGNING_PASSWORD }}
+          ROBRIX_UPDATER_PUBKEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
+          ROBRIX_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
@@ -305,6 +315,8 @@ jobs:
           github_token: ${{ secrets.ROBRIX_RELEASE }}
           packager_formats: dmg
           enable_macos_notarization: true
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
           releaseId: ${{ needs.create_release.outputs.release_id }}
 
   for_windows:
@@ -326,9 +338,15 @@ jobs:
         env:
           CARGO_PACKAGER_SIGNING_KEY: ${{ secrets.CARGO_PACKAGER_SIGNING_KEY }}
           CARGO_PACKAGER_SIGNING_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGNING_PASSWORD }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY || secrets.CARGO_PACKAGER_SIGNING_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD || secrets.CARGO_PACKAGER_SIGNING_PASSWORD }}
+          ROBRIX_UPDATER_PUBKEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
+          ROBRIX_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
         with:
           github_token: ${{ secrets.ROBRIX_RELEASE }}
           packager_formats: nsis
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
           releaseId: ${{ needs.create_release.outputs.release_id }}
 
   for_android:

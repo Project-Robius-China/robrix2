@@ -81,6 +81,7 @@ pub mod space_service_sync;
 pub mod avatar_cache;
 pub mod media_cache;
 pub mod verification;
+pub mod updater;
 
 pub mod utils;
 /// Multi-account management for supporting multiple Matrix accounts simultaneously.

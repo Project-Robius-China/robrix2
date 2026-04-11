@@ -25,7 +25,7 @@ script_mod! {
             height: Fit
             flow: Down
             spacing: (SPACE_XS)
-            margin: Inset{left: (SPACE_XS), right: (SPACE_SM), bottom: 2}
+            margin: Inset{bottom: 2}
 
             translation_title := TitleLabel {
                 width: Fit
@@ -49,8 +49,9 @@ script_mod! {
             height: Fit
             flow: Right
             align: Align{x: 0.0, y: 0.5}
-            spacing: (SPACE_SM)
-            margin: Inset{left: (SPACE_XS), bottom: 2}
+            spacing: (SPACE_XS)
+            padding: Inset{left: 6}
+            margin: Inset{bottom: 2}
 
             translation_switch := Toggle {
                 width: Fit
@@ -83,7 +84,7 @@ script_mod! {
             height: Fit
             flow: Down
             spacing: (SPACE_SM)
-            margin: Inset{left: (SPACE_XS), right: (SPACE_SM)}
+            margin: 0
 
             View {
                 width: Fill, height: Fit

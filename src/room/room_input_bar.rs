@@ -1081,6 +1081,10 @@ impl RoomInputBar {
                     #[cfg(feature = "tsp")]
                     sign_with_tsp: self.is_tsp_signing_enabled(cx),
                 });
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    MessageAction::MessageSubmittedLocally,
+                );
 
                 self.clear_replying_to(cx);
                 location_preview.clear();
@@ -1144,6 +1148,10 @@ impl RoomInputBar {
                     #[cfg(feature = "tsp")]
                     sign_with_tsp: self.is_tsp_signing_enabled(cx),
                 });
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    MessageAction::MessageSubmittedLocally,
+                );
 
                 self.clear_replying_to(cx);
                 mentionable_text_input.set_text(cx, "");

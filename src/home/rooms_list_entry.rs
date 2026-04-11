@@ -10,7 +10,7 @@ use crate::{
     }, utils::{self, relative_format}
 };
 
-use super::rooms_list::{InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListScopeProps};
+use super::{ContextMenuOpenGesture, rooms_list::{InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListScopeProps}};
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
@@ -242,7 +242,7 @@ pub enum RoomsListEntryAction {
     /// This RoomsListEntry was primary-clicked or tapped.
     PrimaryClicked(OwnedRoomId),
     /// This RoomsListEntry was right-clicked or long-pressed.
-    SecondaryClicked(OwnedRoomId, DVec2),
+    SecondaryClicked(OwnedRoomId, DVec2, ContextMenuOpenGesture),
     #[default]
     None,
 }
@@ -281,14 +281,22 @@ impl Widget for RoomsListEntry {
                     if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) {
                         cx.widget_action(
                             uid, 
-                            RoomsListEntryAction::SecondaryClicked(room_id.clone(), fe.abs),
+                            RoomsListEntryAction::SecondaryClicked(
+                                room_id.clone(),
+                                fe.abs,
+                                ContextMenuOpenGesture::from_finger_down(&fe),
+                            ),
                         );
                     }
                 }
                 Hit::FingerLongPress(fe) => {
                     cx.widget_action(
                         uid, 
-                        RoomsListEntryAction::SecondaryClicked(room_id.clone(), fe.abs),
+                        RoomsListEntryAction::SecondaryClicked(
+                            room_id.clone(),
+                            fe.abs,
+                            ContextMenuOpenGesture::from_long_press(&fe),
+                        ),
                     );
                 }
                 Hit::FingerUp(fe) if !rooms_list_props.was_scrolling && fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
