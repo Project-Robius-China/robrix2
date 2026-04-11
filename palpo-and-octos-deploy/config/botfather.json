@@ -6,6 +6,7 @@
     "provider": "deepseek",
     "model": "deepseek-chat",
     "api_key_env": "DEEPSEEK_API_KEY",
+    "admin_mode": true,
     "channels": [
       {
         "type": "matrix",
