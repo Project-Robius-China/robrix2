@@ -226,7 +226,7 @@ script_mod! {
                             preferences_language_hint_label := Label {
                                 width: Fill
                                 height: Fit
-                                margin: Inset{left: (SPACE_XS), right: (SPACE_SM), top: (SPACE_XS), bottom: (SPACE_XS)}
+                                margin: Inset{right: (SPACE_SM), top: (SPACE_XS), bottom: (SPACE_XS)}
                                 draw_text +: {
                                     color: (MESSAGE_TEXT_COLOR)
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
@@ -268,28 +268,16 @@ script_mod! {
                             }
 
                             preferences_proxy_use_toggle := Toggle {
-                                width: 52, height: 28
+                                width: Fit
+                                height: Fit
+                                padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
                                 text: ""
                                 active: false
-                                icon_walk: Walk{width: 0, height: 0, margin: 0}
-                                label_walk: Walk{width: 0, height: 0, margin: 0}
                                 draw_bg +: {
-                                    size: 18.0
-                                    color: #E3E7EF
-                                    color_hover: #E3E7EF
-                                    color_down: #D5DBE6
+                                    size: 20.0
                                     color_active: (COLOR_ACTIVE_PRIMARY)
-                                    border_radius: 14.0
-                                    border_size: 1.5
-                                    border_color: #7E879A
-                                    border_color_hover: #7E879A
-                                    border_color_down: #6F788D
-                                    border_color_active: (COLOR_ACTIVE_PRIMARY_DARKER)
-                                    mark_color: #2D3A57
-                                    mark_color_hover: #2D3A57
-                                    mark_color_down: #2D3A57
-                                    mark_color_active: #FFFFFF
-                                    mark_color_active_hover: #FFFFFF
+                                    border_color_active: (COLOR_ACTIVE_PRIMARY)
+                                    mark_color_active: #fff
                                 }
                             }
                         }
