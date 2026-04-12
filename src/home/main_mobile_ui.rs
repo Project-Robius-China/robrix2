@@ -116,6 +116,14 @@ impl Widget for MainMobileUI {
                     .room_screen(cx, ids!(room_screen))
                     .set_displayed_room(cx, room_name_id, Some(thread_root_event_id.clone()));
             }
+            Some(SelectedRoom::Voip { room_name_id }) => {
+                show_welcome = false;
+                show_room = true; // VoIP uses RoomScreen with VoIP as main content
+                show_invite = false;
+                show_space_lobby = false;
+                let room_screen = self.view.room_screen(cx, ids!(room_screen));
+                room_screen.set_voip_visible(cx, true, Some(room_name_id.room_id().clone()));
+            }
             None => {
                 show_welcome = true;
                 show_room = false;

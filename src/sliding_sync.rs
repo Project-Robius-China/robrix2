@@ -32,7 +32,19 @@ use matrix_sdk_ui::{
     RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails}
 };
 use robius_open::Uri;
-use ruma::{OwnedRoomOrAliasId, RoomId, events::tag::Tags};
+use ruma::{
+    OwnedRoomOrAliasId, RoomId,
+    api::client::account::request_openid_token,
+    events::{
+        tag::Tags,
+        call::member::{
+            CallMemberEventContent, CallMemberStateKey,
+            Application, CallApplicationContent, CallScope,
+            Focus, LivekitFocus,
+            ActiveFocus, ActiveLivekitFocus, FocusSelection,
+        },
+    },
+};
 use tokio::{
     runtime::Handle,
     sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, watch, Notify}, task::JoinHandle, time::error::Elapsed,
@@ -1033,6 +1045,31 @@ pub enum MatrixRequest {
         on_fetched: OnLinkPreviewFetchedFn,
         destination: Arc<Mutex<crate::home::link_preview::TimestampedCacheEntry>>,
         update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
+    },
+    /// Send a call member state event to join a call (MSC3401).
+    SendCallMemberState {
+        room_id: OwnedRoomId,
+        call_type: crate::voip::call_state::CallType,
+    },
+    /// Send an empty call member state event to leave a call (MSC3401).
+    SendEndCallState {
+        room_id: OwnedRoomId,
+    },
+    /// Fetch call member state events to get list of participants in the call (MSC3401).
+    GetCallMembers {
+        room_id: OwnedRoomId,
+    },
+    /// Fetch OpenID token from Matrix homeserver (for LiveKit authentication).
+    FetchOpenIdToken {
+        room_id: OwnedRoomId,
+    },
+    /// Fetch LiveKit JWT using OpenID token.
+    FetchLiveKitJwt {
+        room_id: OwnedRoomId,
+        access_token: String,
+        token_type: String,
+        matrix_server_name: String,
+        expires_in: u64,
     },
 }
 
@@ -3088,6 +3125,304 @@ async fn matrix_worker_task(
                     SignalToUI::set_ui_signal();
                 });
             }
+
+            MatrixRequest::SendCallMemberState { room_id, call_type: _ } => {
+                let Some(client) = get_client() else { continue };
+                let _send_call_member_task = Handle::current().spawn(async move {
+                    log!("Sending call member state for room {room_id}...");
+
+                    let Some(room) = client.get_room(&room_id) else {
+                        error!("Room {room_id} not found for call member state");
+                        return;
+                    };
+
+                    let Some(session) = client.session_meta() else {
+                        error!("No session metadata available for call member state");
+                        return;
+                    };
+                    let user_id = session.user_id.clone();
+                    let device_id = session.device_id.clone();
+
+                    // LiveKit service URL (Element Call uses this)
+                    let livekit_service_url = "https://livekit-jwt.call.matrix.org";
+
+                    // Build the call application content
+                    let call_app = CallApplicationContent::new(
+                        String::new(),  // call_id: empty for room-scoped calls
+                        CallScope::Room,
+                    );
+
+                    // Build the active focus (LiveKit with oldest_membership selection)
+                    let mut active_livekit = ActiveLivekitFocus::new();
+                    active_livekit.focus_selection = FocusSelection::OldestMembership;
+                    let focus_active = ActiveFocus::Livekit(active_livekit);
+
+                    // Build the preferred foci list
+                    let foci_preferred = vec![
+                        Focus::Livekit(LivekitFocus::new(
+                            room_id.to_string(),           // alias
+                            livekit_service_url.to_string(), // service_url
+                        ))
+                    ];
+
+                    // Build the call member event content using typed API (MSC3401)
+                    let content = CallMemberEventContent::new(
+                        Application::Call(call_app),
+                        device_id.clone(),
+                        focus_active,
+                        foci_preferred,
+                        None,  // created_ts: will be set by server
+                        Some(Duration::from_secs(7200)),  // expires: 2 hours
+                    );
+
+                    // Build the state key using typed API
+                    let state_key = CallMemberStateKey::new(
+                        user_id.clone(),
+                        Some(format!("{}_m.call", device_id)),
+                        true,  // use underscore prefix
+                    );
+
+                    // Send the typed state event
+                    match room.send_state_event_for_key(&state_key, content).await {
+                        Ok(response) => {
+                            log!("Successfully sent call member state, event_id: {}", response.event_id);
+                            // Notify UI that call member state was sent
+                            Cx::post_action(crate::voip::VoipAction::CallMemberStateSent {
+                                room_id: room_id.clone(),
+                                success: true,
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to send call member state: {e:?}");
+                            Cx::post_action(crate::voip::VoipAction::CallMemberStateSent {
+                                room_id: room_id.clone(),
+                                success: false,
+                            });
+                        }
+                    }
+                    SignalToUI::set_ui_signal();
+                });
+            }
+
+            MatrixRequest::SendEndCallState { room_id } => {
+                let Some(client) = get_client() else { continue };
+                let _send_end_call_task = Handle::current().spawn(async move {
+                    log!("Sending end call state for room {room_id}...");
+
+                    let Some(room) = client.get_room(&room_id) else {
+                        error!("Room {room_id} not found for end call state");
+                        return;
+                    };
+
+                    let Some(session) = client.session_meta() else {
+                        error!("No session metadata available for end call state");
+                        return;
+                    };
+                    let user_id = session.user_id.clone();
+                    let device_id = session.device_id.clone();
+
+                    // Build empty content to leave the call
+                    let content = CallMemberEventContent::new_empty(None);
+
+                    // Build the state key using typed API
+                    let state_key = CallMemberStateKey::new(
+                        user_id.clone(),
+                        Some(format!("{}_m.call", device_id)),
+                        true,  // use underscore prefix
+                    );
+
+                    match room.send_state_event_for_key(&state_key, content).await {
+                        Ok(response) => {
+                            log!("Successfully sent end call state, event_id: {}", response.event_id);
+                        }
+                        Err(e) => {
+                            error!("Failed to send end call state: {e:?}");
+                        }
+                    }
+                    SignalToUI::set_ui_signal();
+                });
+            }
+
+            MatrixRequest::GetCallMembers { room_id } => {
+                let Some(client) = get_client() else { continue };
+                let _get_call_members_task = Handle::current().spawn(async move {
+                    log!("Fetching call members for room {room_id}...");
+
+                    let Some(room) = client.get_room(&room_id) else {
+                        error!("Room {room_id} not found for get call members");
+                        return;
+                    };
+
+                    // Use RoomInfo::active_room_call_participants() for simpler API
+                    let participants = room.active_room_call_participants();
+                    log!("Found {} active room call participants", participants.len());
+
+                    let mut members = Vec::new();
+                    for user_id in participants {
+                        // Get display name for the user
+                        let display_name = room.get_member_no_sync(&user_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|m| m.display_name().map(|n| n.to_string()));
+
+                        log!("Active call participant: {}", user_id);
+
+                        members.push(crate::voip::CallMember {
+                            user_id: user_id.to_string(),
+                            device_id: String::new(), // Not available from this API
+                            display_name,
+                        });
+                    }
+
+                    log!("Total active call members: {}", members.len());
+                    Cx::post_action(crate::voip::VoipAction::CallMembersUpdated {
+                        room_id: room_id.clone(),
+                        members,
+                    });
+                    SignalToUI::set_ui_signal();
+                });
+            }
+
+            MatrixRequest::FetchOpenIdToken { room_id } => {
+                let Some(client) = get_client() else { continue };
+                let _fetch_openid_task = Handle::current().spawn(async move {
+                    log!("Fetching OpenID token for room {room_id}...");
+
+                    // Get the user ID for the OpenID request
+                    let user_id = client.user_id().expect("Client should have user_id").to_owned();
+
+                    // Use the Matrix SDK to get an OpenID token via direct API call
+                    // This corresponds to POST /_matrix/client/v3/user/{userId}/openid/request_token
+                    match client.send(request_openid_token::v3::Request::new(user_id)).await {
+                        Ok(response) => {
+                            log!("OpenID token fetched successfully");
+                            log!("  matrix_server_name: {}", response.matrix_server_name);
+                            log!("  expires_in: {:?}", response.expires_in);
+
+                            // Convert expires_in Duration to seconds
+                            let expires_in_secs = response.expires_in.as_secs();
+
+                            Cx::post_action(crate::voip::VoipAction::OpenIdTokenFetched {
+                                room_id: room_id.clone(),
+                                access_token: response.access_token,
+                                token_type: "Bearer".to_string(),
+                                matrix_server_name: response.matrix_server_name.to_string(),
+                                expires_in: expires_in_secs,
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to fetch OpenID token: {e:?}");
+                            Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
+                                room_id: room_id.clone(),
+                                error: format!("Failed to fetch OpenID token: {e}"),
+                            });
+                        }
+                    }
+                    SignalToUI::set_ui_signal();
+                });
+            }
+
+            MatrixRequest::FetchLiveKitJwt { room_id, access_token, token_type, matrix_server_name, expires_in } => {
+                let _fetch_jwt_task = Handle::current().spawn(async move {
+                    log!("Fetching LiveKit JWT for room {room_id}...");
+
+                    // LiveKit JWT endpoint (external service, not Matrix API)
+                    // POST https://livekit-jwt.call.matrix.org/sfu/get
+                    let jwt_endpoint = "https://livekit-jwt.call.matrix.org/sfu/get";
+
+                    // Get device_id from client
+                    let device_id = get_client()
+                        .and_then(|c| c.session_meta().map(|m| m.device_id.to_string()))
+                        .unwrap_or_default();
+
+                    // Build the request body matching webrtc example format
+                    // JwtRequest { room, openid_token: OpenIdToken, device_id }
+                    let request_body = serde_json::json!({
+                        "room": room_id.as_str(),
+                        "openid_token": {
+                            "access_token": access_token,
+                            "token_type": token_type,
+                            "matrix_server_name": matrix_server_name,
+                            "expires_in": expires_in,
+                        },
+                        "device_id": device_id,
+                    });
+
+                    log!("LiveKit JWT request body: {}", serde_json::to_string_pretty(&request_body).unwrap_or_default());
+
+                    // Make HTTP request to LiveKit JWT endpoint
+                    let http_client = matrix_sdk::reqwest::Client::new();
+                    let request_body_str = serde_json::to_string(&request_body).unwrap_or_default();
+                    match http_client
+                        .post(jwt_endpoint)
+                        .header("Content-Type", "application/json")
+                        .body(request_body_str)
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            if response.status().is_success() {
+                                match response.text().await {
+                                    Ok(text) => {
+                                        match serde_json::from_str::<serde_json::Value>(&text) {
+                                            Ok(json) => {
+                                                let url = json["url"].as_str().unwrap_or("").to_string();
+                                                let jwt = json["jwt"].as_str().unwrap_or("").to_string();
+
+                                                if !url.is_empty() && !jwt.is_empty() {
+                                                    log!("LiveKit JWT fetched successfully, url: {}", url);
+                                                    Cx::post_action(crate::voip::VoipAction::LiveKitJwtFetched {
+                                                        room_id: room_id.clone(),
+                                                        url,
+                                                        jwt,
+                                                    });
+                                                } else {
+                                                    error!("LiveKit JWT response missing url or jwt");
+                                                    Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
+                                                        room_id: room_id.clone(),
+                                                        error: "Invalid JWT response".to_string(),
+                                                    });
+                                                }
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to parse LiveKit JWT response: {e:?}");
+                                                Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
+                                                    room_id: room_id.clone(),
+                                                    error: format!("Failed to parse JWT response: {e}"),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to read LiveKit JWT response: {e:?}");
+                                        Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
+                                            room_id: room_id.clone(),
+                                            error: format!("Failed to read response: {e}"),
+                                        });
+                                    }
+                                }
+                            } else {
+                                let status = response.status();
+                                let error_text = response.text().await.unwrap_or_else(|_| String::new());
+                                error!("LiveKit JWT request failed: {} - {}", status, error_text);
+                                Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
+                                    room_id: room_id.clone(),
+                                    error: format!("JWT request failed: {status}"),
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to fetch LiveKit JWT: {e:?}");
+                            Cx::post_action(crate::voip::VoipAction::LiveKitConnectionFailed {
+                                room_id: room_id.clone(),
+                                error: format!("Network error: {e}"),
+                            });
+                        }
+                    }
+                    SignalToUI::set_ui_signal();
+                });
+            }
         }
     }
 
@@ -3453,6 +3788,7 @@ struct RoomListServiceRoomInfo {
     is_direct: bool,
     is_marked_unread: bool,
     is_tombstoned: bool,
+    has_active_call: bool,
     tags: Option<Tags>,
     user_power_levels: Option<UserPowerLevels>,
     latest_event_timestamp: Option<MilliSecondsSinceUnixEpoch>,
@@ -3484,6 +3820,7 @@ impl RoomListServiceRoomInfo {
             is_direct: is_direct.unwrap_or(false),
             is_marked_unread: room.is_marked_unread(),
             is_tombstoned: room.is_tombstoned(),
+            has_active_call: room.has_active_room_call(),
             tags: tags.ok().flatten(),
             user_power_levels,
             latest_event_timestamp: room.latest_event_timestamp(),
@@ -4390,6 +4727,18 @@ async fn update_room(
                 });
             }
 
+            if old_room.has_active_call != new_room.has_active_call {
+                log!("Updating room {} has_active_call from {} to {}",
+                    new_room_id,
+                    old_room.has_active_call,
+                    new_room.has_active_call,
+                );
+                enqueue_rooms_list_update(RoomsListUpdate::UpdateActiveCall {
+                    room_id: new_room_id.clone(),
+                    has_active_call: new_room.has_active_call,
+                });
+            }
+
             let mut __timeline_update_sender_opt = None;
             let mut get_timeline_update_sender = |room_id| {
                 if __timeline_update_sender_opt.is_none() {
@@ -4530,7 +4879,6 @@ async fn add_new_room(
     if subscribe {
         room_list_service.subscribe_to_rooms(&[&new_room.room_id]).await;
     }
-
     let timeline = Arc::new(
         new_room.room.timeline_builder()
             .with_focus(TimelineFocus::Live {
@@ -4600,6 +4948,7 @@ async fn add_new_room(
         is_selected: false,
         is_direct: new_room.is_direct,
         is_tombstoned: new_room.is_tombstoned,
+        has_active_call: new_room.has_active_call,
     }));
 
     Cx::post_action(AppStateAction::RoomLoadedSuccessfully {

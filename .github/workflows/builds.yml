@@ -123,9 +123,16 @@ jobs:
         with:
           key: macos-${{ matrix.arch }}-build-${{ hashFiles('Cargo.lock') }}
 
+      - name: Install LLVM
+        run: brew install llvm
+
       - name: Build
         env:
           RUSTFLAGS: "-D warnings"
+          # Use Homebrew LLVM for C++ compilation to avoid cxx contiguous_range
+          # static_assert issue with Apple's libc++
+          CXX: ${{ matrix.arch == 'arm64' && '/opt/homebrew/opt/llvm/bin/clang++' || '/usr/local/opt/llvm/bin/clang++' }}
+          CC: ${{ matrix.arch == 'arm64' && '/opt/homebrew/opt/llvm/bin/clang' || '/usr/local/opt/llvm/bin/clang' }}
         run: |
           cargo build --profile fast
 

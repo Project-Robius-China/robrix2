@@ -62,6 +62,8 @@ pub mod shared;
 /// Generating text previews of timeline events/messages.
 mod event_preview;
 pub mod room;
+/// VoIP call screen and related functionality.
+pub mod voip;
 
 
 /// All content related to TSP (Trust Spanning Protocol) wallets/identities.

@@ -22,7 +22,8 @@ pub mod unread_badge;
 pub mod verification_badge;
 pub mod restore_status_view;
 pub mod image_viewer;
-
+pub mod webcam_capture;
+pub mod webrtc_video;
 
 pub fn script_mod(vm: &mut ScriptVm) {
     // Order matters here, as some widget definitions depend on others.
@@ -48,4 +49,6 @@ pub fn script_mod(vm: &mut ScriptVm) {
     image_viewer::script_mod(vm);
     progress_bar::script_mod(vm);
     file_upload_modal::script_mod(vm);
+    webrtc_video::script_mod(vm);
+    webcam_capture::script_mod(vm);
 }
