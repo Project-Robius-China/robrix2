@@ -85,7 +85,21 @@ Log in to Robrix using the alice account you registered above:
 | Password | `test1234` |
 | **Homeserver** | `http://localhost:6002` |
 
-After login: New Direct Message → `@bot:palpo-1:8448` → send `hello` → bot replies.
+After logging in, click the **＋** button in the left nav bar to open **Add/Explore Rooms and Spaces**. **Matrix user-directory search is scoped to each homeserver**, so you *cannot* find the palpo-1 bot via the search box -- use the middle **Add a friend** panel instead:
+
+![Robrix Add a friend panel](../images/robrix-add-friend.png)
+
+1. In the **Add a friend** input, enter the bot's full MXID: `@bot:palpo-1:8448`
+2. Click **Add friend** -- Robrix creates a DM room through the palpo-2 → palpo-1 federation channel
+3. Open the new room, send `hello`, and wait for the bot to reply
+
+> **Why must you go through "Add a friend" instead of searching?**
+>
+> Matrix's user-directory search (`/user_directory/search`) **only indexes users known to the local homeserver**. palpo-2 was just started and only knows alice -- it has **no record of any palpo-1 user**, so the search box will never find `@bot` no matter what you type.
+>
+> "Add a friend" directly invokes `/createRoom` + `invite`: when palpo-2 receives the invite request, it **actively issues a federation request** to palpo-1 to verify the MXID exists and accepts invitations -- this is the **only correct entry point** for creating a cross-federation DM.
+>
+> This constraint is not Robrix-specific -- Element, SchildiChat, and every other Matrix client work the same way: full MXID + invite, never search.
 
 **A successful reply confirms all three legs work: federation handshake, AppService forwarding, and the Octos LLM backend.**
 
@@ -591,15 +605,19 @@ Open Robrix. On the login screen:
 
 ### 6.4 Send a message to the bot
 
-After login succeeds:
+After login succeeds, click the **＋** button in the left nav bar to open **Add/Explore Rooms and Spaces**:
 
-1. Click **New Direct Message**
-2. Enter the bot's full MXID: `@bot:palpo-1:8448`
-3. Robrix detects this is a federated user and creates a cross-server DM room
-4. Send a message, e.g. `hello`
+![Robrix Add a friend panel](../images/robrix-add-friend.png)
+
+1. In the middle **Add a friend** section (not the *Create a new room* section at the top), enter the bot's full MXID: `@bot:palpo-1:8448`
+2. Click the **Add friend** button
+3. Robrix detects a federated user and creates a DM room through the palpo-2 → palpo-1 federation channel
+4. Open the new room and send `hello`
 5. Wait for the bot's reply (generated via DeepSeek)
 
 If everything is wired up, you should see the bot's reply within seconds. **This is the complete federation + AppService pipeline.**
+
+> **Why not use the search box?** Matrix's `/user_directory/search` only indexes **users known to the local homeserver** -- palpo-2 has never interacted with the palpo-1 bot, so the search returns nothing. "Add a friend" directly triggers `/createRoom` + `invite`, after which the server issues a federation request to look up the MXID on palpo-1 -- that is the correct cross-federation DM path.
 
 ---
 

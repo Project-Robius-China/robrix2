@@ -85,9 +85,23 @@ curl -s "http://localhost:6002/_matrix/client/v3/profile/@bot:palpo-1:8448" \
 | Password | `test1234` |
 | **Homeserver** | `http://localhost:6002` |
 
-登录后 New Direct Message → `@bot:palpo-1:8448` → 发 `hello` → 等 bot 回复。
+登录后，点击左侧导航栏的 **＋** 按钮打开 **Add/Explore Rooms and Spaces** 页面。**Matrix 的用户目录搜索只覆盖本服务器**，所以你搜不到 palpo-1 上的 bot -- 要走中间的 **Add a friend** 这条路：
 
-**如果这一步成功，说明：联邦握手、AppService 转发、Octos bot 回复这三条链路全部打通了。**
+![Robrix Add a friend 面板](../images/robrix-add-friend.png)
+
+1. 在 **Add a friend** 输入框里填入 bot 的完整 MXID：`@bot:palpo-1:8448`
+2. 点击 **Add friend** 按钮 -- Robrix 会通过 palpo-2 → palpo-1 的联邦通道创建 DM 房间
+3. 进入新创建的房间，发送 `hello`，等 bot 回复
+
+> **为什么必须从 "Add a friend" 走，而不是搜索？**
+>
+> Matrix 的用户目录搜索（`/user_directory/search`）**只索引本服务器已知的用户**。palpo-2 刚起来只有 alice 自己，**不认识任何 palpo-1 上的用户**，所以不管在搜索框里怎么搜都找不到 `@bot`。
+>
+> "Add a friend" 直接调用 `/createRoom` + `invite`：palpo-2 收到邀请请求后会**主动发起联邦请求**去 palpo-1 验证这个 MXID 存在、是否可邀请 -- 这是跨联邦建立 DM 的**唯一正确入口**。
+>
+> 这个限制不是 Robrix 特有的 -- Element、SchildiChat 等所有 Matrix 客户端跨联邦聊天都得这样：输入完整 MXID + 发起邀请，而不是搜索。
+
+**如果 bot 回复了消息，说明：联邦握手、AppService 转发、Octos bot 回复这三条链路全部打通了。**
 
 ---
 
@@ -591,15 +605,19 @@ curl -s "http://localhost:6002/_matrix/client/v3/profile/@bot:palpo-1:8448" \
 
 ### 6.4 给机器人发消息
 
-登录成功后：
+登录成功后，从左侧导航栏点 **＋** 进入 **Add/Explore Rooms and Spaces** 页面：
 
-1. 点击 **New Direct Message**（新建直接消息）
-2. 输入机器人的完整 MXID：`@bot:palpo-1:8448`
-3. Robrix 会自动检测到这是联邦用户，创建跨服务器的 DM 房间
-4. 发送一条消息，比如 `hello`
-5. 等待机器人通过 DeepSeek 生成并返回回复
+![Robrix Add a friend 面板](../images/robrix-add-friend.png)
+
+1. 在中间的 **Add a friend** 区域（不是顶部的 *Create a new room*），输入机器人的完整 MXID：`@bot:palpo-1:8448`
+2. 点击 **Add friend** 按钮
+3. Robrix 识别出这是联邦用户，会走 palpo-2 → palpo-1 的联邦通道创建 DM 房间
+4. 进入新房间，发送 `hello`
+5. 等机器人通过 DeepSeek 生成并返回回复
 
 如果一切正常，你会在几秒内看到机器人的回复。**这就是跨联邦 + AppService 完整链路**。
+
+> **为什么不用搜索框找 bot？** Matrix 的 `/user_directory/search` 只索引**当前 homeserver 已知的用户** -- palpo-2 上还没人和 palpo-1 的 bot 有过交互，所以搜索不到。"Add a friend" 直接触发 `/createRoom` + `invite`，服务器会主动发联邦请求去 palpo-1 查这个 MXID -- 这才是跨联邦建 DM 的正确路径。
 
 ---
 
