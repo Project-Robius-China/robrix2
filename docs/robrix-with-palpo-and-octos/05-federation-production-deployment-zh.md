@@ -339,6 +339,8 @@ trusted_servers = ["matrix.org"]
 
 ## 6. Docker Compose 变更
 
+> **基线说明：** 本节的对比是针对**单节点部署**（`palpo-and-octos-deploy/compose.yml`，`server_name = "127.0.0.1:8128"`），不是 04 号文档的双节点联邦。因为生产环境拓扑几乎总是**单 homeserver + 对外联邦**，结构上更接近单节点而非 04 号的本地双节点模拟。如果你是从 04 号过来的，端口/服务名的本地列略过就好，重点关注**右列**（生产值）— 生产值本身是通用的。
+
 相比本地 `compose.yml` 的关键变更：
 
 ```yaml
@@ -387,7 +389,16 @@ services:
 
 从 `127.0.0.1:8128` 切到真实域名时，需要更新以下文件。
 
-### 7.1 `appservices/octos-registration.yaml`
+### 7.1 AppService namespace 文件
+
+不同的本地部署用不同的文件名：
+
+| 起点 | 路径 |
+|------|------|
+| 单节点（01 号文档） | `palpo-and-octos-deploy/appservices/octos-registration.yaml` |
+| 双节点联邦（04 号文档） | `palpo-and-octos-deploy/federation/nodes/node1/appservices/octos.yaml` |
+
+不管用哪个，都要把 namespace regex 改成你的真实域名：
 
 ```yaml
 namespaces:
@@ -471,14 +482,14 @@ curl https://matrix.example.com/.well-known/matrix/client
 
 Robrix 里：
 
-1. 点击 **Join Room**
-2. 输入目标房间别名，如 `#general:matrix.org`
+1. 点左侧导航栏的 **＋** 按钮打开 **Add/Explore Rooms and Spaces** 页面
+2. 在最底下的 **Join an existing room or space** 区域，输入目标房间别名（`#general:matrix.org`）、ID（`!...:matrix.org`）或 `matrix:` 链接，点 **Go**
 3. 你的服务器通过联邦联系 `matrix.org` 并加入
 4. 来自所有参与服务器的消息实时同步
 
 ### 9.2 邀请其他服务器的用户
 
-1. 在你的房间里点 **Invite**
+1. 打开你的房间，通过房间里的 invite 入口（右键房间或打开房间 info 面板，具体位置取决于 Robrix 版本）
 2. 输入远程用户 MXID：`@friend:other-server.com`
 3. 邀请通过联邦送到远程服务器
 4. 对方接受后加入你的房间

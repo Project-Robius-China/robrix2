@@ -341,6 +341,8 @@ The most common choice is `matrix.org` since it is the central hub of the public
 
 ## 6. Docker Compose Changes
 
+> **Baseline note:** This section compares against the **single-node** deployment (`palpo-and-octos-deploy/compose.yml`, which uses `server_name = "127.0.0.1:8128"`), not the dual-node federation from Doc 04. Production topology is almost always a single homeserver with outward federation — structurally closer to single-node than to Doc 04's local-simulation topology. If you started from Doc 04, ignore the port/service-name specifics and focus on the **rightmost column** — production values apply identically.
+
 Key differences versus the local `compose.yml`:
 
 ```yaml
@@ -389,7 +391,16 @@ Overall structure stays the same as the local deployment -- Postgres, Palpo, Oct
 
 When switching from `127.0.0.1:8128` to a real domain, update the following files.
 
-### 7.1 `appservices/octos-registration.yaml`
+### 7.1 AppService namespace file
+
+Different local setups use different filenames:
+
+| Starting point | Path |
+|---------------|------|
+| Single-node (Doc 01) | `palpo-and-octos-deploy/appservices/octos-registration.yaml` |
+| Dual-node federation (Doc 04) | `palpo-and-octos-deploy/federation/nodes/node1/appservices/octos.yaml` |
+
+Whichever you use, update the namespace regex to your real domain:
 
 ```yaml
 namespaces:
@@ -473,14 +484,14 @@ Once federation is up, you can:
 
 In Robrix:
 
-1. Click **Join Room**
-2. Enter a target room alias, e.g. `#general:matrix.org`
+1. Click the **＋** button in the left nav bar to open **Add/Explore Rooms and Spaces**
+2. In the bottom **Join an existing room or space** section, enter a target room alias (`#general:matrix.org`), ID (`!...:matrix.org`), or a `matrix:` link, then click **Go**
 3. Your server reaches `matrix.org` through federation and joins
 4. Messages from all participating servers sync in real time
 
 ### 9.2 Invite Users from Other Servers
 
-1. Click **Invite** in one of your rooms
+1. Open one of your rooms and use its invite action (right-click the room or open its info panel, depending on the Robrix version)
 2. Enter the remote user's MXID: `@friend:other-server.com`
 3. The invitation is sent via federation to the remote server
 4. After they accept, they join your room
