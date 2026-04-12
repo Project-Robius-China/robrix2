@@ -28,7 +28,7 @@ script_mod! {
         spacing: 4,
         align: Align{x: 0.0, y: 0.5},
 
-        Icon {
+        search_icon := Icon {
             draw_icon +: {
                 svg: (ICON_SEARCH),
                 color: (COLOR_TEXT_INPUT_IDLE),
@@ -140,6 +140,12 @@ impl RoomFilterInputBarRef {
     /// See [`RoomFilterInputBar::changed()`].
     pub fn changed(&self, actions: &Actions) -> Option<String> {
         self.borrow().and_then(|inner| inner.changed(actions))
+    }
+
+    pub fn set_search_icon_visible(&self, cx: &mut Cx, visible: bool) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.view.view(cx, ids!(search_icon)).set_visible(cx, visible);
+        inner.redraw(cx);
     }
 }
 

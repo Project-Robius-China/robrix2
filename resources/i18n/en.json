@@ -392,7 +392,7 @@
   "rooms_list_header.tooltip.synced": "Fully synced",
 
   "room_filter_input.placeholder": "Filter rooms & spaces...",
-  "search_messages.button.todo": "Search (TODO)",
+  "search_messages.button.todo": "Search",
   "verification_badge.tooltip.verified": "This device is fully verified.",
   "verification_badge.tooltip.unverified": "This device is unverified. To view your encrypted message history, please verify Robrix from another client.",
   "verification_badge.tooltip.unknown": "Verification state is unknown.",
@@ -573,6 +573,7 @@
   "app.room_filter.remote.people": "People",
   "app.room_filter.remote.rooms": "Rooms",
   "app.room_filter.remote.spaces": "Spaces",
+  "app.room_filter.remote.hint": "No local results? Try searching on server:",
   "app.room_filter.remote.kind.people": "people",
   "app.room_filter.remote.kind.rooms": "rooms",
   "app.room_filter.remote.kind.spaces": "spaces",

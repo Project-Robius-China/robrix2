@@ -219,6 +219,17 @@ script_mod! {
                                                 }
                                             }
 
+                                            remote_search_hint := Label {
+                                                visible: false
+                                                width: Fill,
+                                                height: Fit,
+                                                text: ""
+                                                draw_text +: {
+                                                    color: (COLOR_TEXT_INPUT_IDLE)
+                                                    text_style: REGULAR_TEXT {font_size: 9.5}
+                                                }
+                                            }
+
                                             remote_search_options := View {
                                                 visible: false
                                                 width: Fill,
@@ -1551,6 +1562,8 @@ impl App {
             .set_text(cx, tr_key(app_language, "app.room_filter.search_results_title"));
         self.ui.label(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.search_results_empty))
             .set_text(cx, tr_key(app_language, "app.room_filter.empty_hint"));
+        self.ui.label(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_hint))
+            .set_text(cx, tr_key(app_language, "app.room_filter.remote.hint"));
         self.ui.button(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_options.remote_search_people_button))
             .set_text(cx, tr_key(app_language, "app.room_filter.remote.people"));
         self.ui.button(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_options.remote_search_rooms_button))
@@ -1636,6 +1649,8 @@ impl App {
         if !text.is_empty() {
             empty_label.set_text(cx, text);
         }
+        self.ui.label(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_hint))
+            .set_visible(cx, show_remote_options);
         self.ui.view(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.remote_search_options))
             .set_visible(cx, show_remote_options);
     }
@@ -1803,7 +1818,7 @@ impl App {
                 true,
             );
         } else {
-            self.set_room_filter_modal_empty_state(cx, "", false);
+            self.set_room_filter_modal_empty_state(cx, "", true);
         }
 
         self.refresh_room_filter_modal_result_buttons(cx);

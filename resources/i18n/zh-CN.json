@@ -390,7 +390,7 @@
   "rooms_list_header.tooltip.synced": "已完全同步",
 
   "room_filter_input.placeholder": "筛选房间与空间...",
-  "search_messages.button.todo": "搜索（待实现）",
+  "search_messages.button.todo": "搜索",
   "verification_badge.tooltip.verified": "此设备已完全验证。",
   "verification_badge.tooltip.unverified": "此设备尚未验证。若要查看加密消息历史，请在其他客户端中验证 Robrix。",
   "verification_badge.tooltip.unknown": "验证状态未知。",
@@ -571,6 +571,7 @@
   "app.room_filter.remote.people": "联系人",
   "app.room_filter.remote.rooms": "房间",
   "app.room_filter.remote.spaces": "空间",
+  "app.room_filter.remote.hint": "没有搜索结果，尝试选择从服务器搜索？",
   "app.room_filter.remote.kind.people": "联系人",
   "app.room_filter.remote.kind.rooms": "房间",
   "app.room_filter.remote.kind.spaces": "空间",

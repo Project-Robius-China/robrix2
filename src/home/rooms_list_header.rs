@@ -280,6 +280,14 @@ impl RoomsListHeader {
     }
 }
 
+impl RoomsListHeaderRef {
+    pub fn set_open_room_filter_button_visible(&self, cx: &mut Cx, visible: bool) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.view.view(cx, ids!(open_room_filter_modal_button)).set_visible(cx, visible);
+        inner.redraw(cx);
+    }
+}
+
 /// Actions that can be handled by the `RoomsListHeader`.
 #[derive(Debug)]
 pub enum RoomsListHeaderAction {

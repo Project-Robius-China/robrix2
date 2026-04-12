@@ -34,7 +34,7 @@ script_mod! {
         icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -1, right: -2} }
 
         // text: "Search Messages"
-        text: "Search (TODO)"
+        text: "Search"
         draw_text +: {
             color: (COLOR_FG_DISABLED)
             // color: (COLOR_PRIMARY),
