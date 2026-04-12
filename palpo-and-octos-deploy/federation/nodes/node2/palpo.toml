@@ -1,0 +1,43 @@
+# ============================================================
+# palpo-2 — Matrix homeserver for test user (alice)
+# ============================================================
+# No AppService on this node. Federates with palpo-1 to talk to the bot.
+# ============================================================
+
+server_name = "palpo-2:8448"
+
+allow_registration = true
+yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = true
+enable_admin_room = true
+
+# Accept the self-signed certificate used by palpo-1.
+# NEVER enable this in production.
+allow_invalid_tls_certificates = true
+
+# ---------- Listeners ----------
+[[listeners]]
+address = "0.0.0.0:8008"
+
+[[listeners]]
+address = "0.0.0.0:8448"
+[listeners.tls]
+cert = "/var/palpo/certs/node2.crt"
+key = "/var/palpo/certs/node2.key"
+
+# ---------- Logging ----------
+[logger]
+format = "pretty"
+
+# ---------- Database ----------
+[db]
+url = "postgres://palpo:palpo@palpo-pg-2:5432/palpo_node_2"
+pool_size = 10
+
+# ---------- Federation ----------
+[federation]
+enable = true
+
+# ---------- Well-known ----------
+[well_known]
+server = "localhost:6402"
+client = "http://localhost:6002"
