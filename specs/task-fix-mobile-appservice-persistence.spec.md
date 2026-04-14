@@ -19,8 +19,8 @@ estimate: 0.5d
 
 ## 决策
 
-- 修复位置：`src/sliding_sync.rs::handle_load_app_state`——只要 `load_app_state` 返回 `Ok`，就无条件派发 `AppStateAction::RestoreAppStateFromPersistentState(Box::new(app_state))`，移除 `if !saved_dock_state_home.open_rooms.is_empty() && !saved_dock_state_home.dock_items.is_empty()` 守卫
-- 理由：`src/app.rs:1071-1095` 的恢复匹配分支已经做了完整的 `self.app_state = *app_state.clone()` 替换，并且无条件派发 `MainDesktopUiAction::LoadDockFromAppState`。空 dock 的情况下游早已正确处理——那个守卫对 dock 正确性本身不是必须的，只是一个"过早优化"，副作用是把非 dock 字段的恢复一起挡掉
+- 修复位置：`src/sliding_sync.rs::handle_load_app_state`——移除原先基于 dock 非空的守卫，改为当 `load_app_state` 返回的 `AppState` 含有任何非默认持久化内容（dock、bot_settings、app_language、translation）时派发 `AppStateAction::RestoreAppStateFromPersistentState(Box::new(app_state))`
+- 理由：`src/app.rs:1071-1095` 的恢复匹配分支已经做了完整的 `self.app_state = *app_state.clone()` 替换，并且无条件派发 `MainDesktopUiAction::LoadDockFromAppState`。因此不能再用"dock 非空"来决定是否恢复；否则移动端的非 dock 字段仍会丢失。但对于全新安装 / 无持久化文件返回的纯默认 `AppState`，保持 no-op 更符合既有语义，也避免用一份默认值去覆盖运行中的瞬时状态
 - 修改 `handle_load_app_state` 内的日志文案，从 "Loaded room panel state from app data directory. Restoring now..." 改为 "Loaded app state from persistent storage. Restoring now..."，防止后续读代码的人误以为这条路径只恢复 dock
 - 回归测试：在 `src/app.rs` 已有的 `#[cfg(test)] mod tests` 模块（约从 2568 行开始）内追加一个 serde 往返单测。构造一个启用了 App Service 的 `AppState`（`bot_settings.enabled = true`、非默认的 `botfather_user_id`、非默认的 `octos_service_url`）、`saved_dock_state_home` 为空；用 `serde_json::to_string` 序列化后再反序列化，断言三个 `bot_settings` 字段全部存活
 - 单测名称保持与场景 `测试:` 选择器一致：`test_app_state_roundtrip_preserves_bot_settings_with_empty_dock`——把"防止哪种 bug"写进名字，未来维护者一眼能懂

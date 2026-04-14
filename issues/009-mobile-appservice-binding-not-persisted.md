@@ -50,12 +50,12 @@ if !app_state.saved_dock_state_home.open_rooms.is_empty()
 
 Mobile has no dock, so every relaunch silently dropped the loaded `bot_settings` (plus `app_language` and `translation` config). Desktop masked the bug because dock state is almost always non-empty after first run. The save path itself was always correct.
 
-**Fix**: unconditionally dispatch `RestoreAppStateFromPersistentState` whenever `load_app_state` succeeds. The restore match arm in `src/app.rs:1071-1095` already performs a full `AppState` replacement and dispatches `LoadDockFromAppState` — empty-dock is safely handled downstream. Log and popup messages inside `handle_load_app_state` were also reworded away from "dock layout" language to reflect the broader scope.
+**Fix**: replace the old "dock must be non-empty" gate with a broader "persisted state is meaningfully non-default" check. `handle_load_app_state` now restores when the loaded `AppState` contains any real persisted content (dock state, bot settings, language, translation), while keeping the fresh-install / no-file path as a no-op. The restore match arm in `src/app.rs:1071-1095` already performs a full `AppState` replacement and dispatches `LoadDockFromAppState`, so empty-dock-but-configured-mobile state is handled correctly downstream. Log and popup messages inside `handle_load_app_state` were also reworded away from "dock layout" language to reflect the broader scope.
 
 **Regression guard**: `src/app.rs` unit test `test_app_state_roundtrip_preserves_bot_settings_with_empty_dock` pins the serde contract so any future `#[serde(skip)]` on `bot_settings` (or a breaking field rename) is caught at `cargo test` time instead of at Android runtime.
 
 **Spec + Plan**:
-- Contract: `specs/task-fix-mobile-appservice-persistence.spec.md` (agent-spec Task Contract, quality 93%, lifecycle 8/8 pass)
+- Contract: `specs/task-fix-mobile-appservice-persistence.spec.md` (agent-spec Task Contract, quality 93%; lifecycle command passes, but the `manual_test_*` scenarios still require human execution)
 - Plan: `docs/superpowers/plans/2026-04-14-fix-mobile-appservice-persistence.md`
 
 ## Remaining Issues
