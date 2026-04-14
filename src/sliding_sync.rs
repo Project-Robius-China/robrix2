@@ -4970,17 +4970,17 @@ fn handle_load_app_state(user_id: OwnedUserId) {
 
         match load_app_state(&user_id).await {
             Ok(app_state) => {
-                if !app_state.saved_dock_state_home.open_rooms.is_empty()
-                    && !app_state.saved_dock_state_home.dock_items.is_empty()
-                {
-                    log!("Loaded room panel state from app data directory. Restoring now...");
-                    Cx::post_action(AppStateAction::RestoreAppStateFromPersistentState(Box::new(app_state)));
-                }
+                // Issue #94: previously gated behind a non-empty dock-state check, which
+                // silently dropped bot_settings / app_language / translation on every mobile
+                // relaunch (mobile has no dock). The restore match arm in app.rs already
+                // handles empty dock correctly, so dispatch unconditionally on Ok.
+                log!("Loaded app state from persistent storage. Restoring now...");
+                Cx::post_action(AppStateAction::RestoreAppStateFromPersistentState(Box::new(app_state)));
             }
             Err(_e) => {
-                log!("Failed to restore dock layout from persistent state: {_e}");
+                log!("Failed to restore app state from persistent storage: {_e}");
                 enqueue_popup_notification(
-                    "Could not restore the previous dock layout.",
+                    "Could not restore the previous app state.",
                     PopupKind::Error,
                     None,
                 );
