@@ -151,10 +151,14 @@ script_mod! {
                     title_container +: {
                     width: Fill
                     height: Fill
-                    padding: Inset{top: 0}
+                    padding: Inset{top: 0, left: 56, right: 56}
                     align: Align{x: 0.5, y: 0.5}
                     title +: {
+                        width: Fill
                         margin: 0
+                        flow: Flow.Right{wrap: false}
+                        max_lines: 1
+                        text_overflow: Ellipsis
                         draw_text +: {
                             text_style: theme.font_bold { font_size: 11.5 }
                             color: (ROOM_NAME_TEXT_COLOR)
