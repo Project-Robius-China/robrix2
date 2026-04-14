@@ -118,7 +118,19 @@ docker compose ps
 
 3. **注册新账号**：输入用户名和密码，点击 **Sign up**
 
-4. **与 AI 机器人对话**：登录后，创建一个房间并邀请机器人：
+4. **在 设置 → Labs 里绑定机器人**（首次使用必做 —— 这个开关启用 AppService 功能，Robrix 才能和 Octos 通信；不开 bot 不会回复）：
+
+   ![Robrix AppService 设置](../images/robrix-appservice-settings.png)
+
+   - 点击左下角 **⚙** 设置图标
+   - 切到 **Labs** 标签页
+   - 打开 **Enabled** 开关
+   - 填入:
+     - **BotFather User ID**：`@octosbot:127.0.0.1:8128`
+     - **Octos Service**：`http://127.0.0.1:8010`
+   - 点 **Save**,再点 **Check Now** —— 应该显示绿色的 **Reachable** 字样
+
+5. **与 AI 机器人对话**：登录后，创建一个房间并邀请机器人：
    - 点击房间中的邀请按钮
    - 输入 `@octosbot:127.0.0.1:8128`
    - 等待机器人加入房间（你应该能看到加入事件）

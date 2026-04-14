@@ -118,7 +118,19 @@ You should see three services (`palpo_postgres`, `palpo`, `octos`) all in `runni
 
 3. **Register a new account**: Enter a username and password, then click **Sign up**
 
-4. **Talk to the AI bot**: After logging in, create a room and invite the bot:
+4. **Bind the bot in Settings → Labs** (first-run only -- this switch turns on the AppService features that let Robrix talk to Octos; without it the bot won't respond):
+
+   ![Robrix AppService settings](../images/robrix-appservice-settings.png)
+
+   - Click the **⚙** Settings icon (bottom-left)
+   - Open the **Labs** tab
+   - Toggle **Enabled** on
+   - Fill in:
+     - **BotFather User ID**: `@octosbot:127.0.0.1:8128`
+     - **Octos Service**: `http://127.0.0.1:8010`
+   - Click **Save**, then **Check Now** -- it should show a green **Reachable** indicator
+
+5. **Talk to the AI bot**: After logging in, create a room and invite the bot:
    - Click the invite button in the room
    - Enter `@octosbot:127.0.0.1:8128`
    - Wait a moment for the bot to join the room (you should see a join event)
