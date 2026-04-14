@@ -586,6 +586,26 @@ docker compose logs octos | grep -i "bot\|logged in"
 
 palpo 和 octos 都从源码编译，首次 `up -d --build` 可能花 5-10 分钟。之后重启只用 1-2 秒（除非改了源码）。构建产物走 Docker BuildKit 缓存，不会重复编译 crate。
 
+### 5.4 磁盘占用与清理
+
+联邦模式会跑 **两份** palpo 镜像、**两份** postgres 和 **一份** octos,占用比单机大:
+
+| 阶段 | 大小 |
+|---|---|
+| 镜像(稳态,两份 palpo 共享图层) | ~3 GB |
+| Build cache(首次构建峰值) | ~5 GB(可回收) |
+| 运行数据(`data/node1` + `data/node2`) | 每节点 ~50-100 MB |
+
+`docker system df` 显示可回收缓存太多时清理:
+
+```bash
+docker builder prune -af            # 清构建缓存(安全)
+docker compose down -v              # 停容器 + 清数据卷
+docker system prune -af --volumes   # 核选项:所有 Docker 相关内容
+```
+
+完整说明(为什么缓存会涨、应该选哪条命令)见 [01 §5.5 清理 Docker 缓存](01-deploying-palpo-and-octos-zh.md#55-清理-docker-缓存)。
+
 ---
 
 ## 6. 备选方案：API 层测试（CI / 无头脚本）

@@ -586,6 +586,26 @@ docker compose logs octos | grep -i "bot\|logged in"
 
 Both palpo and octos are compiled from source. The first `docker compose up -d --build` may take 5-10 minutes. Subsequent restarts are 1-2 seconds (unless source changes). Docker BuildKit caches Rust artifacts, so crates aren't recompiled every time.
 
+### 5.4 Disk Footprint & Cleanup
+
+Federation mode runs **two** palpo images, **two** postgres instances, and **one** octos, so the footprint is larger than single-node:
+
+| Stage | Size |
+|---|---|
+| Images (steady, layers shared across the two palpo instances) | ~3 GB |
+| Build cache (first build peak) | ~5 GB (reclaimable) |
+| Runtime data (`data/node1` + `data/node2`) | ~50-100 MB per node |
+
+Clean up when `docker system df` shows too much reclaimable cache:
+
+```bash
+docker builder prune -af            # drop build cache (safe)
+docker compose down -v              # stop + wipe data volumes
+docker system prune -af --volumes   # nuclear: everything Docker-related
+```
+
+See [01 §5.5 Cleaning up Docker Cache](01-deploying-palpo-and-octos.md#55-cleaning-up-docker-cache) for the full explanation of why cache grows and which command to pick.
+
 ---
 
 ## 6. Alternative: API-level testing (for CI / headless scripting)

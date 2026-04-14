@@ -36,6 +36,23 @@ Before starting, make sure you have:
 
 > **Note:** Palpo and Octos are both built from source inside Docker. You do not need to install Rust or any other toolchain on your host machine.
 
+### Disk Budget
+
+First-time `docker compose up --build` is the peak. Most of what shows up on disk after that is one-time build cache that can be safely pruned -- see [§5.5 Cleaning up Docker Cache](#55-cleaning-up-docker-cache).
+
+| Item | Size | Notes |
+|---|---|---|
+| Palpo image (local build) | ~214 MB | `debian:bookworm` runtime |
+| Octos image (local build) | ~1.7 GB | bundles skills runtime (ffmpeg, LibreOffice, etc.) |
+| Postgres image | ~476 MB | `postgres:17` |
+| **Container images total** | **~2.4 GB** | permanent footprint |
+| Build cache (first build) | ~4.75 GB | 100% reclaimable |
+| Runtime data (`./data/`, 24h steady) | ~50-120 MB | grows slowly with messages |
+| **Peak (right after first build)** | **~7.2 GB** | |
+| **Steady state (after `docker builder prune -af`)** | **~2.5 GB** | |
+
+> A 256 GB SSD is fine as long as you run `docker builder prune -af` occasionally. Rebuilding after source-code changes piles up several GB of cache each time -- that cache is what the cleanup commands reclaim.
+
 ---
 
 ## 2. Quick Start
@@ -483,6 +500,24 @@ docker compose down -v
 rm -rf data/
 docker compose up -d
 ```
+
+### 5.5 Cleaning up Docker Cache
+
+The big number on disk is usually **build cache**, not running data. Cache is safe to drop -- the only cost is a slower next rebuild.
+
+```bash
+# See what Docker is using
+docker system df
+
+# Drop build cache only (safe; next build re-uses the registry layer cache)
+docker builder prune -af
+
+# Nuclear: also remove stopped containers, dangling images, unused networks, and volumes
+docker compose down
+docker system prune -af --volumes
+```
+
+If you've been iterating on source code for a while and `docker system df` shows tens of GB of reclaimable cache, that's expected -- Cargo's target directory is cached inside the builder layer, so repeated `cargo build` across edits piles up. One `docker builder prune -af` zeros it.
 
 ---
 

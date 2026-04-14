@@ -36,6 +36,23 @@
 
 > **注意：** Palpo 和 Octos 都在 Docker 内从源码构建。你不需要在宿主机上安装 Rust 或任何其他工具链。
 
+### 硬盘预算
+
+首次 `docker compose up --build` 是占用峰值。之后磁盘上大部分空间是一次性 build cache,可以安全清理 —— 见 [§5.5 清理 Docker 缓存](#55-清理-docker-缓存)。
+
+| 项目 | 大小 | 说明 |
+|---|---|---|
+| Palpo 镜像(本地构建) | ~214 MB | `debian:bookworm` runtime |
+| Octos 镜像(本地构建) | ~1.7 GB | 捆绑 skills runtime(ffmpeg、LibreOffice 等) |
+| Postgres 镜像 | ~476 MB | `postgres:17` |
+| **镜像合计** | **~2.4 GB** | 长期占用 |
+| Build cache(首次构建) | ~4.75 GB | 100% 可回收 |
+| 运行数据(`./data/`,24h 稳态) | ~50-120 MB | 随消息量缓慢增长 |
+| **峰值(刚首次 build 完)** | **~7.2 GB** | |
+| **稳态(`docker builder prune -af` 后)** | **~2.5 GB** | |
+
+> 256 GB SSD 完全够用 —— 只要偶尔运行一下 `docker builder prune -af` 即可。源码反复修改后的重复构建会累积几 GB 的缓存,这部分就是清理命令要回收的对象。
+
 ---
 
 ## 2. 快速开始
@@ -483,6 +500,24 @@ docker compose down -v
 rm -rf data/
 docker compose up -d
 ```
+
+### 5.5 清理 Docker 缓存
+
+磁盘占用里的大头通常是 **build cache**,不是运行数据。缓存可以放心清 —— 代价只是下次构建慢一点。
+
+```bash
+# 查看 Docker 实际占用
+docker system df
+
+# 只清构建缓存(安全;下次构建会复用 registry 层缓存,仅 Rust 编译产物重来)
+docker builder prune -af
+
+# 核选项:停容器 + 清悬挂镜像 + 未用网络 + 卷
+docker compose down
+docker system prune -af --volumes
+```
+
+如果你已经迭代源码一段时间,`docker system df` 显示几十 GB 的可回收缓存是正常现象 —— Cargo 的 target 目录缓存在 builder 层里,反复 `cargo build` 会积累。一次 `docker builder prune -af` 即可清零。
 
 ---
 
