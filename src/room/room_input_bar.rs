@@ -416,6 +416,50 @@ fn addressed_command_target_for_context(
     Ok(Some(target_user_id))
 }
 
+fn allbots_broadcast_target_user_ids_for_context(
+    entered_text: &str,
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    persisted_bound_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+) -> Option<Vec<OwnedUserId>> {
+    let parsed_command = parse_command_with_at_suffix(entered_text)?;
+    if parsed_command.command != "/allbots" || parsed_command.target_localpart.is_some() {
+        return None;
+    }
+
+    if is_direct_room {
+        return None;
+    }
+
+    if !is_management_bot_room_for_context(
+        app_service_enabled,
+        is_direct_room,
+        has_persisted_management_binding,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+    ) {
+        return None;
+    }
+
+    let mut targets = persisted_bound_bot_user_ids
+        .iter()
+        .filter(|bot_user_id|
+            resolved_parent_bot_user_id
+                .map(|parent| bot_user_id.as_str() != parent.as_str())
+                .unwrap_or(true)
+        )
+        .cloned()
+        .collect::<Vec<_>>();
+    targets.sort_by(|lhs, rhs| lhs.as_str().cmp(rhs.as_str()));
+    targets.dedup_by(|lhs, rhs| lhs.as_str() == rhs.as_str());
+    Some(targets)
+}
+
 fn routing_directives_for_submission(
     entered_text: &str,
     resolved_target: &ResolvedTarget,
@@ -1606,6 +1650,7 @@ impl RoomInputBar {
                     replied_to,
                     target_user_id,
                     explicit_room,
+                    broadcast_target_user_ids: None,
                     #[cfg(feature = "tsp")]
                     sign_with_tsp: self.is_tsp_signing_enabled(cx),
                 });
@@ -1683,6 +1728,16 @@ impl RoomInputBar {
                         return;
                     }
                 };
+                let broadcast_target_user_ids = allbots_broadcast_target_user_ids_for_context(
+                    &entered_text,
+                    room_screen_props.app_service_enabled,
+                    room_screen_props.is_direct_room,
+                    room_screen_props.has_persisted_management_binding,
+                    room_screen_props.bound_bot_user_id.as_deref(),
+                    room_screen_props.resolved_parent_bot_user_id.as_deref(),
+                    &room_screen_props.persisted_bound_bot_user_ids,
+                    &room_screen_props.known_bot_user_ids,
+                );
                 let replied_to = self.replying_to.take().and_then(|(event_tl_item, _emb)|
                     event_tl_item.event_id().map(|event_id| {
                         let enforce_thread = if room_screen_props.timeline_kind.thread_root_event_id().is_some() {
@@ -1711,6 +1766,7 @@ impl RoomInputBar {
                     replied_to,
                     target_user_id,
                     explicit_room,
+                    broadcast_target_user_ids,
                     #[cfg(feature = "tsp")]
                     sign_with_tsp: self.is_tsp_signing_enabled(cx),
                 });
@@ -2919,6 +2975,67 @@ mod tests {
                 std::slice::from_ref(&child_bot_user_id),
             ),
             Ok((Some(parent_bot_user_id), false)),
+        );
+    }
+
+    #[test]
+    fn test_allbots_broadcast_targets_use_persisted_child_bindings() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let child_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+        let other_child_bot_user_id = test_user_id("@octosbot_alexbot:127.0.0.1:8128");
+
+        assert_eq!(
+            allbots_broadcast_target_user_ids_for_context(
+                "/allbots summarize this issue",
+                true,
+                false,
+                true,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[
+                    parent_bot_user_id.clone(),
+                    child_bot_user_id.clone(),
+                    other_child_bot_user_id.clone(),
+                ],
+                std::slice::from_ref(&child_bot_user_id),
+            ),
+            Some(vec![other_child_bot_user_id, child_bot_user_id]),
+        );
+    }
+
+    #[test]
+    fn test_allbots_broadcast_targets_require_management_room_context() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let child_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+
+        assert_eq!(
+            allbots_broadcast_target_user_ids_for_context(
+                "/allbots summarize this issue",
+                true,
+                true,
+                false,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[
+                    parent_bot_user_id.clone(),
+                    child_bot_user_id.clone(),
+                ],
+                std::slice::from_ref(&child_bot_user_id),
+            ),
+            None,
+        );
+        assert_eq!(
+            allbots_broadcast_target_user_ids_for_context(
+                "/allbots summarize this issue",
+                true,
+                false,
+                true,
+                Some(child_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                std::slice::from_ref(&child_bot_user_id),
+                std::slice::from_ref(&child_bot_user_id),
+            ),
+            None,
         );
     }
 
