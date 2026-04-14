@@ -68,7 +68,7 @@ estimate: 0.5d
   并且 用户打开 Settings → Labs → App Service
   并且 用户启用 App Service 并填写 BotFather user ID `"@octosbot:192.168.5.12:8128"` 与 Octos service URL `"http://192.168.5.12:8010"`
   并且 用户点击 Save 看到成功提示
-  当 用户执行 `adb shell am force-stop rs.robius.robrix` 强杀 robrix2
+  当 用户执行 `adb shell am force-stop dev.makepad.robrix` 强杀 robrix2
   并且 用户重新启动 robrix2 并回到 Settings → Labs → App Service
   那么 BotFather user ID 输入框显示 `"@octosbot:192.168.5.12:8128"`
   并且 Octos service URL 输入框显示 `"http://192.168.5.12:8010"`

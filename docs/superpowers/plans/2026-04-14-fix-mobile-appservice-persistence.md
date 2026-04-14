@@ -273,7 +273,7 @@ Do NOT run `git commit`. Present the work to the user with:
   1. `cargo makepad android run -p robrix --release` to Android emulator/device
   2. Login, go to Settings → Labs → App Service
   3. Enable, fill both fields, Save → success popup + Reachable
-  4. `adb shell am force-stop rs.robius.robrix`
+  4. `adb shell am force-stop dev.makepad.robrix`
   5. Relaunch → expect the fields populated and Check Now → Reachable
 
 - [ ] **Step 4.4: Wait for user confirmation before committing**

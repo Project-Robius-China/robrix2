@@ -32,7 +32,7 @@ Desktop (macOS/Linux/Windows) likely works because `app_data_dir()` there resolv
 3. Register/login; go to Settings → Labs → App Service
 4. Enable and fill both fields; click Save
 5. Verify "Check Now" reports Reachable
-6. `adb shell am force-stop rs.robius.robrix` (or swipe-kill from recent apps)
+6. `adb shell am force-stop dev.makepad.robrix` (or swipe-kill from recent apps)
 7. Relaunch robrix2
 8. Navigate back to App Service settings — observe empty fields
 
