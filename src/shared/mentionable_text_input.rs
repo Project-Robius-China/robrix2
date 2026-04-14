@@ -191,6 +191,14 @@ pub(crate) struct SlashCommand {
     needs_args: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SlashCommandDiscoveryContext {
+    ManagementDm,
+    ManagementRoom,
+    ChildBotRoom,
+    None,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedSlashCommand {
     pub command: String,
@@ -206,7 +214,7 @@ struct TrackedVisibleMention {
 }
 
 const MENTION_POPUP_HEADER_TEXT: &str = "Users in this Room";
-const SLASH_COMMANDS: &[SlashCommand] = &[
+const MANAGEMENT_DM_SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         command: "/createbot",
         description_key: "slash_command.createbot.description",
@@ -227,49 +235,157 @@ const SLASH_COMMANDS: &[SlashCommand] = &[
         description_key: "slash_command.bothelp.description",
         needs_args: false,
     },
+    SlashCommand {
+        command: "/schedule",
+        description_key: "slash_command.schedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/schedules",
+        description_key: "slash_command.schedules.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/unschedule",
+        description_key: "slash_command.unschedule.description",
+        needs_args: true,
+    },
 ];
 
-pub(crate) fn is_management_bot_room(
+const MANAGEMENT_ROOM_SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        command: "/createbot",
+        description_key: "slash_command.createbot.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/deletebot",
+        description_key: "slash_command.deletebot.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/listbots",
+        description_key: "slash_command.listbots.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/bothelp",
+        description_key: "slash_command.bothelp.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/schedule",
+        description_key: "slash_command.schedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/schedules",
+        description_key: "slash_command.schedules.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/unschedule",
+        description_key: "slash_command.unschedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/allbots",
+        description_key: "slash_command.allbots.description",
+        needs_args: true,
+    },
+];
+
+const CHILD_BOT_SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        command: "/new",
+        description_key: "slash_command.new.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/s",
+        description_key: "slash_command.s.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/sessions",
+        description_key: "slash_command.sessions.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/back",
+        description_key: "slash_command.back.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/delete",
+        description_key: "slash_command.delete.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/soul",
+        description_key: "slash_command.soul.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/status",
+        description_key: "slash_command.status.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/adaptive",
+        description_key: "slash_command.adaptive.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/reset",
+        description_key: "slash_command.reset.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/help",
+        description_key: "slash_command.help.description",
+        needs_args: false,
+    },
+];
+
+pub(crate) fn slash_command_discovery_context(
     app_service_enabled: bool,
     is_direct_room: bool,
     has_persisted_management_binding: bool,
     bound_bot_user_id: Option<&OwnedUserId>,
     resolved_parent_bot_user_id: Option<&OwnedUserId>,
     _known_bot_user_ids: &[OwnedUserId],
-) -> bool {
+) -> SlashCommandDiscoveryContext {
     if !app_service_enabled {
-        return false;
+        return SlashCommandDiscoveryContext::None;
     }
 
     let Some(bound_bot_user_id) = bound_bot_user_id else {
-        return false;
+        return SlashCommandDiscoveryContext::None;
     };
 
-    if !is_direct_room && !has_persisted_management_binding {
-        return false;
+    if resolved_parent_bot_user_id.is_some_and(|resolved_parent_bot_user_id|
+        bound_bot_user_id == resolved_parent_bot_user_id
+    ) {
+        if is_direct_room {
+            return SlashCommandDiscoveryContext::ManagementDm;
+        }
+        if has_persisted_management_binding {
+            return SlashCommandDiscoveryContext::ManagementRoom;
+        }
+        return SlashCommandDiscoveryContext::None;
     }
 
-    resolved_parent_bot_user_id.is_some_and(|resolved_parent_bot_user_id|
-        bound_bot_user_id == resolved_parent_bot_user_id
-    )
+    SlashCommandDiscoveryContext::ChildBotRoom
 }
 
-fn bot_command_popup_enabled(
-    app_service_enabled: bool,
-    is_direct_room: bool,
-    has_persisted_management_binding: bool,
-    bound_bot_user_id: Option<&OwnedUserId>,
-    resolved_parent_bot_user_id: Option<&OwnedUserId>,
-    known_bot_user_ids: &[OwnedUserId],
-) -> bool {
-    is_management_bot_room(
-        app_service_enabled,
-        is_direct_room,
-        has_persisted_management_binding,
-        bound_bot_user_id,
-        resolved_parent_bot_user_id,
-        known_bot_user_ids,
-    )
+fn slash_command_catalog(context: SlashCommandDiscoveryContext) -> &'static [SlashCommand] {
+    match context {
+        SlashCommandDiscoveryContext::ManagementDm => MANAGEMENT_DM_SLASH_COMMANDS,
+        SlashCommandDiscoveryContext::ManagementRoom => MANAGEMENT_ROOM_SLASH_COMMANDS,
+        SlashCommandDiscoveryContext::ChildBotRoom => CHILD_BOT_SLASH_COMMANDS,
+        SlashCommandDiscoveryContext::None => &[],
+    }
 }
 
 fn find_slash_command_trigger_position(text: &str, cursor_pos: usize) -> Option<usize> {
@@ -288,9 +404,12 @@ fn find_slash_command_trigger_position(text: &str, cursor_pos: usize) -> Option<
     Some(line_start)
 }
 
-fn matching_slash_commands(search_text: &str) -> Vec<SlashCommand> {
+fn matching_slash_commands_for_context(
+    context: SlashCommandDiscoveryContext,
+    search_text: &str,
+) -> Vec<SlashCommand> {
     let query = search_text.trim().trim_start_matches('/').to_ascii_lowercase();
-    SLASH_COMMANDS
+    slash_command_catalog(context)
         .iter()
         .copied()
         .filter(|command| {
@@ -305,7 +424,7 @@ fn matching_slash_commands(search_text: &str) -> Vec<SlashCommand> {
 
 pub(crate) fn classify_known_slash_command_for_submission(text: &str) -> Option<SlashCommand> {
     let first_token = text.split_whitespace().next()?;
-    SLASH_COMMANDS
+    MANAGEMENT_ROOM_SLASH_COMMANDS
         .iter()
         .copied()
         .find(|command| command.command == first_token)
@@ -1713,7 +1832,7 @@ impl MentionableTextInput {
             .get::<RoomScreenProps>()
             .expect("RoomScreenProps should be available in scope for MentionableTextInput");
 
-        let enabled = bot_command_popup_enabled(
+        let context = slash_command_discovery_context(
             room_props.app_service_enabled,
             room_props.is_direct_room,
             room_props.has_persisted_management_binding,
@@ -1721,7 +1840,7 @@ impl MentionableTextInput {
             room_props.resolved_parent_bot_user_id.as_ref(),
             &room_props.known_bot_user_ids,
         );
-        if !enabled {
+        if context == SlashCommandDiscoveryContext::None {
             if self.is_slash_command_popup_active() {
                 self.close_mention_popup(cx);
             }
@@ -1738,7 +1857,7 @@ impl MentionableTextInput {
         self.cmd_text_input.reset_list_scroll(cx);
         self.set_popup_header_for_slash_commands(cx, scope);
 
-        let commands = matching_slash_commands(search_text);
+        let commands = matching_slash_commands_for_context(context, search_text);
         if commands.is_empty() {
             self.close_mention_popup(cx);
             return;
@@ -1945,14 +2064,33 @@ impl MentionableTextInput {
         finalize_popup_selection(cx, self);
     }
 
-    fn on_slash_command_selected(&mut self, cx: &mut Cx, selected: WidgetRef) {
+    fn on_slash_command_selected(&mut self, cx: &mut Cx, scope: &mut Scope, selected: WidgetRef) {
         let command = selected.label(cx, ids!(command_name)).text();
         if command.is_empty() {
             return;
         }
 
-        if classify_known_slash_command_for_submission(&command)
-            .is_some_and(|slash_command| !slash_command.needs_args)
+        let command_metadata = scope
+            .props
+            .get::<RoomScreenProps>()
+            .map(|room_props|
+                slash_command_discovery_context(
+                    room_props.app_service_enabled,
+                    room_props.is_direct_room,
+                    room_props.has_persisted_management_binding,
+                    room_props.bound_bot_user_id.as_ref(),
+                    room_props.resolved_parent_bot_user_id.as_ref(),
+                    &room_props.known_bot_user_ids,
+                )
+            )
+            .and_then(|context|
+                slash_command_catalog(context)
+                    .iter()
+                    .copied()
+                    .find(|slash_command| slash_command.command == command)
+            );
+
+        if command_metadata.is_some_and(|slash_command| !slash_command.needs_args)
         {
             self.close_mention_popup(cx);
             self.emit_primary_submit_action(cx, command);
@@ -1992,7 +2130,7 @@ impl MentionableTextInput {
     fn on_popup_item_selected(&mut self, cx: &mut Cx, scope: &mut Scope, selected: WidgetRef) {
         match self.active_popup_mode {
             PopupMode::Mention => self.on_user_selected(cx, scope, selected),
-            PopupMode::SlashCommand => self.on_slash_command_selected(cx, selected),
+            PopupMode::SlashCommand => self.on_slash_command_selected(cx, scope, selected),
             PopupMode::None => {}
         }
     }
@@ -2865,6 +3003,10 @@ mod tests {
     use super::*;
     use matrix_sdk::ruma::events::room::message::MessageType;
 
+    fn slash_command_names(commands: &[SlashCommand]) -> Vec<&'static str> {
+        commands.iter().map(|command| command.command).collect()
+    }
+
     #[test]
     fn popup_status_items_are_never_selectable() {
         assert!(!popup_status_item_is_selectable(PopupStatusItemKind::Loading));
@@ -2943,67 +3085,149 @@ mod tests {
     }
 
     #[test]
-    fn slash_command_popup_requires_management_bot_room() {
+    fn slash_command_popup_contexts_follow_bot_context() {
         let parent_bot = OwnedUserId::try_from("@octosbot:example.com").unwrap();
         let child_bot = OwnedUserId::try_from("@octosbot_child:example.com").unwrap();
         let mismatched_parent = OwnedUserId::try_from("@bot:example.com").unwrap();
 
-        assert!(bot_command_popup_enabled(
+        assert_eq!(slash_command_discovery_context(
             true,
             true,
             false,
             Some(&parent_bot),
             Some(&parent_bot),
             &[],
-        ));
-        assert!(!bot_command_popup_enabled(
+        ), SlashCommandDiscoveryContext::ManagementDm);
+        assert_eq!(slash_command_discovery_context(
+            true,
+            false,
+            true,
+            Some(&parent_bot),
+            Some(&parent_bot),
+            &[],
+        ), SlashCommandDiscoveryContext::ManagementRoom);
+        assert_eq!(slash_command_discovery_context(
+            true,
+            false,
+            false,
+            Some(&parent_bot),
+            Some(&child_bot),
+            &[],
+        ), SlashCommandDiscoveryContext::ChildBotRoom);
+        assert_eq!(slash_command_discovery_context(
             true,
             false,
             false,
             Some(&parent_bot),
             Some(&parent_bot),
             &[],
-        ));
-        assert!(!bot_command_popup_enabled(
+        ), SlashCommandDiscoveryContext::None);
+        assert_eq!(slash_command_discovery_context(
             true,
             false,
             true,
             Some(&child_bot),
             Some(&parent_bot),
             std::slice::from_ref(&child_bot),
-        ));
-        assert!(!bot_command_popup_enabled(
+        ), SlashCommandDiscoveryContext::ChildBotRoom);
+        assert_eq!(slash_command_discovery_context(
             true,
             false,
             false,
             None,
             Some(&parent_bot),
             &[],
-        ));
-        assert!(!bot_command_popup_enabled(
+        ), SlashCommandDiscoveryContext::None);
+        assert_eq!(slash_command_discovery_context(
             true,
             false,
             true,
             Some(&parent_bot),
             Some(&mismatched_parent),
             &[],
-        ));
-        assert!(!bot_command_popup_enabled(
+        ), SlashCommandDiscoveryContext::ChildBotRoom);
+        assert_eq!(slash_command_discovery_context(
             true,
             false,
             false,
             Some(&parent_bot),
             Some(&mismatched_parent),
             &[],
-        ));
-        assert!(!bot_command_popup_enabled(
+        ), SlashCommandDiscoveryContext::ChildBotRoom);
+        assert_eq!(slash_command_discovery_context(
             false,
             false,
             true,
             Some(&parent_bot),
             Some(&parent_bot),
             &[],
+        ), SlashCommandDiscoveryContext::None);
+    }
+
+    #[test]
+    fn management_dm_command_catalog() {
+        let command_names = slash_command_names(slash_command_catalog(
+            SlashCommandDiscoveryContext::ManagementDm,
         ));
+        assert_eq!(
+            command_names,
+            vec![
+                "/listbots",
+                "/bothelp",
+                "/createbot",
+                "/deletebot",
+                "/schedule",
+                "/schedules",
+                "/unschedule",
+            ]
+        );
+    }
+
+    #[test]
+    fn management_room_command_catalog() {
+        let command_names = slash_command_names(slash_command_catalog(
+            SlashCommandDiscoveryContext::ManagementRoom,
+        ));
+        assert_eq!(
+            command_names,
+            vec![
+                "/listbots",
+                "/bothelp",
+                "/createbot",
+                "/deletebot",
+                "/schedule",
+                "/schedules",
+                "/unschedule",
+                "/allbots",
+            ]
+        );
+    }
+
+    #[test]
+    fn child_bot_room_command_catalog() {
+        let command_names = slash_command_names(slash_command_catalog(
+            SlashCommandDiscoveryContext::ChildBotRoom,
+        ));
+        assert_eq!(
+            command_names,
+            vec![
+                "/new",
+                "/s",
+                "/sessions",
+                "/back",
+                "/delete",
+                "/soul",
+                "/status",
+                "/adaptive",
+                "/reset",
+                "/help",
+            ]
+        );
+    }
+
+    #[test]
+    fn no_bot_context_command_catalog_is_empty() {
+        assert!(slash_command_catalog(SlashCommandDiscoveryContext::None).is_empty());
     }
 
     #[test]
@@ -3028,7 +3252,10 @@ mod tests {
 
     #[test]
     fn slash_commands_filter_by_prefix_without_leading_slash() {
-        let commands = matching_slash_commands("li");
+        let commands = matching_slash_commands_for_context(
+            SlashCommandDiscoveryContext::ManagementRoom,
+            "li",
+        );
         assert_eq!(commands, vec![SlashCommand {
             command: "/listbots",
             description_key: "slash_command.listbots.description",
@@ -3038,7 +3265,30 @@ mod tests {
 
     #[test]
     fn slash_commands_return_empty_for_unknown_prefix() {
-        assert!(matching_slash_commands("zzzznotacommand").is_empty());
+        assert!(matching_slash_commands_for_context(
+            SlashCommandDiscoveryContext::ManagementRoom,
+            "zzzznotacommand",
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn management_room_prefix_filtering_after_context_filter() {
+        let command_names = slash_command_names(&matching_slash_commands_for_context(
+            SlashCommandDiscoveryContext::ManagementRoom,
+            "sch",
+        ));
+        assert_eq!(command_names, vec!["/schedule", "/schedules"]);
+    }
+
+    #[test]
+    fn child_bot_room_popup_shows_child_commands_without_menu_button_context() {
+        let command_names = slash_command_names(&matching_slash_commands_for_context(
+            SlashCommandDiscoveryContext::ChildBotRoom,
+            "/",
+        ));
+        assert!(command_names.contains(&"/help"));
+        assert!(!command_names.contains(&"/listbots"));
     }
 
     #[test]

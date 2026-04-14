@@ -5721,6 +5721,17 @@ impl RoomScreen {
                 room_members,
                 is_direct_room,
                 room_bot_user_ids,
+                persisted_bound_bot_user_ids: scope
+                    .data
+                    .get::<AppState>()
+                    .map(|app_state| {
+                        if app_service_enabled {
+                            app_state.bot_settings.bound_bot_user_ids(&room_id)
+                        } else {
+                            Vec::new()
+                        }
+                    })
+                    .unwrap_or_default(),
                 room_members_sync_pending: tl.room_members_sync_pending,
                 room_members_sort: tl.room_members_sort.clone(),
                 room_avatar_url: self.room_avatar_url.clone(),
@@ -5740,6 +5751,7 @@ impl RoomScreen {
                 room_members: None,
                 is_direct_room: false,
                 room_bot_user_ids: Vec::new(),
+                persisted_bound_bot_user_ids: Vec::new(),
                 room_members_sort: None,
                 room_members_sync_pending: false,
                 room_avatar_url: None,
@@ -5915,6 +5927,7 @@ impl RoomScreen {
             replied_to: None,
             target_user_id: None,
             explicit_room: false,
+            broadcast_target_user_ids: None,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
@@ -5962,6 +5975,7 @@ impl RoomScreen {
                 .bound_bot_user_id(room_id.as_ref())
                 .map(ToOwned::to_owned),
             explicit_room: false,
+            broadcast_target_user_ids: None,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
@@ -8089,6 +8103,7 @@ pub struct RoomScreenProps {
     pub room_members: Option<Arc<Vec<RoomMember>>>,
     pub is_direct_room: bool,
     pub room_bot_user_ids: Vec<OwnedUserId>,
+    pub persisted_bound_bot_user_ids: Vec<OwnedUserId>,
     pub room_members_sync_pending: bool,
     /// Pre-computed sort order for room members (for mention search optimization).
     pub room_members_sort: Option<Arc<crate::room::member_search::PrecomputedMemberSort>>,
