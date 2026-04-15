@@ -3,6 +3,12 @@ use std::time::{Duration, Instant};
 const FINISHED_STREAM_TIMEOUT: Duration = Duration::from_secs(30);
 const LIVE_STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
+/// Upper bound on how long a single live update's interpolation can run.
+/// Chosen strictly smaller than any reasonable server edit throttle so
+/// the client always catches up before the next edit arrives, preventing
+/// the long-tail behaviour of PR #14's fixed-cadence pacer.
+const TWEEN_DURATION: Duration = Duration::from_millis(150);
+
 /// Animation state for a single streaming message.
 /// Tracks an MSC4357 live message and caches the latest full snapshot.
 pub struct StreamingAnimState {
@@ -16,12 +22,18 @@ pub struct StreamingAnimState {
     /// Whether the message currently carries the MSC4357 `live` field.
     pub is_live: bool,
     pub timeline_index: Option<usize>,
+    /// Starting displayed_char_count for the current tween window.
+    /// Equals target_char_count when no tween is in progress.
+    pub reveal_base_char: usize,
+    /// Reference time for the current tween window.
+    pub reveal_base_time: Instant,
 }
 
 impl StreamingAnimState {
     fn sync_displayed_to_target(&mut self) {
         self.displayed_char_count = self.target_char_count;
         self.displayed_byte_offset = self.target_text.len();
+        self.reveal_base_char = self.target_char_count;
     }
 
     pub fn new(initial_text: &str, is_live: bool) -> Self {
@@ -37,6 +49,8 @@ impl StreamingAnimState {
             display_buffer: String::with_capacity(initial_text.len() + 4),
             is_live,
             timeline_index: None,
+            reveal_base_char: 0,
+            reveal_base_time: now,
         };
         state.sync_displayed_to_target();
         state
@@ -50,19 +64,43 @@ impl StreamingAnimState {
     }
 
     pub fn update_target(&mut self, new_text: &str, is_live: bool) {
+        let prev_target_char_count = self.target_char_count;
+        let previous_displayed = self.displayed_char_count;
+
         self.target_text.clear();
         self.target_text.push_str(new_text);
         self.target_char_count = new_text.chars().count();
         self.is_live = is_live;
 
-        self.last_update_time = Instant::now();
+        let now = Instant::now();
+        self.last_update_time = now;
 
         let needed = new_text.len() + 4;
         if self.display_buffer.capacity() < needed {
             self.display_buffer.reserve(needed - self.display_buffer.len());
         }
 
-        self.sync_displayed_to_target();
+        let is_growth = is_live && self.target_char_count > prev_target_char_count;
+        if is_growth {
+            // Keep displayed at its current position and open a fresh tween
+            // window. displayed_char_count may already trail target_char_count
+            // from an earlier tween; preserve it as the new reveal base.
+            self.reveal_base_char = previous_displayed.min(self.target_char_count);
+            self.reveal_base_time = now;
+            // displayed_byte_offset is left trailing; the next tick will advance
+            // it when displayed_char_count moves forward. Clamp it here to stay
+            // within the new target text so advance_displayed's slicing stays
+            // safe even before the first tick.
+            self.displayed_char_count = self.reveal_base_char;
+            self.displayed_byte_offset = self.target_text
+                .char_indices()
+                .nth(self.reveal_base_char)
+                .map_or(self.target_text.len(), |(byte_idx, _)| byte_idx);
+        } else {
+            // Finish edit or non-growing live update: sync immediately.
+            self.sync_displayed_to_target();
+            self.reveal_base_time = now;
+        }
     }
 
     pub fn advance_displayed(&mut self, chars_to_add: usize) {
@@ -90,12 +128,31 @@ impl StreamingAnimState {
     }
 
     pub fn tick(&mut self) -> bool {
-        self.tick_with_elapsed(Duration::ZERO)
+        let elapsed = self.reveal_base_time.elapsed();
+        self.tick_with_elapsed(elapsed)
     }
 
-    pub fn tick_with_elapsed(&mut self, elapsed: Duration) -> bool {
-        let _ = elapsed;
-        false
+    pub fn tick_with_elapsed(&mut self, elapsed_since_reveal: Duration) -> bool {
+        if self.displayed_char_count >= self.target_char_count {
+            return false;
+        }
+
+        let progress = (elapsed_since_reveal.as_secs_f64()
+            / TWEEN_DURATION.as_secs_f64())
+            .clamp(0.0, 1.0);
+
+        let delta = self.target_char_count.saturating_sub(self.reveal_base_char);
+        let target_displayed = self.reveal_base_char
+            + ((delta as f64) * progress).round() as usize;
+        let target_displayed = target_displayed.min(self.target_char_count);
+
+        if target_displayed <= self.displayed_char_count {
+            return false;
+        }
+
+        let advance = target_displayed - self.displayed_char_count;
+        self.advance_displayed(advance);
+        true
     }
 
     pub fn fill_display_buffer(&mut self) {
@@ -106,7 +163,7 @@ impl StreamingAnimState {
     }
 
     pub fn needs_frame(&self) -> bool {
-        false
+        self.displayed_char_count < self.target_char_count
     }
 
     /// Streaming is complete when the live field is absent and all text has been revealed.
