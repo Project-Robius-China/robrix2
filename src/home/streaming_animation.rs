@@ -232,9 +232,11 @@ mod tests {
 
     #[test]
     fn test_update_target_tracks_latest_full_snapshot() {
-        let mut s = make_state("Hello");
-        s.update_target("Hello, world!", true);
-        assert_eq!(s.target_char_count, 13);
+        let mut s = make_state("Hello, world!");
+        // Non-growing live update must still sync immediately because there
+        // is no backlog to interpolate across.
+        s.update_target("Greetings!", true);
+        assert_eq!(s.target_char_count, 10);
         assert_eq!(s.displayed_char_count, s.target_char_count);
         assert_eq!(s.displayed_byte_offset, s.target_text.len());
         assert!(!s.needs_frame());
