@@ -184,6 +184,83 @@ mod tests {
     }
 
     #[test]
+    fn test_update_target_live_growth_defers_sync_via_tween() {
+        let mut s = make_state("Hello");
+        // Sanity: new() already synced displayed to the first target.
+        assert_eq!(s.displayed_char_count, s.target_char_count);
+
+        let displayed_before = s.displayed_char_count;
+        s.update_target("Hello, world!", true);
+
+        // Growth path must NOT sync displayed; it should stay at the previous
+        // target so tick_with_elapsed can interpolate toward the new target.
+        assert_eq!(s.displayed_char_count, displayed_before);
+        assert_eq!(s.reveal_base_char, displayed_before);
+        assert!(s.displayed_char_count < s.target_char_count);
+        assert!(s.needs_frame());
+    }
+
+    #[test]
+    fn test_update_target_live_false_syncs_immediately() {
+        let mut s = make_state("Hello");
+        // Force a mid-tween state to prove the sync still happens.
+        s.displayed_char_count = 1;
+        s.displayed_byte_offset = 1;
+
+        s.update_target("Hello, world!", false);
+
+        assert_eq!(s.displayed_char_count, s.target_char_count);
+        assert_eq!(s.displayed_byte_offset, s.target_text.len());
+        assert!(!s.needs_frame());
+    }
+
+    #[test]
+    fn test_tick_interpolates_displayed_toward_target() {
+        let mut s = make_state("Hello");
+        s.update_target(&"a".repeat(100), true);
+        // Sanity: growth path sets up the tween.
+        assert_eq!(s.reveal_base_char, 5);
+        assert_eq!(s.target_char_count, 100);
+
+        let changed = s.tick_with_elapsed(TWEEN_DURATION / 2);
+
+        assert!(changed);
+        // Halfway through TWEEN_DURATION should reveal ~half of the 95-char
+        // delta (5 base + ~47 revealed = ~52). Give a ±2-char tolerance to
+        // absorb rounding across platforms.
+        assert!(s.displayed_char_count >= 50);
+        assert!(s.displayed_char_count <= 54);
+        assert!(s.displayed_char_count < s.target_char_count);
+        assert!(s.needs_frame());
+    }
+
+    #[test]
+    fn test_tick_completes_tween_at_full_duration() {
+        let mut s = make_state("Hello");
+        s.update_target(&"a".repeat(100), true);
+
+        let changed = s.tick_with_elapsed(TWEEN_DURATION);
+
+        assert!(changed);
+        assert_eq!(s.displayed_char_count, s.target_char_count);
+        assert!(!s.needs_frame());
+    }
+
+    #[test]
+    fn test_tick_noop_when_displayed_already_caught_up() {
+        let mut s = make_state("Hello");
+        // new() already synced displayed to target.
+        assert_eq!(s.displayed_char_count, s.target_char_count);
+
+        let before = s.displayed_char_count;
+        let changed = s.tick_with_elapsed(Duration::from_secs(1));
+
+        assert!(!changed);
+        assert_eq!(s.displayed_char_count, before);
+        assert!(!s.needs_frame());
+    }
+
+    #[test]
     fn test_update_target_shrinks_safely() {
         let mut s = make_state("Hello, world!");
         s.update_target("Hi", true);
