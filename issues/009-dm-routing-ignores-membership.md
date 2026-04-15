@@ -49,15 +49,31 @@ Flow (steps 4–6 are the bug):
 
 ## Fix Applied
 
-Filter `client.get_dm_room()` by local membership. Treat a DM whose state is not
-`Joined` or `Invited` as "no existing DM" so the handler falls through to
-`DidNotExist`, which opens the existing "Create DM" confirmation modal. Confirming
-creates a fresh DM and invites the peer, who (for appservice peers) auto-accepts.
+Filter `client.get_dm_room()` by local membership via a pure predicate
+`is_active_dm_room_state`. Treat a DM whose state is not `Joined` as "no existing
+DM" so the handler falls through to `DidNotExist`, which opens the existing
+"Create DM" confirmation modal. Confirming creates a fresh DM and invites the
+peer, who (for appservice peers) auto-accepts.
 
 ```rust
+fn is_active_dm_room_state(state: RoomState) -> bool {
+    state == RoomState::Joined
+}
+
 let existing = client.get_dm_room(&user_profile.user_id)
-    .filter(|r| matches!(r.state(), RoomState::Joined | RoomState::Invited));
+    .filter(|r| is_active_dm_room_state(r.state()));
 ```
+
+### Why `Joined` only
+
+Upstream `client.get_dm_room()` delegates to `joined_rooms()`, which filters
+strictly by `RoomStateFilter::JOINED` (matrix-sdk `client/mod.rs:1288`). In steady
+state only `Joined` rooms reach the filter. The predicate still acts as:
+
+1. A defense against the race between `leave()` returning 200 and the local
+   membership transition being applied by sliding sync (during that window the
+   cached state can still read `Joined`, but the check remains cheap and explicit).
+2. A guard against any future relaxation of `get_dm_room()`'s upstream filter.
 
 ## Out of Scope (follow-ups)
 

@@ -33,18 +33,22 @@ in a room where every send is rejected with 403 M_FORBIDDEN.
 - Filter the result of `client.get_dm_room(user_id)` by local membership before
   emitting `FoundExisting`; the change is confined to the
   `MatrixRequest::OpenOrCreateDirectMessage` arm of `src/sliding_sync.rs`
-- A DM room is treated as "active" (existing) only when its
-  `room.state()` is `RoomState::Joined` or `RoomState::Invited`
-- Any other state (`Left`, `Banned`, `Knocked`) is treated as "no existing DM",
-  causing the handler to fall through to the `allow_create` branch
-- The filter applies regardless of `allow_create`: with `allow_create == false` the
+- A DM room is treated as "active" (reusable) only when its `room.state()` is
+  `RoomState::Joined`. All other states (`Left`, `Banned`, `Invited`, `Knocked`)
+  are treated as "no existing DM"
+- The membership check is a guard for the race between the leave HTTP response
+  (200) and the local membership transition being applied by sliding sync; without
+  it, a stale `Joined`-cached room can surface here during that window
+- Upstream `client.get_dm_room()` already delegates to `joined_rooms()` which
+  filters strictly by `RoomStateFilter::JOINED` (matrix-sdk
+  `client/mod.rs:1288`), so in steady state only `Joined` rooms reach the filter;
+  the predicate is still kept as explicit, testable defense in depth
+- The fall-through is driven by `allow_create`: with `allow_create == false` the
   handler emits `DidNotExist` (opens the "Create DM" confirmation modal); with
   `allow_create == true` it proceeds to create a fresh DM
-- The fix is implemented inline in the existing `OpenOrCreateDirectMessage` arm
-  using `Option::filter`; no helper function or refactor is needed
-- Rationale for treating `Invited` as active: a pending invite is not yet a `join`
-  but server-side membership is `invite`, the user can accept it from the existing
-  room, and creating a duplicate DM would leave two DM tabs for the same peer
+- The classification is implemented as a pure free function
+  `fn is_active_dm_room_state(state: RoomState) -> bool` so it is unit-testable
+  without spinning up a `Client`
 
 ## Boundaries
 
@@ -87,13 +91,15 @@ Scenario: Banned-from DM is treated the same as a left DM
   Then the client does not navigate to the banned room
   And the "Create New Direct Message" confirmation modal is shown
 
-Scenario: Pending invite is treated as an active DM
-  Test: manual_test_dm_routing_invited_room_navigates_directly
-  Given peer W has invited the user to a DM
-  And the user has not yet accepted (room state is `Invited`)
-  When the user opens People, selects W, and clicks the direct-message button
-  Then the client navigates to the invited DM room
-  And no duplicate DM with W is created
+Scenario: Classification predicate accepts Joined and rejects all other states
+  Test: is_active_dm_room_state_only_joined_is_reusable
+  Given the `is_active_dm_room_state` predicate
+  When called with each `RoomState` variant
+  Then it returns `true` for `RoomState::Joined`
+  And it returns `false` for `RoomState::Invited`
+  And it returns `false` for `RoomState::Left`
+  And it returns `false` for `RoomState::Banned`
+  And it returns `false` for `RoomState::Knocked`
 
 Scenario: Sending in the freshly created DM succeeds with no 403
   Test: manual_test_dm_routing_new_dm_send_succeeds

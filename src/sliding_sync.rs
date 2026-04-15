@@ -1125,9 +1125,23 @@ async fn ensure_target_user_joined_room(
     Ok(())
 }
 
+/// Returns whether a DM room in the given state is reusable without rejoining.
+fn is_active_dm_room_state(state: RoomState) -> bool {
+    state == RoomState::Joined
+}
+
 #[cfg(test)]
 mod matrix_request_tests {
     use super::*;
+
+    #[test]
+    fn is_active_dm_room_state_only_joined_is_reusable() {
+        assert!(is_active_dm_room_state(RoomState::Joined));
+        assert!(!is_active_dm_room_state(RoomState::Invited));
+        assert!(!is_active_dm_room_state(RoomState::Left));
+        assert!(!is_active_dm_room_state(RoomState::Banned));
+        assert!(!is_active_dm_room_state(RoomState::Knocked));
+    }
 
     #[test]
     fn should_add_octos_target_user_id_to_message_content() {
@@ -2084,12 +2098,11 @@ async fn matrix_worker_task(
             MatrixRequest::OpenOrCreateDirectMessage { user_profile, allow_create, create_encrypted } => {
                 let Some(client) = get_client() else { continue };
                 let _create_dm_task = Handle::current().spawn(async move {
-                    // `m.direct` is not pruned when the user leaves a DM (Matrix-spec quirk),
-                    // so `client.get_dm_room` may return a Left/Banned room. Filter to active
-                    // memberships only; otherwise we silently navigate into a dead room where
-                    // every send returns 403.
+                    // `m.direct` is not pruned on leave; upstream `get_dm_room` goes through
+                    // `joined_rooms()` (JOINED-only) but a race between leave-200 and the local
+                    // membership transition can still surface a stale room here. Guard at dispatch.
                     let existing_dm = client.get_dm_room(&user_profile.user_id)
-                        .filter(|r| matches!(r.state(), RoomState::Joined | RoomState::Invited));
+                        .filter(|r| is_active_dm_room_state(r.state()));
                     if let Some(room) = existing_dm {
                         log!("Found existing DM room: {}", room.room_id());
                         Cx::post_action(DirectMessageRoomAction::FoundExisting {
