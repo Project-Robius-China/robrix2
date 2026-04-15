@@ -62,9 +62,16 @@ impl StreamingAnimState {
         restored.timeline_index = previous.timeline_index;
 
         // Preserve in-flight tween state across timeline rebuilds
-        // (clear_cache / full_snapshot). Without this, restore() would snap
-        // displayed to target via Self::new's sync, cancelling the active
-        // tween and producing the "stuck then jumps" artefact on rebuild.
+        // (clear_cache / full_snapshot). Three-way split aligns with
+        // update_target()'s semantics while still providing visual
+        // continuity for content-unchanged rebuilds:
+        //
+        //   - Same text: preserve tween (rebuild carried no new content).
+        //   - Different text, target grew: open a fresh tween window
+        //     (matches update_target's growth branch).
+        //   - Different text, same length or shrunk: sync to target
+        //     (matches update_target's non-growth branch, avoids showing
+        //     a stale prefix against the new text).
         let had_in_flight_tween =
             previous.displayed_char_count < previous.target_char_count;
         if is_live && had_in_flight_tween {
@@ -74,24 +81,30 @@ impl StreamingAnimState {
                 .char_indices()
                 .nth(prev_displayed)
                 .map_or(new_text.len(), |(byte_idx, _)| byte_idx);
-            restored.displayed_char_count = prev_displayed;
-            restored.displayed_byte_offset = prev_byte_offset;
+            let same_text = new_text == previous.target_text.as_str();
 
-            if restored.target_char_count > previous.target_char_count {
-                // Rebuild arrived with a LARGER target than the previous
-                // tween was heading toward. Open a fresh tween window
-                // (matching update_target's growth-branch semantics) so the
-                // next tick doesn't pair an old reveal_base_time with a
-                // larger delta and jump several chars at once.
-                restored.reveal_base_char = prev_displayed;
-                restored.reveal_base_time = Instant::now();
-            } else {
-                // Same or shrunk target: continue the existing tween so the
-                // user perceives no interruption across rebuild.
+            if same_text {
+                // Rebuild delivered the same text — continue tween in
+                // place so the user perceives no interruption.
+                restored.displayed_char_count = prev_displayed;
+                restored.displayed_byte_offset = prev_byte_offset;
                 restored.reveal_base_char =
                     previous.reveal_base_char.min(restored.target_char_count);
                 restored.reveal_base_time = previous.reveal_base_time;
+            } else if restored.target_char_count > previous.target_char_count {
+                // Text grew. Open a fresh tween window from current
+                // displayed position so the next tick doesn't pair an old
+                // reveal_base_time with a larger delta and jump several
+                // chars at once.
+                restored.displayed_char_count = prev_displayed;
+                restored.displayed_byte_offset = prev_byte_offset;
+                restored.reveal_base_char = prev_displayed;
+                restored.reveal_base_time = Instant::now();
             }
+            // else: different text + non-growth (same-length rewrite or
+            // shrink). Self::new() already synced displayed to target so
+            // we don't render a stale prefix against the new text. This
+            // matches update_target()'s non-growth branch behaviour.
         }
 
         restored
@@ -437,6 +450,26 @@ mod tests {
         assert_eq!(restored.reveal_base_char, 5);
         assert_eq!(restored.reveal_base_time, prev_base_time);
         assert!(restored.needs_frame());
+    }
+
+    #[test]
+    fn test_restore_non_growth_rewrite_syncs_to_target() {
+        // Previous state is mid-tween on "aaaaa" (5 chars), displayed=2.
+        let mut prev = make_state(&"a".repeat(5));
+        prev.displayed_char_count = 2;
+        prev.displayed_byte_offset = 2;
+        prev.reveal_base_char = 0;
+
+        // Rebuild delivers a DIFFERENT 5-char text (same length rewrite).
+        // Continuing the old tween would show "aa" of the old text as a
+        // stale prefix against the new text. Sync matches
+        // update_target()'s non-growth branch.
+        let restored = StreamingAnimState::restore(&prev, "world", true);
+
+        assert_eq!(restored.target_char_count, 5);
+        assert_eq!(restored.displayed_char_count, restored.target_char_count);
+        assert_eq!(restored.displayed_byte_offset, restored.target_text.len());
+        assert!(!restored.needs_frame());
     }
 
     #[test]

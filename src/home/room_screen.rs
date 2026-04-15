@@ -11166,6 +11166,40 @@ mod tests {
     }
 
     #[test]
+    fn test_clear_cache_update_rebuild_preserves_in_flight_tween_from_cached_state() {
+        // Integration coverage: ensure a mid-tween cached state flowing
+        // through `rebuild_streaming_messages_for_clear_cache_update` keeps
+        // its in-flight tween rather than snapping to fully displayed. This
+        // is the end-to-end guarantee for the growth-rebuild case pushed
+        // through the real clear_cache path (not just restore() in
+        // isolation).
+        let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
+        let mut previous_state = make_state(&"a".repeat(20));
+        // Force mid-tween: displayed=5 of 20.
+        previous_state.displayed_char_count = 5;
+        previous_state.displayed_byte_offset = 5;
+        previous_state.reveal_base_char = 0;
+        let mut previous_streaming_messages = HashMap::new();
+        previous_streaming_messages.insert(event_id.clone(), previous_state);
+        let previous_item_texts = HashMap::new();
+
+        let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_clear_cache_update(
+            // Rebuild brings a LONGER target (50 chars) — growth case.
+            [(event_id.clone(), "a".repeat(50), true)],
+            Some(&previous_streaming_messages),
+            &previous_item_texts,
+        );
+
+        let state = rebuilt.get(&event_id).unwrap();
+        // displayed preserved at previous mid-tween position; fresh tween
+        // window anchored there.
+        assert_eq!(state.displayed_char_count, 5);
+        assert_eq!(state.reveal_base_char, 5);
+        assert!(state.needs_frame());
+        assert!(should_schedule_frame);
+    }
+
+    #[test]
     fn test_clear_cache_update_rebuild_skips_unchanged_live_without_cached_state() {
         let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
         let previous_item_texts = HashMap::from([(event_id.clone(), String::from("hello"))]);
