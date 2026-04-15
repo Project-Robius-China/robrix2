@@ -459,7 +459,7 @@ docker compose logs octos --since 1m | grep -i -E "deepseek|llm|provider"
 | Palpo 日志中出现 `Connection refused` | Octos 未运行，或注册 YAML 中 `url` 错误 | 确保 Octos 正在运行。`url` 必须使用 Docker 服务名（`http://octos:8009`），不能用 `localhost`。 |
 | `User ID not in namespace` | `sender_localpart` 与 `namespaces.users` 正则不匹配 | 更新 `octos-registration.yaml` 中的正则表达式，包含机器人的完整用户 ID 模式。 |
 | 机器人加入房间但回复空消息 | LLM API Key 无效或额度不足 | 检查 `docker compose logs octos` 中的 API 错误。验证 API Key 和账户余额。 |
-| Octos 日志出现 `400 Bad Request: "Invalid max_tokens value, the valid range of max_tokens is [1, 8192]"`（DeepSeek） | Octos 默认的 chat `max_tokens` 是 16384，超出 DeepSeek 单次响应上限（8192）。Octos 其实有模型感知函数 `max_output_tokens("deepseek-chat")` 返回 8000，但尚未接入 `ChatConfig::default()`（上游待修，参见 [octos PR #345](https://github.com/ZhangHanDong/octos/pull/345)）。 | 在 `config/botfather.json` 的 `config.gateway` 内添加 `"max_output_tokens": 8000`（参考 [3.5 节](#35-octos-机器人配置configbotfatherjson)），然后 `docker compose restart octos`。无需重新构建镜像。 |
+| Octos 日志出现 `400 Bad Request: "Invalid max_tokens value, the valid range of max_tokens is [1, 8192]"`（DeepSeek） | Octos 默认的 chat `max_tokens` 是 16384，超出 DeepSeek 单次响应上限（8192）。 | 在 `config/botfather.json` 的 `config.gateway` 内添加 `"max_output_tokens": 8000`（参考 [3.5 节](#35-octos-机器人配置configbotfatherjson)），然后 `docker compose restart octos`。无需重新构建镜像。 |
 | 部分用户的消息被忽略 | `botfather.json` 中的 `allowed_senders` 过滤 | 设 `allowed_senders` 为 `[]` 允许所有人，或添加用户的 Matrix ID。 |
 | 机器人配置未加载 | `botfather.json` 缺少 `created_at` / `updated_at` | 这两个字段是必需的。按 [3.5 节](#35-octos-机器人配置configbotfatherjson) 示例添加。 |
 
