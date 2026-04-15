@@ -8604,7 +8604,25 @@ fn populate_message_view(
                             );
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
-                            // Check for Splash card in custom event field
+                            // Agent-to-app envelope (L1 registry path).
+                            // Reads from the ORIGINAL event content to enforce
+                            // the immutability rule from the master spec
+                            // (`specs/task-agent-to-app-system.spec.md`
+                            // §消息不可变性): m.replace edits must not alter
+                            // the rendered app envelope.
+                            let app_splash_code = original_event_content_json(event_tl_item)
+                                .as_ref()
+                                .and_then(|content| {
+                                    crate::home::app_registry::render_app_envelope_to_splash(
+                                        content,
+                                        app_language,
+                                    )
+                                });
+
+                            // Legacy raw Splash card path. Still reads from
+                            // the latest effective content for now; will
+                            // eventually be gated to development builds
+                            // only (master spec §Out of Scope).
                             let splash_code = latest_effective_event_content_json(event_tl_item)
                                 .and_then(|content|
                                     content
@@ -8612,7 +8630,16 @@ fn populate_message_view(
                                         .and_then(|v| v.as_str().map(|s| s.to_string()))
                                 );
 
-                            if let Some(ref splash) = splash_code {
+                            // Priority: org.octos.app registry path wins over
+                            // raw splash_card when both are present (per L1
+                            // sub-spec §解析与接线).
+                            if let Some(ref splash) = app_splash_code {
+                                item.view(cx, ids!(content.message)).set_visible(cx, false);
+                                let splash_widget = item.splash(cx, ids!(content.splash_card));
+                                splash_widget.set_visible(cx, true);
+                                splash_widget.set_text(cx, splash);
+                                new_drawn_status.content_drawn = true;
+                            } else if let Some(ref splash) = splash_code {
                                 // SPLASH CARD MODE: render native Makepad card
                                 item.view(cx, ids!(content.message)).set_visible(cx, false);
                                 let splash_widget = item.splash(cx, ids!(content.splash_card));

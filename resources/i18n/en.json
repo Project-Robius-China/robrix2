@@ -638,5 +638,10 @@
   "space_lobby.item.member_one": "1 member",
   "space_lobby.item.member_n": "{count} members",
   "space_lobby.item.child_room_one": "~{count} room",
-  "space_lobby.item.child_room_n": "~{count} rooms"
+  "space_lobby.item.child_room_n": "~{count} rooms",
+  "agent_to_app.weather.feels_like": "Feels like",
+  "agent_to_app.weather.humidity": "Humidity",
+  "agent_to_app.weather.wind": "Wind",
+  "agent_to_app.weather.forecast": "Forecast",
+  "agent_to_app.weather.updated_at_prefix": "Updated"
 }

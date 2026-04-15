@@ -636,5 +636,10 @@
   "space_lobby.item.member_one": "1 位成员",
   "space_lobby.item.member_n": "{count} 位成员",
   "space_lobby.item.child_room_one": "~{count} 个房间",
-  "space_lobby.item.child_room_n": "~{count} 个房间"
+  "space_lobby.item.child_room_n": "~{count} 个房间",
+  "agent_to_app.weather.feels_like": "体感",
+  "agent_to_app.weather.humidity": "湿度",
+  "agent_to_app.weather.wind": "风速",
+  "agent_to_app.weather.forecast": "预报",
+  "agent_to_app.weather.updated_at_prefix": "更新于"
 }
