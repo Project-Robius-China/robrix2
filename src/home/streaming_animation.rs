@@ -70,16 +70,28 @@ impl StreamingAnimState {
         if is_live && had_in_flight_tween {
             let prev_displayed =
                 previous.displayed_char_count.min(restored.target_char_count);
-            let prev_base =
-                previous.reveal_base_char.min(restored.target_char_count);
             let prev_byte_offset = new_text
                 .char_indices()
                 .nth(prev_displayed)
                 .map_or(new_text.len(), |(byte_idx, _)| byte_idx);
             restored.displayed_char_count = prev_displayed;
             restored.displayed_byte_offset = prev_byte_offset;
-            restored.reveal_base_char = prev_base;
-            restored.reveal_base_time = previous.reveal_base_time;
+
+            if restored.target_char_count > previous.target_char_count {
+                // Rebuild arrived with a LARGER target than the previous
+                // tween was heading toward. Open a fresh tween window
+                // (matching update_target's growth-branch semantics) so the
+                // next tick doesn't pair an old reveal_base_time with a
+                // larger delta and jump several chars at once.
+                restored.reveal_base_char = prev_displayed;
+                restored.reveal_base_time = Instant::now();
+            } else {
+                // Same or shrunk target: continue the existing tween so the
+                // user perceives no interruption across rebuild.
+                restored.reveal_base_char =
+                    previous.reveal_base_char.min(restored.target_char_count);
+                restored.reveal_base_time = previous.reveal_base_time;
+            }
         }
 
         restored
@@ -424,6 +436,29 @@ mod tests {
         assert_eq!(restored.displayed_byte_offset, 10);
         assert_eq!(restored.reveal_base_char, 5);
         assert_eq!(restored.reveal_base_time, prev_base_time);
+        assert!(restored.needs_frame());
+    }
+
+    #[test]
+    fn test_restore_growth_rebuild_opens_fresh_tween_window() {
+        // Previous state is mid-tween: displayed=10 of 100.
+        let mut prev = make_state(&"a".repeat(100));
+        prev.displayed_char_count = 10;
+        prev.displayed_byte_offset = 10;
+        prev.reveal_base_char = 5;
+        let prev_base_time = prev.reveal_base_time;
+
+        // Rebuild brings a LONGER target (150 chars). Reusing the old
+        // reveal_base_time here would pair old elapsed with a larger delta
+        // and advance many chars at once on the next tick.
+        let restored = StreamingAnimState::restore(&prev, &"a".repeat(150), true);
+
+        // displayed preserved for visual continuity.
+        assert_eq!(restored.displayed_char_count, 10);
+        // Fresh tween window anchored at current displayed with a NEW
+        // reveal_base_time — strictly > prev_base_time.
+        assert_eq!(restored.reveal_base_char, 10);
+        assert!(restored.reveal_base_time > prev_base_time);
         assert!(restored.needs_frame());
     }
 

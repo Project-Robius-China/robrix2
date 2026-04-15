@@ -11091,7 +11091,11 @@ mod tests {
         let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
         let mut previous = HashMap::new();
         let mut previous_state = make_state("hello");
-        previous_state.advance_displayed(3);
+        // make_state() syncs displayed to target; push it back to simulate an
+        // in-flight tween with displayed=3 of 5.
+        previous_state.displayed_char_count = 3;
+        previous_state.displayed_byte_offset = 3;
+        previous_state.reveal_base_char = 0;
         previous.insert(event_id.clone(), previous_state);
 
         let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_full_snapshot(
@@ -11100,9 +11104,15 @@ mod tests {
         );
 
         let restored = rebuilt.get(&event_id).unwrap();
-        assert_eq!(restored.displayed_char_count, restored.target_char_count);
+        // Full-snapshot rebuild must preserve the in-flight tween: the
+        // previously-displayed prefix stays visible and the tween continues
+        // rather than snapping to fully revealed. This is the end-to-end
+        // guarantee that prevents the "stuck then jumps" artefact users
+        // observed when switching rooms mid-stream.
+        assert_eq!(restored.displayed_char_count, 3);
         assert!(restored.is_live);
-        assert!(!should_schedule_frame);
+        assert!(restored.needs_frame());
+        assert!(should_schedule_frame);
     }
 
     #[test]
