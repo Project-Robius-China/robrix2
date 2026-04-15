@@ -60,6 +60,28 @@ impl StreamingAnimState {
         let mut restored = Self::new(new_text, is_live);
         restored.animation_start_time = previous.animation_start_time;
         restored.timeline_index = previous.timeline_index;
+
+        // Preserve in-flight tween state across timeline rebuilds
+        // (clear_cache / full_snapshot). Without this, restore() would snap
+        // displayed to target via Self::new's sync, cancelling the active
+        // tween and producing the "stuck then jumps" artefact on rebuild.
+        let had_in_flight_tween =
+            previous.displayed_char_count < previous.target_char_count;
+        if is_live && had_in_flight_tween {
+            let prev_displayed =
+                previous.displayed_char_count.min(restored.target_char_count);
+            let prev_base =
+                previous.reveal_base_char.min(restored.target_char_count);
+            let prev_byte_offset = new_text
+                .char_indices()
+                .nth(prev_displayed)
+                .map_or(new_text.len(), |(byte_idx, _)| byte_idx);
+            restored.displayed_char_count = prev_displayed;
+            restored.displayed_byte_offset = prev_byte_offset;
+            restored.reveal_base_char = prev_base;
+            restored.reveal_base_time = previous.reveal_base_time;
+        }
+
         restored
     }
 
@@ -378,6 +400,31 @@ mod tests {
         let restored = StreamingAnimState::restore(&prev, "Hello, world!!!", true);
         assert_eq!(restored.displayed_char_count, restored.target_char_count);
         assert_eq!(restored.displayed_byte_offset, restored.target_text.len());
+    }
+
+    #[test]
+    fn test_restore_preserves_in_flight_tween() {
+        // Previous state is mid-tween: displayed=10 of 100, base=5, elapsed
+        // 40ms since reveal_base_time (well under TWEEN_DURATION).
+        let mut prev = make_state(&"a".repeat(100));
+        // Force mid-tween manually (simulates what update_target + tick would produce).
+        prev.displayed_char_count = 10;
+        prev.displayed_byte_offset = 10;
+        prev.reveal_base_char = 5;
+        let prev_base_time = prev.reveal_base_time;
+
+        // Simulate a clear_cache / full_snapshot rebuild: restore() re-creates
+        // the state from new_items. Same text, same live flag.
+        let restored = StreamingAnimState::restore(&prev, &"a".repeat(100), true);
+
+        // Tween state must be preserved so the next tick continues the
+        // animation from where it left off instead of snapping to fully
+        // displayed.
+        assert_eq!(restored.displayed_char_count, 10);
+        assert_eq!(restored.displayed_byte_offset, 10);
+        assert_eq!(restored.reveal_base_char, 5);
+        assert_eq!(restored.reveal_base_time, prev_base_time);
+        assert!(restored.needs_frame());
     }
 
     #[test]
