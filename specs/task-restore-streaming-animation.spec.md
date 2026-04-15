@@ -8,11 +8,11 @@ estimate: 0.5d
 
 ## 意图
 
-Octos 的 MSC4357 流式回复不再使用本地匀速打字机节奏。当前实现为了追求“丝滑逐字”而在客户端维护 `StreamingAnimState` 的 reveal cadence，但这会把长回复拖成明显长尾，并在掉帧后出现“卡一会儿然后突然补很多字”与“为了避免突跳而尾巴过长”之间的两难。用户已经明确要求与 Moly 保持同类体验：流式期间直接展示服务端当前最新文本，只在尾部追加一个进行中标记，完成后再切回既有 rich markdown / bot card 分层渲染。
+Octos 的 MSC4357 流式回复需要在客户端层面同时满足两个目标:(1) 与服务端 pace 对齐以避免 PR #14 固定 cadence 造成的长尾;(2) 把服务端粗粒度 edit throttle(Octos 默认 1000ms / 测试环境 200ms)带来的“一跳一跳”阶跃过渡,平滑到人眼感知阈值以下。
 
-本任务将 Robrix 的 streaming path 改为 Moly 风格的实时流式展示：不再做本地二次 cadence 动画，不再按字符 backlog 追帧，也不再对长回复做本地 reveal 节奏控制。流式期间消息始终显示最新 `m.text` 快照加 trailing cursor；流式结束后走现有富文本渲染。
+当前实现在 `StreamingAnimState` 上维护一个**有界的每次 update tween**(bounded per-update tween,`TWEEN_DURATION = 150ms`)——每次服务端 live edit 到达时,客户端在 150ms 内用线性插值把 displayed 从旧 reveal base 推向新 target。由于 tween 时长**严格小于**服务端 edit throttle 下限,客户端永远在下一次 edit 到达前完成;不累积 backlog,不会退化成 PR #14 那种无限长尾。`is_live=false` 的 finish edit 立即 sync 到完整文本,不做 tween。
 
-参考实现：Moly 在 `moly-kit/src/widgets/standard_message_content.rs` 中仅在 `metadata.is_writing()` 时把当前全文和 `|` 尾标直接送入 markdown widget；其数据层 `openclaw_client.rs` 在每次流式事件到来时合并最新文本并立即 `Yield(content.clone())`，没有本地 reveal 时钟。
+参考对照:Moly 本体在 `moly-kit/src/widgets/standard_message_content.rs` 里直接把服务端最新全文送入 widget,没有本地 reveal 时钟——因为 Moly 接 openclaw SSE API,服务端 pace 已经足够细(~30-50ms/token)。Robrix 通过 Matrix edit event 与服务端通信,协议层天然有 200-1000ms 粗粒度,所以补一个**受限**的本地 tween,只是为了弥合这段传输粗粒度,不是回到 PR #14 的客户端节奏器。
 
 ## 决策
 
