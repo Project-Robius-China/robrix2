@@ -2084,7 +2084,13 @@ async fn matrix_worker_task(
             MatrixRequest::OpenOrCreateDirectMessage { user_profile, allow_create, create_encrypted } => {
                 let Some(client) = get_client() else { continue };
                 let _create_dm_task = Handle::current().spawn(async move {
-                    if let Some(room) = client.get_dm_room(&user_profile.user_id) {
+                    // `m.direct` is not pruned when the user leaves a DM (Matrix-spec quirk),
+                    // so `client.get_dm_room` may return a Left/Banned room. Filter to active
+                    // memberships only; otherwise we silently navigate into a dead room where
+                    // every send returns 403.
+                    let existing_dm = client.get_dm_room(&user_profile.user_id)
+                        .filter(|r| matches!(r.state(), RoomState::Joined | RoomState::Invited));
+                    if let Some(room) = existing_dm {
                         log!("Found existing DM room: {}", room.room_id());
                         Cx::post_action(DirectMessageRoomAction::FoundExisting {
                             user_id: user_profile.user_id,
