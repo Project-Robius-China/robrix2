@@ -283,17 +283,13 @@ script_mod! {
         
         LineH { padding: 10, margin: Inset{top: 10, right: 2} }
 
-        create_new_room_label := SubsectionLabel {
-            margin: Inset{top: 8}
-            text: "Create a new room:"
-        }
-
-        create_room_button_view := View {
+        quick_actions_view := View {
             width: Fill
             height: Fit
             margin: Inset{ top: 8, bottom: 10 }
-            padding: Inset{left: 5}
-            flow: Right
+            padding: Inset{left: 5, right: 5}
+            flow: Flow.Right{wrap: true}
+            spacing: 10
 
             new_room_button := RobrixPositiveIconButton {
                 width: Fit
@@ -303,48 +299,14 @@ script_mod! {
                 icon_walk: Walk{width: 16, height: 16}
                 text: "New room"
             }
-        }
 
-        LineH { padding: 10, margin: Inset{right: 2} }
-
-        add_friend_label := SubsectionLabel {
-            margin: Inset{top: 4}
-            text: "Add a friend:"
-        }
-
-        add_friend_help := Label {
-            width: Fill, height: Fit
-            flow: Flow.Right{wrap: true}
-            draw_text +: {
-                color: (MESSAGE_TEXT_COLOR),
-                text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
-            }
-            text: "Enter a Matrix user ID to open or create a direct message room."
-        }
-
-        add_friend_view := View {
-            width: Fill
-            height: Fit
-            margin: Inset{ top: 6, bottom: 10 }
-            align: Align{y: 0.5}
-            spacing: 5
-            flow: Right
-
-            friend_user_id_input := RobrixTextInput {
-                align: Align{y: 0.5}
-                margin: Inset{top: 0, left: 5, right: 5, bottom: 0}
-                padding: Inset{left: 12, right: 12, top: 11, bottom: 0}
-                width: Fill { max: 400 }
-                height: 40
-                empty_text: "Enter a Matrix user ID, like @alice:matrix.org..."
-            }
-
-            add_friend_button := RobrixIconButton {
+            start_chat_button := RobrixPositiveIconButton {
+                width: Fit
                 padding: Inset{top: 10, bottom: 10, left: 12, right: 14}
                 height: 40
                 draw_icon.svg: (ICON_ADD_USER)
                 icon_walk: Walk{width: 16, height: 16}
-                text: "Add friend"
+                text: "Start chat"
             }
         }
 
@@ -654,6 +616,120 @@ script_mod! {
             }
         }
     }
+
+    mod.widgets.StartChatModal = #(StartChatModal::register_widget(vm)) {
+        width: Fit
+        height: Fit
+
+        RoundedView {
+            width: 400
+            height: Fit
+            align: Align{x: 0.5}
+            flow: Down
+            padding: Inset{top: 14, right: 14, bottom: 14, left: 14}
+
+            show_bg: true
+            draw_bg +: {
+                color: #fff
+                border_radius: 24.0
+            }
+
+            title_view := View {
+                width: Fill
+                height: Fit
+                padding: Inset{top: 4, bottom: 14}
+                align: Align{y: 0.5}
+                flow: Right
+
+                title := Label {
+                    width: Fill
+                    height: Fit
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        text_style: TITLE_TEXT {font_size: 15}
+                        color: #000
+                    }
+                    text: "Direct Messages"
+                }
+
+                close_button := RobrixNeutralIconButton {
+                    width: 38
+                    height: 38
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 0
+                    padding: 11
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 14, height: 14}
+                }
+            }
+
+            subtitle := Label {
+                width: Fill
+                height: Fit
+                margin: Inset{bottom: 10}
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR)
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 }
+                }
+                text: "Start a conversation by entering a Matrix user ID."
+            }
+
+            search_row := View {
+                width: Fill
+                height: Fit
+                spacing: 8
+                align: Align{y: 0.5}
+                margin: Inset{left: 5, right: 5}
+                flow: Right
+
+                chat_user_id_input := RobrixTextInput {
+                    padding: Inset{left: 12, right: 12, top: 11, bottom: 0}
+                    width: Fill
+                    height: 40
+                    empty_text: "Search by Matrix user ID..."
+                }
+
+                go_button := RobrixNeutralIconButton {
+                    width: 82
+                    height: 40
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 10
+                    text: "Go"
+                }
+            }
+
+            chat_hint := Label {
+                width: Fill
+                height: Fit
+                margin: Inset{left: 5, right: 5, top: 8, bottom: 6}
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR)
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 }
+                }
+                text: "A direct message room will be created if one does not already exist."
+            }
+
+            buttons_view := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                padding: Inset{top: 10, bottom: 5}
+                align: Align{x: 1.0, y: 0.5}
+                spacing: 10
+
+                cancel_button := RobrixNeutralIconButton {
+                    width: 132
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 12
+                    draw_icon.svg: (ICON_FORBIDDEN)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
+                    text: "Cancel"
+                }
+            }
+        }
+    }
 }
 
 #[derive(Script, ScriptHook, Widget)]
@@ -662,7 +738,6 @@ pub struct AddRoomScreen {
     #[rust] state: AddRoomState,
     /// The function to perform when the user clicks the `join_room_button`.
     #[rust(JoinButtonFunction::None)] join_function: JoinButtonFunction,
-    #[rust(false)] adding_friend: bool,
     #[rust] app_language: AppLanguage,
 }
 
@@ -1272,29 +1347,174 @@ impl CreateRoomModalRef {
     }
 }
 
+#[derive(Script, ScriptHook, Widget)]
+pub struct StartChatModal {
+    #[deref] view: View,
+    #[rust(false)] submitting: bool,
+    #[rust] app_language: AppLanguage,
+}
+
+impl Widget for StartChatModal {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+        self.view.handle_event(cx, event, scope);
+        self.widget_match_event(cx, event, scope);
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+        let user_id_text_is_empty = self.view
+            .text_input(cx, ids!(chat_user_id_input))
+            .text()
+            .trim()
+            .is_empty();
+        self.view.button(cx, ids!(go_button))
+            .set_enabled(cx, !self.submitting && !user_id_text_is_empty);
+        self.view.button(cx, ids!(cancel_button))
+            .set_enabled(cx, !self.submitting);
+        self.view.button(cx, ids!(close_button))
+            .set_enabled(cx, !self.submitting);
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl WidgetMatchEvent for StartChatModal {
+    fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        let chat_user_id_input = self.view.text_input(cx, ids!(chat_user_id_input));
+        let go_button = self.view.button(cx, ids!(go_button));
+        let cancel_button = self.view.button(cx, ids!(cancel_button));
+        let close_button = self.view.button(cx, ids!(close_button));
+
+        let submit_chat_request = go_button.clicked(actions)
+            || chat_user_id_input.returned(actions).is_some();
+        if submit_chat_request {
+            self.submit(cx);
+        }
+
+        let cancel_clicked = cancel_button.clicked(actions);
+        let close_clicked = close_button.clicked(actions);
+        if cancel_clicked || close_clicked {
+            cx.action(StartChatModalAction::Close);
+        }
+
+        for action in actions {
+            if matches!(action.downcast_ref(), Some(DirectMessageRoomAction::FoundExisting { .. } | DirectMessageRoomAction::NewlyCreated { .. })) {
+                self.submitting = false;
+                cx.action(StartChatModalAction::Close);
+            } else if matches!(action.downcast_ref(), Some(DirectMessageRoomAction::FailedToCreate { .. } | DirectMessageRoomAction::DidNotExist { .. })) {
+                self.submitting = false;
+                self.view.redraw(cx);
+            }
+        }
+    }
+}
+
+impl StartChatModal {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.view.label(cx, ids!(title))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.title"));
+        self.view.label(cx, ids!(subtitle))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.subtitle"));
+        self.view.text_input(cx, ids!(chat_user_id_input))
+            .set_empty_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.input.placeholder").to_string());
+        self.view.label(cx, ids!(chat_hint))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.hint"));
+        self.view.button(cx, ids!(go_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.button.go"));
+        self.view.button(cx, ids!(cancel_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.button.cancel"));
+        self.view.redraw(cx);
+    }
+
+    fn submit(&mut self, cx: &mut Cx) {
+        let user_id_str = self.view.text_input(cx, ids!(chat_user_id_input)).text();
+        let user_id_str = user_id_str.trim();
+        if user_id_str.is_empty() {
+            return;
+        }
+
+        match user_id_str.parse::<OwnedUserId>() {
+            Ok(user_id) => {
+                if current_user_id().as_ref().is_some_and(|current| current == &user_id) {
+                    enqueue_popup_notification(
+                        tr_key(self.app_language, "add_room.popup.cannot_add_self").to_string(),
+                        PopupKind::Warning,
+                        Some(4.0),
+                    );
+                    return;
+                }
+
+                self.submitting = true;
+                submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
+                    create_encrypted: false,
+                    user_profile: UserProfile {
+                        user_id,
+                        username: None,
+                        avatar_state: AvatarState::Unknown,
+                    },
+                    allow_create: true,
+                });
+                self.view.redraw(cx);
+            }
+            Err(e) => {
+                let error_text = e.to_string();
+                enqueue_popup_notification(
+                    tr_fmt(self.app_language, "add_room.popup.invalid_user_id", &[
+                        ("error", error_text.as_str()),
+                    ]),
+                    PopupKind::Error,
+                    None,
+                );
+                self.view.text_input(cx, ids!(chat_user_id_input)).set_key_focus(cx);
+            }
+        }
+    }
+
+    pub fn show(&mut self, cx: &mut Cx) {
+        self.submitting = false;
+        self.view.text_input(cx, ids!(chat_user_id_input)).set_text(cx, "");
+        self.set_app_language(cx, self.app_language);
+        self.view.button(cx, ids!(go_button)).reset_hover(cx);
+        self.view.button(cx, ids!(cancel_button)).reset_hover(cx);
+        self.view.button(cx, ids!(close_button)).reset_hover(cx);
+        self.view.text_input(cx, ids!(chat_user_id_input)).set_key_focus(cx);
+        self.view.redraw(cx);
+    }
+}
+
+impl StartChatModalRef {
+    pub fn show(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show(cx);
+    }
+}
+
 impl AddRoomScreen {
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.view.label(cx, ids!(title))
             .set_text(cx, tr_key(self.app_language, "add_room.title"));
-        self.view.label(cx, ids!(create_new_room_label))
-            .set_text(cx, tr_key(self.app_language, "add_room.section.create_new_room"));
         self.view.button(cx, ids!(new_room_button))
             .set_text(cx, tr_key(self.app_language, "add_room.create_room.button.new_room"));
-        self.view.label(cx, ids!(add_friend_label))
-            .set_text(cx, tr_key(self.app_language, "add_room.section.add_friend"));
+        self.view.button(cx, ids!(start_chat_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.button"));
         self.view.label(cx, ids!(join_existing_label))
             .set_text(cx, tr_key(self.app_language, "add_room.section.join_existing"));
-        self.view.label(cx, ids!(add_friend_help))
-            .set_text(cx, tr_key(self.app_language, "add_room.add_friend.help"));
         self.view.html(cx, ids!(help_info))
             .set_text(cx, tr_key(self.app_language, "add_room.join.help_html"));
-        self.view.text_input(cx, ids!(friend_user_id_input))
-            .set_empty_text(cx, tr_key(self.app_language, "add_room.add_friend.input.placeholder").to_string());
         self.view.text_input(cx, ids!(room_alias_id_input))
             .set_empty_text(cx, tr_key(self.app_language, "add_room.join.input.placeholder").to_string());
-        self.view.button(cx, ids!(add_friend_button))
-            .set_text(cx, tr_key(self.app_language, "add_room.add_friend.button"));
         self.view.button(cx, ids!(search_for_room_button))
             .set_text(cx, tr_key(self.app_language, "add_room.join.button.go"));
         self.view.button(cx, ids!(fetched_room_summary.buttons_view.cancel_button))
@@ -1316,9 +1536,8 @@ impl Widget for AddRoomScreen {
         if let Event::Actions(actions) = event {
             let room_alias_id_input = self.view.text_input(cx, ids!(room_alias_id_input));
             let search_for_room_button = self.view.button(cx, ids!(search_for_room_button));
-            let friend_user_id_input = self.view.text_input(cx, ids!(friend_user_id_input));
-            let add_friend_button = self.view.button(cx, ids!(add_friend_button));
             let new_room_button = self.view.button(cx, ids!(new_room_button));
+            let start_chat_button = self.view.button(cx, ids!(start_chat_button));
             let cancel_button = self.view.button(cx, ids!(fetched_room_summary.buttons_view.cancel_button));
             let join_room_button = self.view.button(cx, ids!(fetched_room_summary.buttons_view.join_room_button));
 
@@ -1327,66 +1546,13 @@ impl Widget for AddRoomScreen {
                     parent_space_id: None,
                 });
             }
+            if start_chat_button.clicked(actions) {
+                cx.action(StartChatModalAction::Open);
+            }
 
             // Enable or disable the button based on if the text input is empty.
             if let Some(text) = room_alias_id_input.changed(actions) {
                 search_for_room_button.set_enabled(cx, !text.trim().is_empty());
-            }
-            if let Some(text) = friend_user_id_input.changed(actions) {
-                add_friend_button.set_enabled(cx, !self.adding_friend && !text.trim().is_empty());
-            }
-
-            let add_friend_request = add_friend_button.clicked(actions)
-                .then(|| friend_user_id_input.text())
-                .or_else(|| friend_user_id_input.returned(actions).map(|(t, _)| t));
-            if let Some(user_id_str) = add_friend_request {
-                let user_id_str = user_id_str.trim();
-                if !user_id_str.is_empty() {
-                    match user_id_str.parse::<OwnedUserId>() {
-                        Ok(user_id) => {
-                            if current_user_id().as_ref().is_some_and(|current| current == &user_id) {
-                                enqueue_popup_notification(
-                                    tr_key(self.app_language, "add_room.popup.cannot_add_self").to_string(),
-                                    PopupKind::Warning,
-                                    Some(4.0),
-                                );
-                            } else {
-                                let create_encrypted = scope
-                                    .data
-                                    .get::<AppState>()
-                                    .map(|app_state| {
-                                        app_state.bot_settings.should_create_encrypted_dm(
-                                            user_id.as_ref(),
-                                            current_user_id().as_deref(),
-                                        )
-                                    })
-                                    .unwrap_or(true);
-                                self.adding_friend = true;
-                                add_friend_button.set_enabled(cx, false);
-                                submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
-                                    create_encrypted,
-                                    user_profile: UserProfile {
-                                        user_id,
-                                        username: None,
-                                        avatar_state: AvatarState::Unknown,
-                                    },
-                                    allow_create: false,
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            let error_text = e.to_string();
-                            enqueue_popup_notification(
-                                tr_fmt(self.app_language, "add_room.popup.invalid_user_id", &[
-                                    ("error", error_text.as_str()),
-                                ]),
-                                PopupKind::Error,
-                                None,
-                            );
-                            friend_user_id_input.set_key_focus(cx);
-                        }
-                    }
-                }
             }
 
             // If the cancel button was clicked, hide the room preview and return to default state.
@@ -1576,19 +1742,6 @@ impl Widget for AddRoomScreen {
             }
 
             for action in actions {
-                if matches!(
-                    action.downcast_ref(),
-                    Some(
-                        DirectMessageRoomAction::FoundExisting { .. }
-                        | DirectMessageRoomAction::DidNotExist { .. }
-                        | DirectMessageRoomAction::NewlyCreated { .. }
-                        | DirectMessageRoomAction::FailedToCreate { .. }
-                    )
-                ) {
-                    self.adding_friend = false;
-                    add_friend_button.set_enabled(cx, !friend_user_id_input.text().trim().is_empty());
-                }
-
                 // If the room/space the user is searching for has been loaded from the homeserver
                 // (e.g., by getting invited to it, or joining it in another client),
                 // then update the state of 
@@ -1610,14 +1763,6 @@ impl Widget for AddRoomScreen {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
-
-        let add_friend_text_is_empty = self.view
-            .text_input(cx, ids!(friend_user_id_input))
-            .text()
-            .trim()
-            .is_empty();
-        self.view.button(cx, ids!(add_friend_button))
-            .set_enabled(cx, !self.adding_friend && !add_friend_text_is_empty);
 
         let loading_room_view = self.view.view(cx, ids!(loading_room_view));
         let fetched_room_summary = self.view.view(cx, ids!(fetched_room_summary));
@@ -1970,6 +2115,13 @@ pub enum CreateRoomModalAction {
     Open {
         parent_space_id: Option<OwnedRoomId>,
     },
+    Close,
+}
+
+/// Actions emitted by other widgets to show or hide the start-chat modal.
+#[derive(Debug)]
+pub enum StartChatModalAction {
+    Open,
     Close,
 }
 

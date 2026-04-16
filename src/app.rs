@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use crate::{
     avatar_cache::{self, AvatarCacheEntry, clear_avatar_cache}, home::{
-        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt},
+        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
@@ -266,6 +266,12 @@ script_mod! {
                         create_room_modal := Modal {
                             content +: {
                                 create_room_modal_inner := CreateRoomModal {}
+                            }
+                        }
+
+                        start_chat_modal := Modal {
+                            content +: {
+                                start_chat_modal_inner := StartChatModal {}
                             }
                         }
 
@@ -1365,6 +1371,19 @@ impl MatchEvent for App {
                 }
                 Some(CreateRoomModalAction::Close) => {
                     self.ui.modal(cx, ids!(create_room_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
+            match action.downcast_ref() {
+                Some(StartChatModalAction::Open) => {
+                    self.ui.start_chat_modal(cx, ids!(start_chat_modal_inner)).show(cx);
+                    self.ui.modal(cx, ids!(start_chat_modal)).open(cx);
+                    continue;
+                }
+                Some(StartChatModalAction::Close) => {
+                    self.ui.modal(cx, ids!(start_chat_modal)).close(cx);
                     continue;
                 }
                 _ => {}
