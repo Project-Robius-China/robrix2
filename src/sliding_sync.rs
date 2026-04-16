@@ -19,9 +19,10 @@ use matrix_sdk::{
             receipt::create_receipt::v3::ReceiptType,
             uiaa::{AuthData, AuthType, Dummy},
         }}, directory::{Filter as PublicRoomsFilter, RoomTypeFilter}, events::{
+            direct::DirectUserIdentifier,
             relation::RelationType,
             room::{
-                encryption::RoomEncryptionEventContent, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
+                encryption::RoomEncryptionEventContent, member::MembershipState, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
             },
             space::{child::SpaceChildEventContent, parent::SpaceParentEventContent},
             InitialStateEvent, MessageLikeEventType, StateEventType
@@ -1130,6 +1131,86 @@ fn is_active_dm_room_state(state: RoomState) -> bool {
     state == RoomState::Joined
 }
 
+fn is_empty_direct_room_display_name(display_name: Option<&RoomDisplayName>) -> bool {
+    matches!(
+        display_name,
+        Some(RoomDisplayName::Empty | RoomDisplayName::EmptyWas(_))
+    )
+}
+
+fn should_display_joined_room_entry(
+    room_state: RoomState,
+    is_direct: bool,
+    display_name: Option<&RoomDisplayName>,
+) -> bool {
+    !(room_state == RoomState::Joined
+        && is_direct
+        && is_empty_direct_room_display_name(display_name))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DmRoomReuseCandidate {
+    room_state: RoomState,
+    display_name: Option<RoomDisplayName>,
+    target_membership: Option<MembershipState>,
+    latest_event_timestamp: Option<u64>,
+}
+
+fn is_reusable_dm_room_candidate(candidate: &DmRoomReuseCandidate) -> bool {
+    is_active_dm_room_state(candidate.room_state)
+        && should_display_joined_room_entry(
+            candidate.room_state,
+            true,
+            candidate.display_name.as_ref(),
+        )
+        && matches!(
+            candidate.target_membership,
+            Some(MembershipState::Join | MembershipState::Invite)
+        )
+}
+
+fn choose_reusable_dm_candidate(candidates: &[DmRoomReuseCandidate]) -> Option<usize> {
+    candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| is_reusable_dm_room_candidate(candidate))
+        .max_by_key(|(_, candidate)| candidate.latest_event_timestamp.unwrap_or(0))
+        .map(|(idx, _)| idx)
+}
+
+async fn find_reusable_direct_message_room(client: &Client, target_user_id: &UserId) -> Option<Room> {
+    let mut candidate_rooms = Vec::new();
+    let mut candidate_metas = Vec::new();
+
+    for room in client.joined_rooms() {
+        let direct_targets = room.direct_targets();
+        if direct_targets.len() != 1
+            || !direct_targets.contains(<&DirectUserIdentifier>::from(target_user_id))
+        {
+            continue;
+        }
+
+        let target_membership = room
+            .get_member_no_sync(target_user_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|member| member.membership().clone());
+        let display_name = room.display_name().await.ok();
+
+        candidate_metas.push(DmRoomReuseCandidate {
+            room_state: room.state(),
+            display_name,
+            target_membership,
+            latest_event_timestamp: room.latest_event_timestamp().map(|ts| u64::from(ts.get())),
+        });
+        candidate_rooms.push(room);
+    }
+
+    choose_reusable_dm_candidate(&candidate_metas)
+        .and_then(|idx| candidate_rooms.into_iter().nth(idx))
+}
+
 #[cfg(test)]
 mod matrix_request_tests {
     use super::*;
@@ -1141,6 +1222,113 @@ mod matrix_request_tests {
         assert!(!is_active_dm_room_state(RoomState::Left));
         assert!(!is_active_dm_room_state(RoomState::Banned));
         assert!(!is_active_dm_room_state(RoomState::Knocked));
+    }
+
+    #[test]
+    fn should_display_joined_room_entry_hides_empty_direct_dm() {
+        assert!(!should_display_joined_room_entry(
+            RoomState::Joined,
+            true,
+            Some(&RoomDisplayName::EmptyWas("octosbot".into())),
+        ));
+        assert!(!should_display_joined_room_entry(
+            RoomState::Joined,
+            true,
+            Some(&RoomDisplayName::Empty),
+        ));
+    }
+
+    #[test]
+    fn should_display_joined_room_entry_keeps_non_empty_or_non_direct_rooms() {
+        assert!(should_display_joined_room_entry(
+            RoomState::Joined,
+            true,
+            Some(&RoomDisplayName::Named("octosbot".into())),
+        ));
+        assert!(should_display_joined_room_entry(
+            RoomState::Joined,
+            false,
+            Some(&RoomDisplayName::EmptyWas("room".into())),
+        ));
+        assert!(should_display_joined_room_entry(
+            RoomState::Invited,
+            true,
+            Some(&RoomDisplayName::EmptyWas("octosbot".into())),
+        ));
+    }
+
+    #[test]
+    fn choose_reusable_dm_candidate_prefers_room_where_target_is_still_active() {
+        let candidates = vec![
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("old".into())),
+                target_membership: Some(MembershipState::Leave),
+                latest_event_timestamp: Some(20),
+            },
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("active".into())),
+                target_membership: Some(MembershipState::Join),
+                latest_event_timestamp: Some(10),
+            },
+        ];
+
+        assert_eq!(choose_reusable_dm_candidate(&candidates), Some(1));
+    }
+
+    #[test]
+    fn choose_reusable_dm_candidate_returns_none_when_target_left_every_candidate() {
+        let candidates = vec![
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("old".into())),
+                target_membership: Some(MembershipState::Leave),
+                latest_event_timestamp: Some(20),
+            },
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("missing".into())),
+                target_membership: None,
+                latest_event_timestamp: Some(30),
+            },
+        ];
+
+        assert_eq!(choose_reusable_dm_candidate(&candidates), None);
+    }
+
+    #[test]
+    fn choose_reusable_dm_candidate_prefers_latest_active_candidate() {
+        let candidates = vec![
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("older".into())),
+                target_membership: Some(MembershipState::Invite),
+                latest_event_timestamp: Some(10),
+            },
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("latest".into())),
+                target_membership: Some(MembershipState::Join),
+                latest_event_timestamp: Some(50),
+            },
+        ];
+
+        assert_eq!(choose_reusable_dm_candidate(&candidates), Some(1));
+    }
+
+    #[test]
+    fn choose_reusable_dm_candidate_rejects_empty_direct_room() {
+        let candidates = vec![
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::EmptyWas("octosbot".into())),
+                target_membership: Some(MembershipState::Join),
+                latest_event_timestamp: Some(50),
+            },
+        ];
+
+        assert_eq!(choose_reusable_dm_candidate(&candidates), None);
     }
 
     #[test]
@@ -2098,11 +2286,7 @@ async fn matrix_worker_task(
             MatrixRequest::OpenOrCreateDirectMessage { user_profile, allow_create, create_encrypted } => {
                 let Some(client) = get_client() else { continue };
                 let _create_dm_task = Handle::current().spawn(async move {
-                    // `m.direct` is not pruned on leave; upstream `get_dm_room` goes through
-                    // `joined_rooms()` (JOINED-only) but a race between leave-200 and the local
-                    // membership transition can still surface a stale room here. Guard at dispatch.
-                    let existing_dm = client.get_dm_room(&user_profile.user_id)
-                        .filter(|r| is_active_dm_room_state(r.state()));
+                    let existing_dm = find_reusable_direct_message_room(&client, &user_profile.user_id).await;
                     if let Some(room) = existing_dm {
                         log!("Found existing DM room: {}", room.room_id());
                         Cx::post_action(DirectMessageRoomAction::FoundExisting {
@@ -4592,6 +4776,24 @@ async fn update_room(
 ) -> Result<()> {
     let new_room_id = new_room.room_id.clone();
     if old_room.room_id == new_room_id {
+        let old_should_display = should_display_joined_room_entry(
+            old_room.state,
+            old_room.is_direct,
+            old_room.display_name.as_ref(),
+        );
+        let new_should_display = should_display_joined_room_entry(
+            new_room.state,
+            new_room.is_direct,
+            new_room.display_name.as_ref(),
+        );
+        if old_should_display && !new_should_display {
+            remove_room(new_room);
+            return Ok(());
+        }
+        if !old_should_display && new_should_display {
+            return add_new_room(new_room, room_list_service, true).await;
+        }
+
         // Handle state transitions for a room.
         if LOG_ROOM_LIST_DIFFS {
             log!("Room {:?} ({new_room_id}) state went from {:?} --> {:?}", new_room.display_name, old_room.state, new_room.state);
@@ -4770,6 +4972,14 @@ async fn add_new_room(
     room_list_service: &RoomListService,
     subscribe: bool,
 ) -> Result<()> {
+    if !should_display_joined_room_entry(
+        new_room.state,
+        new_room.is_direct,
+        new_room.display_name.as_ref(),
+    ) {
+        return Ok(());
+    }
+
     match new_room.state {
         RoomState::Knocked => {
             log!("Got new Knocked room: {:?} ({})", new_room.display_name, new_room.room_id);
