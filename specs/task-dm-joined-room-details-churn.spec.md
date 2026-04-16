@@ -79,7 +79,7 @@ Scenario: display-flip predicate returns NoDisplayChange when eligibility is sta
   Then the returned value equals `JoinedRoomDisplayFlip::NoDisplayChange`
 
 Scenario: RoomsListUpdate::UnhideRoom clears hidden flag and restores a displayable direct room
-  Test: rooms_list_unhide_room_restores_direct_room
+  Test: manual_test_rooms_list_unhide_room_restores_direct_room
   Given a `RoomsList` whose `hidden_rooms` contains `room_id R`
   And `all_joined_rooms[R].is_direct == true`
   And `all_joined_rooms[R]` would satisfy `should_display_room!` if not hidden
@@ -89,7 +89,7 @@ Scenario: RoomsListUpdate::UnhideRoom clears hidden flag and restores a displaya
   And `self.displayed_regular_rooms` does not contain `R`
 
 Scenario: RoomsListUpdate::UnhideRoom on an unknown room is a no-op
-  Test: rooms_list_unhide_room_unknown_room_is_noop
+  Test: manual_test_rooms_list_unhide_room_unknown_room_is_noop
   Given a `RoomsList` whose `all_joined_rooms` does not contain `room_id R`
   When the handler processes `RoomsListUpdate::UnhideRoom { room_id: R }`
   Then no panic occurs
