@@ -525,6 +525,21 @@ macro_rules! should_display_room {
     };
 }
 
+fn for_each_room_id_in_display_order<'a, I, F>(room_ids: I, mut f: F)
+where
+    I: IntoIterator<Item = &'a OwnedRoomId>,
+    F: FnMut(&'a OwnedRoomId),
+{
+    let mut seen_room_ids = HashSet::new();
+    for room_id in room_ids {
+        if !seen_room_ids.insert(room_id.clone()) {
+            warning!("Ignoring duplicate room ID {room_id} in all_known_rooms_order");
+            continue;
+        }
+        f(room_id);
+    }
+}
+
 
 impl RoomsList {
     /// Returns whether the homeserver has finished syncing all of the rooms
@@ -545,6 +560,11 @@ impl RoomsList {
             return Some(RoomState::Invited);
         }
         None
+    }
+
+    /// Returns whether the given joined room is marked as a direct room.
+    pub fn is_direct_room(&self, room_id: &OwnedRoomId) -> Option<bool> {
+        self.all_joined_rooms.get(room_id).map(|jr| jr.is_direct)
     }
 
     fn upsert_created_room_placeholder(
@@ -1088,7 +1108,7 @@ impl RoomsList {
         else {
             let mut seen_joined = HashSet::new();
             let mut seen_invited = HashSet::new();
-            for room_id in &self.all_known_rooms_order {
+            for_each_room_id_in_display_order(self.all_known_rooms_order.iter(), |room_id| {
                 if let Some(jr) = self.all_joined_rooms.get(room_id) {
                     if should_display_room!(self, room_id, jr) {
                         seen_joined.insert(room_id.clone());
@@ -1100,7 +1120,7 @@ impl RoomsList {
                         new_displayed_invited_rooms.push(room_id.clone());
                     }
                 }
-            }
+            });
 
             for (room_id, jr) in &self.all_joined_rooms {
                 if !seen_joined.contains(room_id) && should_display_room!(self, room_id, jr) {
@@ -1723,6 +1743,11 @@ impl RoomsListRef {
         self.borrow()?.get_room_state(room_id)
     }
 
+    /// Returns whether the given joined room is marked as a direct room.
+    pub fn is_direct_room(&self, room_id: &OwnedRoomId) -> Option<bool> {
+        self.borrow()?.is_direct_room(room_id)
+    }
+
     /// Returns the name of the given room, if it is known and loaded.
     pub fn get_room_name(&self, room_id: &OwnedRoomId) -> Option<RoomNameId> {
         let inner = self.borrow()?;
@@ -1813,4 +1838,31 @@ struct RoomCategoryIndexes {
     first_room_index: usize,
     /// The index after the last room in this category, which is where the next category should start.
     after_rooms_index: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matrix_sdk::ruma::owned_room_id;
+
+    #[test]
+    fn room_order_iteration_ignores_duplicate_room_ids() {
+        let first_room_id = owned_room_id!("!first:example.com");
+        let second_room_id = owned_room_id!("!second:example.com");
+        let ordered_room_ids = [
+            first_room_id.clone(),
+            first_room_id.clone(),
+            second_room_id.clone(),
+        ];
+
+        let mut iterated_room_ids = Vec::new();
+        for_each_room_id_in_display_order(ordered_room_ids.iter(), |room_id| {
+            iterated_room_ids.push(room_id.clone());
+        });
+
+        assert_eq!(
+            iterated_room_ids,
+            vec![first_room_id, second_room_id],
+        );
+    }
 }

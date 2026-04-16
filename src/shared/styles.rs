@@ -87,6 +87,56 @@ script_mod! {
         line_spacing: (mod.widgets.MESSAGE_TEXT_LINE_SPACING),
     }
 
+    // Code blocks need a real monospace latin font for CodeView layout,
+    // plus a Chinese fallback so mixed CJK comments remain readable.
+    mod.widgets.MESSAGE_CODE_TEXT_STYLE = TextStyle {
+        font_family: FontFamily{
+            latin := FontMember{
+                res: crate_resource("self://resources/fonts/LiberationMono-Regular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            chinese := FontMember{
+                res: crate_resource("self://resources/fonts/LXGWWenKaiRegular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            emoji := FontMember{
+                res: crate_resource("self://resources/fonts/NotoColorEmoji.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+        }
+        font_size: (mod.widgets.MESSAGE_FONT_SIZE),
+        line_spacing: (mod.widgets.MESSAGE_TEXT_LINE_SPACING),
+        top_drop: 0.21,
+    }
+
+    // Event source JSON benefits from a slightly looser code style than
+    // bot markdown blocks, especially when CJK glyph fallback is involved.
+    mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE = TextStyle {
+        font_family: FontFamily{
+            latin := FontMember{
+                res: crate_resource("self://resources/fonts/LiberationMono-Regular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            chinese := FontMember{
+                res: crate_resource("self://resources/fonts/LXGWWenKaiRegular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            emoji := FontMember{
+                res: crate_resource("self://resources/fonts/NotoColorEmoji.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+        }
+        font_size: 11.0,
+        line_spacing: 1.58,
+        top_drop: 0.18,
+    }
+
     mod.widgets.MESSAGE_REPLY_PREVIEW_FONT_SIZE = 9.5
 
 
@@ -212,6 +262,11 @@ script_mod! {
     // Settings screen layout
     mod.widgets.SETTINGS_CONTENT_PADDING = 16
     mod.widgets.SETTINGS_BUTTON_HEIGHT = 36
+
+    // Text alignment compensation for non-Label widgets (LinkLabel, IconButton)
+    // whose internal rendering origin differs from plain Label.
+    mod.widgets.LINK_LABEL_LEFT_PAD = 6
+    mod.widgets.ICON_BUTTON_LEFT_PAD = 4
 
     mod.widgets.COLOR_IMAGE_VIEWER_BACKGROUND = #333333CC // 80% Opacity
 

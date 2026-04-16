@@ -23,7 +23,7 @@ use matrix_sdk::{
 use matrix_sdk_ui::timeline::{
     self, EmbeddedEvent, EncryptedMessage, EventTimelineItem, InReplyToDetails, LiveLocationState, MemberProfileChange, MembershipChange, MsgLikeContent, MsgLikeKind, OtherMessageLike, PollState, RoomMembershipChange, TimelineDetails, TimelineEventItemId, TimelineItem, TimelineItemContent, TimelineItemKind, VirtualTimelineItem
 };
-use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent}, owned_room_id};
+use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent}};
 
 use matrix_sdk_ui::sync_service::State;
 use crate::{
@@ -39,6 +39,7 @@ use crate::{
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
+use crate::home::streaming_animation::StreamingAnimState;
 use crate::room::room_input_bar::RoomInputBarWidgetExt;
 use crate::shared::mentionable_text_input::MentionableTextInputAction;
 
@@ -67,6 +68,888 @@ const TRANSLATION_LANG_POPUP_SCROLL_HEIGHT: f64 = 288.0;
 const TRANSLATION_LANG_POPUP_HEIGHT: f64 = TRANSLATION_LANG_POPUP_SCROLL_HEIGHT + 8.0;
 const TRANSLATION_LANG_POPUP_GAP: f64 = 6.0;
 const TRANSLATION_LANG_POPUP_MARGIN: f64 = 8.0;
+const MESSAGE_PROFILE_TOP_MARGIN: f64 = 4.5;
+const MESSAGE_PROFILE_AVATAR_SIZE: f64 = 48.0;
+const MESSAGE_USERNAME_ROW_HEIGHT: f64 = 18.0;
+const MESSAGE_USERNAME_ROW_BOTTOM_MARGIN: f64 = 9.0;
+const MESSAGE_USERNAME_RIGHT_MARGIN: f64 = 4.0;
+const BOT_BADGE_HEIGHT: f64 = 16.0;
+const BOT_BADGE_HORIZONTAL_PADDING: f64 = 6.0;
+const BOT_BADGE_BORDER_RADIUS: f64 = 3.0;
+const BOT_BADGE_TEXT_FONT_SIZE: f64 = 8.5;
+const BOT_BADGE_TEXT_TOP_DROP: f64 = -0.08;
+const MAX_OCTOS_ACTION_BUTTONS: usize = 6;
+
+const fn centered_top_margin(outer_top_margin: f64, outer_height: f64, inner_height: f64) -> f64 {
+    outer_top_margin + ((outer_height - inner_height) * 0.5)
+}
+
+#[cfg(test)]
+const fn center_y(top_margin: f64, height: f64) -> f64 {
+    top_margin + (height * 0.5)
+}
+
+const MESSAGE_USERNAME_ROW_TOP_MARGIN: f64 = centered_top_margin(
+    MESSAGE_PROFILE_TOP_MARGIN,
+    MESSAGE_PROFILE_AVATAR_SIZE,
+    MESSAGE_USERNAME_ROW_HEIGHT,
+);
+
+#[cfg(test)]
+fn message_profile_avatar_center_y() -> f64 {
+    center_y(MESSAGE_PROFILE_TOP_MARGIN, MESSAGE_PROFILE_AVATAR_SIZE)
+}
+
+#[cfg(test)]
+fn message_username_row_center_y() -> f64 {
+    center_y(MESSAGE_USERNAME_ROW_TOP_MARGIN, MESSAGE_USERNAME_ROW_HEIGHT)
+}
+
+#[cfg(test)]
+fn bot_badge_center_y_within_username_row() -> f64 {
+    let bot_badge_top_margin = MESSAGE_USERNAME_ROW_TOP_MARGIN
+        + ((MESSAGE_USERNAME_ROW_HEIGHT - BOT_BADGE_HEIGHT) * 0.5);
+    center_y(bot_badge_top_margin, BOT_BADGE_HEIGHT)
+}
+
+#[cfg(test)]
+fn bot_badge_label_center_y() -> f64 {
+    let bot_badge_label_top_margin = (BOT_BADGE_HEIGHT - BOT_BADGE_TEXT_FONT_SIZE) * 0.5
+        + (BOT_BADGE_TEXT_FONT_SIZE * BOT_BADGE_TEXT_TOP_DROP);
+    center_y(bot_badge_label_top_margin, BOT_BADGE_TEXT_FONT_SIZE)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BotTimelineLayers {
+    status: Option<String>,
+    provider: Option<String>,
+    body: String,
+    footer: Option<String>,
+}
+
+impl BotTimelineLayers {
+    fn plain(body: &str) -> Self {
+        Self {
+            status: None,
+            provider: None,
+            body: body.to_string(),
+            footer: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BotTimelineRenderState {
+    show_card: bool,
+    show_body_card: bool,
+    show_status_strip: bool,
+    show_metadata_footer: bool,
+    status: Option<String>,
+    provider: Option<String>,
+    body: String,
+    footer: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OctosActionStyle {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosActionButton {
+    id: String,
+    label: String,
+    style: OctosActionStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActionButtonRenderSlot {
+    id: String,
+    label: String,
+    style: OctosActionStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedOctosActionState {
+    id: String,
+    label: String,
+    style: OctosActionStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApprovalCardRenderState {
+    title: String,
+    summary: String,
+    buttons_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActionButtonRenderState {
+    show_container: bool,
+    show_button_row: bool,
+    approval_card: Option<ApprovalCardRenderState>,
+    buttons_enabled: bool,
+    visible_slots: Vec<ActionButtonRenderSlot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedOctosActionPayload {
+    approval_request: Option<OctosApprovalRequest>,
+    actions: Vec<OctosActionButton>,
+    malformed_approval_request: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OctosApprovalRiskLevel {
+    Normal,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OctosApprovalTimeoutBehavior {
+    Notify,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosApprovalRequest {
+    request_id: String,
+    tool_name: String,
+    tool_args_digest: String,
+    title: String,
+    summary: String,
+    risk_level: OctosApprovalRiskLevel,
+    authorized_approvers: Vec<String>,
+    expires_at: String,
+    on_timeout: OctosApprovalTimeoutBehavior,
+}
+
+fn parse_octos_action_style(style: Option<&str>) -> OctosActionStyle {
+    match style {
+        Some("primary") => OctosActionStyle::Primary,
+        Some("danger") => OctosActionStyle::Danger,
+        _ => OctosActionStyle::Secondary,
+    }
+}
+
+fn effective_octos_message_content(content: &serde_json::Value) -> &serde_json::Value {
+    content.get("m.new_content").unwrap_or(content)
+}
+
+fn latest_effective_event_content_json(
+    event_tl_item: &EventTimelineItem,
+) -> Option<serde_json::Value> {
+    event_tl_item.latest_edit_json()
+        .or_else(|| event_tl_item.original_json())
+        .and_then(|raw| raw.get_field::<serde_json::Value>("content").ok())
+        .flatten()
+        .map(|content| effective_octos_message_content(&content).clone())
+}
+
+fn original_event_content_json(
+    event_tl_item: &EventTimelineItem,
+) -> Option<serde_json::Value> {
+    event_tl_item.original_json()
+        .and_then(|raw| raw.get_field::<serde_json::Value>("content").ok())
+        .flatten()
+}
+
+fn parse_octos_approval_risk_level(value: Option<&str>) -> Option<OctosApprovalRiskLevel> {
+    match value {
+        Some("normal") => Some(OctosApprovalRiskLevel::Normal),
+        Some("critical") => Some(OctosApprovalRiskLevel::Critical),
+        _ => None,
+    }
+}
+
+fn parse_octos_approval_timeout_behavior(value: Option<&str>) -> Option<OctosApprovalTimeoutBehavior> {
+    match value {
+        Some("notify") => Some(OctosApprovalTimeoutBehavior::Notify),
+        _ => None,
+    }
+}
+
+fn parse_octos_approval_request_from_content(content: &serde_json::Value) -> Option<OctosApprovalRequest> {
+    let approval = content.get("org.octos.approval_request")?;
+    let request_id = approval.get("request_id")?.as_str()?.trim();
+    let tool_name = approval.get("tool_name")?.as_str()?.trim();
+    let tool_args_digest = approval.get("tool_args_digest")?.as_str()?.trim();
+    let title = approval.get("title")?.as_str()?.trim();
+    let summary = approval.get("summary")?.as_str()?.trim();
+    let risk_level = parse_octos_approval_risk_level(
+        approval.get("risk_level").and_then(|value| value.as_str()).map(str::trim),
+    )?;
+
+    let approvers = approval.get("authorized_approvers")?.as_array()?;
+    let authorized_approvers = approvers
+        .iter()
+        .filter_map(|value| value.as_str().map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if authorized_approvers.is_empty() {
+        return None;
+    }
+
+    let expires_at = approval.get("expires_at")?.as_str()?.trim();
+    let on_timeout = parse_octos_approval_timeout_behavior(
+        approval.get("on_timeout").and_then(|value| value.as_str()).map(str::trim),
+    )?;
+
+    if request_id.is_empty()
+        || tool_name.is_empty()
+        || tool_args_digest.is_empty()
+        || title.is_empty()
+        || summary.is_empty()
+        || expires_at.is_empty()
+    {
+        return None;
+    }
+
+    Some(OctosApprovalRequest {
+        request_id: request_id.to_owned(),
+        tool_name: tool_name.to_owned(),
+        tool_args_digest: tool_args_digest.to_owned(),
+        title: title.to_owned(),
+        summary: summary.to_owned(),
+        risk_level,
+        authorized_approvers,
+        expires_at: expires_at.to_owned(),
+        on_timeout,
+    })
+}
+
+fn parse_octos_actions_from_content(content: &serde_json::Value) -> Vec<OctosActionButton> {
+    let Some(actions) = effective_octos_message_content(content)
+        .get("org.octos.actions")
+        .and_then(|value| value.as_array())
+    else {
+        return Vec::new();
+    };
+
+    let mut parsed = Vec::new();
+    for (index, action) in actions.iter().enumerate() {
+        if parsed.len() >= MAX_OCTOS_ACTION_BUTTONS {
+            warning!(
+                "org.octos.actions: truncated {} extra buttons",
+                actions.len().saturating_sub(MAX_OCTOS_ACTION_BUTTONS)
+            );
+            break;
+        }
+
+        let Some(id) = action.get("id").and_then(|value| value.as_str()).map(str::trim) else {
+            warning!("org.octos.actions: skipping malformed entry at index {index}");
+            continue;
+        };
+        let Some(label) = action.get("label").and_then(|value| value.as_str()).map(str::trim) else {
+            warning!("org.octos.actions: skipping malformed entry at index {index}");
+            continue;
+        };
+        if id.is_empty() || label.is_empty() {
+            warning!("org.octos.actions: skipping malformed entry at index {index}");
+            continue;
+        }
+
+        parsed.push(OctosActionButton {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            style: parse_octos_action_style(action.get("style").and_then(|value| value.as_str())),
+        });
+    }
+
+    parsed
+}
+
+fn parse_octos_approval_actions_from_content(content: &serde_json::Value) -> Vec<OctosActionButton> {
+    parse_octos_actions_from_content(content)
+        .into_iter()
+        .filter(|action| matches!(action.id.as_str(), "approve" | "deny"))
+        .collect()
+}
+
+fn parse_octos_action_payload_for_render(
+    content: Option<&serde_json::Value>,
+    original_content: Option<&serde_json::Value>,
+) -> ParsedOctosActionPayload {
+    let approval_request = original_content
+        .and_then(parse_octos_approval_request_from_content);
+    let malformed_approval_request = original_content
+        .is_some_and(|content| content.get("org.octos.approval_request").is_some())
+        && approval_request.is_none();
+
+    let actions = if malformed_approval_request {
+        Vec::new()
+    } else if approval_request.is_some() {
+        original_content
+            .map(parse_octos_approval_actions_from_content)
+            .unwrap_or_default()
+    } else {
+        content
+            .map(parse_octos_actions_from_content)
+            .unwrap_or_default()
+    };
+
+    ParsedOctosActionPayload {
+        approval_request,
+        actions,
+        malformed_approval_request,
+    }
+}
+
+fn compute_action_button_render_state(
+    actions: &[OctosActionButton],
+    approval_request: Option<&OctosApprovalRequest>,
+    current_user_id: Option<&UserId>,
+) -> ActionButtonRenderState {
+    let approval_card = approval_request
+        .and_then(|approval_request| (!actions.is_empty()).then(|| ApprovalCardRenderState {
+            title: approval_request.title.clone(),
+            summary: approval_request.summary.clone(),
+            buttons_enabled: local_user_can_approve(approval_request, current_user_id),
+        }));
+    let visible_slots = actions
+        .iter()
+        .take(MAX_OCTOS_ACTION_BUTTONS)
+        .map(|action| ActionButtonRenderSlot {
+            id: action.id.clone(),
+            label: action.label.clone(),
+            style: action.style,
+        })
+        .collect::<Vec<_>>();
+
+    let buttons_enabled = approval_card
+        .as_ref()
+        .map(|approval_card| approval_card.buttons_enabled)
+        .unwrap_or(true);
+    let show_button_row = !visible_slots.is_empty();
+
+    ActionButtonRenderState {
+        show_container: approval_card.is_some() || show_button_row,
+        show_button_row,
+        approval_card,
+        buttons_enabled,
+        visible_slots,
+    }
+}
+
+fn action_button_render_slots_for_display(
+    render_state: &ActionButtonRenderState,
+    selected_action: Option<&SelectedOctosActionState>,
+) -> Vec<ActionButtonRenderSlot> {
+    if let Some(selected_action) = selected_action {
+        vec![ActionButtonRenderSlot {
+            id: selected_action.id.clone(),
+            label: format!("✓ {}", selected_action.label),
+            style: selected_action.style,
+        }]
+    } else {
+        render_state.visible_slots.clone()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosActionResponseRequest {
+    timeline_kind: TimelineKind,
+    content: serde_json::Value,
+    target_user_id: OwnedUserId,
+    explicit_room: bool,
+    source_event_id: OwnedEventId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OctosActionButtonRequest {
+    Generic {
+        action_id: String,
+        label: String,
+        style: OctosActionStyle,
+    },
+    Approval {
+        request_id: String,
+        title: String,
+        decision: String,
+        label: String,
+        tool_args_digest: String,
+        style: OctosActionStyle,
+    },
+}
+
+impl OctosActionButtonRequest {
+    fn action_id(&self) -> &str {
+        match self {
+            Self::Generic { action_id, .. } => action_id,
+            Self::Approval { decision, .. } => decision,
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::Generic { label, .. } => label,
+            Self::Approval { label, .. } => label,
+        }
+    }
+
+    fn style(&self) -> OctosActionStyle {
+        match self {
+            Self::Generic { style, .. } | Self::Approval { style, .. } => *style,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosActionButtonContext {
+    source_event_id: OwnedEventId,
+    original_sender: OwnedUserId,
+    request: OctosActionButtonRequest,
+}
+
+fn build_octos_approval_response_request(
+    timeline_kind: &TimelineKind,
+    title: &str,
+    request_id: &str,
+    decision: &str,
+    tool_args_digest: &str,
+    source_event_id: &EventId,
+    original_sender: &UserId,
+) -> OctosActionResponseRequest {
+    OctosActionResponseRequest {
+        timeline_kind: timeline_kind.clone(),
+        content: serde_json::json!({
+            "msgtype": "m.text",
+            "body": format!("[Approval: {decision}] {title}"),
+            "org.octos.approval_response": {
+                "request_id": request_id,
+                "decision": decision,
+                "source_event_id": source_event_id.as_str(),
+                "tool_args_digest": tool_args_digest,
+            },
+            "m.relates_to": {
+                "m.in_reply_to": {
+                    "event_id": source_event_id.as_str(),
+                }
+            }
+        }),
+        target_user_id: original_sender.to_owned(),
+        explicit_room: false,
+        source_event_id: source_event_id.to_owned(),
+    }
+}
+
+fn build_octos_action_response_request(
+    timeline_kind: &TimelineKind,
+    label: &str,
+    action_id: &str,
+    source_event_id: &EventId,
+    original_sender: &UserId,
+) -> OctosActionResponseRequest {
+    OctosActionResponseRequest {
+        timeline_kind: timeline_kind.clone(),
+        content: serde_json::json!({
+            "msgtype": "m.text",
+            "body": format!("[Action: {label}]"),
+            "org.octos.action_response": {
+                "action_id": action_id,
+                "source_event_id": source_event_id.as_str(),
+            },
+            "m.relates_to": {
+                "m.in_reply_to": {
+                    "event_id": source_event_id.as_str(),
+                }
+            }
+        }),
+        target_user_id: original_sender.to_owned(),
+        explicit_room: false,
+        source_event_id: source_event_id.to_owned(),
+    }
+}
+
+fn local_user_can_approve(
+    approval_request: &OctosApprovalRequest,
+    current_user_id: Option<&UserId>,
+) -> bool {
+    let Some(current_user_id) = current_user_id else {
+        return false;
+    };
+
+    approval_request.authorized_approvers
+        .iter()
+        .any(|approver| approver == current_user_id.as_str())
+}
+
+fn mark_action_buttons_disabled(
+    disabled_source_event_ids: &mut HashSet<OwnedEventId>,
+    source_event_id: &OwnedEventId,
+) {
+    disabled_source_event_ids.insert(source_event_id.clone());
+}
+
+fn mark_selected_octos_action(
+    selected_actions: &mut HashMap<OwnedEventId, SelectedOctosActionState>,
+    source_event_id: &OwnedEventId,
+    action_id: &str,
+    label: &str,
+    style: OctosActionStyle,
+) {
+    selected_actions.insert(source_event_id.clone(), SelectedOctosActionState {
+        id: action_id.to_owned(),
+        label: label.to_owned(),
+        style,
+    });
+}
+
+fn clear_selected_octos_action(
+    selected_actions: &mut HashMap<OwnedEventId, SelectedOctosActionState>,
+    source_event_id: &EventId,
+) {
+    selected_actions.remove(source_event_id);
+}
+
+fn clear_action_buttons_disabled(
+    disabled_source_event_ids: &mut HashSet<OwnedEventId>,
+    source_event_id: &EventId,
+) {
+    disabled_source_event_ids.remove(source_event_id);
+}
+
+fn are_action_buttons_disabled(
+    disabled_source_event_ids: &HashSet<OwnedEventId>,
+    source_event_id: &EventId,
+) -> bool {
+    disabled_source_event_ids.contains(source_event_id)
+}
+
+fn octos_action_button_paths(index: usize) -> (&'static [LiveId], &'static [LiveId], &'static [LiveId], &'static [LiveId]) {
+    match index {
+        0 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(danger_button)],
+        ),
+        1 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(danger_button)],
+        ),
+        2 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(danger_button)],
+        ),
+        3 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(danger_button)],
+        ),
+        4 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(danger_button)],
+        ),
+        _ => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(danger_button)],
+        ),
+    }
+}
+
+fn is_bot_provider_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("via ") && trimmed.contains('(') && trimmed.ends_with(')')
+}
+
+fn strip_streaming_cursor_suffix(line: &str) -> &str {
+    line
+        .trim_end()
+        .strip_suffix('\u{25CF}')
+        .map(str::trim_end)
+        .unwrap_or_else(|| line.trim_end())
+}
+
+fn is_bot_footer_line(line: &str) -> bool {
+    let trimmed = strip_streaming_cursor_suffix(line);
+    trimmed.starts_with('_')
+        && trimmed.ends_with('_')
+        && trimmed.contains("·")
+        && trimmed.contains(" in")
+        && trimmed.contains(" out")
+}
+
+fn looks_like_metrics_line(line: &str) -> bool {
+    let trimmed = strip_streaming_cursor_suffix(line).trim();
+    !trimmed.is_empty()
+        && trimmed.chars().count() <= 40
+        && trimmed.chars().any(|ch| ch.is_ascii_digit())
+        && (trimmed.contains('s') || trimmed.contains(" in") || trimmed.contains(" out"))
+}
+
+fn looks_like_status_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty()
+        && !trimmed.starts_with("via ")
+        && !trimmed.starts_with('_')
+        && trimmed.chars().count() <= 32
+        && !trimmed.contains("  ")
+}
+
+fn trim_structured_body_lines(lines: &[&str]) -> String {
+    let mut start = 0;
+    let mut end = lines.len();
+
+    while start < end && lines[start].trim().is_empty() {
+        start += 1;
+    }
+    while end > start && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+
+    lines[start..end].join("\n")
+}
+
+fn is_viable_bot_body(body: &str) -> bool {
+    let trimmed = body.trim();
+    !trimmed.is_empty()
+        && trimmed.chars().any(|c| c.is_alphanumeric())
+}
+
+fn parse_bot_timeline_layers(raw_body: &str, is_bot_sender: bool) -> BotTimelineLayers {
+    if !is_bot_sender || raw_body.trim().is_empty() {
+        return BotTimelineLayers::plain(raw_body);
+    }
+
+    let lines: Vec<&str> = raw_body.lines().collect();
+    if lines.is_empty() {
+        return BotTimelineLayers::plain(raw_body);
+    }
+
+    let (status, provider, mut content_start) =
+        if lines.len() >= 2 && looks_like_status_line(lines[0]) && is_bot_provider_line(lines[1]) {
+            (
+                Some(lines[0].trim().to_string()),
+                Some(lines[1].trim().to_string()),
+                2usize,
+            )
+        } else if is_bot_provider_line(lines[0]) {
+            (None, Some(lines[0].trim().to_string()), 1usize)
+        } else {
+            (None, None, 0usize)
+        };
+
+    while content_start < lines.len() && lines[content_start].trim().is_empty() {
+        content_start += 1;
+    }
+
+    let mut footer = None;
+    let mut content_end = lines.len();
+    let last_non_empty = lines.iter().rposition(|line| !line.trim().is_empty());
+
+    if let Some(last_idx) = last_non_empty {
+        if is_bot_footer_line(lines[last_idx]) {
+            footer = Some(strip_streaming_cursor_suffix(lines[last_idx]).trim().to_string());
+            content_end = last_idx;
+            while content_end > content_start && lines[content_end - 1].trim().is_empty() {
+                content_end -= 1;
+            }
+        }
+    }
+
+    if content_start >= content_end {
+        return if status.is_some() || provider.is_some() || footer.is_some() {
+            BotTimelineLayers {
+                status,
+                provider,
+                body: String::new(),
+                footer,
+            }
+        } else {
+            BotTimelineLayers::plain(raw_body)
+        };
+    }
+
+    let content_lines = &lines[content_start..content_end];
+    let mut body = trim_structured_body_lines(content_lines);
+    if footer.is_none() && content_lines.len() == 1 && looks_like_metrics_line(content_lines[0]) {
+        footer = Some(strip_streaming_cursor_suffix(content_lines[0]).trim().to_string());
+        body.clear();
+    }
+    if !is_viable_bot_body(&body) {
+        return if status.is_some() || provider.is_some() || footer.is_some() {
+            BotTimelineLayers {
+                status,
+                provider,
+                body,
+                footer,
+            }
+        } else {
+            BotTimelineLayers::plain(raw_body)
+        };
+    }
+
+    BotTimelineLayers {
+        status,
+        provider,
+        body,
+        footer,
+    }
+}
+
+fn compute_bot_timeline_render_state(raw_body: &str, is_bot_sender: bool) -> BotTimelineRenderState {
+    let layers = parse_bot_timeline_layers(raw_body, is_bot_sender);
+    let show_card = is_bot_sender;
+    let show_body_card = show_card && !layers.body.trim().is_empty();
+
+    BotTimelineRenderState {
+        show_card,
+        show_body_card,
+        show_status_strip: show_card && layers.status.is_some(),
+        show_metadata_footer: show_card && (layers.provider.is_some() || layers.footer.is_some()),
+        status: layers.status,
+        provider: layers.provider,
+        body: layers.body,
+        footer: layers.footer,
+    }
+}
+
+fn display_bot_footer_text(footer: &str) -> &str {
+    strip_streaming_cursor_suffix(footer)
+        .strip_prefix('_')
+        .and_then(|trimmed| trimmed.strip_suffix('_'))
+        .unwrap_or(footer)
+}
+
+fn has_rich_markdown_syntax(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && (
+            trimmed.contains("```")
+            || trimmed.starts_with("## ")
+            || trimmed.starts_with("### ")
+            || trimmed.contains("\n## ")
+            || trimmed.contains("\n### ")
+            || trimmed.starts_with("|")
+            || trimmed.contains("\n|")
+            || trimmed.starts_with("- ")
+            || trimmed.contains("\n- ")
+            || trimmed.starts_with("* ")
+            || trimmed.contains("\n* ")
+            || trimmed.contains("**")
+            || trimmed.contains("`")
+        )
+}
+
+fn should_render_streaming_full_snapshot(
+    body: &str,
+    formatted_body: Option<&FormattedBody>,
+    is_bot_sender: bool,
+) -> bool {
+    is_bot_sender
+        && (
+            formatted_body.is_some_and(|formatted| formatted.format == MessageFormat::Html)
+            || has_rich_markdown_syntax(body)
+        )
+}
+
+fn select_bot_timeline_body_formatted_body(
+    render_state: &BotTimelineRenderState,
+    formatted_body: Option<&FormattedBody>,
+) -> Option<FormattedBody> {
+    if render_state.status.is_none()
+        && render_state.provider.is_none()
+        && render_state.footer.is_none()
+    {
+        return formatted_body
+            .cloned()
+            .or_else(|| has_rich_markdown_syntax(&render_state.body)
+                .then(|| FormattedBody::markdown(&render_state.body))
+                .flatten());
+    }
+
+    FormattedBody::markdown(&render_state.body)
+}
+
+fn should_render_bot_timeline_body_with_markdown_widget(
+    render_state: &BotTimelineRenderState,
+) -> bool {
+    render_state.show_body_card
+        && render_state.body.contains("```")
+}
+
+fn contains_cjk(text: &str) -> bool {
+    text.chars().any(|ch|
+        matches!(ch as u32,
+            0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2B820..=0x2CEAF
+            | 0x2CEB0..=0x2EBEF
+            | 0x3000..=0x303F
+            | 0x3040..=0x30FF
+            | 0x31F0..=0x31FF
+            | 0xAC00..=0xD7AF
+        )
+    )
+}
+
+fn fenced_code_blocks_contain_cjk(text: &str) -> bool {
+    let mut in_fence = false;
+    let mut fence_has_cjk = false;
+
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            if in_fence && fence_has_cjk {
+                return true;
+            }
+            in_fence = !in_fence;
+            fence_has_cjk = false;
+            continue;
+        }
+
+        if in_fence && contains_cjk(line) {
+            fence_has_cjk = true;
+        }
+    }
+
+    in_fence && fence_has_cjk
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BotTimelineCodeBlockMode {
+    None,
+    Highlighted,
+    Plain,
+}
+
+fn bot_timeline_code_block_mode(render_state: &BotTimelineRenderState) -> BotTimelineCodeBlockMode {
+    if !should_render_bot_timeline_body_with_markdown_widget(render_state) {
+        return BotTimelineCodeBlockMode::None;
+    }
+
+    if fenced_code_blocks_contain_cjk(&render_state.body) {
+        BotTimelineCodeBlockMode::Plain
+    } else {
+        BotTimelineCodeBlockMode::Highlighted
+    }
+}
+
+fn streaming_update_requires_content_invalidation(
+    state: &StreamingAnimState,
+    new_text: &str,
+    is_live: bool,
+    render_full_target: bool,
+) -> bool {
+    state.target_text != new_text
+        || state.is_live != is_live
+        || state.render_full_target != render_full_target
+}
 
 thread_local! {
     static ROOM_INFO_ACTION_MODAL_OPEN: Cell<bool> = const { Cell::new(false) };
@@ -398,6 +1281,122 @@ fn is_likely_bot_user_id(
         || (localpart.ends_with("bot") && localpart.len() > 3)
 }
 
+pub(crate) fn is_known_or_likely_bot(
+    user_id: &UserId,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    known_bot_user_ids
+        .iter()
+        .any(|known_bot_user_id| known_bot_user_id.as_str() == user_id.as_str())
+        || resolved_parent_bot_user_id.is_some_and(|parent| parent == user_id)
+        || is_likely_bot_user_id(user_id, resolved_parent_bot_user_id)
+}
+
+fn is_timeline_sender_bot(
+    user_id: &UserId,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    room_bot_user_ids
+        .iter()
+        .any(|room_bot_user_id| room_bot_user_id.as_str() == user_id.as_str())
+        || is_known_or_likely_bot(
+            user_id,
+            resolved_parent_bot_user_id,
+            known_bot_user_ids,
+        )
+}
+
+fn collect_room_bot_user_ids(
+    room_members: &[RoomMember],
+    resolved_parent_bot_user_id: Option<&UserId>,
+    known_bot_user_ids: &[OwnedUserId],
+    persisted_room_bot_user_ids: &[OwnedUserId],
+) -> Vec<OwnedUserId> {
+    let own_user_id = current_user_id();
+    let mut room_bot_user_ids = Vec::<OwnedUserId>::new();
+
+    for persisted_room_bot_user_id in persisted_room_bot_user_ids {
+        if room_bot_user_ids
+            .iter()
+            .all(|existing_user_id| existing_user_id.as_str() != persisted_room_bot_user_id.as_str())
+        {
+            room_bot_user_ids.push(persisted_room_bot_user_id.clone());
+        }
+    }
+
+    for room_member in room_members.iter().filter(|room_member|
+        own_user_id
+            .as_deref()
+            .is_none_or(|own_user_id| room_member.user_id() != own_user_id)
+    ) {
+        if is_known_or_likely_bot(
+            room_member.user_id(),
+            resolved_parent_bot_user_id,
+            known_bot_user_ids,
+        ) || is_likely_bot_member(room_member, resolved_parent_bot_user_id)
+        {
+            let user_id = room_member.user_id().to_owned();
+            if room_bot_user_ids
+                .iter()
+                .all(|existing_user_id| existing_user_id.as_str() != user_id.as_str())
+            {
+                room_bot_user_ids.push(user_id);
+            }
+        }
+    }
+
+    room_bot_user_ids.sort_by(|lhs, rhs| lhs.as_str().cmp(rhs.as_str()));
+    room_bot_user_ids
+}
+
+fn compute_timeline_bot_context(
+    app_state: Option<&AppState>,
+    room_id: &OwnedRoomId,
+    room_members: Option<&Arc<Vec<RoomMember>>>,
+) -> (Option<OwnedUserId>, Vec<OwnedUserId>, Vec<OwnedUserId>) {
+    app_state
+        .map(|app_state| {
+            let app_service_enabled = app_state.bot_settings.enabled;
+            let persisted_room_bot_user_ids = if app_service_enabled {
+                app_state.bot_settings.bound_bot_user_ids(room_id)
+            } else {
+                Vec::new()
+            };
+            let resolved_parent_bot_user_id = if app_service_enabled {
+                app_state
+                    .bot_settings
+                    .resolved_bot_user_id(current_user_id().as_deref())
+                    .ok()
+            } else {
+                None
+            };
+            let known_bot_user_ids = if app_service_enabled {
+                app_state.bot_settings.known_bot_user_ids()
+            } else {
+                Vec::new()
+            };
+            let room_bot_user_ids = room_members
+                .map(|members|
+                    collect_room_bot_user_ids(
+                        members.as_ref(),
+                        resolved_parent_bot_user_id.as_deref(),
+                        &known_bot_user_ids,
+                        &persisted_room_bot_user_ids,
+                    )
+                )
+                .unwrap_or(persisted_room_bot_user_ids);
+            (
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            )
+        })
+        .unwrap_or((None, Vec::new(), Vec::new()))
+}
+
 fn is_likely_bot_member(
     room_member: &RoomMember,
     resolved_parent_bot_user_id: Option<&UserId>,
@@ -495,6 +1494,172 @@ script_mod! {
     mod.widgets.COLOR_THREAD_SUMMARY_BG_HOVER = #FFEACC
     mod.widgets.COLOR_THREAD_SUMMARY_BORDER = #E8C99A
     mod.widgets.COLOR_THREAD_SUMMARY_REPLY_COUNT = #A35A00
+    mod.widgets.COLOR_BOT_CARD_BG = #xF7FAFE
+    mod.widgets.COLOR_BOT_CARD_BORDER = #xD8E3F0
+    mod.widgets.COLOR_BOT_STATUS_BG = #xEEF4FB
+    mod.widgets.COLOR_BOT_STATUS_TEXT = #x5A6F86
+    mod.widgets.COLOR_BOT_PROVIDER_TEXT = #x708399
+    mod.widgets.COLOR_BOT_FOOTER_TEXT = #x8B98A7
+    mod.widgets.COLOR_BOT_CODE_BG = #xECF2F8
+    mod.widgets.COLOR_BOT_CODE_BORDER = #xD5E0ED
+
+    mod.widgets.MessageActionPrimaryButton = RobrixPositiveIconButton {
+        width: Fit
+        height: Fit
+        spacing: 6.0
+        padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        draw_text +: {
+            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+        }
+    }
+
+    mod.widgets.MessageActionSecondaryButton = Button {
+        width: Fit
+        height: Fit
+        spacing: 6.0
+        padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        draw_text +: {
+            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+        }
+        text: ""
+    }
+
+    mod.widgets.MessageActionDangerButton = RobrixNegativeIconButton {
+        width: Fit
+        height: Fit
+        spacing: 6.0
+        padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        draw_text +: {
+            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+        }
+    }
+
+    mod.widgets.MessageActionButtonSlot = View {
+        visible: false
+        width: Fit
+        height: Fit
+        flow: Overlay
+
+        primary_button := mod.widgets.MessageActionPrimaryButton {
+            visible: false
+        }
+        secondary_button := mod.widgets.MessageActionSecondaryButton {
+            visible: false
+        }
+        danger_button := mod.widgets.MessageActionDangerButton {
+            visible: false
+        }
+    }
+
+    mod.widgets.BotTimelineMarkdown = Markdown {
+        width: Fill
+        height: Fit
+        padding: 0.0
+        font_size: (MESSAGE_FONT_SIZE)
+        font_color: (MESSAGE_TEXT_COLOR)
+        paragraph_spacing: 10.0
+        pre_code_spacing: 8.0
+        heading_base_scale: 1.45
+        inline_code_padding: Inset{ top: 3, bottom: 3, left: 4, right: 4 }
+        inline_code_margin: Inset{ left: 3, right: 3, bottom: 2, top: 2 }
+        use_code_block_widget: true
+
+        draw_text +: {
+            color: (MESSAGE_TEXT_COLOR)
+        }
+        text_style_normal: mod.widgets.MESSAGE_TEXT_STYLE {
+            font_size: (MESSAGE_FONT_SIZE)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        text_style_italic: theme.font_italic {
+            font_size: (MESSAGE_FONT_SIZE)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        text_style_bold: theme.font_bold {
+            font_size: (MESSAGE_FONT_SIZE)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        text_style_bold_italic: theme.font_bold_italic {
+            font_size: (MESSAGE_FONT_SIZE)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        text_style_fixed: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
+            font_size: (MESSAGE_FONT_SIZE - 0.5)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        draw_block +: {
+            line_color: (MESSAGE_TEXT_COLOR)
+            sep_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
+            quote_bg_color: #xEFF5FB
+            quote_fg_color: #x7892AC
+            code_color: (mod.widgets.COLOR_BOT_CODE_BG)
+        }
+        code_layout: Layout{
+            flow: Flow.Right{wrap: true}
+            padding: Inset{ left: 0.0, right: 0.0, top: 0.0, bottom: 0.0 }
+        }
+        code_walk: Walk{ width: Fill, height: Fit, margin: Inset{ top: 10.0, bottom: 10.0 } }
+        quote_layout: Layout{
+            flow: Flow.Right{wrap: true}
+            padding: Inset{ left: 12.0, right: 12.0, top: 8.0, bottom: 8.0 }
+        }
+        quote_walk: Walk{ width: Fill, height: Fit, margin: Inset{ top: 6.0, bottom: 6.0 } }
+        list_item_layout: Layout{
+            flow: Flow.Right{wrap: true}
+            padding: Inset{ left: 0.0, right: 0.0, top: 1.0, bottom: 1.0 }
+        }
+        list_item_walk: Walk{ width: Fill, height: Fit, margin: Inset{ top: 0.0, bottom: 1.0 } }
+
+        code_block := RoundedView {
+            width: Fill
+            height: Fit
+            flow: Overlay
+            padding: 0.0
+            new_batch: true
+            show_bg: true
+            draw_bg +: {
+                color: (mod.widgets.COLOR_BOT_CODE_BG)
+                border_radius: 10.0
+                border_size: 1.0
+                border_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
+            }
+
+            code_view := mod.widgets.CodeView {
+                keep_cursor_at_end: false
+                editor +: {
+                    width: Fill
+                    height: Fit
+                    margin: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                    draw_bg +: { color: #0000 }
+                    draw_text +: {
+                        text_style: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
+                            font_size: (MESSAGE_FONT_SIZE - 0.5)
+                            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+                        }
+                    }
+                    token_colors +: {
+                        whitespace: #x6a737d
+                        delimiter: #x24292e
+                        delimiter_highlight: #x005cc5
+                        error_decoration: #xcb2431
+                        warning_decoration: #xb08800
+                        unknown: #x24292e
+                        branch_keyword: #xd73a49
+                        constant: #x005cc5
+                        identifier: #x24292e
+                        loop_keyword: #xd73a49
+                        number: #x005cc5
+                        other_keyword: #xd73a49
+                        punctuator: #x24292e
+                        string: #x22863a
+                        function: #x6f42c1
+                        typename: #xe36209
+                        comment: #x6a737d
+                    }
+                }
+            }
+        }
+    }
 
     // An empty view that takes up no space in the portal list.
     mod.widgets.Empty = View { }
@@ -643,11 +1808,11 @@ script_mod! {
                 align: Align{x: 0.5, y: 0.0} // centered horizontally, top aligned
                 width: 65.0,
                 height: Fit,
-                margin: Inset{top: 4.5, right: 10}
+                margin: Inset{top: #(MESSAGE_PROFILE_TOP_MARGIN), right: 10}
                 flow: Down,
                 avatar := Avatar {
-                    width: 48,
-                    height: 48,
+                    width: #(MESSAGE_PROFILE_AVATAR_SIZE),
+                    height: #(MESSAGE_PROFILE_AVATAR_SIZE),
                 }
                 timestamp := Timestamp {
                     margin: Inset{ top: 5.9 }
@@ -664,13 +1829,18 @@ script_mod! {
 
                 username_view := View {
                     flow: Right,
-                    width: Fill,
-                    height: Fit,
+                    align: Align{y: 0.5},
+                    width: Fit,
+                    height: #(MESSAGE_USERNAME_ROW_HEIGHT),
+                    margin: Inset{
+                        top: #(MESSAGE_USERNAME_ROW_TOP_MARGIN),
+                        bottom: #(MESSAGE_USERNAME_ROW_BOTTOM_MARGIN),
+                    }
                     username := Label {
-                        width: Fill,
+                        width: Fit,
                         flow: Right, // do not wrap
                         padding: 0,
-                        margin: Inset{bottom: 9.0, top: 20.0, right: 10.0,}
+                        margin: Inset{right: #(MESSAGE_USERNAME_RIGHT_MARGIN)}
                         max_lines: 1
                         text_overflow: Ellipsis
                         draw_text +: {
@@ -679,9 +1849,183 @@ script_mod! {
                         }
                         text: ""
                     }
+                    bot_badge := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: #(BOT_BADGE_HEIGHT)
+                        align: Align{x: 0.5, y: 0.5}
+                        new_batch: true
+                        padding: Inset{left: #(BOT_BADGE_HORIZONTAL_PADDING), right: #(BOT_BADGE_HORIZONTAL_PADDING)}
+                        show_bg: true
+                        draw_bg +: {
+                            color: (COLOR_ACTIVE_PRIMARY)
+                            border_radius: #(BOT_BADGE_BORDER_RADIUS)
+                        }
+                        bot_badge_label := Label {
+                            width: Fit
+                            height: Fit
+                            padding: 0
+                            draw_text +: {
+                                text_style: REGULAR_TEXT {
+                                    font_size: #(BOT_BADGE_TEXT_FONT_SIZE)
+                                    top_drop: #(BOT_BADGE_TEXT_TOP_DROP)
+                                }
+                                color: #fff
+                            }
+                            text: "bot"
+                        }
+                    }
+                }
+
+                bot_message_card := View {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 6.0
+                    margin: Inset{ top: 1.0, bottom: 3.0 }
+
+                    bot_status_strip := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: Fit
+                        new_batch: true
+                        padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
+                            border_radius: 10.0
+                        }
+
+                        bot_status_label := Label {
+                            width: Fit
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+
+                    bot_body_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        new_batch: true
+                        padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_CARD_BG)
+                            border_radius: 14.0
+                            border_size: 1.0
+                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                        }
+
+                        bot_card_body := HtmlOrPlaintext { }
+                        bot_card_markdown := mod.widgets.BotTimelineMarkdown {
+                            visible: false
+                            body: ""
+                        }
+                        bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
+                            visible: false
+                            use_code_block_widget: false
+                            body: ""
+                        }
+                    }
+
+                    bot_metadata_footer := View {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 2.0
+                        padding: Inset{ left: 2.0 }
+
+                        bot_provider_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
+                            }
+                            text: ""
+                        }
+
+                        bot_footer_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
                 }
 
                 message := HtmlOrPlaintext { }
+                splash_card := Splash { visible: false }
+                action_buttons := View {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 6.0
+                    margin: Inset{ top: 8.0, bottom: 2.0 }
+
+                    approval_request_view := RoundedView {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        new_batch: true
+                        spacing: 4.0
+                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
+                            border_radius: 12.0
+                            border_size: 1.0
+                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                        }
+
+                        approval_title_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: theme.font_bold { font_size: 10.5 }
+                                color: (mod.widgets.COLOR_TEXT)
+                            }
+                            text: ""
+                        }
+
+                        approval_summary_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+
+                    action_button_row := View {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Flow.Right{wrap: true}
+                        spacing: 8.0
+
+                        action_button_slot_0 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_1 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_2 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_3 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_4 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_5 := mod.widgets.MessageActionButtonSlot {}
+                    }
+                }
                 link_preview_view := mod.widgets.LinkPreview {}
                 View {
                     width: Fill,
@@ -726,7 +2070,154 @@ script_mod! {
                 flow: Down,
                 padding: Inset{ left: 10.0 }
 
+                bot_message_card := View {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 6.0
+                    margin: Inset{ top: 1.0, bottom: 3.0 }
+
+                    bot_status_strip := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: Fit
+                        new_batch: true
+                        padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
+                            border_radius: 10.0
+                        }
+
+                        bot_status_label := Label {
+                            width: Fit
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+
+                    bot_body_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        new_batch: true
+                        padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_CARD_BG)
+                            border_radius: 14.0
+                            border_size: 1.0
+                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                        }
+
+                        bot_card_body := HtmlOrPlaintext { }
+                        bot_card_markdown := mod.widgets.BotTimelineMarkdown {
+                            visible: false
+                            body: ""
+                        }
+                        bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
+                            visible: false
+                            use_code_block_widget: false
+                            body: ""
+                        }
+                    }
+
+                    bot_metadata_footer := View {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 2.0
+                        padding: Inset{ left: 2.0 }
+
+                        bot_provider_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
+                            }
+                            text: ""
+                        }
+
+                        bot_footer_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+                }
+
                 message := HtmlOrPlaintext { }
+                action_buttons := View {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 6.0
+                    margin: Inset{ top: 8.0, bottom: 2.0 }
+
+                    approval_request_view := RoundedView {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        new_batch: true
+                        spacing: 4.0
+                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
+                            border_radius: 12.0
+                            border_size: 1.0
+                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                        }
+
+                        approval_title_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: theme.font_bold { font_size: 10.5 }
+                                color: (mod.widgets.COLOR_TEXT)
+                            }
+                            text: ""
+                        }
+
+                        approval_summary_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+
+                    action_button_row := View {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Flow.Right{wrap: true}
+                        spacing: 8.0
+
+                        action_button_slot_0 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_1 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_2 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_3 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_4 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_5 := mod.widgets.MessageActionButtonSlot {}
+                    }
+                }
                 link_preview_view := mod.widgets.LinkPreview {}
                 View {
                     width: Fill,
@@ -1907,7 +3398,6 @@ script_mod! {
         }
     }
 
-
     mod.widgets.RoomScreen = #(RoomScreen::register_widget(vm)) {
         width: Fill, height: Fill,
         cursor: MouseCursor.Default,
@@ -2840,6 +4330,9 @@ pub struct RoomScreen {
     #[rust] app_language: AppLanguage,
     #[rust] app_language_initialized: bool,
     #[rust] pending_invited_users: HashSet<OwnedUserId>,
+    #[rust] octos_action_button_contexts: HashMap<WidgetUid, OctosActionButtonContext>,
+    #[rust] disabled_octos_action_source_event_ids: HashSet<OwnedEventId>,
+    #[rust] selected_octos_action_by_source_event_id: HashMap<OwnedEventId, SelectedOctosActionState>,
 }
 
 impl Drop for RoomScreen {
@@ -3200,6 +4693,28 @@ impl Widget for RoomScreen {
                         );
                     }
                 }
+                if let Some(ActionResponseResultAction::Failed { room_id, source_event_id, error }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        clear_action_buttons_disabled(
+                            &mut self.disabled_octos_action_source_event_ids,
+                            source_event_id.as_ref(),
+                        );
+                        clear_selected_octos_action(
+                            &mut self.selected_octos_action_by_source_event_id,
+                            source_event_id.as_ref(),
+                        );
+                        self.redraw_timeline_list(cx);
+                        enqueue_popup_notification(
+                            tr_fmt(
+                                self.app_language,
+                                "room_screen.popup.action_response.failed",
+                                &[("error", error.as_str())],
+                            ),
+                            PopupKind::Error,
+                            Some(5.0),
+                        );
+                    }
+                }
 
                 match action
                     .as_widget_action()
@@ -3437,99 +4952,18 @@ impl Widget for RoomScreen {
         //       so the only thing we'd need here is the conditional below.
 
         if room_info_action_modal_open || !is_pane_shown || !is_interactive_hit {
-            // Create a Scope with RoomScreenProps containing the room members.
-            // This scope is needed by child widgets like MentionableTextInput during event handling.
-            let room_props = if let Some(tl) = self.tl_state.as_ref() {
-                let room_id = tl.kind.room_id().clone();
-                let room_members = tl.room_members.clone();
-                let (app_service_enabled, app_service_room_bound, bound_bot_user_id) = scope
-                    .data
-                    .get::<AppState>()
-                    .map(|app_state| {
-                        let app_service_enabled = app_state.bot_settings.enabled;
-                        let persisted_bound_bot_user_id =
-                            app_state.bot_settings.bound_bot_user_id(&room_id).map(ToOwned::to_owned);
-                        let detected_bound_bot_user_id = room_members
-                            .as_ref()
-                            .and_then(|members|
-                                detected_bot_binding_for_members(
-                                    app_state,
-                                    &room_id,
-                                    members.as_ref(),
-                                )
-                            );
-                        if persisted_bound_bot_user_id.is_none()
-                            && detected_bound_bot_user_id.is_some()
-                            && let Some(bot_user_id) = detected_bound_bot_user_id.as_ref()
-                        {
-                            Cx::post_action(AppStateAction::BotRoomBindingDetected {
-                                room_id: room_id.clone(),
-                                bot_user_id: bot_user_id.clone(),
-                            });
-                        }
-                        let bound_bot_user_id = if app_service_enabled {
-                            persisted_bound_bot_user_id.or(detected_bound_bot_user_id)
-                        } else {
-                            None
-                        };
-                        let app_service_room_bound = bound_bot_user_id.is_some();
-                        (
-                            app_service_enabled,
-                            app_service_room_bound,
-                            bound_bot_user_id,
-                        )
-                    })
-                    .unwrap_or((false, false, None));
-
-                RoomScreenProps {
-                    room_screen_widget_uid,
-                    room_name_id: self.room_name_id.clone().unwrap_or_else(|| RoomNameId::empty(room_id)),
-                    timeline_kind: tl.kind.clone(),
-                    room_members,
-                    room_members_sync_pending: tl.room_members_sync_pending,
-                    room_members_sort: tl.room_members_sort.clone(),
-                    room_avatar_url: self.room_avatar_url.clone(),
-                    app_service_enabled,
-                    app_service_room_bound,
-                    bound_bot_user_id,
-                }
-            } else if let Some(room_name) = &self.room_name_id {
-                // Fallback case: we have a room_name but no tl_state yet
-                RoomScreenProps {
-                    room_screen_widget_uid,
-                    room_name_id: room_name.clone(),
-                    timeline_kind: self.timeline_kind.clone()
-                        .expect("BUG: room_name_id was set but timeline_kind was missing"),
-                    room_members: None,
-                    room_members_sort: None,
-                    room_members_sync_pending: false,
-                    room_avatar_url: None,
-                    app_service_enabled: false,
-                    app_service_room_bound: false,
-                    bound_bot_user_id: None,
-                }
-            } else {
-                // No room selected yet, skip event handling that requires room context
+            let Some(room_props) = self.build_room_screen_props(cx, scope, room_screen_widget_uid) else {
                 if !is_pane_shown || !is_interactive_hit {
                     return;
                 }
                 log!("RoomScreen handling event with no room_name_id and no tl_state, skipping room-dependent event handling");
-                // Use a dummy room props for non-room-specific events
-                let room_id = owned_room_id!("!dummy:matrix.org");
-                RoomScreenProps {
-                    room_screen_widget_uid,
-                    room_name_id: RoomNameId::empty(room_id.clone()),
-                    timeline_kind: TimelineKind::MainRoom { room_id },
-                    room_members: None,
-                    room_members_sort: None,
-                    room_members_sync_pending: false,
-                    room_avatar_url: None,
-                    app_service_enabled: false,
-                    app_service_room_bound: false,
-                    bound_bot_user_id: None,
-                }
+                return;
             };
-            let mut room_scope = Scope::with_props(&room_props);
+            let mut room_scope = if let Some(app_state) = scope.data.get_mut::<AppState>() {
+                Scope::with_data_props(app_state, &room_props)
+            } else {
+                Scope::with_props(&room_props)
+            };
             let leave_room_confirm_modal_uid = self
                 .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
                 .widget_uid();
@@ -3878,7 +5312,16 @@ impl Widget for RoomScreen {
 
 
         let room_screen_widget_uid = self.widget_uid();
-        while let Some(subview) = self.view.draw_walk(cx, scope, walk).step() {
+        let Some(room_props) = self.build_room_screen_props(cx, scope, room_screen_widget_uid) else {
+            return DrawStep::done();
+        };
+        let mut room_scope = if let Some(app_state) = scope.data.get_mut::<AppState>() {
+            Scope::with_data_props(app_state, &room_props)
+        } else {
+            Scope::with_props(&room_props)
+        };
+        self.octos_action_button_contexts.clear();
+        while let Some(subview) = self.view.draw_walk(cx, &mut room_scope, walk).step() {
             // Here, we only need to handle drawing the portal list.
             let portal_list_ref = subview.as_portal_list();
             let Some(mut list_ref) = portal_list_ref.borrow_mut() else { continue };
@@ -3892,6 +5335,16 @@ impl Widget for RoomScreen {
 
             let list = list_ref.deref_mut();
             list.set_item_range(cx, 0, last_item_id);
+
+            let (
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            ) = compute_timeline_bot_context(
+                room_scope.data.get::<AppState>(),
+                tl_state.kind.room_id(),
+                tl_state.room_members.as_ref(),
+            );
 
             while let Some(item_id) = list.next_visible_item(cx) {
                 let item = {
@@ -3944,7 +5397,13 @@ impl Widget for RoomScreen {
                                                 &self.pinned_events,
                                                 item_drawn_status,
                                                 room_screen_widget_uid,
+                                                resolved_parent_bot_user_id.as_deref(),
+                                                &room_bot_user_ids,
+                                                &known_bot_user_ids,
                                                 &mut tl_state.streaming_messages,
+                                                &mut self.octos_action_button_contexts,
+                                                &self.disabled_octos_action_source_event_ids,
+                                                &self.selected_octos_action_by_source_event_id,
                                             )
                                         },
                                         // TODO: properly implement `Poll` as a regular Message-like timeline item.
@@ -4063,7 +5522,7 @@ impl Widget for RoomScreen {
                     item
                     }
                 };
-                item.draw_all(cx, scope);
+                item.draw_all(cx, &mut room_scope);
             }
 
             // If the list is not filling the viewport, we need to back paginate the timeline
@@ -4163,6 +5622,135 @@ impl RoomScreen {
         self.view
             .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_hi))
             .set_text(cx, &translation::language_popup_label("hi"));
+    }
+
+    fn build_room_screen_props(
+        &self,
+        cx: &mut Cx,
+        scope: &mut Scope,
+        room_screen_widget_uid: WidgetUid,
+    ) -> Option<RoomScreenProps> {
+        if let Some(tl) = self.tl_state.as_ref() {
+            let room_id = tl.kind.room_id().clone();
+            let room_members = tl.room_members.clone();
+            let is_direct_room = cx.get_global::<RoomsListRef>()
+                .is_direct_room(&room_id)
+                .unwrap_or(false);
+            let (
+                app_service_enabled,
+                app_service_room_bound,
+                has_persisted_management_binding,
+                bound_bot_user_id,
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            ) = scope
+                .data
+                .get::<AppState>()
+                .map(|app_state| {
+                    let app_service_enabled = app_state.bot_settings.enabled;
+                    let persisted_bound_bot_user_id =
+                        app_state.bot_settings.bound_bot_user_id(&room_id).map(ToOwned::to_owned);
+                    let persisted_room_bot_user_ids = if app_service_enabled {
+                        app_state.bot_settings.bound_bot_user_ids(&room_id)
+                    } else {
+                        Vec::new()
+                    };
+                    let resolved_parent_bot_user_id = if app_service_enabled {
+                        app_state
+                            .bot_settings
+                            .resolved_bot_user_id(current_user_id().as_deref())
+                            .ok()
+                    } else {
+                        None
+                    };
+                    let known_bot_user_ids = if app_service_enabled {
+                        app_state.bot_settings.known_bot_user_ids()
+                    } else {
+                        Vec::new()
+                    };
+                    let has_persisted_management_binding = resolved_parent_bot_user_id
+                        .as_ref()
+                        .is_some_and(|resolved_parent_bot_user_id|
+                            persisted_room_bot_user_ids
+                                .iter()
+                                .any(|bot_user_id| bot_user_id == resolved_parent_bot_user_id)
+                        );
+                    let room_bot_user_ids = room_members
+                        .as_ref()
+                        .map(|members|
+                            collect_room_bot_user_ids(
+                                members.as_ref(),
+                                resolved_parent_bot_user_id.as_deref(),
+                                &known_bot_user_ids,
+                                &persisted_room_bot_user_ids,
+                            )
+                        )
+                        .unwrap_or(persisted_room_bot_user_ids);
+                    let detected_bound_bot_user_id = room_members
+                        .as_ref()
+                        .and_then(|members|
+                            detected_bot_binding_for_members(
+                                app_state,
+                                &room_id,
+                                members.as_ref(),
+                            )
+                        );
+                    let bound_bot_user_id = if app_service_enabled {
+                        persisted_bound_bot_user_id.or(detected_bound_bot_user_id)
+                    } else {
+                        None
+                    };
+                    let app_service_room_bound = bound_bot_user_id.is_some();
+                    (
+                        app_service_enabled,
+                        app_service_room_bound,
+                        has_persisted_management_binding,
+                        bound_bot_user_id,
+                        resolved_parent_bot_user_id,
+                        room_bot_user_ids,
+                        known_bot_user_ids,
+                    )
+                })
+                .unwrap_or((false, false, false, None, None, Vec::new(), Vec::new()));
+
+            Some(RoomScreenProps {
+                room_screen_widget_uid,
+                room_name_id: self.room_name_id.clone().unwrap_or_else(|| RoomNameId::empty(room_id.clone())),
+                timeline_kind: tl.kind.clone(),
+                room_members,
+                is_direct_room,
+                room_bot_user_ids,
+                room_members_sync_pending: tl.room_members_sync_pending,
+                room_members_sort: tl.room_members_sort.clone(),
+                room_avatar_url: self.room_avatar_url.clone(),
+                app_service_enabled,
+                app_service_room_bound,
+                has_persisted_management_binding,
+                bound_bot_user_id,
+                resolved_parent_bot_user_id,
+                known_bot_user_ids,
+            })
+        } else {
+            self.room_name_id.as_ref().map(|room_name| RoomScreenProps {
+                room_screen_widget_uid,
+                room_name_id: room_name.clone(),
+                timeline_kind: self.timeline_kind.clone()
+                    .expect("BUG: room_name_id was set but timeline_kind was missing"),
+                room_members: None,
+                is_direct_room: false,
+                room_bot_user_ids: Vec::new(),
+                room_members_sort: None,
+                room_members_sync_pending: false,
+                room_avatar_url: None,
+                app_service_enabled: false,
+                app_service_room_bound: false,
+                has_persisted_management_binding: false,
+                bound_bot_user_id: None,
+                resolved_parent_bot_user_id: None,
+                known_bot_user_ids: Vec::new(),
+            })
+        }
     }
 
     fn room_id(&self) -> Option<&OwnedRoomId> {
@@ -4326,6 +5914,7 @@ impl RoomScreen {
             message: RoomMessageEventContent::notice_plain(message),
             replied_to: None,
             target_user_id: None,
+            explicit_room: false,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
@@ -4372,6 +5961,7 @@ impl RoomScreen {
                 .bot_settings
                 .bound_bot_user_id(room_id.as_ref())
                 .map(ToOwned::to_owned),
+            explicit_room: false,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
@@ -4466,6 +6056,15 @@ impl RoomScreen {
         let curr_first_id = portal_list.first_id();
         let ui = self.widget_uid();
         let Some(tl) = self.tl_state.as_mut() else { return };
+        let (
+            resolved_parent_bot_user_id,
+            room_bot_user_ids,
+            known_bot_user_ids,
+        ) = compute_timeline_bot_context(
+            app_state,
+            tl.kind.room_id(),
+            tl.room_members.as_ref(),
+        );
 
         let mut done_loading = false;
         let mut should_continue_backwards_pagination = false;
@@ -4684,8 +6283,6 @@ impl RoomScreen {
                             self.streaming_next_frame = cx.new_next_frame();
                         }
                     } else if !new_items.is_empty() {
-                        use crate::home::streaming_animation::StreamingAnimState;
-
                         let mut should_schedule_frame = false;
                         let scan_range = streaming_scan_range(
                             clear_cache,
@@ -4704,16 +6301,45 @@ impl RoomScreen {
                             let Some(event_id) = new_evt.event_id().map(|id| id.to_owned()) else { continue };
                             let live = is_msc4357_live(new_evt);
                             let Some(new_text) = Self::extract_message_text(new_item) else { continue };
+                            let render_full_target = should_render_streaming_full_snapshot(
+                                &new_text,
+                                new_evt.content()
+                                    .as_message()
+                                    .and_then(|message| match message.msgtype() {
+                                        MessageType::Text(TextMessageEventContent { formatted, .. }) => formatted.as_ref(),
+                                        MessageType::Notice(NoticeMessageEventContent { formatted, .. }) => formatted.as_ref(),
+                                        _ => None,
+                                    }),
+                                is_timeline_sender_bot(
+                                    new_evt.sender(),
+                                    resolved_parent_bot_user_id.as_deref(),
+                                    &room_bot_user_ids,
+                                    &known_bot_user_ids,
+                                ),
+                            );
 
                             if let Some(state) = tl.streaming_messages.get_mut(&event_id) {
+                                let should_invalidate_content = streaming_update_requires_content_invalidation(
+                                    state,
+                                    &new_text,
+                                    live,
+                                    render_full_target,
+                                );
                                 state.update_target(&new_text, live);
+                                state.set_render_full_target(render_full_target);
+                                if should_invalidate_content
+                                    && let Some(idx) = state.timeline_index
+                                {
+                                    tl.content_drawn_since_last_update.remove(idx .. idx + 1);
+                                }
                                 // Schedule frame for animation OR for cleanup of just-completed state
                                 should_schedule_frame |= state.needs_frame() || state.is_complete();
                                 continue;
                             }
 
                             if live && !old_event_ids.contains(&*event_id) {
-                                let state = StreamingAnimState::new(&new_text, true);
+                                let mut state = StreamingAnimState::new(&new_text, true);
+                                state.set_render_full_target(render_full_target);
                                 should_schedule_frame |= state.needs_frame();
                                 tl.streaming_messages.insert(event_id, state);
                             }
@@ -4870,19 +6496,6 @@ impl RoomScreen {
                 }
                 TimelineUpdate::RoomMembersListFetched { members } => {
                     let members = Arc::new(members);
-                    if let Some(app_state) = app_state {
-                        let room_id = tl.kind.room_id().clone();
-                        if let Some(bot_user_id) = detected_bot_binding_for_members(
-                            app_state,
-                            &room_id,
-                            members.as_ref(),
-                        ) {
-                            Cx::post_action(AppStateAction::BotRoomBindingDetected {
-                                room_id,
-                                bot_user_id,
-                            });
-                        }
-                    }
                     if tl.awaiting_post_sync_member_refresh {
                         tl.room_members_sync_pending = false;
                         tl.awaiting_post_sync_member_refresh = false;
@@ -5125,6 +6738,13 @@ impl RoomScreen {
         };
 
         if let HtmlLinkAction::Clicked { url, .. } = action.as_widget_action().cast() {
+            // Handle mxc:// links (file downloads from Matrix media server)
+            if url.starts_with("mxc://") {
+                let mxc_uri = OwnedMxcUri::from(url.clone());
+                self.handle_mxc_file_download(cx, mxc_uri);
+                return true;
+            }
+
             let mut link_was_handled = false;
             if let Ok(matrix_to_uri) = MatrixToUri::parse(&url) {
                 link_was_handled |= handle_matrix_link(matrix_to_uri.id(), matrix_to_uri.via());
@@ -5164,6 +6784,27 @@ impl RoomScreen {
         else {
             false
         }
+    }
+
+    /// Handles an mxc:// file download link click.
+    /// Fetches the file from the Matrix media server, saves it with a unique name,
+    /// and opens it with the system default application.
+    fn handle_mxc_file_download(&mut self, _cx: &mut Cx, mxc_uri: OwnedMxcUri) {
+        log!("handle_mxc_file_download: mxc_uri={mxc_uri}");
+
+        enqueue_popup_notification(
+            tr_key(self.app_language, "room_screen.file.downloading").to_string(),
+            PopupKind::Info,
+            Some(3.0),
+        );
+
+        // Download directly using the Matrix client (bypasses MediaCache to avoid
+        // header parsing issues with non-ASCII Content-Disposition headers).
+        let app_language = self.app_language;
+        submit_async_request(MatrixRequest::DownloadAndSaveFile {
+            mxc_uri,
+            app_language,
+        });
     }
 
     /// Handles image clicks in message content by opening the image viewer.
@@ -5233,6 +6874,59 @@ impl RoomScreen {
         portal_list: &PortalListRef,
         loading_pane: &LoadingPaneRef,
     ) {
+        if let Some(clicked_context) = self.octos_action_button_contexts
+            .iter()
+            .find_map(|(widget_uid, context)| {
+                actions.find_widget_action(*widget_uid)
+                    .and_then(|item| matches!(item.cast(), ButtonAction::Clicked(_)).then(|| context.clone()))
+            })
+        {
+            if !are_action_buttons_disabled(
+                &self.disabled_octos_action_source_event_ids,
+                clicked_context.source_event_id.as_ref(),
+            ) {
+                let Some(tl) = self.tl_state.as_ref() else { return };
+                let request = match &clicked_context.request {
+                    OctosActionButtonRequest::Generic { action_id, label, .. } => build_octos_action_response_request(
+                        &tl.kind,
+                        label,
+                        action_id,
+                        clicked_context.source_event_id.as_ref(),
+                        clicked_context.original_sender.as_ref(),
+                    ),
+                    OctosActionButtonRequest::Approval { request_id, title, decision, tool_args_digest, .. } => build_octos_approval_response_request(
+                        &tl.kind,
+                        title,
+                        request_id,
+                        decision,
+                        tool_args_digest,
+                        clicked_context.source_event_id.as_ref(),
+                        clicked_context.original_sender.as_ref(),
+                    ),
+                };
+                mark_action_buttons_disabled(
+                    &mut self.disabled_octos_action_source_event_ids,
+                    &clicked_context.source_event_id,
+                );
+                mark_selected_octos_action(
+                    &mut self.selected_octos_action_by_source_event_id,
+                    &clicked_context.source_event_id,
+                    clicked_context.request.action_id(),
+                    clicked_context.request.label(),
+                    clicked_context.request.style(),
+                );
+                self.redraw_timeline_list(cx);
+                submit_async_request(MatrixRequest::SendActionResponse {
+                    timeline_kind: request.timeline_kind,
+                    content: request.content,
+                    target_user_id: request.target_user_id,
+                    explicit_room: request.explicit_room,
+                    source_event_id: request.source_event_id,
+                });
+            }
+            return;
+        }
+
         let room_screen_widget_uid = self.widget_uid();
         for action in actions {
             match action.as_widget_action().widget_uid_eq(room_screen_widget_uid).cast_ref() {
@@ -6393,13 +8087,18 @@ pub struct RoomScreenProps {
     pub room_name_id: RoomNameId,
     pub timeline_kind: TimelineKind,
     pub room_members: Option<Arc<Vec<RoomMember>>>,
+    pub is_direct_room: bool,
+    pub room_bot_user_ids: Vec<OwnedUserId>,
     pub room_members_sync_pending: bool,
     /// Pre-computed sort order for room members (for mention search optimization).
     pub room_members_sort: Option<Arc<crate::room::member_search::PrecomputedMemberSort>>,
     pub room_avatar_url: Option<OwnedMxcUri>,
     pub app_service_enabled: bool,
     pub app_service_room_bound: bool,
+    pub has_persisted_management_binding: bool,
     pub bound_bot_user_id: Option<OwnedUserId>,
+    pub resolved_parent_bot_user_id: Option<OwnedUserId>,
+    pub known_bot_user_ids: Vec<OwnedUserId>,
 }
 
 
@@ -6814,10 +8513,22 @@ fn populate_message_view(
     pinned_events: &[OwnedEventId],
     item_drawn_status: ItemDrawnStatus,
     room_screen_widget_uid: WidgetUid,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
     streaming_messages: &mut HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>,
+    action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
+    disabled_action_source_event_ids: &HashSet<OwnedEventId>,
+    selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
 ) -> (WidgetRef, ItemDrawnStatus) {
     let mut new_drawn_status = item_drawn_status;
     let ts_millis = event_tl_item.timestamp();
+    let sender_is_bot = is_timeline_sender_bot(
+        event_tl_item.sender(),
+        resolved_parent_bot_user_id,
+        room_bot_user_ids,
+        known_bot_user_ids,
+    );
 
     let mut is_notice = false; // whether this message is a Notice (automated bot message)
     let mut is_server_notice = false; // whether this message is a Server Notice
@@ -6857,32 +8568,73 @@ fn populate_message_view(
                     if existed && item_drawn_status.content_drawn {
                         (item, true)
                     } else {
-                        let html_or_plaintext_ref =
-                            item.html_or_plaintext(cx, ids!(content.message));
-
                         // Check if this message is being streamed
                         let is_streaming = event_tl_item.event_id()
                             .and_then(|eid| streaming_messages.get_mut(&eid.to_owned()));
 
                         if let Some(state) = is_streaming {
-                            // STREAMING MODE: show partial plaintext with cursor
-                            state.fill_display_buffer();
-                            html_or_plaintext_ref.show_plaintext(cx, &state.display_buffer);
-                            new_drawn_status.content_drawn = false; // force re-render
-                        } else {
-                            // NORMAL MODE: existing logic
-                            let mut link_preview_ref =
-                                item.link_preview(cx, ids!(content.link_preview_view));
-                            new_drawn_status.content_drawn = populate_text_message_content(
-                                cx,
-                                &html_or_plaintext_ref,
-                                app_language,
+                            let render_full_snapshot = should_render_streaming_full_snapshot(
                                 body,
                                 formatted.as_ref(),
+                                sender_is_bot,
+                            );
+                            state.set_render_full_target(render_full_snapshot);
+
+                            // STREAMING MODE:
+                            // - markdown-rich bot replies render the latest full snapshot directly
+                            // - plain text keeps the local typewriter prefix with cursor
+                            let mut link_preview_ref =
+                                item.link_preview(cx, ids!(content.link_preview_view));
+                            let (stream_body, stream_formatted) = if render_full_snapshot {
+                                (body.as_str(), formatted.as_ref())
+                            } else {
+                                state.fill_display_buffer();
+                                (state.display_buffer.as_str(), None)
+                            };
+                            let _ = populate_bot_text_message_content(
+                                cx,
+                                &item,
+                                app_language,
+                                stream_body,
+                                stream_formatted,
                                 Some(&mut link_preview_ref),
                                 Some(media_cache),
                                 Some(link_preview_cache),
+                                sender_is_bot,
                             );
+                            new_drawn_status.content_drawn = false; // force re-render
+                        } else {
+                            // Check for Splash card in custom event field
+                            let splash_code = latest_effective_event_content_json(event_tl_item)
+                                .and_then(|content|
+                                    content
+                                        .get("org.octos.splash_card")
+                                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                                );
+
+                            if let Some(ref splash) = splash_code {
+                                // SPLASH CARD MODE: render native Makepad card
+                                item.view(cx, ids!(content.message)).set_visible(cx, false);
+                                let splash_widget = item.splash(cx, ids!(content.splash_card));
+                                splash_widget.set_visible(cx, true);
+                                splash_widget.set_text(cx, splash);
+                                new_drawn_status.content_drawn = true;
+                            } else {
+                                // NORMAL MODE: existing logic
+                                let mut link_preview_ref =
+                                    item.link_preview(cx, ids!(content.link_preview_view));
+                                new_drawn_status.content_drawn = populate_bot_text_message_content(
+                                    cx,
+                                    &item,
+                                    app_language,
+                                    body,
+                                    formatted.as_ref(),
+                                    Some(&mut link_preview_ref),
+                                    Some(media_cache),
+                                    Some(link_preview_cache),
+                                    sender_is_bot,
+                                );
+                            }
                         }
                         (item, false)
                     }
@@ -6901,26 +8653,29 @@ fn populate_message_view(
                     if existed && item_drawn_status.content_drawn {
                         (item, true)
                     } else {
-                        let html_or_plaintext_ref = item.html_or_plaintext(cx, ids!(content.message));
-                        // Apply gray color to all text styles for notice messages.
-                        let mut html_widget = html_or_plaintext_ref.html(cx, ids!(html_view.html));
-                        script_apply_eval!(cx, html_widget, {
-                            font_color: mod.widgets.COLOR_MESSAGE_NOTICE_TEXT,
-                            draw_block +: {
-                                quote_fg_color: mod.widgets.COLOR_MESSAGE_NOTICE_TEXT,
-                            }
-                        });
+                        if !sender_is_bot {
+                            let html_or_plaintext_ref = item.html_or_plaintext(cx, ids!(content.message));
+                            // Apply gray color to all text styles for notice messages.
+                            let mut html_widget = html_or_plaintext_ref.html(cx, ids!(html_view.html));
+                            script_apply_eval!(cx, html_widget, {
+                                font_color: mod.widgets.COLOR_MESSAGE_NOTICE_TEXT,
+                                draw_block +: {
+                                    quote_fg_color: mod.widgets.COLOR_MESSAGE_NOTICE_TEXT,
+                                }
+                            });
+                        }
                         let mut link_preview_ref =
                             item.link_preview(cx, ids!(content.link_preview_view));
-                        new_drawn_status.content_drawn = populate_text_message_content(
+                        new_drawn_status.content_drawn = populate_bot_text_message_content(
                             cx,
-                            &html_or_plaintext_ref,
+                            &item,
                             app_language,
                             body,
                             formatted.as_ref(),
                             Some(&mut link_preview_ref),
                             Some(media_cache),
                             Some(link_preview_cache),
+                            sender_is_bot,
                         );
                         (item, false)
                     }
@@ -7096,6 +8851,7 @@ fn populate_message_view(
                             &html_or_plaintext_ref,
                             app_language,
                             file_content,
+                            media_cache,
                         );
                         (item, false)
                     }
@@ -7379,6 +9135,9 @@ fn populate_message_view(
             }
             username_label.set_text(cx, &username);
             new_drawn_status.profile_drawn = profile_drawn;
+
+            // Show/hide the bot badge based on sender's user ID
+            item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, sender_is_bot);
         }
         else {
             // Server notices are drawn with a red color avatar background and username.
@@ -7390,9 +9149,25 @@ fn populate_message_view(
                     color: (mod.widgets.COLOR_FG_DANGER_RED)
                 }
             });
+            item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, false);
             new_drawn_status.profile_drawn = true;
         }
     }
+
+    let action_button_content = latest_effective_event_content_json(event_tl_item);
+    let original_action_button_content = original_event_content_json(event_tl_item);
+    let source_event_id = event_tl_item.event_id().map(|event_id| event_id.to_owned());
+    populate_octos_action_buttons(
+        cx,
+        &item,
+        action_button_content.as_ref(),
+        original_action_button_content.as_ref(),
+        source_event_id.as_ref(),
+        event_tl_item.sender(),
+        action_button_contexts,
+        disabled_action_source_event_ids,
+        selected_actions,
+    );
 
     // If we've previously drawn the item content, skip all other steps.
     if used_cached_item && item_drawn_status.content_drawn && item_drawn_status.profile_drawn {
@@ -7505,6 +9280,227 @@ fn populate_text_message_content(
         )
     } else {
         true
+    }
+}
+
+fn populate_bot_text_message_content(
+    cx: &mut Cx,
+    item: &WidgetRef,
+    app_language: AppLanguage,
+    body: &str,
+    formatted_body: Option<&FormattedBody>,
+    link_preview_ref: Option<&mut LinkPreviewRef>,
+    media_cache: Option<&mut MediaCache>,
+    link_preview_cache: Option<&mut LinkPreviewCache>,
+    is_bot_sender: bool,
+) -> bool {
+    let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
+    let bot_card_view = item.view(cx, ids!(content.bot_message_card));
+    let message_view = item.html_or_plaintext(cx, ids!(content.message));
+
+    bot_card_view.set_visible(cx, render_state.show_card);
+    message_view.set_visible(cx, !render_state.show_card);
+
+    if !render_state.show_card {
+        return populate_text_message_content(
+            cx,
+            &message_view,
+            app_language,
+            body,
+            formatted_body,
+            link_preview_ref,
+            media_cache,
+            link_preview_cache,
+        );
+    }
+
+    let status_strip = item.view(cx, ids!(content.bot_message_card.bot_status_strip));
+    status_strip.set_visible(cx, render_state.show_status_strip);
+    if let Some(status) = render_state.status.as_ref() {
+        item.label(cx, ids!(content.bot_message_card.bot_status_strip.bot_status_label))
+            .set_text(cx, status);
+    }
+
+    let provider_label = item.label(cx, ids!(content.bot_message_card.bot_metadata_footer.bot_provider_label));
+    if let Some(provider) = render_state.provider.as_ref() {
+        provider_label.set_text(cx, provider);
+        provider_label.set_visible(cx, true);
+    } else {
+        provider_label.set_visible(cx, false);
+    }
+
+    let footer_label = item.label(cx, ids!(content.bot_message_card.bot_metadata_footer.bot_footer_label));
+    if let Some(footer) = render_state.footer.as_ref() {
+        footer_label.set_text(cx, display_bot_footer_text(footer));
+        footer_label.set_visible(cx, true);
+    } else {
+        footer_label.set_visible(cx, false);
+    }
+    item.view(cx, ids!(content.bot_message_card.bot_metadata_footer))
+        .set_visible(cx, render_state.show_metadata_footer);
+
+    let body_card = item.view(cx, ids!(content.bot_message_card.bot_body_card));
+    body_card.set_visible(cx, render_state.show_body_card);
+    let body_widget = item.html_or_plaintext(cx, ids!(content.bot_message_card.bot_body_card.bot_card_body));
+    let mut markdown_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown));
+    let mut markdown_plain_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown_plain));
+    let code_block_mode = bot_timeline_code_block_mode(&render_state);
+    body_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::None);
+    markdown_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Highlighted);
+    markdown_plain_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Plain);
+
+    if render_state.show_body_card {
+        if code_block_mode != BotTimelineCodeBlockMode::None {
+            match code_block_mode {
+                BotTimelineCodeBlockMode::Highlighted => markdown_widget.set_text(cx, &render_state.body),
+                BotTimelineCodeBlockMode::Plain => markdown_plain_widget.set_text(cx, &render_state.body),
+                BotTimelineCodeBlockMode::None => { }
+            }
+
+            if let (Some(link_preview_ref), Some(media_cache), Some(link_preview_cache)) =
+                (link_preview_ref, media_cache, link_preview_cache)
+            {
+                let mut links = Vec::new();
+                let _ = utils::linkify_get_urls(&render_state.body, false, Some(&mut links));
+                link_preview_ref.populate_below_message(
+                    cx,
+                    &links,
+                    media_cache,
+                    link_preview_cache,
+                    &|cx, text_or_image_ref, image_info_source, original_source, body, media_cache| {
+                        populate_image_message_content(
+                            cx,
+                            text_or_image_ref,
+                            app_language,
+                            image_info_source,
+                            original_source,
+                            body,
+                            media_cache,
+                        )
+                    },
+                )
+            } else {
+                true
+            }
+        } else {
+            let formatted_body_for_card =
+                select_bot_timeline_body_formatted_body(&render_state, formatted_body);
+            populate_text_message_content(
+                cx,
+                &body_widget,
+                app_language,
+                &render_state.body,
+                formatted_body_for_card.as_ref(),
+                link_preview_ref,
+                media_cache,
+                link_preview_cache,
+            )
+        }
+    } else {
+        true
+    }
+}
+
+fn populate_octos_action_buttons(
+    cx: &mut Cx,
+    item: &WidgetRef,
+    content: Option<&serde_json::Value>,
+    original_content: Option<&serde_json::Value>,
+    source_event_id: Option<&OwnedEventId>,
+    original_sender: &UserId,
+    action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
+    disabled_source_event_ids: &HashSet<OwnedEventId>,
+    selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
+) {
+    let container = item.view(cx, ids!(content.action_buttons));
+    let approval_request_view = item.view(cx, ids!(content.action_buttons.approval_request_view));
+    let button_row = item.view(cx, ids!(content.action_buttons.action_button_row));
+    let Some(source_event_id) = source_event_id else {
+        container.set_visible(cx, false);
+        return;
+    };
+
+    let parsed_payload = parse_octos_action_payload_for_render(content, original_content);
+
+    if parsed_payload.malformed_approval_request {
+        warning!("org.octos.approval_request: skipping malformed approval request");
+    }
+
+    let render_state = compute_action_button_render_state(
+        &parsed_payload.actions,
+        parsed_payload.approval_request.as_ref(),
+        current_user_id().as_deref(),
+    );
+    let is_disabled = are_action_buttons_disabled(disabled_source_event_ids, source_event_id.as_ref())
+        || !render_state.buttons_enabled;
+    let selected_action = selected_actions.get(source_event_id);
+    let visible_slots = action_button_render_slots_for_display(&render_state, selected_action);
+
+    container.set_visible(cx, render_state.show_container);
+    button_row.set_visible(cx, render_state.show_button_row && !visible_slots.is_empty());
+    approval_request_view.set_visible(cx, render_state.approval_card.is_some());
+    if let Some(approval_card) = render_state.approval_card.as_ref() {
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_title_label))
+            .set_text(cx, &approval_card.title);
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_summary_label))
+            .set_text(cx, &approval_card.summary);
+    }
+
+    for index in 0..MAX_OCTOS_ACTION_BUTTONS {
+        let (slot_path, primary_path, secondary_path, danger_path) = octos_action_button_paths(index);
+        item.view(cx, slot_path).set_visible(cx, false);
+
+        let primary_button = item.button(cx, primary_path);
+        action_button_contexts.remove(&primary_button.widget_uid());
+        primary_button.set_visible(cx, false);
+        primary_button.set_enabled(cx, !is_disabled);
+
+        let secondary_button = item.button(cx, secondary_path);
+        action_button_contexts.remove(&secondary_button.widget_uid());
+        secondary_button.set_visible(cx, false);
+        secondary_button.set_enabled(cx, !is_disabled);
+
+        let danger_button = item.button(cx, danger_path);
+        action_button_contexts.remove(&danger_button.widget_uid());
+        danger_button.set_visible(cx, false);
+        danger_button.set_enabled(cx, !is_disabled);
+
+        let Some(render_slot) = visible_slots.get(index) else { continue };
+        item.view(cx, slot_path).set_visible(cx, true);
+
+        let active_button = match render_slot.style {
+            OctosActionStyle::Primary => primary_button,
+            OctosActionStyle::Secondary => secondary_button,
+            OctosActionStyle::Danger => danger_button,
+        };
+        active_button.set_visible(cx, true);
+        active_button.set_enabled(cx, !is_disabled);
+        active_button.set_text(cx, &render_slot.label);
+
+        if !is_disabled {
+            let request = if let Some(approval_request) = parsed_payload.approval_request.as_ref() {
+                OctosActionButtonRequest::Approval {
+                    request_id: approval_request.request_id.clone(),
+                    title: approval_request.title.clone(),
+                    decision: render_slot.id.clone(),
+                    label: render_slot.label.clone(),
+                    tool_args_digest: approval_request.tool_args_digest.clone(),
+                    style: render_slot.style,
+                }
+            } else {
+                OctosActionButtonRequest::Generic {
+                    action_id: render_slot.id.clone(),
+                    label: render_slot.label.clone(),
+                    style: render_slot.style,
+                }
+            };
+
+            action_button_contexts.insert(active_button.widget_uid(), OctosActionButtonContext {
+                source_event_id: source_event_id.clone(),
+                original_sender: original_sender.to_owned(),
+                request,
+            });
+        }
     }
 }
 
@@ -7654,13 +9650,17 @@ fn populate_image_message_content(
 /// Draws a file message's content into the given `message_content_widget`.
 ///
 /// Returns whether the file message content was fully drawn.
+///
+/// File download is NOT triggered automatically during rendering.
+/// The user must click the `mxc://` link in the rendered HTML to initiate
+/// the download via the existing `RobrixHtmlLinkAction` handler.
 fn populate_file_message_content(
     cx: &mut Cx,
     message_content_widget: &HtmlOrPlaintextRef,
     app_language: AppLanguage,
     file_content: &FileMessageEventContent,
+    _media_cache: &mut MediaCache,
 ) -> bool {
-    // Display the file name, human-readable size, caption, and a button to download it.
     let filename = htmlize::escape_text(file_content.filename());
     let size = file_content
         .info
@@ -7668,20 +9668,30 @@ fn populate_file_message_content(
         .and_then(|info| info.size)
         .map(|bytes| format!("  ({})", ByteSize::b(bytes.into())))
         .unwrap_or_default();
+    // Escape caption to prevent HTML injection from untrusted message content
     let caption = file_content.formatted_caption()
-        .map(|fb| format!("<br><i>{}</i>", fb.body))
-        .or_else(|| file_content.caption().map(|c| format!("<br><i>{c}</i>")))
+        .map(|fb| format!("<br><i>{}</i>", htmlize::escape_text(&fb.body)))
+        .or_else(|| file_content.caption().map(|c| format!("<br><i>{}</i>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
-    // TODO: add a button to download the file
+    // Build a clickable mxc:// link so the user can explicitly trigger download.
+    // The link is handled by `RobrixHtmlLinkAction` / `robius_open` in the room screen.
+    let download_link = match &file_content.source {
+        MediaSource::Plain(mxc_uri) => {
+            format!(
+                "<br>→ <a href=\"{}\">{}</a>",
+                htmlize::escape_text(mxc_uri.as_str()),
+                tr_key(app_language, "room_screen.file.download"),
+            )
+        }
+        MediaSource::Encrypted(_) => {
+            format!("<br>→ <i>{}</i>", tr_key(app_language, "room_screen.file.encrypted_not_supported"))
+        }
+    };
 
     message_content_widget.show_html(
         cx,
-        tr_fmt(app_language, "room_screen.file.preview_html", &[
-            ("filename", &filename),
-            ("size", size.as_str()),
-            ("caption", caption.as_str()),
-        ]),
+        format!("<b>{filename}</b>{size}{caption}{download_link}"),
     );
     true
 }
@@ -8472,8 +10482,19 @@ pub enum ReportRoomResultAction {
     },
 }
 
+#[derive(Debug)]
+pub enum ActionResponseResultAction {
+    Sent {
+        room_id: OwnedRoomId,
+        source_event_id: OwnedEventId,
+    },
+    Failed {
+        room_id: OwnedRoomId,
+        source_event_id: OwnedEventId,
+        error: String,
+    },
+}
 
-/// Actions related to a specific message within a room timeline.
 #[derive(Clone, Default, Debug)]
 pub enum MessageAction {
     /// The user clicked the "react" button on a message
@@ -9103,5 +11124,828 @@ mod tests {
             popup_pos.x + TRANSLATION_LANG_POPUP_WIDTH,
             container_rect.size.x - TRANSLATION_LANG_POPUP_MARGIN
         );
+    }
+
+    #[test]
+    fn center_username_row_aligns_with_avatar_center() {
+        assert_eq!(
+            message_profile_avatar_center_y(),
+            message_username_row_center_y(),
+        );
+    }
+
+    #[test]
+    fn center_bot_badge_aligns_with_username_row_center() {
+        assert_eq!(
+            message_username_row_center_y(),
+            bot_badge_center_y_within_username_row(),
+        );
+    }
+
+    #[test]
+    fn bot_badge_text_is_centered_within_badge() {
+        assert!(bot_badge_label_center_y() < (BOT_BADGE_HEIGHT * 0.5));
+    }
+
+    #[test]
+    fn test_bot_detection_configured_parent() {
+        let user_id: OwnedUserId = "@octosbot:127.0.0.1:8128".try_into().unwrap();
+        let resolved_parent_bot_user_id = Some(user_id.clone());
+        let known_bot_user_ids = Vec::new();
+
+        assert!(is_known_or_likely_bot(
+            user_id.as_ref(),
+            resolved_parent_bot_user_id.as_deref(),
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_bot_detection_heuristic_fallback() {
+        let user_id: OwnedUserId = "@myservice_bot:other.server".try_into().unwrap();
+        let known_bot_user_ids = Vec::new();
+
+        assert!(is_known_or_likely_bot(
+            user_id.as_ref(),
+            None,
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_bot_detection_child_bot() {
+        let user_id: OwnedUserId = "@octosbot_weather:127.0.0.1:8128".try_into().unwrap();
+        let known_bot_user_ids = vec![user_id.clone()];
+
+        assert!(is_known_or_likely_bot(
+            user_id.as_ref(),
+            None,
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_bot_detection_rejects_normal_user() {
+        let user_id: OwnedUserId = "@alice:127.0.0.1:8128".try_into().unwrap();
+        let known_bot_user_ids = Vec::new();
+
+        assert!(!is_known_or_likely_bot(
+            user_id.as_ref(),
+            None,
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_timeline_bot_detection_uses_room_bot_user_ids() {
+        let user_id: OwnedUserId = "@octosbot_bob:127.0.0.1:8128".try_into().unwrap();
+        let room_bot_user_ids = vec![user_id.clone()];
+        let known_bot_user_ids = Vec::new();
+
+        assert!(is_timeline_sender_bot(
+            user_id.as_ref(),
+            None,
+            &room_bot_user_ids,
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_extracts_status_provider_body_and_footer() {
+        let body = "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 **Alex**\n\n_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers.status.as_deref(), Some("施法中"));
+        assert_eq!(layers.provider.as_deref(), Some("via moonshot@api (kimi-k2.5)"));
+        assert_eq!(layers.body, "你好！我是 **Alex**");
+        assert_eq!(
+            layers.footer.as_deref(),
+            Some("_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_"),
+        );
+    }
+
+    #[test]
+    fn test_parse_octos_actions_skips_malformed_entries() {
+        let actions = parse_octos_actions_from_content(&serde_json::json!({
+            "org.octos.actions": [
+                { "id": "retry_pptx", "label": "Regenerate PPT", "style": "primary" },
+                { "label": "Missing id" },
+                { "id": "cancel", "label": "Cancel", "style": "secondary" }
+            ]
+        }));
+
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].id, "retry_pptx");
+        assert_eq!(actions[1].id, "cancel");
+    }
+
+    #[test]
+    fn test_parse_octos_actions_truncates_after_six() {
+        let actions = parse_octos_actions_from_content(&serde_json::json!({
+            "org.octos.actions": [
+                { "id": "a1", "label": "A1" },
+                { "id": "a2", "label": "A2" },
+                { "id": "a3", "label": "A3" },
+                { "id": "a4", "label": "A4" },
+                { "id": "a5", "label": "A5" },
+                { "id": "a6", "label": "A6" },
+                { "id": "a7", "label": "A7" }
+            ]
+        }));
+
+        assert_eq!(actions.len(), 6);
+        assert_eq!(actions.last().map(|action| action.id.as_str()), Some("a6"));
+    }
+
+    #[test]
+    fn test_parse_octos_actions_reads_m_new_content_wrapper() {
+        let actions = parse_octos_actions_from_content(&serde_json::json!({
+            "m.new_content": {
+                "org.octos.actions": [
+                    { "id": "confirm", "label": "确认", "style": "primary" },
+                    { "id": "cancel", "label": "取消", "style": "secondary" }
+                ]
+            },
+            "org.octos.actions": [
+                { "id": "stale", "label": "旧按钮" }
+            ]
+        }));
+
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].id, "confirm");
+        assert_eq!(actions[1].id, "cancel");
+    }
+
+    #[test]
+    fn test_parse_octos_approval_request_from_content() {
+        let approval = parse_octos_approval_request_from_content(&serde_json::json!({
+            "org.octos.approval_request": {
+                "request_id": "req_abc123",
+                "tool_name": "shell",
+                "tool_args_digest": "sha256:4bf5",
+                "title": "Execute shell command",
+                "summary": "rm -rf ~/tmp/cache",
+                "risk_level": "critical",
+                "authorized_approvers": ["@alice:example.org"],
+                "expires_at": "2026-04-14T14:30:00Z",
+                "on_timeout": "notify"
+            }
+        })).expect("approval request should parse");
+
+        assert_eq!(approval.request_id, "req_abc123");
+        assert_eq!(approval.tool_name, "shell");
+        assert_eq!(approval.tool_args_digest, "sha256:4bf5");
+        assert_eq!(approval.title, "Execute shell command");
+        assert_eq!(approval.summary, "rm -rf ~/tmp/cache");
+        assert_eq!(approval.risk_level, OctosApprovalRiskLevel::Critical);
+        assert_eq!(approval.authorized_approvers, vec!["@alice:example.org"]);
+        assert_eq!(approval.on_timeout, OctosApprovalTimeoutBehavior::Notify);
+    }
+
+    #[test]
+    fn test_parse_octos_approval_request_ignores_m_new_content_wrapper() {
+        let approval = parse_octos_approval_request_from_content(&serde_json::json!({
+            "org.octos.approval_request": {
+                "request_id": "req_original",
+                "tool_name": "shell",
+                "tool_args_digest": "sha256:4bf5",
+                "title": "Original request",
+                "summary": "rm -rf ~/tmp/cache",
+                "risk_level": "critical",
+                "authorized_approvers": ["@alice:example.org"],
+                "expires_at": "2026-04-14T14:30:00Z",
+                "on_timeout": "notify"
+            },
+            "m.new_content": {
+                "org.octos.approval_request": {
+                    "request_id": "req_edited",
+                    "tool_name": "shell",
+                    "tool_args_digest": "sha256:mallory",
+                    "title": "Edited request",
+                    "summary": "whoami",
+                    "risk_level": "normal",
+                    "authorized_approvers": ["@mallory:example.org"],
+                    "expires_at": "2026-04-14T14:30:00Z",
+                    "on_timeout": "notify"
+                }
+            }
+        })).expect("approval request should parse from original content");
+
+        assert_eq!(approval.request_id, "req_original");
+        assert_eq!(approval.authorized_approvers, vec!["@alice:example.org"]);
+        assert_eq!(approval.risk_level, OctosApprovalRiskLevel::Critical);
+    }
+
+    #[test]
+    fn test_parse_octos_approval_request_rejects_empty_authorized_approvers() {
+        assert!(parse_octos_approval_request_from_content(&serde_json::json!({
+            "org.octos.approval_request": {
+                "request_id": "req_abc123",
+                "tool_name": "shell",
+                "tool_args_digest": "sha256:4bf5",
+                "title": "Execute shell command",
+                "summary": "rm -rf ~/tmp/cache",
+                "risk_level": "critical",
+                "authorized_approvers": [],
+                "expires_at": "2026-04-14T14:30:00Z",
+                "on_timeout": "notify"
+            }
+        })).is_none());
+    }
+
+    #[test]
+    fn test_build_approval_response_request_targets_original_sender() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let original_sender: OwnedUserId = "@octosbot:127.0.0.1:8128".try_into().unwrap();
+
+        let request = build_octos_approval_response_request(
+            &timeline_kind,
+            "Execute shell command",
+            "req_abc123",
+            "approve",
+            "sha256:4bf5",
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+        );
+
+        assert_eq!(request.timeline_kind, timeline_kind);
+        assert_eq!(request.target_user_id, original_sender);
+        assert!(!request.explicit_room);
+        assert_eq!(request.content["org.octos.approval_response"]["request_id"], "req_abc123");
+        assert_eq!(request.content["org.octos.approval_response"]["decision"], "approve");
+        assert_eq!(request.content["org.octos.approval_response"]["tool_args_digest"], "sha256:4bf5");
+    }
+
+    #[test]
+    fn test_action_buttons_render_state_hidden_without_actions() {
+        let state = compute_action_button_render_state(&[], None, None);
+
+        assert!(!state.show_container);
+        assert!(state.visible_slots.is_empty());
+    }
+
+    #[test]
+    fn test_action_buttons_render_state_with_primary_secondary_danger() {
+        let state = compute_action_button_render_state(&[
+            OctosActionButton {
+                id: "retry".into(),
+                label: "Regenerate PPT".into(),
+                style: OctosActionStyle::Primary,
+            },
+            OctosActionButton {
+                id: "cancel".into(),
+                label: "Cancel".into(),
+                style: OctosActionStyle::Secondary,
+            },
+            OctosActionButton {
+                id: "delete".into(),
+                label: "Delete".into(),
+                style: OctosActionStyle::Danger,
+            },
+        ], None, None);
+
+        assert!(state.show_container);
+        assert!(state.show_button_row);
+        assert!(state.buttons_enabled);
+        assert!(state.approval_card.is_none());
+        assert_eq!(state.visible_slots.len(), 3);
+        assert_eq!(state.visible_slots[0].style, OctosActionStyle::Primary);
+        assert_eq!(state.visible_slots[1].style, OctosActionStyle::Secondary);
+        assert_eq!(state.visible_slots[2].style, OctosActionStyle::Danger);
+    }
+
+    #[test]
+    fn test_approval_buttons_disabled_for_unauthorized_user() {
+        let approval_request = OctosApprovalRequest {
+            request_id: "req_abc123".into(),
+            tool_name: "shell".into(),
+            tool_args_digest: "sha256:4bf5".into(),
+            title: "Execute shell command".into(),
+            summary: "rm -rf ~/tmp/cache".into(),
+            risk_level: OctosApprovalRiskLevel::Critical,
+            authorized_approvers: vec!["@alice:example.org".into()],
+            expires_at: "2026-04-14T14:30:00Z".into(),
+            on_timeout: OctosApprovalTimeoutBehavior::Notify,
+        };
+        let current_user_id = UserId::parse("@mallory:example.org").unwrap();
+        let state = compute_action_button_render_state(&[
+            OctosActionButton {
+                id: "approve".into(),
+                label: "Approve".into(),
+                style: OctosActionStyle::Primary,
+            },
+            OctosActionButton {
+                id: "deny".into(),
+                label: "Deny".into(),
+                style: OctosActionStyle::Danger,
+            },
+        ], Some(&approval_request), Some(current_user_id.as_ref()));
+
+        assert!(state.show_container);
+        assert!(state.show_button_row);
+        assert!(!state.buttons_enabled);
+        assert_eq!(
+            state.approval_card.as_ref().map(|card| card.title.as_str()),
+            Some("Execute shell command"),
+        );
+        assert_eq!(
+            state.approval_card.as_ref().map(|card| card.summary.as_str()),
+            Some("rm -rf ~/tmp/cache"),
+        );
+    }
+
+    #[test]
+    fn test_selected_action_reduces_visible_slots_to_clicked_button() {
+        let render_state = compute_action_button_render_state(&[
+            OctosActionButton {
+                id: "approve".into(),
+                label: "Approve".into(),
+                style: OctosActionStyle::Primary,
+            },
+            OctosActionButton {
+                id: "deny".into(),
+                label: "Deny".into(),
+                style: OctosActionStyle::Danger,
+            },
+        ], None, None);
+
+        let visible_slots = action_button_render_slots_for_display(&render_state, Some(&SelectedOctosActionState {
+            id: "deny".into(),
+            label: "Deny".into(),
+            style: OctosActionStyle::Danger,
+        }));
+
+        assert_eq!(visible_slots.len(), 1);
+        assert_eq!(visible_slots[0].id, "deny");
+        assert_eq!(visible_slots[0].label, "✓ Deny");
+        assert_eq!(visible_slots[0].style, OctosActionStyle::Danger);
+    }
+
+    #[test]
+    fn test_generic_actions_without_approval_request_remain_supported() {
+        let payload = parse_octos_action_payload_for_render(
+            Some(&serde_json::json!({
+                "org.octos.actions": [
+                    { "id": "retry_pptx", "label": "Regenerate PPT", "style": "primary" }
+                ]
+            })),
+            None,
+        );
+
+        assert!(payload.approval_request.is_none());
+        assert!(!payload.malformed_approval_request);
+        assert_eq!(payload.actions.len(), 1);
+        assert_eq!(payload.actions[0].id, "retry_pptx");
+    }
+
+    #[test]
+    fn test_malformed_approval_request_hides_buttons() {
+        let payload = parse_octos_action_payload_for_render(
+            Some(&serde_json::json!({
+                "org.octos.actions": [
+                    { "id": "approve", "label": "Approve", "style": "primary" },
+                    { "id": "deny", "label": "Deny", "style": "danger" }
+                ]
+            })),
+            Some(&serde_json::json!({
+                "org.octos.approval_request": {
+                    "request_id": "req_abc123"
+                },
+                "org.octos.actions": [
+                    { "id": "approve", "label": "Approve", "style": "primary" },
+                    { "id": "deny", "label": "Deny", "style": "danger" }
+                ]
+            })),
+        );
+        let state = compute_action_button_render_state(
+            &payload.actions,
+            payload.approval_request.as_ref(),
+            None,
+        );
+
+        assert!(payload.malformed_approval_request);
+        assert!(!state.show_container);
+        assert!(state.visible_slots.is_empty());
+    }
+
+    #[test]
+    fn test_approval_request_ignores_m_replace_edits() {
+        let payload = parse_octos_action_payload_for_render(
+            Some(&serde_json::json!({
+                "m.new_content": {
+                    "org.octos.approval_request": {
+                        "request_id": "req_replaced",
+                        "tool_name": "shell",
+                        "tool_args_digest": "sha256:replaced",
+                        "title": "Replaced request",
+                        "summary": "echo hacked",
+                        "risk_level": "normal",
+                        "authorized_approvers": ["@mallory:example.org"],
+                        "expires_at": "2026-04-14T14:35:00Z",
+                        "on_timeout": "notify"
+                    },
+                    "org.octos.actions": [
+                        { "id": "approve", "label": "Approve", "style": "primary" },
+                        { "id": "deny", "label": "Deny", "style": "danger" }
+                    ]
+                }
+            })),
+            Some(&serde_json::json!({
+                "org.octos.approval_request": {
+                    "request_id": "req_original",
+                    "tool_name": "shell",
+                    "tool_args_digest": "sha256:original",
+                    "title": "Original request",
+                    "summary": "rm -rf ~/tmp/cache",
+                    "risk_level": "critical",
+                    "authorized_approvers": ["@alice:example.org"],
+                    "expires_at": "2026-04-14T14:30:00Z",
+                    "on_timeout": "notify"
+                },
+                "org.octos.actions": [
+                    { "id": "approve", "label": "Approve", "style": "primary" },
+                    { "id": "deny", "label": "Deny", "style": "danger" }
+                ]
+            })),
+        );
+        let current_user_id = UserId::parse("@alice:example.org").unwrap();
+        let state = compute_action_button_render_state(
+            &payload.actions,
+            payload.approval_request.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert_eq!(
+            payload.approval_request.as_ref().map(|approval| approval.request_id.as_str()),
+            Some("req_original"),
+        );
+        assert!(state.buttons_enabled);
+        assert_eq!(
+            state.approval_card.as_ref().map(|card| card.title.as_str()),
+            Some("Original request"),
+        );
+    }
+
+    #[test]
+    fn test_build_action_response_request_targets_original_sender() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let original_sender: OwnedUserId = "@octosbot_weather:127.0.0.1:8128".try_into().unwrap();
+
+        let request = build_octos_action_response_request(
+            &timeline_kind,
+            "Regenerate PPT",
+            "retry_pptx",
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+        );
+
+        assert_eq!(request.timeline_kind, timeline_kind);
+        assert_eq!(request.target_user_id, original_sender);
+        assert!(!request.explicit_room);
+    }
+
+    #[test]
+    fn test_build_action_response_request_preserves_reply_relation() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let original_sender: OwnedUserId = "@octosbot_weather:127.0.0.1:8128".try_into().unwrap();
+
+        let request = build_octos_action_response_request(
+            &timeline_kind,
+            "Regenerate PPT",
+            "retry_pptx",
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+        );
+
+        let action_response = &request.content["org.octos.action_response"];
+        assert_eq!(request.content["body"], "[Action: Regenerate PPT]");
+        assert_eq!(action_response["action_id"], "retry_pptx");
+        assert_eq!(action_response["source_event_id"], "$orig123");
+        assert_eq!(request.content["m.relates_to"]["m.in_reply_to"]["event_id"], "$orig123");
+    }
+
+    #[test]
+    fn test_disable_action_buttons_marks_source_event_disabled() {
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let mut disabled = HashSet::new();
+
+        mark_action_buttons_disabled(&mut disabled, &source_event_id);
+
+        assert!(are_action_buttons_disabled(&disabled, source_event_id.as_ref()));
+    }
+
+    #[test]
+    fn test_reenable_action_buttons_clears_disabled_state() {
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let mut disabled = HashSet::new();
+        mark_action_buttons_disabled(&mut disabled, &source_event_id);
+
+        clear_action_buttons_disabled(&mut disabled, source_event_id.as_ref());
+
+        assert!(!are_action_buttons_disabled(&disabled, source_event_id.as_ref()));
+    }
+
+    #[test]
+    fn test_selected_action_state_marks_and_clears_by_source_event_id() {
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let mut selected_actions = HashMap::new();
+
+        mark_selected_octos_action(
+            &mut selected_actions,
+            &source_event_id,
+            "approve",
+            "Approve",
+            OctosActionStyle::Primary,
+        );
+        assert_eq!(
+            selected_actions.get(&source_event_id).map(|state| state.label.as_str()),
+            Some("Approve"),
+        );
+
+        clear_selected_octos_action(&mut selected_actions, source_event_id.as_ref());
+        assert!(!selected_actions.contains_key(&source_event_id));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_extracts_footer_without_provider_prefix() {
+        let body = "PPT 已经生成并发送了！\n\n你应该已经收到了文件。\n\n_moonshot@api/kimi-k2.5 · 11.0K in · 279 out · 9s_";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers.status, None);
+        assert_eq!(layers.provider, None);
+        assert_eq!(layers.body, "PPT 已经生成并发送了！\n\n你应该已经收到了文件。");
+        assert_eq!(
+            layers.footer.as_deref(),
+            Some("_moonshot@api/kimi-k2.5 · 11.0K in · 279 out · 9s_"),
+        );
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_falls_back_for_unmatched_bot_text() {
+        let body = "你好！我是 Alex。\n今天可以帮你查天气。";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers, BotTimelineLayers::plain(body));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_ignores_regular_user_messages() {
+        let body = "via moonshot@api (kimi-k2.5)\n\n这不是 bot 消息。";
+
+        let layers = parse_bot_timeline_layers(body, false);
+
+        assert_eq!(layers, BotTimelineLayers::plain(body));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_prefers_safe_fallback_for_malformed_metadata() {
+        let body = "施法中\n这个不是 provider 行\n\n你好，我还在。";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers, BotTimelineLayers::plain(body));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_invalid_metadata_does_not_panic() {
+        let body = "施法中\nvia moonshot@api (kimi-k2.5)\n\n_\n";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers, BotTimelineLayers::plain(body));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_tolerates_streaming_cursor_in_footer() {
+        let body = "via moonshot@api (kimi-k2.5)\n\n你好！我是 **Alex**\n\n_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_ ●";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers.body, "你好！我是 **Alex**");
+        assert_eq!(
+            layers.footer.as_deref(),
+            Some("_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_"),
+        );
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_promotes_metrics_only_body_to_footer() {
+        let body = "疯狂输出中\nvia moonshot@api (kimi-k2.5)\n4s";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers.status.as_deref(), Some("疯狂输出中"));
+        assert_eq!(layers.provider.as_deref(), Some("via moonshot@api (kimi-k2.5)"));
+        assert!(layers.body.is_empty());
+        assert_eq!(layers.footer.as_deref(), Some("4s"));
+    }
+
+    #[test]
+    fn test_rich_markdown_streaming_prefers_full_snapshot_rendering() {
+        let formatted = FormattedBody::html("<p><strong>OpenClaw</strong></p>");
+        assert!(should_render_streaming_full_snapshot(
+            "根据搜索结果， **OpenClaw** 有两个不同的项目。",
+            Some(&formatted),
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_plain_text_streaming_keeps_typewriter_path() {
+        assert!(!should_render_streaming_full_snapshot(
+            "你好，我是 Octos。",
+            None,
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_bot_timeline_card_visible_for_bot_text_message() {
+        let state = compute_bot_timeline_render_state(
+            "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。\n\n_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_",
+            true,
+        );
+
+        assert!(state.show_card);
+        assert_eq!(state.body, "你好！我是 Alex。");
+    }
+
+    #[test]
+    fn test_bot_timeline_card_hidden_for_regular_user_message() {
+        let state = compute_bot_timeline_render_state("你好", false);
+
+        assert!(!state.show_card);
+    }
+
+    #[test]
+    fn test_bot_status_strip_renders_above_body_and_not_inside_body() {
+        let state = compute_bot_timeline_render_state(
+            "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。",
+            true,
+        );
+
+        assert_eq!(state.status.as_deref(), Some("施法中"));
+        assert!(state.show_status_strip);
+        assert!(!state.body.starts_with("施法中"));
+    }
+
+    #[test]
+    fn test_bot_metadata_footer_renders_below_body() {
+        let state = compute_bot_timeline_render_state(
+            "via moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。\n\n_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_",
+            true,
+        );
+
+        assert!(state.show_metadata_footer);
+        assert_eq!(state.provider.as_deref(), Some("via moonshot@api (kimi-k2.5)"));
+        assert_eq!(
+            state.footer.as_deref(),
+            Some("_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_"),
+        );
+    }
+
+    #[test]
+    fn test_bot_progress_message_hides_body_card_when_only_metrics_remain() {
+        let state = compute_bot_timeline_render_state(
+            "疯狂输出中\nvia moonshot@api (kimi-k2.5)\n4s",
+            true,
+        );
+
+        assert!(state.show_card);
+        assert!(!state.show_body_card);
+        assert!(state.show_status_strip);
+        assert!(state.show_metadata_footer);
+        assert_eq!(state.footer.as_deref(), Some("4s"));
+    }
+
+    #[test]
+    fn test_bot_timeline_card_body_uses_html_or_plaintext_rendering() {
+        let state = compute_bot_timeline_render_state(
+            "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 **Alex**",
+            true,
+        );
+
+        let formatted = select_bot_timeline_body_formatted_body(&state, None)
+            .expect("structured bot body should still produce formatted content");
+
+        assert_eq!(formatted.format, MessageFormat::Html);
+        assert!(formatted.body.contains("<strong>Alex</strong>"));
+    }
+
+    #[test]
+    fn test_bot_plain_markdown_body_without_formatted_html_still_renders_as_markdown() {
+        let state = compute_bot_timeline_render_state(
+            "## 标题\n\n```rust\n// 中文注释\nlet answer = 42;\n```",
+            true,
+        );
+
+        let formatted = select_bot_timeline_body_formatted_body(&state, None)
+            .expect("rich markdown bot body should synthesize HTML during streaming");
+
+        assert_eq!(formatted.format, MessageFormat::Html);
+        assert!(formatted.body.contains("<h2>标题</h2>"));
+        assert!(formatted.body.contains("中文注释"));
+    }
+
+    #[test]
+    fn test_bot_timeline_body_prefers_markdown_widget_for_fenced_code_blocks() {
+        let state = compute_bot_timeline_render_state(
+            "## 标题\n\n```rust\nlet answer = 42;\n```\n\n这里是中文说明。",
+            true,
+        );
+
+        assert!(should_render_bot_timeline_body_with_markdown_widget(&state));
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::Highlighted,
+        );
+    }
+
+    #[test]
+    fn test_bot_timeline_body_keeps_html_widget_for_non_code_markdown() {
+        let state = compute_bot_timeline_render_state(
+            "## 标题\n\n这里有 **加粗**，但没有代码块。",
+            true,
+        );
+
+        assert!(!should_render_bot_timeline_body_with_markdown_widget(&state));
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::None,
+        );
+    }
+
+    #[test]
+    fn test_bot_timeline_body_uses_plain_markdown_code_block_for_cjk_code() {
+        let state = compute_bot_timeline_render_state(
+            "```rust\n// 中文注释\nprintln!(\"你好\");\n```",
+            true,
+        );
+
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::Plain,
+        );
+    }
+
+    #[test]
+    fn test_fenced_code_blocks_ignore_cjk_outside_code_block() {
+        let body = "## 标题\n\n```rust\nlet answer = 42;\n```\n\n这里是中文总结。";
+
+        assert!(!fenced_code_blocks_contain_cjk(body));
+    }
+
+    #[test]
+    fn test_streaming_update_requires_content_invalidation_for_new_full_snapshot_text() {
+        let state = StreamingAnimState::new("你好", true);
+
+        assert!(streaming_update_requires_content_invalidation(
+            &state,
+            "## 标题\n\n内容",
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_streaming_update_skips_invalidation_when_target_and_mode_are_unchanged() {
+        let mut state = StreamingAnimState::new("## 标题\n\n内容", true);
+        state.set_render_full_target(true);
+
+        assert!(!streaming_update_requires_content_invalidation(
+            &state,
+            "## 标题\n\n内容",
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_bot_timeline_card_preserves_reply_preview_and_condensed_layout() {
+        let reply_state = compute_bot_timeline_render_state(
+            "via moonshot@api (kimi-k2.5)\n\n第一条回复",
+            true,
+        );
+        let condensed_state = compute_bot_timeline_render_state(
+            "via moonshot@api (kimi-k2.5)\n\n第二条回复",
+            true,
+        );
+
+        assert!(reply_state.show_card);
+        assert!(condensed_state.show_card);
+        assert!(reply_state.show_metadata_footer);
+        assert!(condensed_state.show_metadata_footer);
     }
 }

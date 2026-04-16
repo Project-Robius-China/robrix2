@@ -116,7 +116,7 @@ Here is what each field does:
 | Field | Purpose |
 |-------|---------|
 | `id` | A unique name for this appservice. Palpo uses it to track event delivery. |
-| `url` | The HTTP endpoint where Palpo sends events. This is Octos's address inside the Docker network. |
+| `url` | The HTTP endpoint where Palpo sends events. Octos runs as a Docker container on the same internal network as Palpo, so Palpo reaches it by the service name `octos`. |
 | `as_token` | The token Octos presents when calling Palpo's API. Proves "I am the registered appservice." |
 | `hs_token` | The token Palpo presents when pushing events to Octos. Proves "I am the homeserver you registered with." |
 | `sender_localpart` | The main bot's username. Combined with `server_name`, it becomes `@octosbot:127.0.0.1:8128`. |
@@ -177,7 +177,7 @@ User types "Hello" in Robrix
          v
 +-----------------+
 | 3. Palpo pushes |  PUT /transactions/{txnId} -> http://octos:8009
-|    to Octos     |  (Appservice API, internal Docker network)
+|    to Octos     |  (Appservice API; Octos runs in the same Docker network)
 +--------+--------+
          |
          v
@@ -189,7 +189,7 @@ User types "Hello" in Robrix
          v
 +-----------------+
 | 5. Octos sends  |  PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message
-|    reply via    |  -> http://palpo:8008 (internal Docker network)
+|    reply via    |  -> http://palpo:8008 (Palpo service on the internal Docker network)
 |    CS API       |  Auth: Bearer {as_token}
 +--------+--------+
          |
@@ -209,11 +209,11 @@ User sees AI reply in Robrix
 
 **Step 2 -- Palpo stores the event.** Palpo receives the message, assigns it an event ID, and persists it to PostgreSQL. The room's state is updated to reflect the new message.
 
-**Step 3 -- Palpo pushes the event to Octos.** Palpo checks its appservice registry and sees that `@octosbot:127.0.0.1:8128` is a member of this room. It sends the event to Octos's appservice endpoint (`http://octos:8009`) via an HTTP PUT to `/transactions/{txnId}`. This uses the internal Docker network -- no traffic leaves the host.
+**Step 3 -- Palpo pushes the event to Octos.** Palpo checks its appservice registry and sees that `@octosbot:127.0.0.1:8128` is a member of this room. It sends the event to Octos's appservice endpoint (`http://octos:8009`) via an HTTP PUT to `/transactions/{txnId}`. Octos runs as a Docker container on the same internal network as Palpo, so Palpo resolves it by the service name `octos` -- no traffic leaves the Docker network.
 
 **Step 4 -- Octos calls the LLM.** Octos receives the event, extracts the message content, and calls the configured LLM provider (e.g., DeepSeek's `/v1/chat/completions` endpoint). It includes conversation history for context.
 
-**Step 5 -- Octos sends the reply.** Once the LLM responds, Octos sends the reply back through Palpo's Client-Server API, acting as the bot user (`@octosbot:127.0.0.1:8128`). It authenticates with `as_token`. Note that Octos connects to Palpo at `http://palpo:8008` (Docker internal), not `127.0.0.1:8128` (host).
+**Step 5 -- Octos sends the reply.** Once the LLM responds, Octos sends the reply back through Palpo's Client-Server API, acting as the bot user (`@octosbot:127.0.0.1:8128`). It authenticates with `as_token`. Octos connects to Palpo at `http://palpo:8008` over the internal Docker network -- the service name `palpo` resolves to Palpo's container on port 8008.
 
 **Step 6 -- Palpo delivers the reply to Robrix.** Palpo stores the bot's reply event and includes it in Robrix's next Sliding Sync response. Robrix receives the event and displays the AI bot's message in the conversation.
 
@@ -232,7 +232,7 @@ Key observations:
 
 - **Robrix never talks directly to Octos.** All communication goes through Palpo. Robrix does not even know Octos exists -- it just sees bot users in rooms.
 - **Two different paths, same API.** Both Robrix and Octos use the Client-Server API to talk to Palpo, but Octos authenticates with `as_token` (appservice credential) instead of a regular user session.
-- **Internal vs. external traffic.** Robrix connects via the host port (8128). Palpo and Octos communicate on the Docker internal network (service names `palpo:8008` and `octos:8009`). Only the LLM API call goes to the internet.
+- **Internal vs. external traffic.** Robrix connects to Palpo via the host port (`127.0.0.1:8128`). Palpo and Octos both run as Docker containers on the same internal network: Palpo calls Octos via `octos:8009`, and Octos calls back into Palpo via `palpo:8008`. Only the LLM API call goes to the public internet.
 
 ---
 
@@ -241,12 +241,12 @@ Key observations:
 | Connection | Protocol | Default Port | Direction | Notes |
 |-----------|----------|-------------|-----------|-------|
 | Robrix -> Palpo | Client-Server API (Sliding Sync) | 8128 (host) -> 8008 (container) | Bidirectional | The only port Robrix needs. Exposed on the host machine. |
-| Palpo -> Octos | Appservice API | 8009 (host) -> 8009 (container) | Palpo pushes events | Also exposed to host for debugging. Uses Docker service name `octos` internally. |
-| Octos -> Palpo | Client-Server API | 8008 (internal Docker network) | Octos sends replies | Uses Docker service name `palpo`. Auth via `as_token`. |
-| Octos Dashboard | HTTP | 8010 (host) -> 8080 (container) | Inbound | Optional admin UI for monitoring Octos. |
+| Palpo -> Octos | Appservice API | 8009 (internal) | Palpo pushes events | Octos listens inside the Docker network; Palpo reaches it via `octos:8009`. |
+| Octos -> Palpo | Client-Server API | 8008 (internal) | Octos sends replies | Octos connects to Palpo via `palpo:8008` over the internal Docker network. Auth via `as_token`. |
+| Octos Dashboard | HTTP | 8080 (host) | Inbound | Optional admin UI for monitoring Octos (exposed on the host for browser access). |
 | Octos -> LLM | HTTPS | 443 (outbound) | Outbound | External API call to the LLM provider. |
 
-**Why two different ports for Palpo (8008 vs. 8128)?** Inside the Docker network, Palpo listens on port 8008 (its container port). Docker maps host port 8128 to container port 8008. Octos, running in the same Docker network, connects directly to `palpo:8008`. Robrix, running on the host machine, connects to `127.0.0.1:8128`.
+**Why two different ports for Palpo (8008 vs. 8128)?** Inside the Docker container, Palpo listens on port 8008. Docker maps host port 8128 to container port 8008 so Robrix (running natively on your machine) can connect to `127.0.0.1:8128`. Octos, which also runs inside Docker, connects directly to Palpo on the internal network via `palpo:8008` -- no port mapping needed. Palpo, in turn, reaches Octos at `octos:8009` using Docker's service name resolution.
 
 ---
 

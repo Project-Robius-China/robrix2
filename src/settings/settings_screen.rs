@@ -226,7 +226,7 @@ script_mod! {
                             preferences_language_hint_label := Label {
                                 width: Fill
                                 height: Fit
-                                margin: Inset{left: (SPACE_XS), right: (SPACE_SM), top: (SPACE_XS), bottom: (SPACE_XS)}
+                                margin: Inset{right: (SPACE_SM), top: (SPACE_XS), bottom: (SPACE_XS)}
                                 draw_text +: {
                                     color: (MESSAGE_TEXT_COLOR)
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
@@ -268,28 +268,16 @@ script_mod! {
                             }
 
                             preferences_proxy_use_toggle := Toggle {
-                                width: 52, height: 28
+                                width: Fit
+                                height: Fit
+                                padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
                                 text: ""
                                 active: false
-                                icon_walk: Walk{width: 0, height: 0, margin: 0}
-                                label_walk: Walk{width: 0, height: 0, margin: 0}
                                 draw_bg +: {
-                                    size: 18.0
-                                    color: #E3E7EF
-                                    color_hover: #E3E7EF
-                                    color_down: #D5DBE6
+                                    size: 20.0
                                     color_active: (COLOR_ACTIVE_PRIMARY)
-                                    border_radius: 14.0
-                                    border_size: 1.5
-                                    border_color: #7E879A
-                                    border_color_hover: #7E879A
-                                    border_color_down: #6F788D
-                                    border_color_active: (COLOR_ACTIVE_PRIMARY_DARKER)
-                                    mark_color: #2D3A57
-                                    mark_color_hover: #2D3A57
-                                    mark_color_down: #2D3A57
-                                    mark_color_active: #FFFFFF
-                                    mark_color_active_hover: #FFFFFF
+                                    border_color_active: (COLOR_ACTIVE_PRIMARY)
+                                    mark_color_active: #fff
                                 }
                             }
                         }
@@ -493,19 +481,21 @@ script_mod! {
                             contribute_description := Label {
                                 width: Fill
                                 height: Fit
-                                flow: Flow.Right{wrap: true}
-                                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), top: 0, bottom: 2}
+                                margin: Inset{top: 0, bottom: 2}
                                 draw_text +: {
                                     color: (COLOR_DESCRIPTION_TEXT)
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
                                 }
-                                text: "Contribute to Robrix on GitHub: https://github.com/Project-Robius-China/robrix2"
+                                text: "Contribute to Robrix on GitHub:"
                             }
 
                             contribute_repo_link := LinkLabel {
                                 width: Fit, height: Fit,
-                                flow: Flow.Right{wrap: true},
-                                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), top: 0, bottom: 0}
+                                padding: Inset{left: (LINK_LABEL_LEFT_PAD)}
+                                margin: 0
+                                spacing: 0,
+                                align: Align{x: 0.0}
+                                icon_walk: Walk{width: 0, height: 0}
                                 draw_text +: {
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
                                     color: #x0000EE,
@@ -533,8 +523,7 @@ script_mod! {
                             about_description := Label {
                                 width: Fill
                                 height: Fit
-                                flow: Flow.Right{wrap: true}
-                                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), top: 0, bottom: 2}
+                                margin: Inset{top: 0, bottom: 2}
                                 draw_text +: {
                                     color: (COLOR_DESCRIPTION_TEXT)
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
@@ -547,7 +536,7 @@ script_mod! {
                             contribute_current_version_label := Label {
                                 width: Fill
                                 height: Fit
-                                margin: Inset{left: (SPACE_XS), right: (SPACE_XS), top: 0, bottom: 4}
+                                margin: Inset{top: 0, bottom: 4}
                                 draw_text +: {
                                     color: (MESSAGE_TEXT_COLOR)
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
@@ -557,7 +546,7 @@ script_mod! {
 
                             contribute_check_update_button := RobrixIconButton {
                                 width: Fit, height: Fit,
-                                margin: Inset{left: (SPACE_XS)}
+                                margin: Inset{left: (ICON_BUTTON_LEFT_PAD)}
                                 padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                                 spacing: 0,
                                 icon_walk: Walk{width: 0, height: 0, margin: 0}

@@ -20,8 +20,8 @@ use makepad_widgets::*;
 use matrix_sdk::room::reply::{EnforceThread, Reply};
 use ruma::events::room::message::AddMentions;
 use matrix_sdk_ui::timeline::{EmbeddedEvent, EventTimelineItem, TimelineEventItemId};
-use ruma::{events::room::message::{LocationMessageEventContent, MessageType, ReplyWithinThread, RoomMessageEventContent}, OwnedRoomId, OwnedUserId};
-use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::MentionableTextInputWidgetExt, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
+use ruma::{events::room::message::{LocationMessageEventContent, MessageType, ReplyWithinThread, RoomMessageEventContent}, OwnedRoomId, OwnedUserId, UserId};
+use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, classify_known_slash_command_for_submission, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::shared::file_upload_modal::{FilePreviewerMetaData, ThumbnailData};
 
@@ -81,6 +81,428 @@ fn compute_translation_apply_outcome(translated_text: &str) -> TranslationApplyO
         next_last_source: applied_text,
         keep_preview_visible: true,
     }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum ExplicitOverride {
+    #[default]
+    None,
+    Bot(OwnedUserId),
+    Room,
+}
+
+impl ExplicitOverride {
+    #[allow(dead_code)]
+    fn cleared(&self) -> Self {
+        Self::None
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ResolvedTarget {
+    NoTarget,
+    ExplicitBot(OwnedUserId),
+    ExplicitRoom,
+    ReplyBot(OwnedUserId),
+}
+
+fn known_bot_candidates<'a>(
+    bound_bot_user_id: Option<&'a UserId>,
+    resolved_parent_bot_user_id: Option<&'a UserId>,
+    room_bot_user_ids: &'a [OwnedUserId],
+    known_bot_user_ids: &'a [OwnedUserId],
+) -> Vec<&'a UserId> {
+    let mut candidates = Vec::with_capacity(room_bot_user_ids.len() + known_bot_user_ids.len() + 2);
+    if let Some(bound_bot_user_id) = bound_bot_user_id {
+        candidates.push(bound_bot_user_id);
+    }
+    if let Some(resolved_parent_bot_user_id) = resolved_parent_bot_user_id
+        && candidates
+            .iter()
+            .all(|candidate| *candidate != resolved_parent_bot_user_id)
+    {
+        candidates.push(resolved_parent_bot_user_id);
+    }
+    for room_bot_user_id in room_bot_user_ids {
+        let room_bot_user_id_ref: &UserId = room_bot_user_id.as_ref();
+        if candidates
+            .iter()
+            .all(|candidate| *candidate != room_bot_user_id_ref)
+        {
+            candidates.push(room_bot_user_id_ref);
+        }
+    }
+    for known_bot_user_id in known_bot_user_ids {
+        let known_bot_user_id_ref: &UserId = known_bot_user_id.as_ref();
+        if candidates
+            .iter()
+            .all(|candidate| *candidate != known_bot_user_id_ref)
+        {
+            candidates.push(known_bot_user_id_ref);
+        }
+    }
+    candidates
+}
+
+fn is_matrix_localpart_mention_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '=' | '/' | '+')
+}
+
+fn contains_matrix_localpart_mention(text: &str, user_id: &UserId) -> bool {
+    let mention = format!("@{}", user_id.localpart());
+    for (idx, _) in text.match_indices(&mention) {
+        let start_ok = text[..idx]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_matrix_localpart_mention_char(c));
+        let end_idx = idx + mention.len();
+        let end_ok = text[end_idx..]
+            .chars()
+            .next()
+            .is_none_or(|c| !is_matrix_localpart_mention_char(c));
+        if start_ok && end_ok {
+            return true;
+        }
+    }
+    false
+}
+
+fn text_mentions_known_bot(
+    text: &str,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    known_bot_candidates(
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        room_bot_user_ids,
+        known_bot_user_ids,
+    )
+    .into_iter()
+    .any(|candidate| {
+        text.contains(candidate.as_str()) || contains_matrix_localpart_mention(text, candidate)
+    })
+}
+
+fn message_mentions_known_bot(
+    message: &RoomMessageEventContent,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    if message.mentions.as_ref().is_some_and(|mentions| {
+        mentions.user_ids.iter().any(|user_id| {
+            room_bot_user_ids
+                .iter()
+                .any(|room_bot_user_id| room_bot_user_id.as_str() == user_id.as_str())
+                || is_known_or_likely_bot(
+                    user_id.as_ref(),
+                    resolved_parent_bot_user_id,
+                    known_bot_user_ids,
+                )
+        })
+    }) {
+        return true;
+    }
+
+    if text_mentions_known_bot(
+        message.body(),
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        room_bot_user_ids,
+        known_bot_user_ids,
+    ) {
+        return true;
+    }
+
+    match &message.msgtype {
+        MessageType::Text(content) => content.formatted.as_ref().is_some_and(|formatted| {
+            text_mentions_known_bot(
+                &formatted.body,
+                bound_bot_user_id,
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            )
+        }),
+        MessageType::Notice(content) => content.formatted.as_ref().is_some_and(|formatted| {
+            text_mentions_known_bot(
+                &formatted.body,
+                bound_bot_user_id,
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            )
+        }),
+        MessageType::Emote(content) => content.formatted.as_ref().is_some_and(|formatted| {
+            text_mentions_known_bot(
+                &formatted.body,
+                bound_bot_user_id,
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            )
+        }),
+        _ => false,
+    }
+}
+
+fn routing_directives_for_message(
+    resolved_target: &ResolvedTarget,
+    message_mentions_bot: bool,
+) -> (Option<OwnedUserId>, bool) {
+    let target_user_id = if message_mentions_bot {
+        None
+    } else {
+        resolved_target_user_id(resolved_target)
+    };
+    let explicit_room = target_user_id.is_none();
+    (target_user_id, explicit_room)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CommandAddressingError {
+    BotNotFound(String),
+}
+
+fn resolve_target(
+    explicit_override: &ExplicitOverride,
+    replying_to_sender: Option<&UserId>,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    known_bot_user_ids: &[OwnedUserId],
+    is_dm_room: bool,
+) -> ResolvedTarget {
+    if let Some(replying_to_sender) = replying_to_sender
+        && is_known_or_likely_bot(
+            replying_to_sender,
+            resolved_parent_bot_user_id,
+            known_bot_user_ids,
+        )
+    {
+        return ResolvedTarget::ReplyBot(replying_to_sender.to_owned());
+    }
+
+    match explicit_override {
+        ExplicitOverride::Bot(bot_user_id) => ResolvedTarget::ExplicitBot(bot_user_id.clone()),
+        ExplicitOverride::Room => ResolvedTarget::ExplicitRoom,
+        ExplicitOverride::None => {
+            // DM rooms (user + bot, ≤2 members) default to routing to the bot,
+            // so users can chat without @mention. Multi-member rooms default to
+            // "explicit room" so the user doesn't accidentally send bot-directed
+            // messages while chatting with other humans. Users can override via
+            // the target chip either way.
+            match (is_dm_room, bound_bot_user_id) {
+                (true, Some(bot_user_id)) => ResolvedTarget::ExplicitBot(bot_user_id.to_owned()),
+                (false, Some(_)) => ResolvedTarget::ExplicitRoom,
+                (_, None) => ResolvedTarget::NoTarget,
+            }
+        }
+    }
+}
+
+fn resolved_target_user_id(target: &ResolvedTarget) -> Option<OwnedUserId> {
+    match target {
+        ResolvedTarget::NoTarget | ResolvedTarget::ExplicitRoom => None,
+        ResolvedTarget::ExplicitBot(bot_user_id)
+        | ResolvedTarget::ReplyBot(bot_user_id) => Some(bot_user_id.clone()),
+    }
+}
+
+fn management_bot_target_user_id(
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+) -> Option<OwnedUserId> {
+    bound_bot_user_id
+        .map(ToOwned::to_owned)
+        .or_else(|| resolved_parent_bot_user_id.map(ToOwned::to_owned))
+}
+
+fn is_management_bot_room_for_context(
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    _known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    if !app_service_enabled {
+        return false;
+    }
+
+    let Some(bound_bot_user_id) = bound_bot_user_id else {
+        return false;
+    };
+
+    if !is_direct_room && !has_persisted_management_binding {
+        return false;
+    }
+
+    resolved_parent_bot_user_id.is_some_and(|resolved_parent_bot_user_id|
+        bound_bot_user_id == resolved_parent_bot_user_id
+    )
+}
+
+fn is_management_bot_room(room_screen_props: &RoomScreenProps) -> bool {
+    is_management_bot_room_for_context(
+        room_screen_props.app_service_enabled,
+        room_screen_props.is_direct_room,
+        room_screen_props.has_persisted_management_binding,
+        room_screen_props.bound_bot_user_id.as_deref(),
+        room_screen_props.resolved_parent_bot_user_id.as_deref(),
+        &room_screen_props.known_bot_user_ids,
+    )
+}
+
+fn classified_management_command_target_for_context(
+    entered_text: &str,
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    known_bot_user_ids: &[OwnedUserId],
+) -> Option<OwnedUserId> {
+    if !is_management_bot_room_for_context(
+        app_service_enabled,
+        is_direct_room,
+        has_persisted_management_binding,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+    ) {
+        return None;
+    }
+
+    classify_known_slash_command_for_submission(entered_text).and_then(|_| {
+        management_bot_target_user_id(
+            bound_bot_user_id,
+            resolved_parent_bot_user_id,
+        )
+    })
+}
+
+fn addressed_command_target_for_context(
+    entered_text: &str,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+) -> Result<Option<OwnedUserId>, CommandAddressingError> {
+    let Some(parsed_command) = parse_command_with_at_suffix(entered_text) else {
+        return Ok(None);
+    };
+
+    let Some(target_localpart) = parsed_command.target_localpart else {
+        return Ok(None);
+    };
+
+    let Some(target_user_id) = known_bot_candidates(
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        room_bot_user_ids,
+        known_bot_user_ids,
+    )
+    .into_iter()
+    .find(|candidate| candidate.localpart().eq_ignore_ascii_case(&target_localpart))
+    .map(ToOwned::to_owned) else {
+        return Err(CommandAddressingError::BotNotFound(target_localpart));
+    };
+
+    Ok(Some(target_user_id))
+}
+
+fn routing_directives_for_submission(
+    entered_text: &str,
+    resolved_target: &ResolvedTarget,
+    message_mentions_bot: bool,
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+) -> Result<(Option<OwnedUserId>, bool), CommandAddressingError> {
+    if let Some(target_user_id) = addressed_command_target_for_context(
+        entered_text,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        room_bot_user_ids,
+        known_bot_user_ids,
+    )? {
+        return Ok((Some(target_user_id), false));
+    }
+
+    if let Some(target_user_id) = classified_management_command_target_for_context(
+        entered_text,
+        app_service_enabled,
+        is_direct_room,
+        has_persisted_management_binding,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+    ) {
+        return Ok((Some(target_user_id), false));
+    }
+
+    Ok(routing_directives_for_message(
+        resolved_target,
+        message_mentions_bot,
+    ))
+}
+
+/// Determines if a room should use DM-style default bot routing.
+/// Only true Matrix direct rooms should get this behavior.
+fn is_dm_room(room_screen_props: &RoomScreenProps) -> bool {
+    room_screen_props.is_direct_room
+}
+
+fn resolve_send_target(
+    explicit_override: &ExplicitOverride,
+    replying_to_sender: Option<&UserId>,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    known_bot_user_ids: &[OwnedUserId],
+    is_dm_room: bool,
+) -> ResolvedTarget {
+    resolve_target(
+        explicit_override,
+        replying_to_sender,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+        is_dm_room,
+    )
+}
+
+#[cfg(test)]
+fn resolve_restored_target(
+    explicit_override: &ExplicitOverride,
+    replying_to_sender: Option<&UserId>,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    known_bot_user_ids: &[OwnedUserId],
+    is_dm_room: bool,
+) -> ResolvedTarget {
+    resolve_target(
+        explicit_override,
+        replying_to_sender,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+        is_dm_room,
+    )
+}
+
+#[cfg(test)]
+fn restored_explicit_override(saved_state: &RoomInputBarState) -> ExplicitOverride {
+    let _ = saved_state;
+    ExplicitOverride::None
 }
 
 script_mod! {
@@ -169,6 +591,46 @@ script_mod! {
             border_size: 1.0
             border_color: (COLOR_SECONDARY)
         }
+    }
+
+    mod.widgets.TargetChipButton = Button {
+        width: Fit, height: Fit
+        padding: Inset{left: 10, right: 10, top: 5, bottom: 5}
+        draw_bg +: {
+            color: #xF7F9FD
+            color_hover: #xEEF3F9
+            color_down: #xE5ECF5
+            border_radius: 9.0
+            border_size: 1.0
+            border_color: #xD7DFEA
+        }
+        draw_text +: {
+            color: (COLOR_TEXT)
+            color_hover: (COLOR_TEXT)
+            color_down: (COLOR_TEXT)
+            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+        }
+        text: "Target"
+    }
+
+    mod.widgets.TargetMenuButton = Button {
+        width: Fit, height: Fit
+        padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+        draw_bg +: {
+            color: (COLOR_PRIMARY)
+            color_hover: #F4F7FC
+            color_down: #E8EEF8
+            border_radius: 7.0
+            border_size: 1.0
+            border_color: (COLOR_SECONDARY)
+        }
+        draw_text +: {
+            color: (COLOR_TEXT)
+            color_hover: (COLOR_TEXT)
+            color_down: (COLOR_TEXT)
+            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+        }
+        text: "Option"
     }
 
 
@@ -473,6 +935,23 @@ script_mod! {
                         text: "",
                     }
 
+                    bot_menu_button := RobrixIconButton {
+                        visible: false,
+                        margin: Inset{left: 1, right: 1, top: 4, bottom: 4}
+                        spacing: 0,
+                        draw_icon +: {
+                            svg: (ICON_LINK)
+                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
+                        },
+                        draw_bg +: {
+                            color: (COLOR_BG_PREVIEW)
+                            color_hover: #xE0E8F0
+                            color_down: #xD0D8E8
+                        }
+                        icon_walk: Walk{width: 18, height: 18}
+                        text: "",
+                    }
+
                     mentionable_text_input := MentionableTextInput {
                         width: Fill,
                         height: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.75}}
@@ -601,8 +1080,8 @@ pub struct RoomInputBar {
     #[rust] was_replying_preview_visible: bool,
     /// Info about the message event that the user is currently replying to, if any.
     #[rust] replying_to: Option<(EventTimelineItem, EmbeddedEvent)>,
-    /// The most recently selected explicit bot target for this room.
-    #[rust] active_target_user_id: Option<OwnedUserId>,
+    /// The user's explicit target override for this room.
+    #[rust] explicit_override: ExplicitOverride,
     /// Whether the location card is currently expanded.
     #[rust] is_location_card_expanded: bool,
     /// Whether the emoji picker popup is currently expanded.
@@ -642,10 +1121,10 @@ impl Widget for RoomInputBar {
             self.set_app_language(cx, app_language);
         }
 
-        let room_screen_props = scope
-            .props
-            .get::<RoomScreenProps>()
-            .expect("BUG: RoomScreenProps should be available in Scope::props for RoomInputBar");
+        let room_screen_props = scope.props.get::<RoomScreenProps>();
+        let room_screen_widget_uid = room_screen_props.map(|props| props.room_screen_widget_uid);
+        let show_bot_menu_tooltip =
+            room_screen_props.is_some_and(is_management_bot_room);
 
         match event.hits(cx, self.view.view(cx, ids!(replying_preview.reply_preview_content)).area()) {
             // If the hit occurred on the replying message preview, jump to it.
@@ -653,10 +1132,12 @@ impl Widget for RoomInputBar {
                 if let Some(event_id) = self.replying_to.as_ref()
                     .and_then(|(event_tl_item, _)| event_tl_item.event_id().map(ToOwned::to_owned))
                 {
-                    cx.widget_action(
-                        room_screen_props.room_screen_widget_uid, 
-                        MessageAction::JumpToEvent(event_id),
-                    );
+                    if let Some(room_screen_widget_uid) = room_screen_widget_uid {
+                        cx.widget_action(
+                            room_screen_widget_uid,
+                            MessageAction::JumpToEvent(event_id),
+                        );
+                    }
                 } else {
                     enqueue_popup_notification(
                         "BUG: couldn't find the message you're replying to.",
@@ -668,12 +1149,39 @@ impl Widget for RoomInputBar {
             _ => {}
         }
 
+        if show_bot_menu_tooltip {
+            let bot_menu_button_area = self.button(cx, ids!(bot_menu_button)).area();
+            match event.hits(cx, bot_menu_button_area) {
+                Hit::FingerHoverIn(_) | Hit::FingerLongPress(_) => {
+                    cx.widget_action(
+                        self.widget_uid(),
+                        TooltipAction::HoverIn {
+                            text: tr_key(
+                                self.app_language,
+                                "room_input_bar.bot_menu_button.tooltip",
+                            )
+                            .to_string(),
+                            widget_rect: bot_menu_button_area.rect(cx),
+                            options: CalloutTooltipOptions {
+                                position: TooltipPosition::Top,
+                                ..Default::default()
+                            },
+                        },
+                    );
+                }
+                Hit::FingerHoverOut(_) => {
+                    cx.widget_action(self.widget_uid(), TooltipAction::HoverOut);
+                }
+                _ => {}
+            }
+        }
+
         // Always read the latest translation config from global state.
         // Settings may update it at any time via set_global_config().
         self.translation_config = translation::get_global_config();
 
         if let Event::Actions(actions) = event {
-            self.handle_actions(cx, actions, room_screen_props);
+            self.handle_actions(cx, scope, actions);
         }
 
         // Handle signal events for pending file loads from background threads.
@@ -776,6 +1284,7 @@ impl Widget for RoomInputBar {
         if !self.app_language_initialized || self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        let room_screen_props = scope.props.get::<RoomScreenProps>();
 
         // Shrink the input_bar's height as the editing pane slides in,
         // and grow it back as the editing pane slides out.
@@ -808,12 +1317,25 @@ impl Widget for RoomInputBar {
         let width = self.view.area().rect(cx).size.x as f32;
         let show_room_info_card = !(width > 1.0 && width < ROOM_INFO_CARD_MOBILE_BREAKPOINT);
         self.button(cx, ids!(room_info_card_button)).set_visible(cx, show_room_info_card);
+        self.button(cx, ids!(bot_menu_button))
+            .set_visible(cx, room_screen_props.is_some_and(is_management_bot_room));
 
         self.view.draw_walk(cx, scope, walk)
     }
 }
 
 impl RoomInputBar {
+    fn current_resolved_target(&self, room_screen_props: &RoomScreenProps) -> ResolvedTarget {
+        resolve_send_target(
+            &self.explicit_override,
+            self.replying_to_sender(),
+            room_screen_props.bound_bot_user_id.as_deref(),
+            room_screen_props.resolved_parent_bot_user_id.as_deref(),
+            &room_screen_props.known_bot_user_ids,
+            is_dm_room(room_screen_props),
+        )
+    }
+
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.app_language_initialized = true;
@@ -858,28 +1380,17 @@ impl RoomInputBar {
         self.redraw(cx);
     }
 
-    fn resolve_target_user_id(
-        &mut self,
-        explicit_target_user_id: Option<OwnedUserId>,
-        reply_target_user_id: Option<OwnedUserId>,
-        fallback_target_user_id: Option<OwnedUserId>,
-    ) -> Option<OwnedUserId> {
-        if let Some(explicit_target_user_id) = explicit_target_user_id {
-            self.active_target_user_id = Some(explicit_target_user_id.clone());
-            Some(explicit_target_user_id)
-        } else if let Some(reply_target_user_id) = reply_target_user_id {
-            self.active_target_user_id = Some(reply_target_user_id.clone());
-            Some(reply_target_user_id)
-        } else {
-            self.active_target_user_id.clone().or(fallback_target_user_id)
-        }
+    fn replying_to_sender(&self) -> Option<&UserId> {
+        self.replying_to
+            .as_ref()
+            .map(|(event_tl_item, _embedded_event)| event_tl_item.sender())
     }
 
     fn handle_actions(
         &mut self,
         cx: &mut Cx,
+        scope: &mut Scope,
         actions: &Actions,
-        room_screen_props: &RoomScreenProps,
     ) {
         let mentionable_text_input = self.mentionable_text_input(cx, ids!(mentionable_text_input));
         let text_input = mentionable_text_input.text_input_ref();
@@ -912,6 +1423,27 @@ impl RoomInputBar {
             log!("Add attachment button clicked; opening file picker...");
             self.open_file_picker(cx);
         }
+
+        if self.button(cx, ids!(bot_menu_button)).clicked(actions) {
+            let in_thread = scope
+                .props
+                .get::<RoomScreenProps>()
+                .is_some_and(|props| props.timeline_kind.thread_root_event_id().is_some());
+            if in_thread {
+                enqueue_popup_notification(
+                    "Bot commands are only supported in the main room timeline.",
+                    PopupKind::Warning,
+                    Some(4.0),
+                );
+            } else {
+                mentionable_text_input.open_slash_command_popup(cx, scope);
+            }
+            self.redraw(cx);
+        }
+
+        let Some(room_screen_props) = scope.props.get::<RoomScreenProps>() else {
+            return;
+        };
 
         let picked_emoji = if self.button(cx, ids!(emoji_smile_button)).clicked(actions) {
             Some("😀")
@@ -1043,10 +1575,9 @@ impl RoomInputBar {
                         LocationMessageEventContent::new(geo_uri.clone(), geo_uri)
                     )
                 );
-                let reply_target_user_id = self
-                    .replying_to
-                    .as_ref()
-                    .map(|(event_tl_item, _emb)| event_tl_item.sender().to_owned());
+                let resolved_target = self.current_resolved_target(room_screen_props);
+                let target_user_id = resolved_target_user_id(&resolved_target);
+                let explicit_room = target_user_id.is_none();
                 let replied_to = self.replying_to.take().and_then(|(event_tl_item, _emb)|
                     event_tl_item.event_id().map(|event_id| {
                         let enforce_thread = if room_screen_props.timeline_kind.thread_root_event_id().is_some() {
@@ -1073,11 +1604,8 @@ impl RoomInputBar {
                     timeline_kind: room_screen_props.timeline_kind.clone(),
                     message,
                     replied_to,
-                    target_user_id: self.resolve_target_user_id(
-                        None,
-                        reply_target_user_id,
-                        room_screen_props.bound_bot_user_id.clone(),
-                    ),
+                    target_user_id,
+                    explicit_room,
                     #[cfg(feature = "tsp")]
                     sign_with_tsp: self.is_tsp_signing_enabled(cx),
                 });
@@ -1092,11 +1620,21 @@ impl RoomInputBar {
             }
         }
 
+        let submitted_text = text_input
+            .returned(actions)
+            .and_then(|(text, modifiers)| {
+                modifiers
+                    .is_primary()
+                    .then_some(text.trim().to_string())
+            });
+
         // Handle the send message button being clicked or Cmd/Ctrl + Return being pressed.
         if self.button(cx, ids!(send_message_button)).clicked(actions)
-            || text_input.returned(actions).is_some_and(|(_, m)| m.is_primary())
+            || submitted_text.is_some()
         {
-            let entered_text = mentionable_text_input.text().trim().to_string();
+            let entered_text = submitted_text
+                .clone()
+                .unwrap_or_else(|| mentionable_text_input.text().trim().to_string());
             if !entered_text.is_empty() {
                 if self.try_handle_bot_shortcut(cx, &entered_text, room_screen_props) {
                     self.clear_replying_to(cx);
@@ -1109,11 +1647,42 @@ impl RoomInputBar {
                     self.redraw(cx);
                     return;
                 }
-                let reply_target_user_id = self
-                    .replying_to
-                    .as_ref()
-                    .map(|(event_tl_item, _emb)| event_tl_item.sender().to_owned());
-                let message = mentionable_text_input.create_message_with_mentions(&entered_text);
+                let resolved_target = self.current_resolved_target(room_screen_props);
+                let message =
+                    mentionable_text_input.create_message_with_mentions_for_submission(&entered_text);
+                let message_mentions_bot = message_mentions_known_bot(
+                    &message,
+                    room_screen_props.bound_bot_user_id.as_deref(),
+                    room_screen_props.resolved_parent_bot_user_id.as_deref(),
+                    &room_screen_props.room_bot_user_ids,
+                    &room_screen_props.known_bot_user_ids,
+                );
+                let (target_user_id, explicit_room) = match routing_directives_for_submission(
+                    &entered_text,
+                    &resolved_target,
+                    message_mentions_bot,
+                    room_screen_props.app_service_enabled,
+                    room_screen_props.is_direct_room,
+                    room_screen_props.has_persisted_management_binding,
+                    room_screen_props.bound_bot_user_id.as_deref(),
+                    room_screen_props.resolved_parent_bot_user_id.as_deref(),
+                    &room_screen_props.room_bot_user_ids,
+                    &room_screen_props.known_bot_user_ids,
+                ) {
+                    Ok(routing_directives) => routing_directives,
+                    Err(CommandAddressingError::BotNotFound(target_localpart)) => {
+                        enqueue_popup_notification(
+                            tr_fmt(
+                                self.app_language,
+                                "room_input_bar.command.bot_not_found",
+                                &[("bot", &format!("@{target_localpart}"))],
+                            ),
+                            PopupKind::Error,
+                            None,
+                        );
+                        return;
+                    }
+                };
                 let replied_to = self.replying_to.take().and_then(|(event_tl_item, _emb)|
                     event_tl_item.event_id().map(|event_id| {
                         let enforce_thread = if room_screen_props.timeline_kind.thread_root_event_id().is_some() {
@@ -1140,11 +1709,8 @@ impl RoomInputBar {
                     timeline_kind: room_screen_props.timeline_kind.clone(),
                     message,
                     replied_to,
-                    target_user_id: self.resolve_target_user_id(
-                        None,
-                        reply_target_user_id,
-                        room_screen_props.bound_bot_user_id.clone(),
-                    ),
+                    target_user_id,
+                    explicit_room,
                     #[cfg(feature = "tsp")]
                     sign_with_tsp: self.is_tsp_signing_enabled(cx),
                 });
@@ -1593,7 +2159,6 @@ impl RoomInputBarRef {
         RoomInputBarState {
             was_replying_preview_visible: inner.was_replying_preview_visible,
             replying_to: inner.replying_to.clone(),
-            active_target_user_id: inner.active_target_user_id.clone(),
             editing_pane_state: inner.child_by_path(ids!(editing_pane)).as_editing_pane().save_state(),
             text_input_state: inner.child_by_path(ids!(input_bar.input_row.mentionable_text_input.text_input)).as_text_input().save_state(),
         }
@@ -1613,7 +2178,6 @@ impl RoomInputBarRef {
             was_replying_preview_visible,
             text_input_state,
             replying_to,
-            active_target_user_id,
             editing_pane_state,
         } = saved_state;
 
@@ -1645,7 +2209,7 @@ impl RoomInputBarRef {
             inner.clear_replying_to(cx);
         }
         inner.was_replying_preview_visible = was_replying_preview_visible;
-        inner.active_target_user_id = active_target_user_id;
+        inner.explicit_override = ExplicitOverride::None;
 
         // 3. Restore the state of the editing pane.
         if let Some(editing_pane_state) = editing_pane_state {
@@ -1774,8 +2338,6 @@ pub struct RoomInputBarState {
     text_input_state: TextInputState,
     /// The event that the user is currently replying to, if any.
     replying_to: Option<(EventTimelineItem, EmbeddedEvent)>,
-    /// The most recently selected explicit bot target for this room.
-    active_target_user_id: Option<OwnedUserId>,
     /// The state of the `EditingPane`, if any message was being edited.
     editing_pane_state: Option<EditingPaneState>,
 }
@@ -1796,6 +2358,10 @@ enum ShowEditingPaneBehavior {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_user_id(user_id: &str) -> OwnedUserId {
+        user_id.try_into().unwrap()
+    }
 
     #[test]
     fn translation_popup_position_prefers_above_button() {
@@ -1876,5 +2442,569 @@ mod tests {
         assert_eq!(outcome.preserved_preview_text, "Hola mundo");
         assert_eq!(outcome.next_last_source, "Hola mundo");
         assert!(outcome.keep_preview_visible);
+    }
+
+    #[test]
+    fn test_bot_bound_room_defaults_to_explicit_room() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            resolve_target(
+                &ExplicitOverride::None,
+                None,
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                &[],
+                false, // non-DM room
+            ),
+            ResolvedTarget::ExplicitRoom,
+        );
+        assert_eq!(
+            routing_directives_for_message(&ResolvedTarget::ExplicitRoom, false),
+            (None, true),
+        );
+    }
+
+    #[test]
+    fn test_direct_message_room_defaults_to_explicit_bot() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            resolve_target(
+                &ExplicitOverride::None,
+                None,
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                &[],
+                true, // direct room
+            ),
+            ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
+        );
+        assert_eq!(
+            routing_directives_for_message(
+                &ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
+                false,
+            ),
+            (Some(bound_bot_user_id), false),
+        );
+    }
+
+    #[test]
+    fn test_two_member_non_direct_room_stays_explicit_room() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            resolve_target(
+                &ExplicitOverride::None,
+                None,
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                &[],
+                false, // not a direct room, even if member count might be 2
+            ),
+            ResolvedTarget::ExplicitRoom,
+        );
+    }
+
+    #[test]
+    fn test_reply_to_human_in_bot_bound_room_stays_explicit_room() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let reply_sender = test_user_id("@alice:127.0.0.1:8128");
+
+        assert_eq!(
+            resolve_target(
+                &ExplicitOverride::None,
+                Some(reply_sender.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                &[],
+                false, // non-DM room
+            ),
+            ResolvedTarget::ExplicitRoom,
+        );
+        assert_eq!(
+            routing_directives_for_message(&ResolvedTarget::ExplicitRoom, false),
+            (None, true),
+        );
+    }
+
+    #[test]
+    fn test_reply_to_bot_still_targets_bot() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            resolve_target(
+                &ExplicitOverride::None,
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                &[],
+                false, // non-DM room
+            ),
+            ResolvedTarget::ReplyBot(bound_bot_user_id.clone()),
+        );
+        assert_eq!(
+            routing_directives_for_message(
+                &ResolvedTarget::ReplyBot(bound_bot_user_id.clone()),
+                false,
+            ),
+            (Some(bound_bot_user_id), false),
+        );
+    }
+
+    #[test]
+    fn test_reply_to_bot_overrides_room_first_default() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            resolve_target(
+                &ExplicitOverride::None,
+                None,
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                &[],
+                false, // non-DM room
+            ),
+            ResolvedTarget::ExplicitRoom,
+        );
+        assert_eq!(
+            resolve_target(
+                &ExplicitOverride::None,
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                &[],
+                false, // non-DM room
+            ),
+            ResolvedTarget::ReplyBot(bound_bot_user_id),
+        );
+    }
+
+    #[test]
+    fn test_reply_to_human_in_direct_message_room_still_targets_bound_bot() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let reply_sender = test_user_id("@alice:127.0.0.1:8128");
+
+        assert_eq!(
+            resolve_target(
+                &ExplicitOverride::None,
+                Some(reply_sender.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                Some(bound_bot_user_id.as_ref()),
+                &[],
+                true, // direct room
+            ),
+            ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
+        );
+        assert_eq!(
+            routing_directives_for_message(
+                &ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
+                false,
+            ),
+            (Some(bound_bot_user_id), false),
+        );
+    }
+
+    #[test]
+    fn test_persisted_explicit_override_is_ignored_on_restore() {
+        let saved_state = RoomInputBarState::default();
+
+        assert_eq!(
+            restored_explicit_override(&saved_state),
+            ExplicitOverride::None,
+        );
+    }
+
+    #[test]
+    fn test_management_bot_room_requires_resolved_parent_match() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let child_bot_user_id = test_user_id("@octosbot_child:127.0.0.1:8128");
+        let mismatched_parent_bot_user_id = test_user_id("@bot:127.0.0.1:8128");
+
+        assert!(is_management_bot_room_for_context(
+            true,
+            true,
+            false,
+            Some(parent_bot_user_id.as_ref()),
+            Some(parent_bot_user_id.as_ref()),
+            &[],
+        ));
+        assert!(!is_management_bot_room_for_context(
+            true,
+            false,
+            false,
+            Some(parent_bot_user_id.as_ref()),
+            Some(parent_bot_user_id.as_ref()),
+            &[],
+        ));
+        assert!(!is_management_bot_room_for_context(
+            true,
+            false,
+            true,
+            Some(child_bot_user_id.as_ref()),
+            Some(parent_bot_user_id.as_ref()),
+            std::slice::from_ref(&child_bot_user_id),
+        ));
+        assert!(!is_management_bot_room_for_context(
+            true,
+            false,
+            true,
+            Some(parent_bot_user_id.as_ref()),
+            Some(mismatched_parent_bot_user_id.as_ref()),
+            &[],
+        ));
+        assert!(!is_management_bot_room_for_context(
+            true,
+            false,
+            false,
+            Some(parent_bot_user_id.as_ref()),
+            Some(mismatched_parent_bot_user_id.as_ref()),
+            &[],
+        ));
+        assert!(!is_management_bot_room_for_context(
+            false,
+            false,
+            true,
+            Some(parent_bot_user_id.as_ref()),
+            Some(parent_bot_user_id.as_ref()),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn test_reply_bot_restores_with_replying_to() {
+        let bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            resolve_restored_target(
+                &ExplicitOverride::None,
+                Some(bot_user_id.as_ref()),
+                Some(bot_user_id.as_ref()),
+                Some(bot_user_id.as_ref()),
+                &[],
+                false, // non-DM room
+            ),
+            ResolvedTarget::ReplyBot(bot_user_id),
+        );
+    }
+
+    #[test]
+    fn test_classified_management_command_targets_parent_bot() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let child_bot_user_id = test_user_id("@octosbot_weather:127.0.0.1:8128");
+
+        assert_eq!(
+            classified_management_command_target_for_context(
+                "/listbots",
+                true,
+                true,
+                false,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[],
+            ),
+            Some(parent_bot_user_id.clone()),
+        );
+        assert_eq!(
+            classified_management_command_target_for_context(
+                "/createbot weather Weather Bot",
+                true,
+                true,
+                false,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[],
+            ),
+            Some(parent_bot_user_id.clone()),
+        );
+        assert_eq!(
+            classified_management_command_target_for_context(
+                "/listbots",
+                true,
+                false,
+                true,
+                Some(child_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                std::slice::from_ref(&child_bot_user_id),
+            ),
+            None,
+        );
+        assert_eq!(
+            classified_management_command_target_for_context(
+                "/unknowncmd",
+                true,
+                true,
+                false,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[],
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn test_classified_management_command_prefers_bound_bot_when_parent_config_mismatches() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let mismatched_parent_bot_user_id = test_user_id("@bot:127.0.0.1:8128");
+        let known_child_bot_user_id = test_user_id("@octosbot_alexbot:127.0.0.1:8128");
+
+        assert_eq!(
+            classified_management_command_target_for_context(
+                "/listbots",
+                true,
+                false,
+                true,
+                Some(bound_bot_user_id.as_ref()),
+                Some(mismatched_parent_bot_user_id.as_ref()),
+                std::slice::from_ref(&known_child_bot_user_id),
+            ),
+            Some(bound_bot_user_id),
+        );
+    }
+
+    #[test]
+    fn test_multi_bot_room_routes_to_specified_bot() {
+        let bob_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+        let weather_bot_user_id = test_user_id("@octosbot_weather:127.0.0.1:8128");
+
+        assert_eq!(
+            routing_directives_for_submission(
+                "/listbots@octosbot_weather",
+                &ResolvedTarget::ExplicitRoom,
+                false,
+                true,
+                false,
+                false,
+                None,
+                None,
+                &[
+                    bob_bot_user_id.clone(),
+                    weather_bot_user_id.clone(),
+                ],
+                &[],
+            ),
+            Ok((Some(weather_bot_user_id), false)),
+        );
+    }
+
+    #[test]
+    fn test_multi_bot_room_rejects_unknown_bot() {
+        let bob_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+
+        assert_eq!(
+            routing_directives_for_submission(
+                "/listbots@octosbot_weather",
+                &ResolvedTarget::ExplicitRoom,
+                false,
+                true,
+                false,
+                false,
+                None,
+                None,
+                std::slice::from_ref(&bob_bot_user_id),
+                &[],
+            ),
+            Err(CommandAddressingError::BotNotFound(
+                "octosbot_weather".to_owned(),
+            )),
+        );
+    }
+
+    #[test]
+    fn test_single_bot_room_honors_matching_suffix() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            routing_directives_for_submission(
+                "/listbots@octosbot",
+                &ResolvedTarget::ExplicitBot(parent_bot_user_id.clone()),
+                false,
+                true,
+                true,
+                false,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[],
+                &[],
+            ),
+            Ok((Some(parent_bot_user_id), false)),
+        );
+    }
+
+    #[test]
+    fn test_single_bot_room_does_not_fallback_on_wrong_suffix() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            routing_directives_for_submission(
+                "/listbots@other_bot",
+                &ResolvedTarget::ExplicitBot(parent_bot_user_id.clone()),
+                false,
+                true,
+                true,
+                false,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[],
+                &[],
+            ),
+            Err(CommandAddressingError::BotNotFound("other_bot".to_owned())),
+        );
+    }
+
+    #[test]
+    fn test_explicit_at_bot_overrides_reply_target() {
+        let bob_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+        let weather_bot_user_id = test_user_id("@octosbot_weather:127.0.0.1:8128");
+
+        assert_eq!(
+            routing_directives_for_submission(
+                "/listbots@octosbot_weather",
+                &ResolvedTarget::ReplyBot(bob_bot_user_id),
+                false,
+                true,
+                false,
+                false,
+                None,
+                None,
+                std::slice::from_ref(&weather_bot_user_id),
+                &[],
+            ),
+            Ok((Some(weather_bot_user_id), false)),
+        );
+    }
+
+    #[test]
+    fn test_bare_unknown_command_in_multi_bot_room_no_auto_target() {
+        let bob_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+        let weather_bot_user_id = test_user_id("@octosbot_weather:127.0.0.1:8128");
+
+        assert_eq!(
+            routing_directives_for_submission(
+                "/foobar",
+                &ResolvedTarget::ExplicitRoom,
+                false,
+                true,
+                false,
+                false,
+                None,
+                None,
+                &[
+                    bob_bot_user_id,
+                    weather_bot_user_id,
+                ],
+                &[],
+            ),
+            Ok((None, true)),
+        );
+    }
+
+    #[test]
+    fn test_bare_classified_command_in_multi_bot_room_targets_parent() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let child_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+
+        assert_eq!(
+            routing_directives_for_submission(
+                "/listbots",
+                &ResolvedTarget::ExplicitRoom,
+                false,
+                true,
+                false,
+                true,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                std::slice::from_ref(&child_bot_user_id),
+                std::slice::from_ref(&child_bot_user_id),
+            ),
+            Ok((Some(parent_bot_user_id), false)),
+        );
+    }
+
+    #[test]
+    fn test_room_bot_mention_overrides_selected_explicit_bot() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let bob_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+        let message = RoomMessageEventContent::text_plain("@octosbot_bob 你好");
+        let resolved_target = ResolvedTarget::ExplicitBot(bound_bot_user_id.clone());
+
+        assert!(message_mentions_known_bot(
+            &message,
+            Some(bound_bot_user_id.as_ref()),
+            Some(bound_bot_user_id.as_ref()),
+            std::slice::from_ref(&bob_bot_user_id),
+            &[],
+        ));
+        assert_eq!(routing_directives_for_message(&resolved_target, true), (None, false));
+        assert!(message.body().contains("@octosbot_bob"));
+    }
+
+    #[test]
+    fn test_text_mentions_known_bot_matches_localpart() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let child_bot_user_id = test_user_id("@octosbot_alexbot:127.0.0.1:8128");
+
+        assert!(text_mentions_known_bot(
+            "@octosbot_alexbot 你是谁",
+            Some(bound_bot_user_id.as_ref()),
+            Some(bound_bot_user_id.as_ref()),
+            std::slice::from_ref(&child_bot_user_id),
+            std::slice::from_ref(&child_bot_user_id),
+        ));
+    }
+
+    #[test]
+    fn test_message_mentions_room_member_bot_with_empty_known_bot_list() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let room_member_bot_user_id = test_user_id("@octosbot_alexbot:127.0.0.1:8128");
+        let message = RoomMessageEventContent::text_plain("@octosbot_alexbot 你是谁");
+
+        assert!(message_mentions_known_bot(
+            &message,
+            Some(bound_bot_user_id.as_ref()),
+            Some(bound_bot_user_id.as_ref()),
+            std::slice::from_ref(&room_member_bot_user_id),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn test_message_mentions_known_bot_prefers_structured_mentions() {
+        use ruma::events::Mentions;
+
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let child_bot_user_id = test_user_id("@octosbot_alexbot:127.0.0.1:8128");
+        let message = RoomMessageEventContent::text_plain("你好")
+            .add_mentions(Mentions::with_user_ids([child_bot_user_id.clone()]));
+
+        assert!(message_mentions_known_bot(
+            &message,
+            Some(bound_bot_user_id.as_ref()),
+            Some(bound_bot_user_id.as_ref()),
+            std::slice::from_ref(&child_bot_user_id),
+            std::slice::from_ref(&child_bot_user_id),
+        ));
+    }
+
+    #[test]
+    fn test_message_bot_mention_suppresses_explicit_bot_target() {
+        let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            routing_directives_for_message(
+                &ResolvedTarget::ExplicitBot(bound_bot_user_id),
+                true,
+            ),
+            (None, false),
+        );
+    }
+
+    #[test]
+    fn test_message_bot_mention_keeps_explicit_room_marker() {
+        assert_eq!(
+            routing_directives_for_message(&ResolvedTarget::ExplicitRoom, true),
+            (None, true),
+        );
     }
 }

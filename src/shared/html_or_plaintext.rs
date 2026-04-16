@@ -116,11 +116,7 @@ script_mod! {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
         }
-        text_style_fixed: theme.font_code {
-            font_size: (MESSAGE_FONT_SIZE)
-            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
-            top_drop: 0.21
-        }
+        text_style_fixed: mod.widgets.MESSAGE_CODE_TEXT_STYLE { }
         draw_block +: {
             line_color: (MESSAGE_TEXT_COLOR)
             sep_color: (MESSAGE_TEXT_COLOR)
@@ -268,17 +264,34 @@ impl Widget for RobrixHtmlLink {
 impl RobrixHtmlLink {
     #[allow(unused)]
     fn draw_matrix_pill(&mut self, cx: &mut Cx, matrix_id: &MatrixId, via: &[OwnedServerName]) {
-        if let Some(mut pill) = self.matrix_link_pill(cx, ids!(matrix_link)).borrow_mut() {
+        {
+            let matrix_link_pill = self.matrix_link_pill(cx, ids!(matrix_link));
+            let Some(mut pill) = matrix_link_pill.borrow_mut() else {
+                self.draw_html_link(cx);
+                return;
+            };
             pill.populate_pill(cx, self.url.clone(), matrix_id, via);
         }
-        self.view(cx, ids!(matrix_link_view)).set_visible(cx, true);
-        self.view(cx, ids!(html_link_view)).set_visible(cx, false);
+        let matrix_link_view = self.view(cx, ids!(matrix_link_view));
+        let html_link_view = self.view(cx, ids!(html_link_view));
+        let visibility_changed = !matrix_link_view.visible() || html_link_view.visible();
+        matrix_link_view.set_visible(cx, true);
+        html_link_view.set_visible(cx, false);
+        if visibility_changed {
+            self.redraw(cx);
+        }
     }
 
     /// Shows the inner plain HTML link and hides the Matrix link pill view.
     fn draw_html_link(&mut self, cx: &mut Cx) {
-        self.view(cx, ids!(html_link_view)).set_visible(cx, true);
-        self.view(cx, ids!(matrix_link_view)).set_visible(cx, false);
+        let html_link_view = self.view(cx, ids!(html_link_view));
+        let matrix_link_view = self.view(cx, ids!(matrix_link_view));
+        let visibility_changed = !html_link_view.visible() || matrix_link_view.visible();
+        html_link_view.set_visible(cx, true);
+        matrix_link_view.set_visible(cx, false);
+        if visibility_changed {
+            self.redraw(cx);
+        }
         let mut html_link = self.html_link(cx, ids!(html_link));
         html_link.set_url(&self.url);
         html_link.set_text(cx, self.text.as_ref());

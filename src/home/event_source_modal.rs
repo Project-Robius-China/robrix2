@@ -1,6 +1,5 @@
 //! A modal dialog that displays the raw JSON source of a Matrix event.
 
-use makepad_code_editor::code_view::CodeViewWidgetExt;
 use makepad_widgets::*;
 use matrix_sdk::ruma::{OwnedEventId, OwnedRoomId};
 
@@ -12,6 +11,37 @@ script_mod! {
     use mod.widgets.*
 
     mod.widgets.VIEW_SOURCE_MODAL_BORDER_RADIUS = 6.0
+
+    mod.widgets.EventSourceHtml = mod.widgets.MessageHtml {
+        width: Fill
+        height: Fit
+        padding: 0.0
+        font_size: 11.0
+        font_color: #x24292e
+
+        draw_text +: {
+            color: #x24292e
+        }
+        text_style_normal: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
+        text_style_italic: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
+        text_style_bold: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
+        text_style_bold_italic: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
+        text_style_fixed: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
+        draw_block +: {
+            line_color: #x24292e
+            sep_color: (COLOR_SECONDARY)
+            quote_bg_color: #xF7F9FC
+            quote_fg_color: #x24292e
+            code_color: #xF7F9FC
+        }
+        code_layout: Layout{
+            flow: Flow.Right{wrap: true}
+            padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
+        }
+        code_walk: Walk{ width: Fill, height: Fit }
+
+        body: "<pre>{}</pre>"
+    }
 
     // A small icon button for copying content
     mod.widgets.CopyButton = RobrixIconButton {
@@ -173,7 +203,7 @@ script_mod! {
             copy_source_button := mod.widgets.CopyButton {}
         }
 
-        // An overlay view that draws a border frame around the code view.
+        // An overlay view that draws a border frame around the source view.
         code_block := View {
             width: Fill,
             height: Fit,
@@ -181,39 +211,7 @@ script_mod! {
             // align the left side of the border frame with the left side of the room id / event id rows
             padding: 6
 
-            // The code editor content (drawn first, behind the overlay)
-            code_view := mod.widgets.CodeView {
-                editor +: {
-                    margin: 12,
-                    width: Fill,
-                    height: Fit,
-                    word_wrap: true
-                    draw_bg +: { color: (COLOR_TRANSPARENT) }
-                    draw_text +: { text_style +: { font_size: 11 } }
-
-                    // Light mode syntax highlighting (inspired by GitHub Light / VS Code Light+)
-                    token_colors +: {
-                        whitespace: #x6a737d,         // Gray for whitespace markers
-                        delimiter: #x24292e,          // Dark gray for punctuation
-                        delimiter_highlight: #x005cc5, // Blue for highlighted delimiters
-                        error_decoration: #xcb2431,   // Red for errors
-                        warning_decoration: #xb08800, // Dark yellow/amber for warnings
-
-                        unknown: #x24292e,            // Default dark text
-                        branch_keyword: #xd73a49,     // Red/pink for keywords (if, else, match)
-                        constant: #x005cc5,           // Blue for constants
-                        identifier: #x24292e,         // Dark gray for variables
-                        loop_keyword: #xd73a49,       // Red/pink for loop keywords
-                        number: #x005cc5,             // Blue for numbers
-                        other_keyword: #xd73a49,      // Red/pink for other keywords
-                        punctuator: #x24292e,         // Dark gray for punctuation
-                        string: #x22863a,             // Green for strings
-                        function: #x6f42c1,           // Purple for functions
-                        typename: #xe36209,           // Orange for types
-                        comment: #x6a737d,            // Gray for comments
-                    }
-                }
-                text: "<Unknown Event Source>"
+            source_html := mod.widgets.EventSourceHtml {
             }
 
             // Border overlay frame (drawn on top of content)
@@ -274,7 +272,8 @@ impl Widget for EventSourceModal {
             self.view.label(cx, ids!(event_id_value)).set_text(cx, event_id.as_str());
         }
         if let Some(json) = &self.original_json {
-            self.view.code_view(cx, ids!(code_view)).set_text(cx, json);
+            self.view.html(cx, ids!(source_html))
+                .set_text(cx, &format_event_source_html(json));
         }
         self.view.draw_walk(cx, scope, walk)
     }
@@ -351,6 +350,181 @@ impl EventSourceModal {
         self.view.button(cx, ids!(event_id_copy_button)).reset_hover(cx);
         self.view.button(cx, ids!(copy_source_button)).reset_hover(cx);
         self.view.redraw(cx);
+    }
+}
+
+fn format_event_source_html(json: &str) -> String {
+    const COLOR_PUNCTUATION: &str = "#6A737D";
+    const COLOR_KEY: &str = "#22863A";
+    const COLOR_STRING: &str = "#032F62";
+    const COLOR_NUMBER: &str = "#005CC5";
+    const COLOR_LITERAL: &str = "#D73A49";
+
+    let chars: Vec<char> = json.chars().collect();
+    let mut out = String::new();
+    let mut i = 0usize;
+    let mut at_line_start = true;
+
+    while i < chars.len() {
+        match chars[i] {
+            '"' => {
+                let start = i;
+                i += 1;
+                let mut escaped = false;
+                while i < chars.len() {
+                    let ch = chars[i];
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                let token: String = chars[start..i.min(chars.len())].iter().collect();
+                let mut j = i;
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
+                }
+                let color = if j < chars.len() && chars[j] == ':' {
+                    COLOR_KEY
+                } else {
+                    COLOR_STRING
+                };
+                push_colored_html(&mut out, color, &token);
+                at_line_start = false;
+            }
+            '-' | '0'..='9' => {
+                let start = i;
+                i += 1;
+                while i < chars.len() && matches!(chars[i], '0'..='9' | '.' | 'e' | 'E' | '+' | '-') {
+                    i += 1;
+                }
+                let token: String = chars[start..i].iter().collect();
+                push_colored_html(&mut out, COLOR_NUMBER, &token);
+                at_line_start = false;
+            }
+            't' if starts_with_chars(&chars, i, "true") => {
+                push_colored_html(&mut out, COLOR_LITERAL, "true");
+                i += 4;
+                at_line_start = false;
+            }
+            'f' if starts_with_chars(&chars, i, "false") => {
+                push_colored_html(&mut out, COLOR_LITERAL, "false");
+                i += 5;
+                at_line_start = false;
+            }
+            'n' if starts_with_chars(&chars, i, "null") => {
+                push_colored_html(&mut out, COLOR_LITERAL, "null");
+                i += 4;
+                at_line_start = false;
+            }
+            '{' | '}' | '[' | ']' | ':' | ',' => {
+                push_colored_html(&mut out, COLOR_PUNCTUATION, &chars[i].to_string());
+                i += 1;
+                at_line_start = false;
+            }
+            '\n' => {
+                out.push_str("<br>");
+                i += 1;
+                at_line_start = true;
+            }
+            ' ' => {
+                if at_line_start {
+                    let mut leading_spaces = 0usize;
+                    while i < chars.len() && chars[i] == ' ' {
+                        leading_spaces += 1;
+                        i += 1;
+                    }
+                    push_indent_html(&mut out, leading_spaces * 2);
+                } else {
+                    out.push_str("&nbsp;");
+                    i += 1;
+                }
+            }
+            '\t' => {
+                if at_line_start {
+                    push_indent_html(&mut out, 8);
+                } else {
+                    out.push_str("&nbsp;&nbsp;&nbsp;&nbsp;");
+                }
+                i += 1;
+            }
+            ch if ch.is_whitespace() => {
+                out.push_str(&htmlize::escape_text(ch.to_string()));
+                i += 1;
+            }
+            ch => {
+                out.push_str(&htmlize::escape_text(ch.to_string()));
+                i += 1;
+                at_line_start = false;
+            }
+        }
+    }
+    out
+}
+
+fn push_colored_html(out: &mut String, color: &str, token: &str) {
+    out.push_str("<font color=\"");
+    out.push_str(color);
+    out.push_str("\">");
+    out.push_str(&htmlize::escape_text(token));
+    out.push_str("</font>");
+}
+
+fn push_indent_html(out: &mut String, width: usize) {
+    if width == 0 {
+        return;
+    }
+    // Makepad trims leading Unicode whitespace on a fresh line, including NBSP.
+    // U+2800 is visually blank but not classified as whitespace, so it survives
+    // the trim pass and still reserves indentation width in the HTML flow.
+    out.push_str("<font color=\"#F7F9FC\">");
+    for _ in 0..width {
+        out.push('\u{2800}');
+    }
+    out.push_str("</font>");
+}
+
+fn starts_with_chars(chars: &[char], start: usize, needle: &str) -> bool {
+    let mut idx = start;
+    for needle_ch in needle.chars() {
+        if chars.get(idx).copied() != Some(needle_ch) {
+            return false;
+        }
+        idx += 1;
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_event_source_html;
+
+    #[test]
+    fn event_source_html_highlights_keys_strings_numbers_and_literals() {
+        let json = "{\n  \"body\": \"拿捏中\",\n  \"age\": 3749,\n  \"ok\": true,\n  \"missing\": null\n}";
+        let html = format_event_source_html(json);
+
+        assert!(html.contains("<font color=\"#22863A\">\"body\"</font>"));
+        assert!(html.contains("<font color=\"#032F62\">\"拿捏中\"</font>"));
+        assert!(html.contains("<font color=\"#005CC5\">3749</font>"));
+        assert!(html.contains("<font color=\"#D73A49\">true</font>"));
+        assert!(html.contains("<font color=\"#D73A49\">null</font>"));
+        assert!(html.contains("<br>"));
+        assert!(html.contains("<font color=\"#F7F9FC\">"));
+        assert!(html.contains('\u{2800}'));
+    }
+
+    #[test]
+    fn event_source_html_escapes_angle_brackets_inside_strings() {
+        let json = "{\n  \"formatted_body\": \"<b>拿捏中</b><br>ok\"\n}";
+        let html = format_event_source_html(json);
+
+        assert!(html.contains("&lt;b&gt;拿捏中&lt;/b&gt;&lt;br&gt;ok"));
+        assert!(!html.contains("<b>拿捏中</b>"));
     }
 }
 

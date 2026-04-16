@@ -44,7 +44,7 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     account_manager::{self, Account},
     app::{AppStateAction, RoomFilterRemoteSearchAction}, app_data_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
-        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
     }, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
@@ -921,14 +921,29 @@ pub enum MatrixRequest {
         destination: MediaCacheEntryRef,
         update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
     },
+    /// Request to download a file from an mxc:// URI and save it to disk.
+    /// This bypasses MediaCache to avoid header parsing issues with non-ASCII filenames.
+    DownloadAndSaveFile {
+        mxc_uri: OwnedMxcUri,
+        app_language: crate::i18n::AppLanguage,
+    },
     /// Request to send a message to the given room.
     SendMessage {
         timeline_kind: TimelineKind,
         message: RoomMessageEventContent,
         replied_to: Option<Reply>,
         target_user_id: Option<OwnedUserId>,
+        explicit_room: bool,
         #[cfg(feature = "tsp")]
         sign_with_tsp: bool,
+    },
+    /// Request to send a bot action response below a timeline message.
+    SendActionResponse {
+        timeline_kind: TimelineKind,
+        content: serde_json::Value,
+        target_user_id: OwnedUserId,
+        explicit_room: bool,
+        source_event_id: OwnedEventId,
     },
     /// Request to send a file attachment to the given room.
     SendAttachment {
@@ -1049,6 +1064,34 @@ fn add_octos_target_user_id(
     content
 }
 
+fn add_octos_explicit_room_marker(
+    mut content: serde_json::Value,
+    explicit_room: bool,
+) -> serde_json::Value {
+    if explicit_room
+        && let Some(content_obj) = content.as_object_mut()
+    {
+        content_obj.insert(
+            "org.octos.explicit_room".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+    content
+}
+
+fn add_octos_routing_metadata(
+    content: serde_json::Value,
+    target_user_id: Option<&UserId>,
+    explicit_room: bool,
+) -> serde_json::Value {
+    let content = add_octos_explicit_room_marker(content, explicit_room);
+    if let Some(target_user_id) = target_user_id {
+        add_octos_target_user_id(content, target_user_id)
+    } else {
+        content
+    }
+}
+
 async fn ensure_target_user_joined_room(
     room: &Room,
     target_user_id: &UserId,
@@ -1101,6 +1144,68 @@ mod matrix_request_tests {
                 .get("org.octos.target_user_id")
                 .and_then(|value| value.as_str()),
             Some("@bot_weather:example.com")
+        );
+    }
+
+    #[test]
+    fn test_send_message_explicit_room_sets_octos_explicit_room_marker() {
+        let content = serde_json::json!({
+            "msgtype": "m.text",
+            "body": "hello room",
+        });
+
+        let content = add_octos_explicit_room_marker(content, true);
+
+        assert_eq!(
+            content
+                .get("org.octos.explicit_room")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(
+            content.get("org.octos.target_user_id").is_none(),
+            "ExplicitRoom should not also set a targeted bot MXID",
+        );
+    }
+
+    #[test]
+    fn test_send_reply_explicit_room_sets_octos_explicit_room_marker() {
+        let content = serde_json::json!({
+            "msgtype": "m.text",
+            "body": "reply body",
+            "m.relates_to": {
+                "m.in_reply_to": {
+                    "event_id": "$reply"
+                }
+            }
+        });
+
+        let content = add_octos_explicit_room_marker(content, true);
+
+        assert_eq!(
+            content
+                .get("org.octos.explicit_room")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(
+            content.get("org.octos.target_user_id").is_none(),
+            "ExplicitRoom replies should suppress room fallback without setting target_user_id",
+        );
+    }
+
+    #[test]
+    fn test_send_message_room_default_does_not_set_octos_explicit_room_marker() {
+        let content = serde_json::json!({
+            "msgtype": "m.text",
+            "body": "hello bot",
+        });
+
+        let content = add_octos_explicit_room_marker(content, false);
+
+        assert!(
+            content.get("org.octos.explicit_room").is_none(),
+            "RoomDefault should not suppress Octos room fallback",
         );
     }
 }
@@ -1717,14 +1822,19 @@ async fn matrix_worker_task(
                 let _join_room_task = Handle::current().spawn(async move {
                     log!("Sending request to join room {room_id}...");
                     let result_action = if let Some(room) = client.get_room(&room_id) {
-                        match room.join().await {
-                            Ok(()) => {
-                                log!("Successfully joined known room {room_id}.");
-                                JoinRoomResultAction::Joined { room_id }
-                            }
-                            Err(e) => {
-                                error!("Error joining known room {room_id}: {e:?}");
-                                JoinRoomResultAction::Failed { room_id, error: e }
+                        if room.state() == RoomState::Joined {
+                            log!("Room {room_id} is already joined, skipping join request.");
+                            JoinRoomResultAction::Joined { room_id }
+                        } else {
+                            match room.join().await {
+                                Ok(()) => {
+                                    log!("Successfully joined known room {room_id}.");
+                                    JoinRoomResultAction::Joined { room_id }
+                                }
+                                Err(e) => {
+                                    error!("Error joining known room {room_id}: {e:?}");
+                                    JoinRoomResultAction::Failed { room_id, error: e }
+                                }
                             }
                         }
                     }
@@ -2590,6 +2700,108 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::DownloadAndSaveFile { mxc_uri, app_language } => {
+                let Some(client) = get_client() else { continue };
+
+                let _download_task = Handle::current().spawn(async move {
+                    use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
+                    use crate::i18n::{tr_key, tr_fmt};
+
+                    log!("DownloadAndSaveFile: downloading {mxc_uri}");
+
+                    // Use the client's homeserver URL to construct a direct download URL,
+                    // bypassing matrix-sdk's header parsing which fails on non-ASCII Content-Disposition.
+                    let server_name = mxc_uri.server_name().map(|s| s.to_string()).unwrap_or_default();
+                    let media_id = mxc_uri.media_id().map(|s| s.to_string()).unwrap_or_default();
+
+                    let homeserver = client.homeserver().to_string();
+                    let homeserver = homeserver.trim_end_matches('/');
+                    let download_url = format!(
+                        "{homeserver}/_matrix/media/v3/download/{server_name}/{media_id}",
+                    );
+
+                    let http_client = matrix_sdk::reqwest::Client::new();
+                    match http_client.get(&download_url).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            // Extract filename from Content-Disposition header or use media_id
+                            let filename = resp.headers()
+                                .get("content-disposition")
+                                .and_then(|v: &matrix_sdk::reqwest::header::HeaderValue| {
+                                    let val = String::from_utf8_lossy(v.as_bytes());
+                                    // Parse filename="..." or filename*=UTF-8''...
+                                    val.split("filename=").nth(1)
+                                        .or_else(|| val.split("filename*=").nth(1))
+                                        .map(|s| s.trim_matches(|c: char| c == '"' || c == '\'' || c == ';' || c == ' ').to_string())
+                                })
+                                .unwrap_or_else(|| format!("robrix_{media_id}"));
+
+                            match resp.bytes().await {
+                                Ok(data) => {
+                                    let downloads_dir = crate::app_data_dir().join("downloads");
+                                    if let Err(e) = std::fs::create_dir_all(&downloads_dir) {
+                                        error!("Failed to create downloads dir: {e:?}");
+                                        return;
+                                    }
+                                    let dest = downloads_dir.join(&filename);
+                                    match std::fs::write(&dest, &data) {
+                                        Ok(()) => {
+                                            log!("DownloadAndSaveFile: saved to {}", dest.display());
+                                            let dest_str = dest.display().to_string();
+                                            enqueue_popup_notification(
+                                                tr_fmt(app_language, "room_screen.file.saved_at", &[("path", &dest_str)]),
+                                                PopupKind::Success,
+                                                Some(8.0),
+                                            );
+                                            // Try to open with system handler
+                                            if let Err(e) = robius_open::Uri::new(&format!("file://{dest_str}")).open() {
+                                                log!("Could not open file: {e:?}");
+                                            }
+                                            SignalToUI::set_ui_signal();
+                                        }
+                                        Err(e) => {
+                                            error!("DownloadAndSaveFile: write failed: {e:?}");
+                                            enqueue_popup_notification(
+                                                tr_key(app_language, "room_screen.file.save_failed").to_string(),
+                                                PopupKind::Error,
+                                                Some(6.0),
+                                            );
+                                            SignalToUI::set_ui_signal();
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("DownloadAndSaveFile: failed to read response body: {e:?}");
+                                    enqueue_popup_notification(
+                                        tr_key(app_language, "room_screen.file.download_failed").to_string(),
+                                        PopupKind::Error,
+                                        Some(6.0),
+                                    );
+                                    SignalToUI::set_ui_signal();
+                                }
+                            }
+                        }
+                        Ok(resp) => {
+                            error!("DownloadAndSaveFile: server returned {}", resp.status());
+                            enqueue_popup_notification(
+                                tr_key(app_language, "room_screen.file.download_failed").to_string(),
+                                PopupKind::Error,
+                                Some(6.0),
+                            );
+                            SignalToUI::set_ui_signal();
+                        }
+                        Err(e) => {
+                            error!("DownloadAndSaveFile: request failed: {e:?}");
+                            enqueue_popup_notification(
+                                tr_key(app_language, "room_screen.file.download_failed").to_string(),
+                                PopupKind::Error,
+                                Some(6.0),
+                            );
+                            SignalToUI::set_ui_signal();
+                        }
+                    }
+                });
+            }
+
             MatrixRequest::FetchMedia { media_request, on_fetched, destination, update_sender } => {
                 let Some(client) = get_client() else { continue };
                 
@@ -2605,6 +2817,7 @@ async fn matrix_worker_task(
                 message,
                 replied_to,
                 target_user_id,
+                explicit_room,
                 #[cfg(feature = "tsp")]
                 sign_with_tsp,
             } => {
@@ -2679,12 +2892,14 @@ async fn matrix_worker_task(
                             }
                         };
 
-                        if let Some(target_user_id) = target_user_id.as_ref() {
-                            if let Err(_e) = ensure_target_user_joined_room(
-                                timeline.room(),
-                                target_user_id.as_ref(),
-                            )
-                            .await
+                        if target_user_id.is_some() || explicit_room {
+                            let target_user_id = target_user_id.as_ref();
+                            if let Some(target_user_id) = target_user_id
+                                && let Err(_e) = ensure_target_user_joined_room(
+                                    timeline.room(),
+                                    target_user_id.as_ref(),
+                                )
+                                .await
                             {
                                 error!("Failed to ensure targeted bot {target_user_id} joined {timeline_kind}: {_e:?}");
                                 enqueue_popup_notification(
@@ -2696,7 +2911,11 @@ async fn matrix_worker_task(
                             }
 
                             let raw_content = match serde_json::to_value(&reply_content) {
-                                Ok(content) => add_octos_target_user_id(content, target_user_id.as_ref()),
+                                Ok(content) => add_octos_routing_metadata(
+                                    content,
+                                    target_user_id.map(|user_id| user_id.as_ref()),
+                                    explicit_room,
+                                ),
                                 Err(_e) => {
                                     error!("Failed to serialize reply content for {timeline_kind}: {_e:?}");
                                     enqueue_popup_notification(
@@ -2708,9 +2927,15 @@ async fn matrix_worker_task(
                                 }
                             };
                             match timeline.room().send_raw("m.room.message", raw_content).await {
-                                Ok(_response) => log!("Sent targeted reply message to {timeline_kind}."),
+                                Ok(_response) => {
+                                    if target_user_id.is_some() {
+                                        log!("Sent targeted reply message to {timeline_kind}.");
+                                    } else {
+                                        log!("Sent explicit-room reply message to {timeline_kind}.");
+                                    }
+                                }
                                 Err(_e) => {
-                                    error!("Failed to send targeted reply message to {timeline_kind}: {_e:?}");
+                                    error!("Failed to send reply message to {timeline_kind}: {_e:?}");
                                     enqueue_popup_notification(format!("Failed to send reply: {_e}"), PopupKind::Error, None);
                                 }
                             }
@@ -2723,12 +2948,14 @@ async fn matrix_worker_task(
                                 }
                             }
                         }
-                    } else if let Some(target_user_id) = target_user_id.as_ref() {
-                        if let Err(_e) = ensure_target_user_joined_room(
-                            timeline.room(),
-                            target_user_id.as_ref(),
-                        )
-                        .await
+                    } else if target_user_id.is_some() || explicit_room {
+                        let target_user_id = target_user_id.as_ref();
+                        if let Some(target_user_id) = target_user_id
+                            && let Err(_e) = ensure_target_user_joined_room(
+                                timeline.room(),
+                                target_user_id.as_ref(),
+                            )
+                            .await
                         {
                             error!("Failed to ensure targeted bot {target_user_id} joined {timeline_kind}: {_e:?}");
                             enqueue_popup_notification(
@@ -2740,7 +2967,11 @@ async fn matrix_worker_task(
                         }
 
                         let raw_content = match serde_json::to_value(&message) {
-                            Ok(content) => add_octos_target_user_id(content, target_user_id.as_ref()),
+                            Ok(content) => add_octos_routing_metadata(
+                                content,
+                                target_user_id.map(|user_id| user_id.as_ref()),
+                                explicit_room,
+                            ),
                             Err(_e) => {
                                 error!("Failed to serialize message content for {timeline_kind}: {_e:?}");
                                 enqueue_popup_notification(
@@ -2752,9 +2983,15 @@ async fn matrix_worker_task(
                             }
                         };
                         match timeline.room().send_raw("m.room.message", raw_content).await {
-                            Ok(_response) => log!("Sent targeted message to {timeline_kind}."),
+                            Ok(_response) => {
+                                if target_user_id.is_some() {
+                                    log!("Sent targeted message to {timeline_kind}.");
+                                } else {
+                                    log!("Sent explicit-room message to {timeline_kind}.");
+                                }
+                            }
                             Err(_e) => {
-                                error!("Failed to send targeted message to {timeline_kind}: {_e:?}");
+                                error!("Failed to send message to {timeline_kind}: {_e:?}");
                                 enqueue_popup_notification(format!("Failed to send message: {_e}"), PopupKind::Error, None);
                             }
                         }
@@ -2768,6 +3005,60 @@ async fn matrix_worker_task(
                         }
                     }
                     SignalToUI::set_ui_signal();
+                });
+            }
+
+            MatrixRequest::SendActionResponse {
+                timeline_kind,
+                content,
+                target_user_id,
+                explicit_room,
+                source_event_id,
+            } => {
+                let Some((timeline, _sender)) = get_timeline_and_sender(&timeline_kind) else {
+                    log!("BUG: {timeline_kind} not found for send action response request");
+                    continue;
+                };
+                let room_id = timeline_kind.room_id().to_owned();
+
+                let _send_action_response_task = Handle::current().spawn(async move {
+                    if let Err(error) = ensure_target_user_joined_room(
+                        timeline.room(),
+                        target_user_id.as_ref(),
+                    )
+                    .await
+                    {
+                        error!("Failed to ensure targeted bot {target_user_id} joined {timeline_kind}: {error:?}");
+                        Cx::post_action(ActionResponseResultAction::Failed {
+                            room_id,
+                            source_event_id,
+                            error: error.to_string(),
+                        });
+                        return;
+                    }
+
+                    let raw_content = add_octos_routing_metadata(
+                        content,
+                        Some(target_user_id.as_ref()),
+                        explicit_room,
+                    );
+                    match timeline.room().send_raw("m.room.message", raw_content).await {
+                        Ok(_response) => {
+                            log!("Sent action response message to {timeline_kind}.");
+                            Cx::post_action(ActionResponseResultAction::Sent {
+                                room_id,
+                                source_event_id,
+                            });
+                        }
+                        Err(error) => {
+                            error!("Failed to send action response to {timeline_kind}: {error:?}");
+                            Cx::post_action(ActionResponseResultAction::Failed {
+                                room_id,
+                                source_event_id,
+                                error: error.to_string(),
+                            });
+                        }
+                    }
                 });
             }
 

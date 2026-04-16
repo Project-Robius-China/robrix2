@@ -8,14 +8,15 @@ use std::{cell::RefCell, collections::HashMap};
 use makepad_widgets::*;
 use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
 use serde::{Deserialize, Serialize};
+use url::Url;
 use crate::{
     avatar_cache::{self, AvatarCacheEntry, clear_avatar_cache}, home::{
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
+        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::{user_profile::UserProfile, user_profile_cache::clear_user_profile_cache}, room::{BasicRoomDetails, FetchedRoomAvatar}, shared::{avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, TimelineKind, AccountSwitchAction, current_user_id, submit_async_request, get_timeline_update_sender}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::{user_profile::UserProfile, user_profile_cache::clear_user_profile_cache}, room::{BasicRoomDetails, FetchedRoomAvatar}, shared::{avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     }
@@ -765,6 +766,8 @@ impl MatchEvent for App {
                     clear_all_app_state(cx);
                     // Reset all app state to its default.
                     self.app_state = Default::default();
+                    // Keep the navigation tab bar's visual state in sync with app state.
+                    cx.action(NavigationBarAction::TabSelected(SelectedTab::Home));
                     on_clear_appstate.notify_one();
                     continue;
                 }
@@ -1017,6 +1020,36 @@ impl MatchEvent for App {
             }
 
             // Handle actions that instruct us to update the top-level app state.
+            if let Some(LeaveRoomResultAction::Left { room_id }) = action.downcast_ref() {
+                enqueue_rooms_list_update(RoomsListUpdate::HideRoom { room_id: room_id.clone() });
+                self.app_state
+                    .bot_settings
+                    .set_room_bound(room_id.clone(), None, false);
+
+                let removed_from_home = self.app_state.saved_dock_state_home.remove_room_id(room_id);
+                let removed_from_spaces: usize = self.app_state.saved_dock_state_per_space
+                    .values_mut()
+                    .map(|saved| saved.remove_room_id(room_id))
+                    .sum();
+                let removed_tabs = removed_from_home + removed_from_spaces;
+                let mut cleared_selected_room = false;
+
+                if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
+                    self.app_state.selected_room = None;
+                    cleared_selected_room = true;
+                }
+                if removed_tabs > 0 || cleared_selected_room {
+                    if let Some(user_id) = current_user_id() {
+                        if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                            error!("Failed to persist app state after leaving room {room_id}. Error: {e}");
+                        }
+                    }
+                }
+
+                cx.action(MainDesktopUiAction::CloseRoomTabs { room_id: room_id.clone() });
+                continue;
+            }
+
             match action.downcast_ref() {
                 Some(AppStateAction::RoomFocused(selected_room)) => {
                     self.app_state.selected_room = Some(selected_room.clone());
@@ -1041,9 +1074,25 @@ impl MatchEvent for App {
                     // Ignore the `logged_in` state that was stored persistently.
                     let logged_in_actual = self.app_state.logged_in;
                     self.app_state = *app_state.clone();
+                    let removed_room_bindings = get_client()
+                        .map(|client| {
+                            self.app_state.bot_settings.remove_room_bindings_where(|room_id, _|
+                                client.get_room(room_id).is_none()
+                            )
+                        })
+                        .unwrap_or(0);
                     self.app_state.logged_in = logged_in_actual;
                     // Initialize the global translation config so RoomInputBar can access it.
                     crate::room::translation::set_global_config(&self.app_state.translation);
+                    if removed_room_bindings > 0 {
+                        if let Some(user_id) = current_user_id() {
+                            if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                                error!(
+                                    "Failed to persist app state after pruning stale room bindings. Error: {e}"
+                                );
+                            }
+                        }
+                    }
                     cx.action(MainDesktopUiAction::LoadDockFromAppState);
                     continue;
                 }
@@ -1094,34 +1143,10 @@ impl MatchEvent for App {
                         message: RoomMessageEventContent::notice_plain(format!("[App Service] {message}")),
                         replied_to: None,
                         target_user_id: None,
+                        explicit_room: false,
                         #[cfg(feature = "tsp")]
                         sign_with_tsp: false,
                     });
-                    self.ui.redraw(cx);
-                    continue;
-                }
-                Some(AppStateAction::BotRoomBindingDetected {
-                    room_id,
-                    bot_user_id,
-                }) => {
-                    if self
-                        .app_state
-                        .bot_settings
-                        .bound_bot_user_id(room_id.as_ref())
-                        .is_some_and(|existing_bot_user_id| existing_bot_user_id.as_str() == bot_user_id.as_str())
-                    {
-                        continue;
-                    }
-                    self.app_state.bot_settings.set_room_bound(
-                        room_id.clone(),
-                        Some(bot_user_id.clone()),
-                        true,
-                    );
-                    if let Some(user_id) = current_user_id() {
-                        if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
-                            error!("Failed to persist detected BotFather room binding. Error: {e}");
-                        }
-                    }
                     self.ui.redraw(cx);
                     continue;
                 }
@@ -2038,6 +2063,8 @@ pub struct BotSettingsState {
     pub enabled: bool,
     /// The configured botfather user, either as a full MXID or localpart.
     pub botfather_user_id: String,
+    /// The Octos service base URL used for health checks.
+    pub octos_service_url: String,
     /// Bots discovered from BotFather `/listbots` replies.
     pub known_bot_user_ids: Vec<OwnedUserId>,
     /// Rooms that Robrix currently considers bot-bound,
@@ -2059,6 +2086,7 @@ impl Default for BotSettingsState {
         Self {
             enabled: false,
             botfather_user_id: Self::DEFAULT_BOTFATHER_LOCALPART.to_string(),
+            octos_service_url: Self::DEFAULT_OCTOS_SERVICE_URL.to_string(),
             known_bot_user_ids: Vec::new(),
             room_bindings: Vec::new(),
         }
@@ -2067,6 +2095,58 @@ impl Default for BotSettingsState {
 
 impl BotSettingsState {
     pub const DEFAULT_BOTFATHER_LOCALPART: &'static str = "bot";
+    pub const DEFAULT_OCTOS_SERVICE_URL: &'static str = "http://127.0.0.1:8010";
+
+    pub fn resolved_octos_service_url(&self) -> &str {
+        let raw = self.octos_service_url.trim();
+        if raw.is_empty() {
+            Self::DEFAULT_OCTOS_SERVICE_URL
+        } else {
+            raw
+        }
+    }
+
+    pub fn validate_octos_service_url(service_url: &str) -> Result<(), String> {
+        let service_url = service_url.trim();
+        if service_url.is_empty() {
+            return Err("Octos service URL cannot be empty.".into());
+        }
+
+        let parsed_url = Url::parse(service_url)
+            .map_err(|e| format!("Invalid Octos service URL: {e}"))?;
+
+        match parsed_url.scheme() {
+            "http" | "https" => {}
+            scheme => {
+                return Err(format!(
+                    "Unsupported Octos service URL scheme `{scheme}`. Use http or https."
+                ));
+            }
+        }
+
+        if parsed_url.host_str().is_none() {
+            return Err("Octos service URL must include a host.".into());
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_botfather_user_id(
+        botfather_user_id: &str,
+        current_user_id: Option<&UserId>,
+    ) -> Result<(), String> {
+        let botfather_user_id = botfather_user_id.trim();
+        if botfather_user_id.is_empty() {
+            return Err("BotFather user ID cannot be empty.".into());
+        }
+
+        Self {
+            botfather_user_id: botfather_user_id.to_string(),
+            ..Self::default()
+        }
+        .resolved_bot_user_id(current_user_id)
+        .map(|_| ())
+    }
 
     fn room_binding_index(
         &self,
@@ -2211,6 +2291,16 @@ impl BotSettingsState {
         } else {
             false
         }
+    }
+
+    pub fn remove_room_bindings_where(
+        &mut self,
+        mut predicate: impl FnMut(&RoomId, &UserId) -> bool,
+    ) -> usize {
+        let original_len = self.room_bindings.len();
+        self.room_bindings
+            .retain(|binding| !predicate(binding.room_id.as_ref(), binding.bot_user_id.as_ref()));
+        original_len.saturating_sub(self.room_bindings.len())
     }
 
     /// Returns the configured botfather user ID, resolving a localpart against
@@ -2398,6 +2488,62 @@ impl SelectedRoom {
     }
 }
 
+impl SavedDockState {
+    /// Removes all tabs and selection state that belong to the given room ID.
+    ///
+    /// Returns the number of removed open tabs, including thread tabs tied to the room.
+    pub fn remove_room_id(&mut self, room_id: &RoomId) -> usize {
+        let tab_ids_to_remove: Vec<LiveId> = self.open_rooms.iter()
+            .filter_map(|(tab_id, selected_room)| (selected_room.room_id() == room_id).then_some(*tab_id))
+            .collect();
+
+        let room_order_matches = self.room_order.iter()
+            .any(|selected_room| selected_room.room_id() == room_id);
+        let selected_room_matches = self.selected_room.as_ref()
+            .is_some_and(|selected_room| selected_room.room_id() == room_id);
+
+        if tab_ids_to_remove.is_empty() && !room_order_matches && !selected_room_matches {
+            return 0;
+        }
+
+        for tab_id in &tab_ids_to_remove {
+            self.open_rooms.remove(tab_id);
+            self.dock_items.remove(tab_id);
+        }
+
+        self.room_order.retain(|selected_room| selected_room.room_id() != room_id);
+
+        if selected_room_matches {
+            self.selected_room = self.room_order.last().cloned();
+        }
+
+        tab_ids_to_remove.len()
+    }
+
+    /// Removes all rooms for which `should_remove` returns `true`.
+    ///
+    /// Returns the number of removed open tabs, including thread tabs tied to removed rooms.
+    pub fn remove_room_ids_where<F>(&mut self, mut should_remove: F) -> usize
+    where
+        F: FnMut(&OwnedRoomId) -> bool,
+    {
+        let mut room_ids: Vec<OwnedRoomId> = self.open_rooms.values()
+            .map(|selected_room| selected_room.room_id().clone())
+            .collect();
+        room_ids.extend(self.room_order.iter().map(|selected_room| selected_room.room_id().clone()));
+        if let Some(selected_room) = self.selected_room.as_ref() {
+            room_ids.push(selected_room.room_id().clone());
+        }
+        room_ids.sort();
+        room_ids.dedup();
+
+        room_ids.into_iter()
+            .filter(|room_id| should_remove(room_id))
+            .map(|room_id| self.remove_room_id(&room_id))
+            .sum()
+    }
+}
+
 impl PartialEq for SelectedRoom {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -2421,6 +2567,181 @@ impl PartialEq for SelectedRoom {
 }
 impl Eq for SelectedRoom {}
 
+#[cfg(test)]
+mod tests {
+    use super::{BotSettingsState, RoomBotBindingState, SavedDockState, SelectedRoom};
+    use crate::utils::RoomNameId;
+    use matrix_sdk::{RoomDisplayName, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, UserId}};
+
+    fn joined_room(room_id_str: &str, name: &str) -> SelectedRoom {
+        SelectedRoom::JoinedRoom {
+            room_name_id: RoomNameId::new(
+                RoomDisplayName::Named(name.into()),
+                room_id_str.parse::<OwnedRoomId>().unwrap(),
+            ),
+        }
+    }
+
+    fn thread_room(room_id_str: &str, name: &str, event_id_str: &str) -> SelectedRoom {
+        SelectedRoom::Thread {
+            room_name_id: RoomNameId::new(
+                RoomDisplayName::Named(name.into()),
+                room_id_str.parse::<OwnedRoomId>().unwrap(),
+            ),
+            thread_root_event_id: event_id_str.parse::<OwnedEventId>().unwrap(),
+        }
+    }
+
+    #[test]
+    fn remove_room_id_removes_main_and_thread_tabs() {
+        let joined = joined_room("!room:example.org", "octosbot");
+        let thread = thread_room("!room:example.org", "octosbot", "$thread:example.org");
+        let other = joined_room("!other:example.org", "other");
+        let removed_room_id = joined.room_id().to_owned();
+        let joined_tab = joined.tab_id();
+        let thread_tab = thread.tab_id();
+        let other_tab = other.tab_id();
+
+        let mut saved = SavedDockState {
+            dock_items: [
+                (joined_tab, Default::default()),
+                (thread_tab, Default::default()),
+                (other_tab, Default::default()),
+            ].into_iter().collect(),
+            open_rooms: [
+                (joined_tab, joined.clone()),
+                (thread_tab, thread.clone()),
+                (other_tab, other.clone()),
+            ].into_iter().collect(),
+            room_order: vec![joined, thread, other.clone()],
+            selected_room: Some(thread_room("!room:example.org", "octosbot", "$thread:example.org")),
+        };
+
+        assert_eq!(saved.remove_room_id(&removed_room_id), 2);
+        assert_eq!(saved.open_rooms.len(), 1);
+        assert!(saved.open_rooms.contains_key(&other_tab));
+        assert!(saved.dock_items.contains_key(&other_tab));
+        assert!(!saved.dock_items.contains_key(&joined_tab));
+        assert!(!saved.dock_items.contains_key(&thread_tab));
+        assert_eq!(saved.room_order, vec![other.clone()]);
+        assert_eq!(saved.selected_room, Some(other));
+    }
+
+    #[test]
+    fn remove_room_id_is_noop_for_unknown_room() {
+        let room = joined_room("!room:example.org", "octosbot");
+        let tab_id = room.tab_id();
+        let mut saved = SavedDockState {
+            dock_items: [(tab_id, Default::default())].into_iter().collect(),
+            open_rooms: [(tab_id, room.clone())].into_iter().collect(),
+            room_order: vec![room.clone()],
+            selected_room: Some(room.clone()),
+        };
+
+        assert_eq!(saved.remove_room_id(&"!missing:example.org".parse::<OwnedRoomId>().unwrap()), 0);
+        assert_eq!(saved.open_rooms.len(), 1);
+        assert_eq!(saved.room_order, vec![room.clone()]);
+        assert_eq!(saved.selected_room, Some(room));
+    }
+
+    #[test]
+    fn remove_room_id_clears_selected_room_even_without_open_tab() {
+        let room = joined_room("!room:example.org", "octosbot");
+        let other = joined_room("!other:example.org", "other");
+        let mut saved = SavedDockState {
+            dock_items: Default::default(),
+            open_rooms: Default::default(),
+            room_order: vec![other.clone()],
+            selected_room: Some(room),
+        };
+
+        assert_eq!(saved.remove_room_id(&"!room:example.org".parse::<OwnedRoomId>().unwrap()), 0);
+        assert_eq!(saved.room_order, vec![other.clone()]);
+        assert_eq!(saved.selected_room, Some(other));
+    }
+
+    #[test]
+    fn remove_room_ids_where_prunes_stale_rooms_from_all_state() {
+        let stale_joined = joined_room("!stale:example.org", "octosbot");
+        let stale_thread = thread_room("!stale:example.org", "octosbot", "$thread:example.org");
+        let fresh = joined_room("!fresh:example.org", "fresh");
+        let fresh_tab = fresh.tab_id();
+        let stale_joined_tab = stale_joined.tab_id();
+        let stale_thread_tab = stale_thread.tab_id();
+        let mut saved = SavedDockState {
+            dock_items: [
+                (stale_joined_tab, Default::default()),
+                (stale_thread_tab, Default::default()),
+                (fresh_tab, Default::default()),
+            ].into_iter().collect(),
+            open_rooms: [
+                (stale_joined_tab, stale_joined.clone()),
+                (stale_thread_tab, stale_thread.clone()),
+                (fresh_tab, fresh.clone()),
+            ].into_iter().collect(),
+            room_order: vec![stale_joined, stale_thread, fresh.clone()],
+            selected_room: Some(fresh.clone()),
+        };
+
+        assert_eq!(
+            saved.remove_room_ids_where(|room_id| room_id.as_str() == "!stale:example.org"),
+            2
+        );
+        assert_eq!(saved.open_rooms, [(fresh_tab, fresh.clone())].into_iter().collect());
+        assert_eq!(saved.room_order, vec![fresh.clone()]);
+        assert_eq!(saved.selected_room, Some(fresh));
+    }
+
+    #[test]
+    fn validate_botfather_user_id_accepts_localpart_and_full_mxid() {
+        let current_user_id = UserId::parse("@alex:example.org").unwrap();
+
+        assert!(BotSettingsState::validate_botfather_user_id(
+            "octosbot",
+            Some(current_user_id.as_ref()),
+        ).is_ok());
+        assert!(BotSettingsState::validate_botfather_user_id(
+            "@octosbot:example.org",
+            Some(current_user_id.as_ref()),
+        ).is_ok());
+        assert!(BotSettingsState::validate_botfather_user_id(
+            "",
+            Some(current_user_id.as_ref()),
+        ).is_err());
+    }
+
+    #[test]
+    fn remove_room_bindings_where_prunes_stale_bindings() {
+        let mut settings = BotSettingsState {
+            room_bindings: vec![
+                RoomBotBindingState {
+                    room_id: "!stale:example.org".parse::<OwnedRoomId>().unwrap(),
+                    bot_user_id: "@octosbot:example.org".parse::<OwnedUserId>().unwrap(),
+                    remark: String::new(),
+                },
+                RoomBotBindingState {
+                    room_id: "!fresh:example.org".parse::<OwnedRoomId>().unwrap(),
+                    bot_user_id: "@octosbot:example.org".parse::<OwnedUserId>().unwrap(),
+                    remark: String::new(),
+                },
+            ],
+            ..BotSettingsState::default()
+        };
+
+        let removed = settings.remove_room_bindings_where(|room_id, _| room_id.as_str() == "!stale:example.org");
+
+        assert_eq!(removed, 1);
+        assert_eq!(
+            settings.room_bindings,
+            vec![RoomBotBindingState {
+                room_id: "!fresh:example.org".parse::<OwnedRoomId>().unwrap(),
+                bot_user_id: "@octosbot:example.org".parse::<OwnedUserId>().unwrap(),
+                remark: String::new(),
+            }]
+        );
+    }
+}
+
 /// Actions sent to the top-level App in order to update / restore its [`AppState`].
 ///
 /// These are *NOT* widget actions.
@@ -2442,11 +2763,6 @@ pub enum AppStateAction {
         bound: bool,
         bot_user_id: Option<OwnedUserId>,
         warning: Option<String>,
-    },
-    /// A room's member list indicates that the configured BotFather is already present.
-    BotRoomBindingDetected {
-        room_id: OwnedRoomId,
-        bot_user_id: OwnedUserId,
     },
     /// Bot IDs discovered from BotFather replies (for example, `/listbots`).
     KnownBotUserIdsDiscovered {
