@@ -49,8 +49,8 @@ imghdr = "0.7.0"
 linkify = "0.10.0"
 mime = "0.3"
 mime_guess = "2.0"
-matrix-sdk-base = { git = "https://github.com/project-robius/matrix-rust-sdk", branch = "space_room_suggested" }
-matrix-sdk = { git = "https://github.com/project-robius/matrix-rust-sdk", branch = "space_room_suggested", default-features = false, features = [
+matrix-sdk-base = { git = "https://github.com/Project-Robius-China/matrix-rust-sdk", rev = "cb391f70ade93aee295108e623f6bed3ef1cea53" }
+matrix-sdk = { git = "https://github.com/Project-Robius-China/matrix-rust-sdk", rev = "cb391f70ade93aee295108e623f6bed3ef1cea53", default-features = false, features = [
     "e2e-encryption",
     "automatic-room-key-forwarding",
     "markdown",
@@ -59,7 +59,7 @@ matrix-sdk = { git = "https://github.com/project-robius/matrix-rust-sdk", branch
     "bundled-sqlite",
     "sso-login",
 ] }
-matrix-sdk-ui = { git = "https://github.com/project-robius/matrix-rust-sdk", branch = "space_room_suggested", default-features = false, features = [
+matrix-sdk-ui = { git = "https://github.com/Project-Robius-China/matrix-rust-sdk", rev = "cb391f70ade93aee295108e623f6bed3ef1cea53", default-features = false, features = [
     "rustls-tls",
 ] }
 ## Use the same ruma version as what's specified in matrix-sdk's Cargo.toml.
