@@ -86,7 +86,7 @@ script_mod! {
             main_window := Window {
                 window.inner_size: vec2(1280, 800)
                 window.title: "Robrix"
-                pass.clear_color: #FFFFFF00
+                pass.clear_color: (COLOR_SECONDARY)
                 caption_bar +: {
                     draw_bg.color: #F3F3F3
                     caption_label +: {
@@ -99,6 +99,8 @@ script_mod! {
             
 
                 body +: {
+                    show_bg: true
+                    draw_bg.color: (COLOR_SECONDARY)
                     padding: Inset{
                         top: (mod.widgets.SAFE_INSET_PAD_TOP),
                         bottom: (mod.widgets.SAFE_INSET_PAD_BOTTOM),
@@ -1968,6 +1970,10 @@ impl App {
     /// screen configuration are effectively no-ops — MainDesktopUI handles
     /// room display via dock tabs instead.
     fn push_selected_room_view(&mut self, cx: &mut Cx, selected_room: SelectedRoom) {
+        if self.app_state.selected_room.as_ref().is_some_and(|current| current == &selected_room) {
+            return;
+        }
+
         // Use the actual StackNavigation depth to pick the next room view slot.
         let new_depth = self.ui.stack_navigation(cx, ids!(view_stack)).depth();
 
