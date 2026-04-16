@@ -3884,6 +3884,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             }
         }
     } else {
+        Cx::post_action(LoginAction::ShowLoginScreen);
         None
     };
     let cli: Cli = cli_parse_result.unwrap_or(Cli::default());
@@ -3977,10 +3978,12 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             // Listen for updates to the ignored user list.
             handle_ignore_user_list_subscriber(client.clone());
 
-            Cx::post_action(LoginAction::Status {
-                title: "Connecting".into(),
-                status: "Setting up sync service...".into(),
-            });
+            if !validate_session {
+                Cx::post_action(LoginAction::Status {
+                    title: "Connecting".into(),
+                    status: "Setting up sync service...".into(),
+                });
+            }
             let sync_service = match SyncService::builder(client.clone())
                 .with_offline_mode()
                 .build()

@@ -357,11 +357,20 @@ pub enum RoomFilterRemoteSearchAction {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AuthUiState {
+    #[default]
+    CheckingSession,
+    LoggedOut,
+    LoggedIn,
+}
+
 #[derive(Script)]
 pub struct App {
     #[live] ui: WidgetRef,
     /// The top-level app state, shared across various parts of the app.
     #[rust] app_state: AppState,
+    #[rust] auth_ui_state: AuthUiState,
     /// The details of a room we're waiting on to be loaded so that we can navigate to it.
     /// This can be either a room we're waiting to join, or one we're waiting to be invited to.
     /// Also includes an optional room ID to be closed once the awaited room has been loaded.
@@ -764,6 +773,7 @@ impl MatchEvent for App {
             match action.downcast_ref() {
                 Some(LogoutAction::LogoutSuccess) => {
                     self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
                     self.ui.modal(cx, ids!(logout_confirm_modal)).close(cx);
                     self.update_login_visibility(cx);
                     self.ui.redraw(cx);
@@ -782,10 +792,21 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            if let Some(LoginAction::ShowLoginScreen) = action.downcast_ref() {
+                if !self.app_state.adding_account {
+                    self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
+                    self.update_login_visibility(cx);
+                    self.ui.redraw(cx);
+                }
+                continue;
+            }
+
             if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
                 log!("Received LoginAction::LoginSuccess, hiding login view.");
                 self.app_state.logged_in = true;
                 self.app_state.adding_account = false;
+                self.auth_ui_state = AuthUiState::LoggedIn;
                 self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
@@ -795,7 +816,7 @@ impl MatchEvent for App {
             if let Some(LoginAction::ShowAddAccountScreen) = action.downcast_ref() {
                 log!("Received LoginAction::ShowAddAccountScreen, showing login view for adding account.");
                 self.app_state.adding_account = true;
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, true);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -807,7 +828,7 @@ impl MatchEvent for App {
                 self.ui
                     .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                     .close(cx);
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, false);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -819,7 +840,7 @@ impl MatchEvent for App {
                 self.ui
                     .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                     .close(cx);
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, false);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -865,9 +886,10 @@ impl MatchEvent for App {
             // by `handle_session_changes`), navigate back to the login screen.
             // When not yet logged in, the login_screen widget handles displaying the failure modal.
             if let Some(LoginAction::LoginFailure(_)) = action.downcast_ref() {
-                if self.app_state.logged_in && !self.app_state.adding_account {
-                    log!("Received LoginAction::LoginFailure while logged in; showing login screen.");
+                if !self.app_state.adding_account && self.auth_ui_state != AuthUiState::LoggedOut {
+                    log!("Received LoginAction::LoginFailure while restoring or logged in; showing login screen.");
                     self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
                     self.update_login_visibility(cx);
                     self.ui.redraw(cx);
                 }
@@ -1621,14 +1643,15 @@ impl App {
     }
 
     fn update_login_visibility(&self, cx: &mut Cx) {
-        let show_login = !self.app_state.logged_in;
+        let show_login = self.app_state.adding_account || self.auth_ui_state == AuthUiState::LoggedOut;
+        let show_home = self.auth_ui_state != AuthUiState::LoggedOut;
         if !show_login {
             self.ui
                 .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                 .close(cx);
         }
         self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, show_login);
-        self.ui.view(cx, ids!(home_screen_view)).set_visible(cx, !show_login);
+        self.ui.view(cx, ids!(home_screen_view)).set_visible(cx, show_home);
     }
 
     fn clicked_room_filter_result_index(&self, cx: &mut Cx, actions: &Actions) -> Option<usize> {
