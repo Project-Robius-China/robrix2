@@ -1148,6 +1148,38 @@ fn should_display_joined_room_entry(
         && is_empty_direct_room_display_name(display_name))
 }
 
+/// Semantic result of comparing a Joined room's display eligibility between two
+/// successive sliding-sync snapshots, while the room stays `RoomState::Joined`.
+///
+/// Used by [`update_room`] to decide whether the visibility flip should hide or
+/// restore the room in the sidebar *without* destroying its
+/// [`JoinedRoomDetails`]. Tearing `JoinedRoomDetails` down mid-session orphans
+/// the open `RoomScreen`'s singleton timeline receiver and leaves the pane
+/// blank forever — see `specs/task-dm-joined-room-details-churn.spec.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JoinedRoomDisplayFlip {
+    /// The room became eligible for display (e.g., an Empty direct DM finally
+    /// got a calculated name after the bot joined).
+    BecameDisplayable,
+    /// The room lost display eligibility (e.g., `is_direct` flipped true while
+    /// `display_name` was still `Empty`).
+    BecameHidden,
+    /// No change in display eligibility; the caller should perform no
+    /// visibility-only side effect.
+    NoDisplayChange,
+}
+
+fn classify_joined_room_display_flip(
+    old_should_display: bool,
+    new_should_display: bool,
+) -> JoinedRoomDisplayFlip {
+    match (old_should_display, new_should_display) {
+        (true, false) => JoinedRoomDisplayFlip::BecameHidden,
+        (false, true) => JoinedRoomDisplayFlip::BecameDisplayable,
+        _ => JoinedRoomDisplayFlip::NoDisplayChange,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DmRoomReuseCandidate {
     room_state: RoomState,
@@ -1255,6 +1287,34 @@ mod matrix_request_tests {
             true,
             Some(&RoomDisplayName::EmptyWas("octosbot".into())),
         ));
+    }
+
+    #[test]
+    fn classify_joined_room_display_flip_becomes_hidden() {
+        assert_eq!(
+            classify_joined_room_display_flip(true, false),
+            JoinedRoomDisplayFlip::BecameHidden,
+        );
+    }
+
+    #[test]
+    fn classify_joined_room_display_flip_becomes_displayable() {
+        assert_eq!(
+            classify_joined_room_display_flip(false, true),
+            JoinedRoomDisplayFlip::BecameDisplayable,
+        );
+    }
+
+    #[test]
+    fn classify_joined_room_display_flip_no_change_when_stable() {
+        assert_eq!(
+            classify_joined_room_display_flip(true, true),
+            JoinedRoomDisplayFlip::NoDisplayChange,
+        );
+        assert_eq!(
+            classify_joined_room_display_flip(false, false),
+            JoinedRoomDisplayFlip::NoDisplayChange,
+        );
     }
 
     #[test]
@@ -4776,6 +4836,16 @@ async fn update_room(
 ) -> Result<()> {
     let new_room_id = new_room.room_id.clone();
     if old_room.room_id == new_room_id {
+        // Same-room update. A pure display-eligibility flip while the room
+        // stays Joined must NOT destroy its JoinedRoomDetails — doing so
+        // orphans the open RoomScreen's singleton timeline receiver and
+        // leaves the right pane stuck on "Loading earlier messages...".
+        //
+        // Hard state transitions (Left, Banned, Joined, Invited, Knocked)
+        // remain the only producers of remove_room/add_new_room; they are
+        // handled in the explicit state-transition block further below.
+        //
+        // See specs/task-dm-joined-room-details-churn.spec.md.
         let old_should_display = should_display_joined_room_entry(
             old_room.state,
             old_room.is_direct,
@@ -4786,12 +4856,18 @@ async fn update_room(
             new_room.is_direct,
             new_room.display_name.as_ref(),
         );
-        if old_should_display && !new_should_display {
-            remove_room(new_room);
-            return Ok(());
-        }
-        if !old_should_display && new_should_display {
-            return add_new_room(new_room, room_list_service, true).await;
+        match classify_joined_room_display_flip(old_should_display, new_should_display) {
+            JoinedRoomDisplayFlip::BecameHidden => {
+                enqueue_rooms_list_update(RoomsListUpdate::HideRoom {
+                    room_id: new_room_id.clone(),
+                });
+            }
+            JoinedRoomDisplayFlip::BecameDisplayable => {
+                enqueue_rooms_list_update(RoomsListUpdate::UnhideRoom {
+                    room_id: new_room_id.clone(),
+                });
+            }
+            JoinedRoomDisplayFlip::NoDisplayChange => {}
         }
 
         // Handle state transitions for a room.
