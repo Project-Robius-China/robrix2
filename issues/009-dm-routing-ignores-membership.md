@@ -1,89 +1,99 @@
-# DM Routing Ignores Membership
+# Stale Empty DM Room Is Displayed And Reused
 
 ## Summary
 
-After leaving a DM with user X, clicking X again in the People tab does **not** prompt
-"Create DM" — the client navigates silently into the dead (left) DM room. Messages
-typed there return `403 M_FORBIDDEN`. Palpo logs confirm: only a `leave` event exists
-for that room, no new `join`.
+After leaving a DM with user X, Robrix could keep showing the old DM as an
+`Empty Room`, and opening X again from People could route back into that stale
+room instead of using a valid DM. In that state the user sees one of two bad
+behaviors:
 
-This is the **primary** defect tracked under issue #98 (rewritten). The downstream
-symptom (composer accepts input in the dead room and sends a 403) is a follow-up
-defense-in-depth gap, not addressed by this fix.
+- On startup, the old DM can reappear in the room list even though Element does
+  not show it.
+- Searching the same user again can reopen that stale empty room, or otherwise
+  reuse the wrong DM candidate.
 
-## Symptoms
+This is the primary defect tracked under issue #98.
 
-- Leave a DM with user X via room context menu or `/leave`.
-- Open People, search X, click their row → click the direct-message button.
-- Observed: client opens the old, empty, unjoined room. No "Create DM" confirmation
-  modal appears.
-- Type and send → red banner: `Failed to send message: ... 403 M_FORBIDDEN
-  "sender's membership is not 'join'"`.
-- Palpo event log: only the prior `leave`, no subsequent `join`.
+## Reproduction
+
+1. Create or open a DM with an appservice peer X.
+2. Exchange at least one message so the room is clearly established.
+3. Leave the DM.
+4. Restart Robrix or search for X again from People.
+
+Observed before the fix:
+
+- Robrix may restore the old DM as `Empty Room (was "X")`.
+- Clicking X again can reopen that stale room.
+- The flow diverges from Element, which hides that room.
 
 ## Root Cause
 
-`MatrixRequest::OpenOrCreateDirectMessage` at `src/sliding_sync.rs:2082` resolves a
-DM via `client.get_dm_room(user_id)`. That helper reads the Matrix `m.direct`
-account-data mapping and **does not filter by local membership**. Per Matrix spec,
-leaving a DM does not remove its entry from `m.direct`, so the mapping keeps
-pointing at the abandoned room.
+The bug turned out to be a compound client-side classification problem, not just
+one stale `m.direct` lookup.
 
-Flow (steps 4–6 are the bug):
+1. A stale direct room whose display name had become `Empty` or
+   `EmptyWas("X")` could still enter Robrix's joined room list and stay visible.
+2. DM reuse logic was still willing to select a joined direct room for X without
+   first proving that X was still an active member of that room.
 
-1. User creates DM with @X → `m.direct[@X] = [!old]`.
-2. User leaves `!old` → server accepts; `m.direct` is unchanged.
-3. User clicks @X in People → `direct_message_button` (`profile/user_profile.rs:466`)
-   fires `OpenOrCreateDirectMessage { allow_create: false }`.
-4. `client.get_dm_room(@X)` returns `!old` (state = `Left`), not `None`.
-5. Handler emits `DirectMessageRoomAction::FoundExisting` → `navigate_to_room(!old)`.
-6. `DidNotExist` branch (which would open the "Create DM" confirmation modal) is
-   never reached.
-7. Any send in the dead room 403s.
-
-## Code References
-
-- `src/sliding_sync.rs:2079-2092` — `OpenOrCreateDirectMessage` handler.
-- `src/profile/user_profile.rs:466-483` — `direct_message_button` click handler.
-- `src/app.rs:1388-1442` — `DirectMessageRoomAction` dispatch.
+That combination let a self-only stale DM survive in local state and then be
+selected again as the "existing DM" for the same target user.
 
 ## Fix Applied
 
-Filter `client.get_dm_room()` by local membership via a pure predicate
-`is_active_dm_room_state`. Treat a DM whose state is not `Joined` as "no existing
-DM" so the handler falls through to `DidNotExist`, which opens the existing
-"Create DM" confirmation modal. Confirming creates a fresh DM and invites the
-peer, who (for appservice peers) auto-accepts.
+The fix has two coordinated parts in `src/sliding_sync.rs`:
 
-```rust
-fn is_active_dm_room_state(state: RoomState) -> bool {
-    state == RoomState::Joined
-}
+1. Introduce a joined-room visibility predicate that hides stale direct rooms
+   whose display name is `Empty` or `EmptyWas(...)`.
+2. Replace direct reuse of a single `get_dm_room()` result with a joined-room
+   scan that:
+   - keeps only direct rooms targeting the requested user,
+   - requires that target user's membership in the room to still be `Join` or
+     `Invite`,
+   - rejects stale empty direct rooms,
+   - chooses the newest valid candidate by latest event timestamp.
 
-let existing = client.get_dm_room(&user_profile.user_id)
-    .filter(|r| is_active_dm_room_state(r.state()));
-```
+This keeps stale empty DMs out of both:
 
-### Why `Joined` only
+- the room list / startup restoration path, and
+- the "open or create DM" routing path.
 
-Upstream `client.get_dm_room()` delegates to `joined_rooms()`, which filters
-strictly by `RoomStateFilter::JOINED` (matrix-sdk `client/mod.rs:1288`). In steady
-state only `Joined` rooms reach the filter. The predicate still acts as:
+## Code References
 
-1. A defense against the race between `leave()` returning 200 and the local
-   membership transition being applied by sliding sync (during that window the
-   cached state can still read `Joined`, but the check remains cheap and explicit).
-2. A guard against any future relaxation of `get_dm_room()`'s upstream filter.
+- `src/sliding_sync.rs`:
+  - `should_display_joined_room_entry(...)`
+  - `find_reusable_direct_message_room(...)`
+  - `update_room(...)`
+  - `add_new_room(...)`
 
-## Out of Scope (follow-ups)
+## Verification
 
-- Composer gating on membership in any already-open left/banned room.
-- Auto-closing dock tabs on local `/leave` (issue #8).
-- Auditing non-message send paths (reactions/edits/redacts/typing/receipts).
-- Cleaning stale `m.direct` entries server-side after a leave.
+Manual verification completed against the fixed binary:
 
-## Environment
+- Startup no longer restores the stale `Empty Room` DM.
+- Open DM with `@octosbot`, send a message, leave the room, search the same user
+  again, and reopen DM: the client no longer routes back to the stale empty room.
+- A fresh DM room is created and messaging succeeds.
 
-- Branch cut from `main @ 55e39037`; reproduces on `main`.
-- Homeserver: local palpo via testenv.
-- Peer: appservice user (auto-accepts invites).
+Relevant log evidence from `/tmp/robrix_debug.log` after the fix:
+
+- the stale room is no longer restored into the visible room list,
+- the first DM after startup is newly created,
+- after leaving, reopening the same user creates a fresh DM instead of reusing
+  the abandoned one,
+- sending in the new room succeeds.
+
+## Out Of Scope
+
+- Composer gating on membership in any already-open left/banned room
+- Auto-closing dock tabs on local `/leave`
+- Cleaning stale `m.direct` entries server-side
+- Unrelated Makepad runtime/property errors seen during app startup
+
+## Residual Follow-up
+
+Post-leave logs still show a small amount of async cleanup noise for rooms that
+have just been removed, for example late updates racing with room removal. That
+did not reproduce the user-facing DM bug after this fix, so it is treated as a
+follow-up cleanup task rather than part of this defect.
