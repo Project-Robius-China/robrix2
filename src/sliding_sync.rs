@@ -4836,16 +4836,8 @@ async fn update_room(
 ) -> Result<()> {
     let new_room_id = new_room.room_id.clone();
     if old_room.room_id == new_room_id {
-        // Same-room update. A pure display-eligibility flip while the room
-        // stays Joined must NOT destroy its JoinedRoomDetails — doing so
-        // orphans the open RoomScreen's singleton timeline receiver and
-        // leaves the right pane stuck on "Loading earlier messages...".
-        //
-        // Hard state transitions (Left, Banned, Joined, Invited, Knocked)
-        // remain the only producers of remove_room/add_new_room; they are
-        // handled in the explicit state-transition block further below.
-        //
-        // See specs/task-dm-joined-room-details-churn.spec.md.
+        // Display-flip on a still-Joined room must not destroy JoinedRoomDetails,
+        // or the open RoomScreen's singleton timeline receiver is orphaned.
         let old_should_display = should_display_joined_room_entry(
             old_room.state,
             old_room.is_direct,
@@ -5048,14 +5040,6 @@ async fn add_new_room(
     room_list_service: &RoomListService,
     subscribe: bool,
 ) -> Result<()> {
-    if !should_display_joined_room_entry(
-        new_room.state,
-        new_room.is_direct,
-        new_room.display_name.as_ref(),
-    ) {
-        return Ok(());
-    }
-
     match new_room.state {
         RoomState::Knocked => {
             log!("Got new Knocked room: {:?} ({})", new_room.display_name, new_room.room_id);
@@ -5197,6 +5181,18 @@ async fn add_new_room(
         is_direct: new_room.is_direct,
         is_tombstoned: new_room.is_tombstoned,
     }));
+
+    // Keep the entry in `ALL_JOINED_ROOMS`, but hide it from the sidebar until
+    // the display name resolves — `update_room` will emit `UnhideRoom` then.
+    if !should_display_joined_room_entry(
+        new_room.state,
+        new_room.is_direct,
+        new_room.display_name.as_ref(),
+    ) {
+        rooms_list::enqueue_rooms_list_update(RoomsListUpdate::HideRoom {
+            room_id: new_room.room_id.clone(),
+        });
+    }
 
     Cx::post_action(AppStateAction::RoomLoadedSuccessfully {
         room_name_id,

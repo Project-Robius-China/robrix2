@@ -96,6 +96,18 @@ Scenario: RoomsListUpdate::UnhideRoom on an unknown room is a no-op
   And `self.displayed_direct_rooms` is unchanged
   And `self.displayed_regular_rooms` is unchanged
 
+Scenario: A first-sync stale-empty-direct DM is tracked and hidden, then restored when its name resolves
+  Test: manual_test_first_sync_stale_empty_direct_dm_is_restorable
+  Given the first sliding-sync snapshot for room `R` is `(state=Joined, is_direct=true, display_name=Empty)`
+  When `add_new_room` handles `R`
+  Then `ALL_JOINED_ROOMS` contains `R`
+  And `rooms_list.all_joined_rooms` contains `R`
+  And `rooms_list.hidden_rooms` contains `R`
+  And neither `displayed_direct_rooms` nor `displayed_regular_rooms` contains `R`
+  When a subsequent sync resolves `R` to `display_name=Calculated("peer")`
+  Then `update_room` emits `RoomsListUpdate::UnhideRoom { room_id: R }`
+  And `rooms_list.displayed_direct_rooms` contains `R`
+
 Scenario: A freshly-created DM with an Empty display name no longer churns JoinedRoomDetails on is_direct flip
   Test: manual_test_dm_rejoin_timeline_not_blank
   Given the user has previously left a DM with `@octosbot`
