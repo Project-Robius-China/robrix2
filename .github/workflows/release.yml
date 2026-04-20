@@ -85,6 +85,67 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  clippy_report:
+    name: Clippy Report (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev \
+            libsqlite3-dev \
+            pkg-config \
+            llvm \
+            clang \
+            libclang-dev \
+            libxcursor-dev \
+            libx11-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libwayland-dev libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-clippy-report
+
+      - name: Run clippy and summarize
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-features 2>&1 | tee clippy.log || true
+          echo "## Clippy Report for $(git rev-parse --short HEAD)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          # Count warnings via the #[warn(...)] annotation line that clippy
+          # emits for each flagged lint. This is more accurate than counting
+          # "^warning:" header lines because cargo itself can emit meta-warnings
+          # (e.g. "warning: skipping duplicate package ...") that are not lints.
+          warn_count=$(grep -cE '#\[warn\(' clippy.log || true)
+          error_count=$(grep -cE '^error:' clippy.log || true)
+          echo "- Warnings: ${warn_count:-0}" >> $GITHUB_STEP_SUMMARY
+          echo "- Errors: ${error_count:-0}" >> $GITHUB_STEP_SUMMARY
+          if [[ "${warn_count:-0}" -gt 0 ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Warning categories" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -oE '#\[warn\([^)]+\)\]' clippy.log | sed -E 's/#\[warn\((.*)\)\]/\1/' | sort | uniq -c | sort -rn >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clippy-log
+          path: clippy.log
+          retention-days: 30
+
   check_tag_version:
     name: Check Release Tag and Cargo.toml Version Consistency
     runs-on: ubuntu-latest
