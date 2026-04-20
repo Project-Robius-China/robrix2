@@ -108,7 +108,7 @@ jobs:
             libpulse-dev \
             libwayland-dev libxkbcommon-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
 
@@ -326,7 +326,7 @@ jobs:
             libwayland-dev libxkbcommon-dev
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Package (desktop)
         uses: project-robius/makepad-packaging-action@v1
@@ -356,7 +356,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Package (macos)
         uses: project-robius/makepad-packaging-action@v1
@@ -392,7 +392,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Package (windows)
         uses: project-robius/makepad-packaging-action@v1
@@ -419,7 +419,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Package (android)
         uses: project-robius/makepad-packaging-action@v1
@@ -446,7 +446,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Package (iOS)
         uses: project-robius/makepad-packaging-action@v1
