@@ -306,15 +306,15 @@ jobs:
           CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD || secrets.CARGO_PACKAGER_SIGNING_PASSWORD }}
           ROBRIX_UPDATER_PUBKEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
           ROBRIX_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         with:
           github_token: ${{ secrets.ROBRIX_RELEASE }}
           packager_formats: dmg
-          enable_macos_notarization: true
+          enable_macos_notarization: false
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
           releaseId: ${{ needs.create_release.outputs.release_id }}

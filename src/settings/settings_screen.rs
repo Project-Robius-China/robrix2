@@ -97,23 +97,27 @@ script_mod! {
                 }
             }
 
-            ScrollXYView {
+            settings_sections := PageFlip {
                 width: Fill, height: Fill
-                flow: Down
+                lazy_init: true,
+                active_page: @account_settings_page
 
-                settings_sections := View {
-                    width: Fill, height: Fit
+                account_settings_page := ScrollXYView {
+                    width: Fill, height: Fill
                     flow: Down
 
-                    // The account settings section.
                     account_settings_section := View {
                         width: Fill, height: Fit
                         flow: Down
                         account_settings := AccountSettings {}
                     }
+                }
+
+                preferences_settings_page := ScrollXYView {
+                    width: Fill, height: Fill
+                    flow: Down
 
                     preferences_settings_section := View {
-                        visible: false
                         width: Fill, height: Fit
                         flow: Down
                         spacing: (SPACE_SM)
@@ -408,9 +412,13 @@ script_mod! {
                             text: "Save Proxy"
                         }
                     }
+                }
+
+                labs_settings_page := ScrollXYView {
+                    width: Fill, height: Fill
+                    flow: Down
 
                     labs_settings_section := View {
-                        visible: false
                         width: Fill, height: Fit
                         flow: Down
                         spacing: (SPACE_SM)
@@ -455,9 +463,13 @@ script_mod! {
                             tsp_settings_screen := TspSettingsScreen {}
                         }
                     }
+                }
+
+                contribute_settings_page := ScrollXYView {
+                    width: Fill, height: Fill
+                    flow: Down
 
                     contribute_settings_section := View {
-                        visible: false
                         width: Fill, height: Fit
                         flow: Down
                         spacing: (SPACE_SM)
@@ -1079,10 +1091,20 @@ impl SettingsScreen {
         let show_labs = self.selected_category == SettingsCategory::Labs;
         let show_contribute = self.selected_category == SettingsCategory::Contribute;
 
-        self.view.view(cx, ids!(account_settings_section)).set_visible(cx, show_account);
-        self.view.view(cx, ids!(preferences_settings_section)).set_visible(cx, show_preferences);
-        self.view.view(cx, ids!(labs_settings_section)).set_visible(cx, show_labs);
-        self.view.view(cx, ids!(contribute_settings_section)).set_visible(cx, show_contribute);
+        self.view
+            .page_flip(cx, ids!(settings_sections))
+            .set_active_page(
+                cx,
+                if show_account {
+                    id!(account_settings_page)
+                } else if show_preferences {
+                    id!(preferences_settings_page)
+                } else if show_labs {
+                    id!(labs_settings_page)
+                } else {
+                    id!(contribute_settings_page)
+                },
+            );
 
         let mut category_account_button = self.view.button(cx, ids!(category_account_button));
         let mut category_preferences_button = self.view.button(cx, ids!(category_preferences_button));
@@ -1197,6 +1219,10 @@ impl SettingsScreen {
         self.view.bot_settings(cx, ids!(bot_settings)).populate(cx, bot_settings);
         self.load_saved_proxy_to_preferences_form(cx);
         self.view.translation_settings(cx, ids!(translation_settings)).populate(cx, translation_config);
+        #[cfg(feature = "tsp")]
+        if let Some(mut tsp_settings_screen) = self.view.child_by_path(ids!(tsp_settings_screen)).borrow_mut::<crate::tsp::tsp_settings_screen::TspSettingsScreen>() {
+            tsp_settings_screen.prepare_for_display(cx, app_language);
+        }
         self.set_app_language(cx, app_language);
         self.set_update_checking(cx, false);
         self.set_selected_category(cx, SettingsCategory::Account);

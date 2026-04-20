@@ -7,7 +7,7 @@ use ruma::{IdParseError, MatrixToUri, MatrixUri, OwnedRoomId, OwnedRoomOrAliasId
 
 use crate::{
     app::{AppState, AppStateAction},
-    home::{invite_screen::JoinRoomResultAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef},
+    home::{invite_screen::JoinRoomResultAction, rooms_list::RoomsListRef},
     i18n::{AppLanguage, tr_fmt, tr_key},
     profile::user_profile::UserProfile,
     room::{BasicRoomDetails, FetchedRoomAvatar, FetchedRoomPreview, RoomPreviewAction},
@@ -40,7 +40,7 @@ script_mod! {
                 color: (MESSAGE_TEXT_COLOR),
                 text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
             }
-            text: "Create a standalone room, or attach it under a space where you can create child rooms."
+            text: "Set a room name, topic, privacy, and encryption options."
         }
 
         create_room_view := View {
@@ -50,37 +50,166 @@ script_mod! {
             spacing: 8
             flow: Down
 
-            create_room_space_row := View {
+            create_room_name_input := RobrixTextInput {
+                margin: Inset{left: 5, right: 5}
+                padding: Inset{left: 12, right: 12, top: 11, bottom: 0}
+                width: Fill
+                height: 40
+                empty_text: "Enter the new room name..."
+            }
+
+            create_room_topic_input := RobrixTextInput {
+                margin: Inset{left: 5, right: 5}
+                padding: Inset{left: 12, right: 12, top: 11, bottom: 0}
+                width: Fill
+                height: 40
+                empty_text: "Topic (optional)"
+            }
+
+            create_room_visibility_selector_button := RoundedView {
+                width: Fill, height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                padding: Inset{left: 12, right: 8, top: 8, bottom: 8}
+                margin: Inset{left: 5, right: 5, top: 2, bottom: 2}
+                cursor: MouseCursor.Hand
+                show_bg: true
+                draw_bg +: {
+                    color: (COLOR_PRIMARY)
+                    border_radius: (RADIUS_SM)
+                    border_size: 1.0
+                    border_color: (COLOR_DROPDOWN_BORDER)
+                }
+
+                create_room_visibility_selector_label := Label {
+                    width: Fill, height: Fit
+                    draw_text +: {
+                        color: (COLOR_DROPDOWN_TEXT)
+                        text_style: REGULAR_TEXT { font_size: 11 }
+                    }
+                    text: "Private room (invite only)"
+                }
+
+                create_room_visibility_arrow := ExpandArrow {
+                    width: 14, height: 14
+                    draw_bg +: {
+                        color: instance((COLOR_DROPDOWN_ARROW))
+                    }
+                }
+            }
+
+            create_room_visibility_popup := RoundedView {
+                visible: false
+                width: Fill, height: Fit
+                flow: Down
+                padding: Inset{top: 4, bottom: 4}
+                margin: Inset{left: 5, right: 5}
+                show_bg: true
+                new_batch: true
+                draw_bg +: {
+                    color: (COLOR_PRIMARY)
+                    border_radius: (RADIUS_MD)
+                    border_size: 1.0
+                    border_color: (COLOR_DROPDOWN_POPUP_BORDER)
+                }
+
+                create_room_visibility_private_option := View {
+                    width: Fill, height: 36
+                    flow: Right
+                    align: Align{y: 0.5}
+                    padding: Inset{left: 12, right: 12}
+                    cursor: MouseCursor.Hand
+                    show_bg: true
+                    draw_bg +: { color: #0000 }
+
+                    create_room_visibility_private_option_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (COLOR_DROPDOWN_TEXT)
+                            text_style: REGULAR_TEXT { font_size: 11 }
+                        }
+                        text: "Private room (invite only)"
+                    }
+                }
+
+                create_room_visibility_public_option := View {
+                    width: Fill, height: 36
+                    flow: Right
+                    align: Align{y: 0.5}
+                    padding: Inset{left: 12, right: 12}
+                    cursor: MouseCursor.Hand
+                    show_bg: true
+                    draw_bg +: { color: #0000 }
+
+                    create_room_visibility_public_option_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (COLOR_DROPDOWN_TEXT)
+                            text_style: REGULAR_TEXT { font_size: 11 }
+                        }
+                        text: "Public room"
+                    }
+                }
+            }
+
+            create_room_visibility_hint := Label {
+                width: Fill, height: Fit
+                margin: Inset{left: 5, right: 5}
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR),
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                }
+                text: "Only people invited will be able to find and join this room."
+            }
+
+            create_room_encryption_row := View {
                 width: Fill
                 height: Fit
-                margin: Inset{left: 5, right: 5}
+                margin: Inset{left: 5, right: 5, top: 2}
                 spacing: 10
                 align: Align{y: 0.5}
                 flow: Right
 
-                create_room_space_dropdown := DropDownFlat {
-                    width: Fill { max: 400 }
-                    height: 40
-                    labels: ["Create without a space"]
-                }
-
-                create_room_space_hint := Label {
-                    width: Fill, height: Fit
-                    flow: Flow.Right{wrap: true}
-                    draw_text +: {
-                        color: (MESSAGE_TEXT_COLOR),
-                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                create_room_encrypted_toggle := Toggle {
+                    width: Fit
+                    height: Fit
+                    padding: Inset{top: 4, right: 4, bottom: 4, left: 4}
+                    text: ""
+                    active: true
+                    draw_bg +: {
+                        size: 20.0
+                        color_active: (COLOR_ACTIVE_PRIMARY)
+                        border_color_active: (COLOR_ACTIVE_PRIMARY)
+                        mark_color_active: #fff
                     }
-                    text: "Choose a space where you have permission to create child rooms."
                 }
-            }
 
-            create_room_name_input := RobrixTextInput {
-                margin: Inset{left: 5, right: 5}
-                padding: Inset{left: 12, right: 12, top: 11, bottom: 0}
-                width: Fill { max: 400 }
-                height: 40
-                empty_text: "Enter the new room name..."
+                create_room_encryption_text := View {
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 4
+
+                    create_room_encryption_label := Label {
+                        width: Fill, height: Fit
+                        draw_text +: {
+                            color: (COLOR_TEXT),
+                            text_style: TITLE_TEXT { font_size: 11.5 },
+                        }
+                        text: "Enable end-to-end encryption"
+                    }
+
+                    create_room_encryption_hint := Label {
+                        width: Fill, height: Fit
+                        flow: Flow.Right{wrap: true}
+                        draw_text +: {
+                            color: (MESSAGE_TEXT_COLOR),
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                        }
+                        text: "You can't disable this later."
+                    }
+                }
             }
 
             create_room_feedback := View {
@@ -154,53 +283,30 @@ script_mod! {
         
         LineH { padding: 10, margin: Inset{top: 10, right: 2} }
 
-        create_new_room_label := SubsectionLabel {
-            margin: Inset{top: 8}
-            text: "Create a new room:"
-        }
-
-        create_room_form := mod.widgets.CreateRoomForm {}
-
-        LineH { padding: 10, margin: Inset{right: 2} }
-
-        add_friend_label := SubsectionLabel {
-            margin: Inset{top: 4}
-            text: "Add a friend:"
-        }
-
-        add_friend_help := Label {
-            width: Fill, height: Fit
-            flow: Flow.Right{wrap: true}
-            draw_text +: {
-                color: (MESSAGE_TEXT_COLOR),
-                text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
-            }
-            text: "Enter a Matrix user ID to open or create a direct message room."
-        }
-
-        add_friend_view := View {
+        quick_actions_view := View {
             width: Fill
             height: Fit
-            margin: Inset{ top: 6, bottom: 10 }
-            align: Align{y: 0.5}
-            spacing: 5
-            flow: Right
+            margin: Inset{ top: 8, bottom: 10 }
+            padding: Inset{left: 5, right: 5}
+            flow: Flow.Right{wrap: true}
+            spacing: 10
 
-            friend_user_id_input := RobrixTextInput {
-                align: Align{y: 0.5}
-                margin: Inset{top: 0, left: 5, right: 5, bottom: 0}
-                padding: Inset{left: 12, right: 12, top: 11, bottom: 0}
-                width: Fill { max: 400 }
+            new_room_button := RobrixPositiveIconButton {
+                width: Fit
+                padding: Inset{top: 10, bottom: 10, left: 12, right: 14}
                 height: 40
-                empty_text: "Enter a Matrix user ID, like @alice:matrix.org..."
+                draw_icon.svg: (ICON_ADD)
+                icon_walk: Walk{width: 16, height: 16}
+                text: "New room"
             }
 
-            add_friend_button := RobrixIconButton {
+            start_chat_button := RobrixPositiveIconButton {
+                width: Fit
                 padding: Inset{top: 10, bottom: 10, left: 12, right: 14}
                 height: 40
                 draw_icon.svg: (ICON_ADD_USER)
                 icon_walk: Walk{width: 16, height: 16}
-                text: "Add friend"
+                text: "Start chat"
             }
         }
 
@@ -427,34 +533,44 @@ script_mod! {
         height: Fit
 
         RoundedView {
-            width: 500
+            width: 400
             height: Fit
             align: Align{x: 0.5}
             flow: Down
-            padding: Inset{top: 24, right: 24, bottom: 20, left: 24}
+            padding: Inset{top: 14, right: 14, bottom: 14, left: 14}
 
             show_bg: true
             draw_bg +: {
-                color: (COLOR_PRIMARY)
-                border_radius: 4.0
+                color: #fff
+                border_radius: 24.0
             }
 
             title_view := View {
                 width: Fill
                 height: Fit
-                padding: Inset{top: 0, bottom: 20}
-                align: Align{x: 0.5, y: 0.0}
+                padding: Inset{top: 4, bottom: 14}
+                align: Align{y: 0.5}
+                flow: Right
 
                 title := Label {
                     width: Fill
                     height: Fit
-                    align: Align{x: 0.5}
                     flow: Flow.Right{wrap: true}
                     draw_text +: {
-                        text_style: TITLE_TEXT {font_size: 13}
+                        text_style: TITLE_TEXT {font_size: 15}
                         color: #000
                     }
                     text: "Create New Room"
+                }
+
+                close_button := RobrixNeutralIconButton {
+                    width: 38
+                    height: 38
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 0
+                    padding: 11
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 14, height: 14}
                 }
             }
 
@@ -467,7 +583,7 @@ script_mod! {
                     color: (MESSAGE_TEXT_COLOR)
                     text_style: MESSAGE_TEXT_STYLE { font_size: 11 }
                 }
-                text: "Create a new room directly inside the selected space."
+                text: "Set a room name, topic, privacy, and encryption options."
             }
 
             create_room_form := mod.widgets.CreateRoomForm {}
@@ -475,22 +591,136 @@ script_mod! {
             buttons_view := View {
                 width: Fill
                 height: Fit
-                flow: Right
+                flow: Flow.Right{wrap: true}
                 padding: Inset{top: 16, bottom: 5}
                 align: Align{x: 1.0, y: 0.5}
-                spacing: 12
+                spacing: 10
+
+                cancel_button := RobrixNeutralIconButton {
+                    width: 132
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 12
+                    draw_icon.svg: (ICON_FORBIDDEN)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
+                    text: "Cancel"
+                }
 
                 create_button := RobrixPositiveIconButton {
-                    width: 140
+                    width: 152
                     align: Align{x: 0.5, y: 0.5}
                     padding: 12
                     draw_icon.svg: (ICON_ADD)
                     icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
                     text: "Create room"
                 }
+            }
+        }
+    }
+
+    mod.widgets.StartChatModal = #(StartChatModal::register_widget(vm)) {
+        width: Fit
+        height: Fit
+
+        RoundedView {
+            width: 400
+            height: Fit
+            align: Align{x: 0.5}
+            flow: Down
+            padding: Inset{top: 14, right: 14, bottom: 14, left: 14}
+
+            show_bg: true
+            draw_bg +: {
+                color: #fff
+                border_radius: 24.0
+            }
+
+            title_view := View {
+                width: Fill
+                height: Fit
+                padding: Inset{top: 4, bottom: 14}
+                align: Align{y: 0.5}
+                flow: Right
+
+                title := Label {
+                    width: Fill
+                    height: Fit
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        text_style: TITLE_TEXT {font_size: 15}
+                        color: #000
+                    }
+                    text: "Direct Messages"
+                }
+
+                close_button := RobrixNeutralIconButton {
+                    width: 38
+                    height: 38
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 0
+                    padding: 11
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 14, height: 14}
+                }
+            }
+
+            subtitle := Label {
+                width: Fill
+                height: Fit
+                margin: Inset{bottom: 10}
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR)
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 }
+                }
+                text: "Start a conversation by entering a Matrix user ID."
+            }
+
+            search_row := View {
+                width: Fill
+                height: Fit
+                spacing: 8
+                align: Align{y: 0.5}
+                margin: Inset{left: 5, right: 5}
+                flow: Right
+
+                chat_user_id_input := RobrixTextInput {
+                    padding: Inset{left: 12, right: 12, top: 11, bottom: 0}
+                    width: Fill
+                    height: 40
+                    empty_text: "Search by Matrix user ID..."
+                }
+
+                go_button := RobrixNeutralIconButton {
+                    width: 82
+                    height: 40
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 10
+                    text: "Go"
+                }
+            }
+
+            chat_hint := Label {
+                width: Fill
+                height: Fit
+                margin: Inset{left: 5, right: 5, top: 8, bottom: 6}
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR)
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 }
+                }
+                text: "A direct message room will be created if one does not already exist."
+            }
+
+            buttons_view := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                padding: Inset{top: 10, bottom: 5}
+                align: Align{x: 1.0, y: 0.5}
+                spacing: 10
 
                 cancel_button := RobrixNeutralIconButton {
-                    width: 120
+                    width: 132
                     align: Align{x: 0.5, y: 0.5}
                     padding: 12
                     draw_icon.svg: (ICON_FORBIDDEN)
@@ -508,7 +738,6 @@ pub struct AddRoomScreen {
     #[rust] state: AddRoomState,
     /// The function to perform when the user clicks the `join_room_button`.
     #[rust(JoinButtonFunction::None)] join_function: JoinButtonFunction,
-    #[rust(false)] adding_friend: bool,
     #[rust] app_language: AppLanguage,
 }
 
@@ -609,9 +838,10 @@ pub struct CreateRoomForm {
     #[rust(CreateRoomContext::AddRoomPage)] context: CreateRoomContext,
     #[rust(false)] creating_room: bool,
     #[rust(None)] pending_created_room: Option<RoomNameId>,
-    #[rust(Vec::new())] creatable_spaces: Vec<RoomNameId>,
-    #[rust(None)] preferred_parent_space_id: Option<OwnedRoomId>,
     #[rust(None)] fixed_parent_space_id: Option<OwnedRoomId>,
+    #[rust(false)] visibility_popup_visible: bool,
+    #[rust(false)] create_public_room: bool,
+    #[rust(true)] create_encrypted_room: bool,
     #[rust] app_language: AppLanguage,
 }
 
@@ -624,6 +854,7 @@ impl Widget for CreateRoomForm {
             self.set_app_language(cx, app_language);
         }
         self.view.handle_event(cx, event, scope);
+        self.handle_visibility_dropdown_event(cx, event);
         self.widget_match_event(cx, event, scope);
     }
 
@@ -636,18 +867,6 @@ impl Widget for CreateRoomForm {
         self.view.button(cx, ids!(create_room_button))
             .set_enabled(cx, !self.is_busy() && !create_room_text_is_empty);
 
-        let selected_space_id = self.selected_parent_space_id(
-            self.view.drop_down(cx, ids!(create_room_space_dropdown)).selected_item(),
-        );
-        let create_room_space_hint = self.view.label(cx, ids!(create_room_space_hint));
-        update_space_hint(
-            cx,
-            &create_room_space_hint,
-            &self.creatable_spaces,
-            selected_space_id.as_ref(),
-            self.app_language,
-        );
-
         self.sync_mode_views(cx);
 
         self.view.draw_walk(cx, scope, walk)
@@ -657,9 +876,9 @@ impl Widget for CreateRoomForm {
 impl WidgetMatchEvent for CreateRoomForm {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
         let create_room_name_input = self.view.text_input(cx, ids!(create_room_name_input));
+        let create_room_topic_input = self.view.text_input(cx, ids!(create_room_topic_input));
         let create_room_button = self.view.button(cx, ids!(create_room_button));
-        let create_room_space_dropdown = self.view.drop_down(cx, ids!(create_room_space_dropdown));
-        let create_room_space_hint = self.view.label(cx, ids!(create_room_space_hint));
+        let create_room_encrypted_toggle = self.view.check_box(cx, ids!(create_room_encrypted_toggle));
 
         if let Some(text) = create_room_name_input.changed(actions) {
             if !self.is_busy() {
@@ -668,21 +887,13 @@ impl WidgetMatchEvent for CreateRoomForm {
             create_room_button.set_enabled(cx, !self.is_busy() && !text.trim().is_empty());
         }
 
-        if create_room_space_dropdown.changed(actions).is_some() {
-            self.preferred_parent_space_id =
-                selected_creatable_space(&self.creatable_spaces, create_room_space_dropdown.selected_item());
-            update_space_hint(
-                cx,
-                &create_room_space_hint,
-                &self.creatable_spaces,
-                self.preferred_parent_space_id.as_ref(),
-                self.app_language,
-            );
-            self.view.redraw(cx);
+        if let Some(enabled) = create_room_encrypted_toggle.changed(actions) {
+            self.create_encrypted_room = enabled;
         }
 
         let create_room_request = create_room_button.clicked(actions)
-            || create_room_name_input.returned(actions).is_some();
+            || create_room_name_input.returned(actions).is_some()
+            || create_room_topic_input.returned(actions).is_some();
         if create_room_request {
             let _ = self.submit(cx);
         }
@@ -695,6 +906,7 @@ impl WidgetMatchEvent for CreateRoomForm {
                     {
                         self.creating_room = false;
                         create_room_name_input.set_text(cx, "");
+                        create_room_topic_input.set_text(cx, "");
                         create_room_button.set_enabled(cx, false);
 
                         if let Some(space_id) = parent_space_id {
@@ -771,20 +983,6 @@ impl WidgetMatchEvent for CreateRoomForm {
                 }
             }
 
-            if let Some(CreatableSpacesAction::Loaded { spaces }) = action.downcast_ref() {
-                self.creatable_spaces = spaces.clone();
-                sync_space_dropdown(
-                    cx,
-                    &create_room_space_dropdown,
-                    &create_room_space_hint,
-                    &self.creatable_spaces,
-                    self.preferred_parent_space_id.as_ref(),
-                    self.app_language,
-                );
-                self.sync_mode_views(cx);
-                self.view.redraw(cx);
-            }
-
             if let Some(AppStateAction::RoomLoadedSuccessfully { room_name_id, .. }) = action.downcast_ref()
                 && self.pending_created_room.as_ref().is_some_and(|pending| pending.room_id() == room_name_id.room_id())
             {
@@ -820,9 +1018,79 @@ impl CreateRoomForm {
         self.app_language = app_language;
         self.view.text_input(cx, ids!(create_room_name_input))
             .set_empty_text(cx, tr_key(self.app_language, "add_room.create_room.input.placeholder").to_string());
+        self.view.text_input(cx, ids!(create_room_topic_input))
+            .set_empty_text(cx, tr_key(self.app_language, "add_room.create_room.topic.placeholder").to_string());
+        self.view.label(cx, ids!(create_room_visibility_private_option_label))
+            .set_text(cx, tr_key(self.app_language, "add_room.create_room.visibility.option.private"));
+        self.view.label(cx, ids!(create_room_visibility_public_option_label))
+            .set_text(cx, tr_key(self.app_language, "add_room.create_room.visibility.option.public"));
+        self.view.label(cx, ids!(create_room_encryption_label))
+            .set_text(cx, tr_key(self.app_language, "add_room.create_room.encryption.label"));
+        self.view.label(cx, ids!(create_room_encryption_hint))
+            .set_text(cx, tr_key(self.app_language, "add_room.create_room.encryption.hint"));
         self.view.button(cx, ids!(create_room_button))
             .set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
+        self.update_visibility_selector_text(cx);
         self.sync_mode_views(cx);
+    }
+
+    fn set_visibility_popup_visible(&mut self, cx: &mut Cx, visible: bool) {
+        self.visibility_popup_visible = visible;
+        self.view.view(cx, ids!(create_room_visibility_popup)).set_visible(cx, visible);
+    }
+
+    fn set_create_room_public(&mut self, cx: &mut Cx, is_public: bool) {
+        self.create_public_room = is_public;
+        self.update_visibility_selector_text(cx);
+    }
+
+    fn update_visibility_selector_text(&mut self, cx: &mut Cx) {
+        let selector_text = if self.create_public_room {
+            tr_key(self.app_language, "add_room.create_room.visibility.option.public")
+        } else {
+            tr_key(self.app_language, "add_room.create_room.visibility.option.private")
+        };
+        self.view.label(cx, ids!(create_room_visibility_selector_label))
+            .set_text(cx, selector_text);
+
+        let hint_text = if self.create_public_room {
+            tr_key(self.app_language, "add_room.create_room.visibility.hint.public")
+        } else {
+            tr_key(self.app_language, "add_room.create_room.visibility.hint.private")
+        };
+        self.view.label(cx, ids!(create_room_visibility_hint))
+            .set_text(cx, hint_text);
+    }
+
+    fn handle_visibility_dropdown_event(&mut self, cx: &mut Cx, event: &Event) {
+        let selector = self.view.view(cx, ids!(create_room_visibility_selector_button));
+        if let Hit::FingerUp(fe) = event.hits(cx, selector.area()) {
+            if fe.is_over && fe.was_tap() {
+                self.set_visibility_popup_visible(cx, !self.visibility_popup_visible);
+                self.view.redraw(cx);
+            }
+        }
+
+        if !self.visibility_popup_visible {
+            return;
+        }
+
+        let visibility_options: &[(&[LiveId], bool)] = &[
+            (&[live_id!(create_room_visibility_private_option)], false),
+            (&[live_id!(create_room_visibility_public_option)], true),
+        ];
+
+        for &(id_path, is_public) in visibility_options {
+            let item_view = self.view.view(cx, id_path);
+            if let Hit::FingerUp(fe) = event.hits(cx, item_view.area()) {
+                if fe.is_over && fe.was_tap() {
+                    self.set_create_room_public(cx, is_public);
+                    self.set_visibility_popup_visible(cx, false);
+                    self.view.redraw(cx);
+                    break;
+                }
+            }
+        }
     }
 
     fn set_feedback(&mut self, cx: &mut Cx, text: &str, show_spinner: bool, is_error: bool) {
@@ -856,14 +1124,17 @@ impl CreateRoomForm {
 
         let room_name = self.view.text_input(cx, ids!(create_room_name_input)).text();
         let room_name = room_name.trim();
-        let parent_space_id = self.selected_parent_space_id(
-            self.view.drop_down(cx, ids!(create_room_space_dropdown)).selected_item(),
-        );
+        let room_topic = self.view.text_input(cx, ids!(create_room_topic_input)).text();
+        let room_topic = room_topic.trim();
+        let parent_space_id = self.selected_parent_space_id();
 
         self.creating_room = true;
         self.set_feedback(cx, tr_key(self.app_language, "add_room.feedback.creating_room"), true, false);
         submit_async_request(MatrixRequest::CreateRoom {
             room_name: room_name.to_owned(),
+            topic: (!room_topic.is_empty()).then_some(room_topic.to_owned()),
+            is_public: self.create_public_room,
+            is_encrypted: self.create_encrypted_room,
             parent_space_id,
             context: self.context.clone(),
         });
@@ -881,56 +1152,48 @@ impl CreateRoomForm {
         self.context = context;
         self.creating_room = false;
         self.pending_created_room = None;
-        self.preferred_parent_space_id = preferred_parent_space_id;
         self.fixed_parent_space_id = (self.context == CreateRoomContext::SpaceLobbyModal)
-            .then_some(self.preferred_parent_space_id.clone())
+            .then_some(preferred_parent_space_id)
             .flatten();
+        self.visibility_popup_visible = false;
+        self.create_public_room = false;
+        self.create_encrypted_room = true;
 
         let create_room_name_input = self.view.text_input(cx, ids!(create_room_name_input));
+        let create_room_topic_input = self.view.text_input(cx, ids!(create_room_topic_input));
         let create_room_button = self.view.button(cx, ids!(create_room_button));
-        let create_room_space_dropdown = self.view.drop_down(cx, ids!(create_room_space_dropdown));
-        let create_room_space_hint = self.view.label(cx, ids!(create_room_space_hint));
+        let create_room_encrypted_toggle = self.view.check_box(cx, ids!(create_room_encrypted_toggle));
 
         if clear_room_name {
             create_room_name_input.set_text(cx, "");
+            create_room_topic_input.set_text(cx, "");
         }
         self.clear_feedback(cx);
         create_room_button.set_enabled(cx, !create_room_name_input.text().trim().is_empty());
         create_room_button.set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
         create_room_button.reset_hover(cx);
-
-        sync_space_dropdown(
-            cx,
-            &create_room_space_dropdown,
-            &create_room_space_hint,
-            &self.creatable_spaces,
-            self.preferred_parent_space_id.as_ref(),
-            self.app_language,
-        );
+        create_room_encrypted_toggle.set_active(cx, self.create_encrypted_room);
+        self.set_create_room_public(cx, self.create_public_room);
+        self.set_visibility_popup_visible(cx, false);
         self.sync_mode_views(cx);
 
-        if self.fixed_parent_space_id.is_none() {
-            submit_async_request(MatrixRequest::GetCreatableSpaces);
-        }
         create_room_name_input.set_key_focus(cx);
         self.view.redraw(cx);
     }
 
-    pub fn refresh_creatable_spaces(&mut self, _cx: &mut Cx) {
-        submit_async_request(MatrixRequest::GetCreatableSpaces);
-    }
-
-    fn selected_parent_space_id(&self, dropdown_index: usize) -> Option<OwnedRoomId> {
+    fn selected_parent_space_id(&self) -> Option<OwnedRoomId> {
         self.fixed_parent_space_id.clone()
-            .or_else(|| selected_creatable_space(&self.creatable_spaces, dropdown_index))
     }
 
     fn sync_mode_views(&mut self, cx: &mut Cx) {
-        let show_fixed_parent = self.fixed_parent_space_id.is_some();
-        self.view.view(cx, ids!(create_room_space_row)).set_visible(cx, !show_fixed_parent);
-        self.view.view(cx, ids!(create_room_button_row)).set_visible(cx, !show_fixed_parent);
+        self.view.view(cx, ids!(create_room_button_row))
+            .set_visible(cx, self.context == CreateRoomContext::AddRoomPage);
+        self.view.view(cx, ids!(create_room_visibility_popup))
+            .set_visible(cx, self.visibility_popup_visible);
+        self.view.label(cx, ids!(create_room_help))
+            .set_visible(cx, self.context == CreateRoomContext::AddRoomPage);
 
-        let help_text = if show_fixed_parent {
+        let help_text = if self.fixed_parent_space_id.is_some() {
             tr_key(self.app_language, "add_room.create_room.help.fixed_parent")
         } else {
             tr_key(self.app_language, "add_room.create_room.help.default")
@@ -967,17 +1230,13 @@ impl CreateRoomFormRef {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.prepare(cx, preferred_parent_space_id, context, clear_room_name);
     }
-
-    pub fn refresh_creatable_spaces(&self, cx: &mut Cx) {
-        let Some(mut inner) = self.borrow_mut() else { return };
-        inner.refresh_creatable_spaces(cx);
-    }
 }
 
 #[derive(Script, ScriptHook, Widget)]
 pub struct CreateRoomModal {
     #[deref] view: View,
     #[rust] app_language: AppLanguage,
+    #[rust(false)] has_fixed_parent: bool,
 }
 
 impl Widget for CreateRoomModal {
@@ -1010,6 +1269,7 @@ impl Widget for CreateRoomModal {
             tr_key(self.app_language, "add_room.create_room.button.create")
         });
         self.view.button(cx, ids!(cancel_button)).set_enabled(cx, !is_busy);
+        self.view.button(cx, ids!(close_button)).set_enabled(cx, !is_busy);
         self.view.draw_walk(cx, scope, walk)
     }
 }
@@ -1019,14 +1279,16 @@ impl WidgetMatchEvent for CreateRoomModal {
         let create_room_form = self.view.create_room_form(cx, ids!(create_room_form));
         let create_button = self.view.button(cx, ids!(create_button));
         let cancel_button = self.view.button(cx, ids!(cancel_button));
+        let close_button = self.view.button(cx, ids!(close_button));
         if create_button.clicked(actions) {
             let _ = create_room_form.submit(cx);
         }
         let cancel_clicked = cancel_button.clicked(actions);
+        let close_clicked = close_button.clicked(actions);
         if !create_room_form.is_busy()
-            && (cancel_clicked || actions.iter().any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed))))
+            && (cancel_clicked || close_clicked || actions.iter().any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed))))
         {
-            if cancel_clicked {
+            if cancel_clicked || close_clicked {
                 cx.action(CreateRoomModalAction::Close);
             }
         }
@@ -1039,7 +1301,11 @@ impl CreateRoomModal {
         self.view.label(cx, ids!(title))
             .set_text(cx, tr_key(self.app_language, "add_room.create_room.modal.title"));
         self.view.label(cx, ids!(subtitle))
-            .set_text(cx, tr_key(self.app_language, "add_room.create_room.modal.subtitle"));
+            .set_text(cx, if self.has_fixed_parent {
+                tr_key(self.app_language, "add_room.create_room.modal.subtitle")
+            } else {
+                tr_key(self.app_language, "add_room.create_room.help.default")
+            });
         self.view.button(cx, ids!(create_button))
             .set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
         self.view.button(cx, ids!(cancel_button))
@@ -1050,6 +1316,7 @@ impl CreateRoomModal {
     }
 
     pub fn show(&mut self, cx: &mut Cx, preferred_parent_space_id: Option<OwnedRoomId>) {
+        self.has_fixed_parent = preferred_parent_space_id.is_some();
         self.view.create_room_form(cx, ids!(create_room_form))
             .set_app_language(cx, self.app_language);
         self.view.create_room_form(cx, ids!(create_room_form)).prepare(
@@ -1058,10 +1325,17 @@ impl CreateRoomModal {
             CreateRoomContext::SpaceLobbyModal,
             true,
         );
+        self.view.label(cx, ids!(subtitle))
+            .set_text(cx, if self.has_fixed_parent {
+                tr_key(self.app_language, "add_room.create_room.modal.subtitle")
+            } else {
+                tr_key(self.app_language, "add_room.create_room.help.default")
+            });
         self.view.button(cx, ids!(create_button))
             .set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
         self.view.button(cx, ids!(create_button)).reset_hover(cx);
         self.view.button(cx, ids!(cancel_button)).reset_hover(cx);
+        self.view.button(cx, ids!(close_button)).reset_hover(cx);
         self.view.redraw(cx);
     }
 }
@@ -1073,33 +1347,178 @@ impl CreateRoomModalRef {
     }
 }
 
+#[derive(Script, ScriptHook, Widget)]
+pub struct StartChatModal {
+    #[deref] view: View,
+    #[rust(false)] submitting: bool,
+    #[rust] app_language: AppLanguage,
+}
+
+impl Widget for StartChatModal {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+        self.view.handle_event(cx, event, scope);
+        self.widget_match_event(cx, event, scope);
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+        let user_id_text_is_empty = self.view
+            .text_input(cx, ids!(chat_user_id_input))
+            .text()
+            .trim()
+            .is_empty();
+        self.view.button(cx, ids!(go_button))
+            .set_enabled(cx, !self.submitting && !user_id_text_is_empty);
+        self.view.button(cx, ids!(cancel_button))
+            .set_enabled(cx, !self.submitting);
+        self.view.button(cx, ids!(close_button))
+            .set_enabled(cx, !self.submitting);
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl WidgetMatchEvent for StartChatModal {
+    fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        let chat_user_id_input = self.view.text_input(cx, ids!(chat_user_id_input));
+        let go_button = self.view.button(cx, ids!(go_button));
+        let cancel_button = self.view.button(cx, ids!(cancel_button));
+        let close_button = self.view.button(cx, ids!(close_button));
+
+        let submit_chat_request = go_button.clicked(actions)
+            || chat_user_id_input.returned(actions).is_some();
+        if submit_chat_request {
+            self.submit(cx);
+        }
+
+        let cancel_clicked = cancel_button.clicked(actions);
+        let close_clicked = close_button.clicked(actions);
+        if cancel_clicked || close_clicked {
+            cx.action(StartChatModalAction::Close);
+        }
+
+        for action in actions {
+            if matches!(action.downcast_ref(), Some(DirectMessageRoomAction::FoundExisting { .. } | DirectMessageRoomAction::NewlyCreated { .. })) {
+                self.submitting = false;
+                cx.action(StartChatModalAction::Close);
+            } else if matches!(action.downcast_ref(), Some(DirectMessageRoomAction::FailedToCreate { .. } | DirectMessageRoomAction::DidNotExist { .. })) {
+                self.submitting = false;
+                self.view.redraw(cx);
+            }
+        }
+    }
+}
+
+impl StartChatModal {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.view.label(cx, ids!(title))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.title"));
+        self.view.label(cx, ids!(subtitle))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.subtitle"));
+        self.view.text_input(cx, ids!(chat_user_id_input))
+            .set_empty_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.input.placeholder").to_string());
+        self.view.label(cx, ids!(chat_hint))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.hint"));
+        self.view.button(cx, ids!(go_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.modal.button.go"));
+        self.view.button(cx, ids!(cancel_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.button.cancel"));
+        self.view.redraw(cx);
+    }
+
+    fn submit(&mut self, cx: &mut Cx) {
+        let user_id_str = self.view.text_input(cx, ids!(chat_user_id_input)).text();
+        let user_id_str = user_id_str.trim();
+        if user_id_str.is_empty() {
+            return;
+        }
+
+        match user_id_str.parse::<OwnedUserId>() {
+            Ok(user_id) => {
+                if current_user_id().as_ref().is_some_and(|current| current == &user_id) {
+                    enqueue_popup_notification(
+                        tr_key(self.app_language, "add_room.popup.cannot_add_self").to_string(),
+                        PopupKind::Warning,
+                        Some(4.0),
+                    );
+                    return;
+                }
+
+                self.submitting = true;
+                submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
+                    create_encrypted: false,
+                    user_profile: UserProfile {
+                        user_id,
+                        username: None,
+                        avatar_state: AvatarState::Unknown,
+                    },
+                    allow_create: true,
+                });
+                self.view.redraw(cx);
+            }
+            Err(e) => {
+                let error_text = e.to_string();
+                enqueue_popup_notification(
+                    tr_fmt(self.app_language, "add_room.popup.invalid_user_id", &[
+                        ("error", error_text.as_str()),
+                    ]),
+                    PopupKind::Error,
+                    None,
+                );
+                self.view.text_input(cx, ids!(chat_user_id_input)).set_key_focus(cx);
+            }
+        }
+    }
+
+    pub fn show(&mut self, cx: &mut Cx) {
+        self.submitting = false;
+        self.view.text_input(cx, ids!(chat_user_id_input)).set_text(cx, "");
+        self.set_app_language(cx, self.app_language);
+        self.view.button(cx, ids!(go_button)).reset_hover(cx);
+        self.view.button(cx, ids!(cancel_button)).reset_hover(cx);
+        self.view.button(cx, ids!(close_button)).reset_hover(cx);
+        self.view.text_input(cx, ids!(chat_user_id_input)).set_key_focus(cx);
+        self.view.redraw(cx);
+    }
+}
+
+impl StartChatModalRef {
+    pub fn show(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show(cx);
+    }
+}
+
 impl AddRoomScreen {
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.view.label(cx, ids!(title))
             .set_text(cx, tr_key(self.app_language, "add_room.title"));
-        self.view.label(cx, ids!(create_new_room_label))
-            .set_text(cx, tr_key(self.app_language, "add_room.section.create_new_room"));
-        self.view.label(cx, ids!(add_friend_label))
-            .set_text(cx, tr_key(self.app_language, "add_room.section.add_friend"));
+        self.view.button(cx, ids!(new_room_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.create_room.button.new_room"));
+        self.view.button(cx, ids!(start_chat_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.start_chat.button"));
         self.view.label(cx, ids!(join_existing_label))
             .set_text(cx, tr_key(self.app_language, "add_room.section.join_existing"));
-        self.view.label(cx, ids!(add_friend_help))
-            .set_text(cx, tr_key(self.app_language, "add_room.add_friend.help"));
         self.view.html(cx, ids!(help_info))
             .set_text(cx, tr_key(self.app_language, "add_room.join.help_html"));
-        self.view.text_input(cx, ids!(friend_user_id_input))
-            .set_empty_text(cx, tr_key(self.app_language, "add_room.add_friend.input.placeholder").to_string());
         self.view.text_input(cx, ids!(room_alias_id_input))
             .set_empty_text(cx, tr_key(self.app_language, "add_room.join.input.placeholder").to_string());
-        self.view.button(cx, ids!(add_friend_button))
-            .set_text(cx, tr_key(self.app_language, "add_room.add_friend.button"));
         self.view.button(cx, ids!(search_for_room_button))
             .set_text(cx, tr_key(self.app_language, "add_room.join.button.go"));
         self.view.button(cx, ids!(fetched_room_summary.buttons_view.cancel_button))
             .set_text(cx, tr_key(self.app_language, "add_room.button.cancel"));
-        self.view.create_room_form(cx, ids!(create_room_form))
-            .set_app_language(cx, app_language);
         self.view.redraw(cx);
     }
 }
@@ -1117,70 +1536,23 @@ impl Widget for AddRoomScreen {
         if let Event::Actions(actions) = event {
             let room_alias_id_input = self.view.text_input(cx, ids!(room_alias_id_input));
             let search_for_room_button = self.view.button(cx, ids!(search_for_room_button));
-            let friend_user_id_input = self.view.text_input(cx, ids!(friend_user_id_input));
-            let add_friend_button = self.view.button(cx, ids!(add_friend_button));
+            let new_room_button = self.view.button(cx, ids!(new_room_button));
+            let start_chat_button = self.view.button(cx, ids!(start_chat_button));
             let cancel_button = self.view.button(cx, ids!(fetched_room_summary.buttons_view.cancel_button));
             let join_room_button = self.view.button(cx, ids!(fetched_room_summary.buttons_view.join_room_button));
+
+            if new_room_button.clicked(actions) {
+                cx.action(CreateRoomModalAction::Open {
+                    parent_space_id: None,
+                });
+            }
+            if start_chat_button.clicked(actions) {
+                cx.action(StartChatModalAction::Open);
+            }
 
             // Enable or disable the button based on if the text input is empty.
             if let Some(text) = room_alias_id_input.changed(actions) {
                 search_for_room_button.set_enabled(cx, !text.trim().is_empty());
-            }
-            if let Some(text) = friend_user_id_input.changed(actions) {
-                add_friend_button.set_enabled(cx, !self.adding_friend && !text.trim().is_empty());
-            }
-
-            let add_friend_request = add_friend_button.clicked(actions)
-                .then(|| friend_user_id_input.text())
-                .or_else(|| friend_user_id_input.returned(actions).map(|(t, _)| t));
-            if let Some(user_id_str) = add_friend_request {
-                let user_id_str = user_id_str.trim();
-                if !user_id_str.is_empty() {
-                    match user_id_str.parse::<OwnedUserId>() {
-                        Ok(user_id) => {
-                            if current_user_id().as_ref().is_some_and(|current| current == &user_id) {
-                                enqueue_popup_notification(
-                                    tr_key(self.app_language, "add_room.popup.cannot_add_self").to_string(),
-                                    PopupKind::Warning,
-                                    Some(4.0),
-                                );
-                            } else {
-                                let create_encrypted = scope
-                                    .data
-                                    .get::<AppState>()
-                                    .map(|app_state| {
-                                        app_state.bot_settings.should_create_encrypted_dm(
-                                            user_id.as_ref(),
-                                            current_user_id().as_deref(),
-                                        )
-                                    })
-                                    .unwrap_or(true);
-                                self.adding_friend = true;
-                                add_friend_button.set_enabled(cx, false);
-                                submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
-                                    create_encrypted,
-                                    user_profile: UserProfile {
-                                        user_id,
-                                        username: None,
-                                        avatar_state: AvatarState::Unknown,
-                                    },
-                                    allow_create: false,
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            let error_text = e.to_string();
-                            enqueue_popup_notification(
-                                tr_fmt(self.app_language, "add_room.popup.invalid_user_id", &[
-                                    ("error", error_text.as_str()),
-                                ]),
-                                PopupKind::Error,
-                                None,
-                            );
-                            friend_user_id_input.set_key_focus(cx);
-                        }
-                    }
-                }
             }
 
             // If the cancel button was clicked, hide the room preview and return to default state.
@@ -1370,24 +1742,6 @@ impl Widget for AddRoomScreen {
             }
 
             for action in actions {
-                if matches!(
-                    action.downcast_ref(),
-                    Some(
-                        DirectMessageRoomAction::FoundExisting { .. }
-                        | DirectMessageRoomAction::DidNotExist { .. }
-                        | DirectMessageRoomAction::NewlyCreated { .. }
-                        | DirectMessageRoomAction::FailedToCreate { .. }
-                    )
-                ) {
-                    self.adding_friend = false;
-                    add_friend_button.set_enabled(cx, !friend_user_id_input.text().trim().is_empty());
-                }
-
-                if let Some(NavigationBarAction::TabSelected(SelectedTab::AddRoom)) = action.downcast_ref() {
-                    self.view.create_room_form(cx, ids!(create_room_form))
-                        .prepare(cx, None, CreateRoomContext::AddRoomPage, false);
-                }
-
                 // If the room/space the user is searching for has been loaded from the homeserver
                 // (e.g., by getting invited to it, or joining it in another client),
                 // then update the state of 
@@ -1409,14 +1763,6 @@ impl Widget for AddRoomScreen {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
-
-        let add_friend_text_is_empty = self.view
-            .text_input(cx, ids!(friend_user_id_input))
-            .text()
-            .trim()
-            .is_empty();
-        self.view.button(cx, ids!(add_friend_button))
-            .set_enabled(cx, !self.adding_friend && !add_friend_text_is_empty);
 
         let loading_room_view = self.view.view(cx, ids!(loading_room_view));
         let fetched_room_summary = self.view.view(cx, ids!(fetched_room_summary));
@@ -1716,72 +2062,6 @@ fn refresh_space_children(cx: &mut Cx, space_id: &OwnedRoomId) {
     }
 }
 
-fn creatable_space_labels(creatable_spaces: &[RoomNameId], app_language: AppLanguage) -> Vec<String> {
-    let mut labels = Vec::with_capacity(creatable_spaces.len() + 1);
-    labels.push(tr_key(app_language, "add_room.create_room.dropdown.no_space").to_string());
-    labels.extend(creatable_spaces.iter().map(ToString::to_string));
-    labels
-}
-
-fn selected_creatable_space(creatable_spaces: &[RoomNameId], dropdown_index: usize) -> Option<OwnedRoomId> {
-    dropdown_index.checked_sub(1)
-        .and_then(|index| creatable_spaces.get(index))
-        .map(|space| space.room_id().clone())
-}
-
-fn apply_space_dropdown_selection(
-    cx: &mut Cx,
-    dropdown: &DropDownRef,
-    creatable_spaces: &[RoomNameId],
-    preferred_parent_space_id: Option<&OwnedRoomId>,
-) {
-    let selected_index = preferred_parent_space_id
-        .and_then(|space_id|
-            creatable_spaces.iter().position(|space| space.room_id() == space_id)
-        )
-        .map(|index| index + 1)
-        .unwrap_or_else(|| dropdown.selected_item().min(creatable_spaces.len()));
-    dropdown.set_selected_item(cx, selected_index);
-}
-
-fn update_space_hint(
-    cx: &mut Cx,
-    hint_label: &LabelRef,
-    creatable_spaces: &[RoomNameId],
-    selected_space_id: Option<&OwnedRoomId>,
-    app_language: AppLanguage,
-) {
-    if creatable_spaces.is_empty() {
-        hint_label.set_text(cx, tr_key(app_language, "add_room.create_room.dropdown.hint.no_creatable_spaces"));
-    } else if let Some(space_id) = selected_space_id {
-        let selected_name = creatable_spaces
-            .iter()
-            .find(|space| space.room_id() == space_id)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| space_id.to_string());
-        hint_label.set_text(cx, &tr_fmt(app_language, "add_room.create_room.dropdown.hint.new_room_under", &[
-            ("selected_name", selected_name.as_str()),
-        ]));
-    } else {
-        hint_label.set_text(cx, tr_key(app_language, "add_room.create_room.dropdown.hint.default"));
-    }
-}
-
-fn sync_space_dropdown(
-    cx: &mut Cx,
-    dropdown: &DropDownRef,
-    hint_label: &LabelRef,
-    creatable_spaces: &[RoomNameId],
-    preferred_parent_space_id: Option<&OwnedRoomId>,
-    app_language: AppLanguage,
-) {
-    dropdown.set_labels(cx, creatable_space_labels(creatable_spaces, app_language));
-    apply_space_dropdown_selection(cx, dropdown, creatable_spaces, preferred_parent_space_id);
-    let selected_space_id = selected_creatable_space(creatable_spaces, dropdown.selected_item());
-    update_space_hint(cx, hint_label, creatable_spaces, selected_space_id.as_ref(), app_language);
-}
-
-
 /// The function to perform when the user clicks the join button in the fetched room preview.
 enum JoinButtonFunction {
     None,
@@ -1835,6 +2115,13 @@ pub enum CreateRoomModalAction {
     Open {
         parent_space_id: Option<OwnedRoomId>,
     },
+    Close,
+}
+
+/// Actions emitted by other widgets to show or hide the start-chat modal.
+#[derive(Debug)]
+pub enum StartChatModalAction {
+    Open,
     Close,
 }
 

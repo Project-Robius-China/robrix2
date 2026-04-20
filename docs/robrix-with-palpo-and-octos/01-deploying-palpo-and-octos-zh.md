@@ -272,6 +272,7 @@ client = "http://127.0.0.1:8128"
     "provider": "deepseek",
     "model": "deepseek-chat",
     "api_key_env": "DEEPSEEK_API_KEY",
+    "admin_mode": true,
     "channels": [
       {
         "type": "matrix",
@@ -305,6 +306,7 @@ client = "http://127.0.0.1:8128"
 | `provider` | LLM 提供商名称。Octos 支持 `deepseek`、`openai`、`anthropic` 等[多种提供商](https://octos-org.github.io/octos/)。 |
 | `model` | 模型标识符（如 `deepseek-chat`、`gpt-4o`、`claude-sonnet-4-20250514`）。 |
 | `api_key_env` | 存放 API Key 的环境变量名称。 |
+| `admin_mode` | 启用 BotFather 管理命令（`/createbot`、`/deletebot`、`/listbots`）。从 Robrix 或聊天中创建和管理子机器人时必须开启。 |
 
 **Matrix 通道设置：**
 

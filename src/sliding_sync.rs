@@ -12,7 +12,7 @@ use matrix_sdk::{
     config::RequestConfig, encryption::EncryptionSettings, event_handler::EventHandlerDropGuard, media::MediaRequestParameters, room::{edit::EditedContent, reply::Reply, IncludeRelations, ListThreadsOptions, RelationsOptions, RoomMember}, ruma::{
         api::{Direction, client::{
             account::register::v3::Request as RegistrationRequest,
-            room::create_room::v3::{Request as CreateRoomRequest, RoomPreset},
+            room::{Visibility, create_room::v3::{Request as CreateRoomRequest, RoomPreset}},
             directory::get_public_rooms_filtered,
             error::ErrorKind,
             profile::{AvatarUrl, DisplayName, set_avatar_url},
@@ -824,6 +824,9 @@ pub enum MatrixRequest {
     /// Request to create a new room, optionally underneath a selected parent space.
     CreateRoom {
         room_name: String,
+        topic: Option<String>,
+        is_public: bool,
+        is_encrypted: bool,
         parent_space_id: Option<OwnedRoomId>,
         context: CreateRoomContext,
     },
@@ -1822,14 +1825,19 @@ async fn matrix_worker_task(
                 let _join_room_task = Handle::current().spawn(async move {
                     log!("Sending request to join room {room_id}...");
                     let result_action = if let Some(room) = client.get_room(&room_id) {
-                        match room.join().await {
-                            Ok(()) => {
-                                log!("Successfully joined known room {room_id}.");
-                                JoinRoomResultAction::Joined { room_id }
-                            }
-                            Err(e) => {
-                                error!("Error joining known room {room_id}: {e:?}");
-                                JoinRoomResultAction::Failed { room_id, error: e }
+                        if room.state() == RoomState::Joined {
+                            log!("Room {room_id} is already joined, skipping join request.");
+                            JoinRoomResultAction::Joined { room_id }
+                        } else {
+                            match room.join().await {
+                                Ok(()) => {
+                                    log!("Successfully joined known room {room_id}.");
+                                    JoinRoomResultAction::Joined { room_id }
+                                }
+                                Err(e) => {
+                                    error!("Error joining known room {room_id}: {e:?}");
+                                    JoinRoomResultAction::Failed { room_id, error: e }
+                                }
                             }
                         }
                     }
@@ -2120,17 +2128,29 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::CreateRoom { room_name, parent_space_id, context } => {
+            MatrixRequest::CreateRoom { room_name, topic, is_public, is_encrypted, parent_space_id, context } => {
                 let Some(client) = get_client() else { continue };
                 let _create_room_task = Handle::current().spawn(async move {
                     let mut request = CreateRoomRequest::new();
                     request.name = Some(room_name.clone());
-                    request.preset = Some(RoomPreset::PrivateChat);
-                    request.initial_state.push(
-                        InitialStateEvent::with_empty_state_key(
-                            RoomEncryptionEventContent::with_recommended_defaults(),
-                        ).to_raw_any()
-                    );
+                    request.topic = topic;
+                    request.visibility = if is_public {
+                        Visibility::Public
+                    } else {
+                        Visibility::Private
+                    };
+                    request.preset = Some(if is_public {
+                        RoomPreset::PublicChat
+                    } else {
+                        RoomPreset::PrivateChat
+                    });
+                    if is_encrypted {
+                        request.initial_state.push(
+                            InitialStateEvent::with_empty_state_key(
+                                RoomEncryptionEventContent::with_recommended_defaults(),
+                            ).to_raw_any()
+                        );
+                    }
 
                     log!("Creating new room \"{room_name}\"...");
                     match client.create_room(request).await {
@@ -3864,6 +3884,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             }
         }
     } else {
+        Cx::post_action(LoginAction::ShowLoginScreen);
         None
     };
     let cli: Cli = cli_parse_result.unwrap_or(Cli::default());
@@ -3957,10 +3978,12 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             // Listen for updates to the ignored user list.
             handle_ignore_user_list_subscriber(client.clone());
 
-            Cx::post_action(LoginAction::Status {
-                title: "Connecting".into(),
-                status: "Setting up sync service...".into(),
-            });
+            if !validate_session {
+                Cx::post_action(LoginAction::Status {
+                    title: "Connecting".into(),
+                    status: "Setting up sync service...".into(),
+                });
+            }
             let sync_service = match SyncService::builder(client.clone())
                 .with_offline_mode()
                 .build()

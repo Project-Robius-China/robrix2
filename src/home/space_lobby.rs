@@ -25,7 +25,7 @@ use crate::{
     app::{AppState, AppStateAction},
     avatar_cache::{self, AvatarCacheEntry},
     home::{
-        add_room::{CreateRoomAction, CreateRoomModalAction},
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomModalAction},
         invite_modal::InviteModalAction,
         rooms_list::RoomsListRef,
     },
@@ -36,6 +36,7 @@ use crate::{
         avatar::{AvatarWidgetExt, AvatarWidgetRefExt},
         room_filter_input_bar::RoomFilterInputBarWidgetExt,
     },
+    sliding_sync::{MatrixRequest, submit_async_request},
     space_service_sync::{SpaceRequest, SpaceRoomExt, SpaceRoomListAction},
     utils::{self, RoomNameId},
 };
@@ -1006,6 +1007,7 @@ pub struct SpaceLobbyScreen {
 
     /// The current filter keywords entered by the user, if any.
     #[rust] filter_keywords: String,
+    #[rust] creatable_spaces: HashSet<OwnedRoomId>,
 }
 
 impl Widget for SpaceLobbyScreen {
@@ -1029,37 +1031,45 @@ impl Widget for SpaceLobbyScreen {
 
         if let Event::Actions(actions) = event {
             for action in actions {
+                if let Some(CreatableSpacesAction::Loaded { spaces }) = action.downcast_ref() {
+                    self.creatable_spaces = spaces.iter()
+                        .map(|space| space.room_id().clone())
+                        .collect();
+                    self.sync_header_action_buttons(cx);
+                    self.redraw(cx);
+                }
+
                 match action.downcast_ref() {
                     Some(SpaceRoomListAction::DetailedChildren { space_id, children, .. }) => {
                         self.update_children_in_space(cx, space_id, children);
                     }
 
                     // Handle receiving top-level space details (join rule, member count).
-                    Some(SpaceRoomListAction::TopLevelSpaceDetails(sr)) => {
-                        if self.space_name_id.as_ref().is_some_and(|sni| sni.room_id() == &sr.room_id) {
-                            self.space_avatar_state = AvatarState::Known(sr.avatar_url.clone());
-                            self.space_avatar_state.update_from_cache(cx); // prefetch the avatar image
-                            self.top_level_join_rule = sr.join_rule.clone();
-                            self.top_level_member_count = Some(sr.num_joined_members);
-                            self.update_space_info_label(cx, app_language);
-                            self.redraw(cx);
-                        }
+                    Some(SpaceRoomListAction::TopLevelSpaceDetails(sr))
+                        if self.space_name_id.as_ref().is_some_and(|sni| sni.room_id() == &sr.room_id) => {
+                        self.space_avatar_state = AvatarState::Known(sr.avatar_url.clone());
+                        self.space_avatar_state.update_from_cache(cx); // prefetch the avatar image
+                        self.top_level_join_rule = sr.join_rule.clone();
+                        self.top_level_member_count = Some(sr.num_joined_members);
+                        self.update_space_info_label(cx, app_language);
+                        self.redraw(cx);
                     }
+                    Some(SpaceRoomListAction::TopLevelSpaceDetails(..)) => {}
 
                     // Handle a change to the set of children in this space or any of its child subspaces.
-                    Some(SpaceRoomListAction::UpdatedChildren { space_id, parent_chain, .. }) => {
+                    Some(SpaceRoomListAction::UpdatedChildren { space_id, parent_chain, .. })
                         if self.space_name_id.as_ref().is_some_and(|sni|
                             sni.room_id() == space_id
                             || parent_chain.iter().any(|ancestor_id| sni.room_id() == ancestor_id)
-                        ) {
-                            if let Some(sender) = &self.space_request_sender {
-                                let _ = sender.send(SpaceRequest::GetDetailedChildren {
-                                    space_id: space_id.clone(),
-                                    parent_chain: parent_chain.clone(),
-                                });
-                            }
+                        ) => {
+                        if let Some(sender) = &self.space_request_sender {
+                            let _ = sender.send(SpaceRequest::GetDetailedChildren {
+                                space_id: space_id.clone(),
+                                parent_chain: parent_chain.clone(),
+                            });
                         }
                     }
+                    Some(SpaceRoomListAction::UpdatedChildren { .. }) => {}
                     _ => { }
                 }
 
@@ -1120,7 +1130,9 @@ impl Widget for SpaceLobbyScreen {
             }
 
             if self.view.button(cx, ids!(header.parent_space_row.create_room_button)).clicked(actions) {
-                if let Some(space_name_id) = self.space_name_id.as_ref() {
+                if self.can_create_room_in_current_space()
+                    && let Some(space_name_id) = self.space_name_id.as_ref()
+                {
                     cx.action(CreateRoomModalAction::Open {
                         parent_space_id: Some(space_name_id.room_id().clone()),
                     });
@@ -1167,6 +1179,7 @@ impl Widget for SpaceLobbyScreen {
         }
 
         self.update_space_info_label(cx, app_language);
+        self.sync_header_action_buttons(cx);
         self.view.button(cx, ids!(header.parent_space_row.create_room_button))
             .set_text(cx, tr_key(app_language, "space_lobby.header.button.new_room"));
         self.view.button(cx, ids!(header.parent_space_row.invite_button))
@@ -1449,6 +1462,16 @@ impl SpaceLobbyScreen {
             String::new()
         };
         self.view.label(cx, ids!(header.space_info_row.space_info_label)).set_text(cx, &text);
+    }
+
+    fn can_create_room_in_current_space(&self) -> bool {
+        self.space_name_id.as_ref()
+            .is_some_and(|space_name_id| self.creatable_spaces.contains(space_name_id.room_id()))
+    }
+
+    fn sync_header_action_buttons(&mut self, cx: &mut Cx) {
+        self.view.button(cx, ids!(header.parent_space_row.create_room_button))
+            .set_visible(cx, self.can_create_room_in_current_space());
     }
 
     fn insert_created_room_placeholder(&mut self, cx: &mut Cx, room_name_id: &RoomNameId) {
@@ -1846,6 +1869,7 @@ impl SpaceLobbyScreen {
         self.save_current_state();
 
         self.space_name_id = Some(space_name_id.clone());
+        self.sync_header_action_buttons(cx);
         let rooms_list_ref = cx.get_global::<RoomsListRef>();
         if let Some(sender) = rooms_list_ref.get_space_request_sender() {
             // Request detailed children for this space so we can start populating it.
@@ -1859,6 +1883,7 @@ impl SpaceLobbyScreen {
             });
             self.space_request_sender = Some(sender);
         }
+        submit_async_request(MatrixRequest::GetCreatableSpaces);
 
         // Clear the main content until we receive the async space info responses.
         self.tree_entries.clear();

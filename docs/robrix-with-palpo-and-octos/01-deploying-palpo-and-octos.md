@@ -272,6 +272,7 @@ This file defines the bot's identity, LLM provider, and Matrix channel configura
     "provider": "deepseek",
     "model": "deepseek-chat",
     "api_key_env": "DEEPSEEK_API_KEY",
+    "admin_mode": true,
     "channels": [
       {
         "type": "matrix",
@@ -305,6 +306,7 @@ This file defines the bot's identity, LLM provider, and Matrix channel configura
 | `provider` | LLM provider name. Octos supports `deepseek`, `openai`, `anthropic`, and [more](https://octos-org.github.io/octos/). |
 | `model` | Model identifier (e.g., `deepseek-chat`, `gpt-4o`, `claude-sonnet-4-20250514`). |
 | `api_key_env` | Name of the environment variable holding your API key. |
+| `admin_mode` | Enables BotFather management commands (`/createbot`, `/deletebot`, `/listbots`). Required for creating and managing child bots from Robrix or chat. |
 
 **Matrix channel settings:**
 
