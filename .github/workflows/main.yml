@@ -52,6 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          rustflags: ""
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:

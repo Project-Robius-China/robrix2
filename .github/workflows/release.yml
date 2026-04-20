@@ -110,6 +110,7 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          rustflags: ""
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -327,6 +328,8 @@ jobs:
 
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Package (desktop)
         uses: project-robius/makepad-packaging-action@v1
@@ -357,6 +360,8 @@ jobs:
 
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Package (macos)
         uses: project-robius/makepad-packaging-action@v1
@@ -393,6 +398,8 @@ jobs:
 
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Package (windows)
         uses: project-robius/makepad-packaging-action@v1
@@ -420,6 +427,8 @@ jobs:
 
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Package (android)
         uses: project-robius/makepad-packaging-action@v1
@@ -447,6 +456,8 @@ jobs:
 
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Package (iOS)
         uses: project-robius/makepad-packaging-action@v1
