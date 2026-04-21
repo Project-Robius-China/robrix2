@@ -6647,7 +6647,7 @@ async fn discover_homeserver_capabilities(
 
     // Step 1: .well-known (lenient — default base_url = raw_url on failure).
     let wk_url = format!("{raw_url}/.well-known/matrix/client");
-    let (base_url, is_mas) = match http.get(&wk_url).send().await {
+    let (base_url, is_mas, mas_account_url) = match http.get(&wk_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = body_json(resp).await;
             let base = body
@@ -6657,19 +6657,25 @@ async fn discover_homeserver_capabilities(
                 .unwrap_or(raw_url)
                 .trim_end_matches('/')
                 .to_string();
-            // Accept both the stable key (post-MSC2965 merge, e.g. alvin.meldry.com)
-            // and the unstable key still used by matrix.org and some deployments.
-            let mas = ["m.authentication", "org.matrix.msc2965.authentication"]
+            // Detect MAS and capture the signup URL in one pass. Prefer stable key.
+            // Fallback to `<issuer>/account/` when `account` field is absent
+            // (alvin.meldry.com currently omits it).
+            let (mas, mas_account_url) = ["m.authentication", "org.matrix.msc2965.authentication"]
                 .iter()
-                .any(|key: &&str| {
-                    body.get(*key)
-                        .and_then(|m: &Value| m.get("issuer"))
+                .find_map(|key: &&str| {
+                    let block = body.get(*key)?;
+                    let issuer = block.get("issuer").and_then(|v: &Value| v.as_str())?;
+                    let account = block
+                        .get("account")
                         .and_then(|v: &Value| v.as_str())
-                        .is_some()
-                });
-            (base, mas)
+                        .map(String::from)
+                        .unwrap_or_else(|| format!("{}/account/", issuer.trim_end_matches('/')));
+                    Some((true, Some(account)))
+                })
+                .unwrap_or((false, None));
+            (base, mas, mas_account_url)
         }
-        _ => (raw_url.trim_end_matches('/').to_string(), false),
+        _ => (raw_url.trim_end_matches('/').to_string(), false, None),
     };
 
     // Step 2: versions — liveness (fatal if unreachable).
@@ -6752,5 +6758,6 @@ async fn discover_homeserver_capabilities(
         registration_enabled,
         uiaa_probe,
         sso_providers,
+        mas_account_url,
     })
 }

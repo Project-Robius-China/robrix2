@@ -33,6 +33,12 @@ pub struct HsCapabilities {
     /// Identity providers harvested from `/_matrix/client/v3/login`.
     /// Phase 1 populates but does not render; Phase 4 renders buttons.
     pub sso_providers: Vec<IdentityProviderSummary>,
+
+    /// URL to open in the system browser for MAS registration.
+    /// Populated from `.well-known` `m.authentication.account` (or the
+    /// unstable MSC2965 variant), with fallback to `<issuer>/account/`.
+    /// None when the server is not MAS (non-MasWebOnly modes).
+    pub mas_account_url: Option<String>,
 }
 
 /// Minimal info per identity provider. Full matrix-sdk type is not
