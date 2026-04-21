@@ -964,7 +964,7 @@ impl WidgetMatchEvent for LoginScreen {
         }
 
         if mode_toggle_button.clicked(actions) {
-            self.set_signup_mode(cx, !self.signup_mode);
+            Cx::post_action(LoginAction::NavigateToRegister);
         }
 
         if login_button.clicked(actions)
@@ -1257,6 +1257,9 @@ pub enum LoginAction {
     /// Request to show the login screen in "add account" mode.
     /// This is used when the user wants to add another Matrix account.
     ShowAddAccountScreen,
+    /// User clicked "Sign up here"; the main App should hide the
+    /// login screen and show RegisterScreen.
+    NavigateToRegister,
     /// Request to cancel adding an account and return to the previous screen.
     CancelAddAccount,
     #[default]
