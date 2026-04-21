@@ -143,12 +143,49 @@ impl WidgetMatchEvent for RegisterScreen {
         for action in actions {
             match action.downcast_ref::<RegisterAction>() {
                 Some(RegisterAction::CapabilitiesDiscovered(caps)) => {
-                    let msg = match caps.mode() {
-                        RegisterMode::MasWebOnly => "This server uses browser-based registration (MAS OAuth). Phase 2 will handle this.",
-                        RegisterMode::Uiaa => "This server allows direct account creation. Phase 3 will handle the form.",
-                        RegisterMode::Disabled => "This server does not allow registration. Please choose a different homeserver or sign in with an existing account.",
-                    };
-                    self.show_status(cx, msg);
+                    match caps.mode() {
+                        RegisterMode::MasWebOnly => {
+                            match caps.mas_account_url.as_deref() {
+                                Some(url) => match robius_open::Uri::new(url).open() {
+                                    Ok(()) => {
+                                        self.show_status(
+                                            cx,
+                                            "Browser opened. Complete registration in your web browser, \
+                                             then click ← Back to Login and sign in with your new account.",
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log!("robius_open failed for MAS signup url {url}: {e:?}");
+                                        self.show_status(
+                                            cx,
+                                            &format!(
+                                                "Could not open the browser automatically. Please visit this URL manually:\n{url}"
+                                            ),
+                                        );
+                                    }
+                                },
+                                None => {
+                                    self.show_status(
+                                        cx,
+                                        "This server advertises browser-based registration but no signup URL was found.",
+                                    );
+                                }
+                            }
+                        }
+                        RegisterMode::Uiaa => {
+                            self.show_status(
+                                cx,
+                                "This server allows direct account creation. Phase 3 will handle the form.",
+                            );
+                        }
+                        RegisterMode::Disabled => {
+                            self.show_status(
+                                cx,
+                                "This server does not allow registration. Please choose a different homeserver \
+                                 or sign in with an existing account.",
+                            );
+                        }
+                    }
                     self.last_discovery = Some(caps.clone());
                 }
                 Some(RegisterAction::DiscoveryFailed(err)) => {
