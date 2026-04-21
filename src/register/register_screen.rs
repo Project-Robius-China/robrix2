@@ -145,7 +145,7 @@ impl WidgetMatchEvent for RegisterScreen {
                 Some(RegisterAction::CapabilitiesDiscovered(caps)) => {
                     match caps.mode() {
                         RegisterMode::MasWebOnly => {
-                            match caps.mas_account_url.as_deref() {
+                            match caps.mas_signup_url.as_deref() {
                                 Some(url) => match robius_open::Uri::new(url).open() {
                                     Ok(()) => {
                                         self.show_status(

@@ -6647,7 +6647,7 @@ async fn discover_homeserver_capabilities(
 
     // Step 1: .well-known (lenient — default base_url = raw_url on failure).
     let wk_url = format!("{raw_url}/.well-known/matrix/client");
-    let (base_url, is_mas, mas_account_url) = match http.get(&wk_url).send().await {
+    let (base_url, is_mas, mas_signup_url) = match http.get(&wk_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = body_json(resp).await;
             let base = body
@@ -6657,23 +6657,22 @@ async fn discover_homeserver_capabilities(
                 .unwrap_or(raw_url)
                 .trim_end_matches('/')
                 .to_string();
-            // Detect MAS and capture the signup URL in one pass. Prefer stable key.
-            // Fallback to `<issuer>/account/` when `account` field is absent
-            // (alvin.meldry.com currently omits it).
-            let (mas, mas_account_url) = ["m.authentication", "org.matrix.msc2965.authentication"]
+            // Detect MAS and derive the signup URL in one pass. Prefer stable key.
+            // MAS exposes the self-registration form at `<issuer>/register` when
+            // open registration is enabled; closed deployments return a polite
+            // "registration not available" page at the same path. The MSC2965
+            // `account` field is for post-login account management (requires a
+            // session) — opening it while unauthenticated loops between
+            // /account/ and /login, so we do NOT use it here.
+            let (mas, mas_signup_url) = ["m.authentication", "org.matrix.msc2965.authentication"]
                 .iter()
                 .find_map(|key: &&str| {
-                    let block = body.get(*key)?;
-                    let issuer = block.get("issuer").and_then(|v: &Value| v.as_str())?;
-                    let account = block
-                        .get("account")
-                        .and_then(|v: &Value| v.as_str())
-                        .map(String::from)
-                        .unwrap_or_else(|| format!("{}/account/", issuer.trim_end_matches('/')));
-                    Some((true, Some(account)))
+                    let issuer = body.get(*key)?.get("issuer").and_then(|v: &Value| v.as_str())?;
+                    let signup = format!("{}/register", issuer.trim_end_matches('/'));
+                    Some((true, Some(signup)))
                 })
                 .unwrap_or((false, None));
-            (base, mas, mas_account_url)
+            (base, mas, mas_signup_url)
         }
         _ => (raw_url.trim_end_matches('/').to_string(), false, None),
     };
@@ -6758,6 +6757,6 @@ async fn discover_homeserver_capabilities(
         registration_enabled,
         uiaa_probe,
         sso_providers,
-        mas_account_url,
+        mas_signup_url,
     })
 }
