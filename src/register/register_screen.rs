@@ -26,8 +26,8 @@ script_mod! {
         padding: Inset { top: 24, right: 32, bottom: 24, left: 32 }
         spacing: 16
         show_bg: true
-        draw_bg: {
-            color: #x1F2124
+        draw_bg +: {
+            color: (COLOR_SECONDARY)
         }
 
         back_button := RobrixIconButton {
@@ -40,9 +40,9 @@ script_mod! {
             width: Fit,
             height: Fit,
             text: "Create Account"
-            draw_text: {
-                color: #xF1F2F3
-                text_style: { font_size: 22 }
+            draw_text +: {
+                color: (COLOR_TEXT)
+                text_style: TITLE_TEXT {font_size: 16.0}
             }
         }
 
@@ -54,9 +54,9 @@ script_mod! {
 
             Label {
                 text: "Homeserver URL"
-                draw_text: {
-                    color: #xAAB2BE
-                    text_style: { font_size: 12 }
+                draw_text +: {
+                    color: (COLOR_TEXT)
+                    text_style: REGULAR_TEXT {font_size: 10.0}
                 }
             }
 
@@ -84,9 +84,9 @@ script_mod! {
                 width: Fill,
                 height: Fit,
                 text: ""
-                draw_text: {
-                    color: #xE0E3E8
-                    text_style: { font_size: 14 }
+                draw_text +: {
+                    color: (COLOR_TEXT)
+                    text_style: REGULAR_TEXT {font_size: 12.0}
                 }
             }
         }

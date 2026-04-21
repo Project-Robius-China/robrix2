@@ -6657,11 +6657,16 @@ async fn discover_homeserver_capabilities(
                 .unwrap_or(raw_url)
                 .trim_end_matches('/')
                 .to_string();
-            let mas = body
-                .get("m.authentication")
-                .and_then(|m: &Value| m.get("issuer"))
-                .and_then(|v: &Value| v.as_str())
-                .is_some();
+            // Accept both the stable key (post-MSC2965 merge, e.g. alvin.meldry.com)
+            // and the unstable key still used by matrix.org and some deployments.
+            let mas = ["m.authentication", "org.matrix.msc2965.authentication"]
+                .iter()
+                .any(|key: &&str| {
+                    body.get(*key)
+                        .and_then(|m: &Value| m.get("issuer"))
+                        .and_then(|v: &Value| v.as_str())
+                        .is_some()
+                });
             (base, mas)
         }
         _ => (raw_url.trim_end_matches('/').to_string(), false),
