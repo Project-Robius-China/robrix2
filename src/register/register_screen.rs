@@ -63,7 +63,7 @@ script_mod! {
             homeserver_input := RobrixTextInput {
                 width: Fill,
                 height: 40,
-                empty_message: "matrix.org"
+                empty_text: "matrix.org"
             }
         }
 

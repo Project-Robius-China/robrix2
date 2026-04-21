@@ -8,7 +8,7 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
-    pub RegisterStatusModal := {{RegisterStatusModal}} View {
+    mod.widgets.RegisterStatusModal = #(RegisterStatusModal::register_widget(vm)) {
         width: Fit,
         height: Fit
 
