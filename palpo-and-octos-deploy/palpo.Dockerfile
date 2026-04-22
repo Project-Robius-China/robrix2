@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY ./repos/palpo .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    cargo build --release && cp target/release/palpo /usr/local/bin/palpo
+    cargo build --release && cp target/release/palpo /usr/local/bin/palpo && cargo clean
 
 FROM debian:bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
