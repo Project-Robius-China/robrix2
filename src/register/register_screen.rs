@@ -432,6 +432,7 @@ impl RegisterScreen {
     }
 
     fn clear_form_error(&mut self, cx: &mut Cx) {
+        self.view.label(cx, ids!(form_error_label)).set_text(cx, "");
         self.view.view(cx, ids!(form_error_label)).set_visible(cx, false);
     }
 }
