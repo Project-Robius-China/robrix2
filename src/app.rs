@@ -2779,6 +2779,31 @@ mod tests {
             "octos_service_url must survive the round-trip (issue #94 regression guard)",
         );
     }
+
+    #[test]
+    fn test_app_state_roundtrip_preserves_selected_room_with_empty_dock() {
+        let mut state = AppState::default();
+        state.selected_room = Some(joined_room("!room:example.org", "octosbot"));
+        assert!(
+            state.saved_dock_state_home.open_rooms.is_empty(),
+            "precondition: this test simulates the mobile case where selected_room persists without desktop dock tabs",
+        );
+        assert!(
+            state.saved_dock_state_home.dock_items.is_empty(),
+            "precondition: this test simulates the mobile case where selected_room persists without desktop dock tabs",
+        );
+
+        let serialized =
+            serde_json::to_string(&state).expect("AppState must serialize via serde_json");
+        let deserialized: AppState =
+            serde_json::from_str(&serialized).expect("serialized AppState must deserialize back");
+
+        assert_eq!(
+            deserialized.selected_room,
+            Some(joined_room("!room:example.org", "octosbot")),
+            "selected_room must survive the round-trip even when dock state is empty",
+        );
+    }
 }
 
 /// Actions sent to the top-level App in order to update / restore its [`AppState`].
