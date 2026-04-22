@@ -1,0 +1,6 @@
+[submodule "palpo-and-octos-deploy/repos/palpo"]
+	path = palpo-and-octos-deploy/repos/palpo
+	url = https://github.com/palpo-im/palpo.git
+[submodule "palpo-and-octos-deploy/repos/octos"]
+	path = palpo-and-octos-deploy/repos/octos
+	url = https://github.com/octos-org/octos.git
