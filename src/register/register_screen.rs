@@ -241,6 +241,11 @@ script_mod! {
 pub struct RegisterScreen {
     #[deref] view: View,
     #[rust] last_discovery: Option<HsCapabilities>,
+    /// True between submit click and the terminal `RegistrationSuccess` /
+    /// `RegistrationFailed` action. Gates duplicate submits so repeat-clicking
+    /// "Create Account" can't queue multiple requests into `login_sender`
+    /// (mirrors the `sso_pending` pattern elsewhere in the app).
+    #[rust] registration_pending: bool,
 }
 
 impl Widget for RegisterScreen {
@@ -285,6 +290,9 @@ impl WidgetMatchEvent for RegisterScreen {
         }
 
         if submit.clicked(actions) {
+            if self.registration_pending {
+                return;
+            }
             use crate::register::validation::{
                 validate_localpart, validate_passwords_match, LocalpartError, PasswordError,
             };
@@ -332,6 +340,7 @@ impl WidgetMatchEvent for RegisterScreen {
 
             self.clear_form_error(cx);
             self.show_status(cx, "Creating your account...");
+            self.registration_pending = true;
             submit_async_request(MatrixRequest::RegisterViaUiaa {
                 username: localpart,
                 password,
@@ -410,10 +419,12 @@ impl WidgetMatchEvent for RegisterScreen {
                     // in the background and LoginAction::LoginSuccess will fire
                     // ~100-200ms later to complete the transition to the main UI.
                     // Show interim feedback so the delay feels intentional.
+                    self.registration_pending = false;
                     self.clear_form_error(cx);
                     self.show_status(cx, "Account created! Loading your account...");
                 }
                 Some(RegisterAction::RegistrationFailed(err)) => {
+                    self.registration_pending = false;
                     self.show_form_error(cx, err);
                     self.show_status(
                         cx,
