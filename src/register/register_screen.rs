@@ -11,6 +11,7 @@
 
 use makepad_widgets::*;
 
+use crate::login::login_screen::LoginAction;
 use crate::register::{HsCapabilities, RegisterAction, RegisterMode};
 use crate::register::validation::{normalize_homeserver_url, HomeserverUrlError};
 use crate::sliding_sync::{submit_async_request, MatrixRequest};
@@ -429,6 +430,16 @@ impl WidgetMatchEvent for RegisterScreen {
             return;
         }
 
+        // Final cleanup when the sync service finishes building and app.rs
+        // swaps us out for the main UI. Mirrors the register-screen-visible
+        // side of what LoginScreen does in its own LoginSuccess arm.
+        for action in actions {
+            if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
+                self.view.view(cx, ids!(status_area)).set_visible(cx, false);
+                self.view.label(cx, ids!(status_label)).set_text(cx, "");
+            }
+        }
+
         // Capability discovery results.
         for action in actions {
             match action.downcast_ref::<RegisterAction>() {
@@ -511,10 +522,31 @@ impl WidgetMatchEvent for RegisterScreen {
                     // Credentials accepted; the sync service is still building
                     // in the background and LoginAction::LoginSuccess will fire
                     // ~100-200ms later to complete the transition to the main UI.
-                    // Show interim feedback so the delay feels intentional.
+                    //
+                    // Reset scope is aggressive because this same RegisterScreen
+                    // widget instance will be reused if the user later chooses
+                    // "Sign up here" again (e.g. after a logout). Password input
+                    // values especially must not linger in widget memory.
                     self.registration_pending = false;
                     self.view.button(cx, ids!(submit_button)).set_text(cx, "Create Account");
+
+                    // Clear sensitive + form state. Done before hiding the form
+                    // so the text is gone from the underlying widgets even if
+                    // someone peeks at them via inspector tooling.
+                    self.view.text_input(cx, ids!(password_input)).set_text(cx, "");
+                    self.view.text_input(cx, ids!(confirm_password_input)).set_text(cx, "");
+                    self.view.text_input(cx, ids!(username_input)).set_text(cx, "");
+                    self.view.text_input(cx, ids!(homeserver_input)).set_text(cx, "");
+
+                    self.last_discovery = None;
+                    self.last_discovery_input_url = None;
+                    self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
                     self.clear_form_error(cx);
+
+                    // Keep status_label visible as bridging feedback during the
+                    // ~100-200ms gap before LoginAction::LoginSuccess arrives —
+                    // the screen would otherwise look frozen. The LoginSuccess
+                    // arm below clears it for a clean re-entry state.
                     self.show_status(cx, "Account created! Loading your account...");
                 }
                 Some(RegisterAction::RegistrationFailed(err)) => {
