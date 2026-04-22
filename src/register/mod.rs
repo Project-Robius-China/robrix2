@@ -92,6 +92,14 @@ pub enum RegisterAction {
     CapabilitiesDiscovered(HsCapabilities),
     /// Capability discovery failed (network error, bad URL, 5xx).
     DiscoveryFailed(String),
+    /// User submitted the RegistrationForm; first POST is in flight.
+    RegistrationSubmitted,
+    /// Registration completed and the client has been persisted via
+    /// `finalize_authenticated_client`. App.rs only needs to switch screens.
+    RegistrationSuccess,
+    /// Registration failed at any stage (network, validation, UIAA error).
+    /// The payload is a user-displayable message.
+    RegistrationFailed(String),
     #[default]
     None,
 }
