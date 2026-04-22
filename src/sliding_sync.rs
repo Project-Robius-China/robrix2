@@ -434,6 +434,12 @@ async fn login(
         }
 
         LoginRequest::Register(registration) => {
+            // This arm drives BOTH signals intentionally:
+            //   - LoginAction::Status — a no-op when the login screen isn't visible
+            //     (the normal register flow); retained so the login-screen-based
+            //     LoginByCli path can still surface progress if ever re-wired.
+            //   - RegisterAction::* (dispatched at the failure sites and at the
+            //     finalize-success site below) — drives RegisterScreen state.
             let cli = Cli::from(RegisterAccount {
                 user_id: registration.user_id.clone(),
                 password: registration.password.clone(),
@@ -714,9 +720,23 @@ pub enum MatrixRequest {
     },
     /// Register a new account on a UIAA server using the single-stage
     /// `m.login.dummy` flow. `homeserver_url` is the already-normalized URL
-    /// from capability discovery. On success the sync service starts
-    /// automatically via the existing login_loop and `LoginAction::LoginSuccess`
-    /// fires. On failure `RegisterAction::RegistrationFailed(message)` fires.
+    /// from capability discovery.
+    ///
+    /// Success dispatches two actions in sequence:
+    ///   1. `RegisterAction::RegistrationSuccess` — fires immediately after
+    ///      `finalize_authenticated_client` persists the session. The
+    ///      RegisterScreen uses this to clear form state and stop showing
+    ///      the submission spinner.
+    ///   2. `LoginAction::LoginSuccess` — fires ~100-200ms later after the
+    ///      sync service finishes building. App.rs uses this to navigate
+    ///      from the register screen to the main UI, mirroring the login
+    ///      path exactly.
+    ///
+    /// Any failure dispatches a single `RegisterAction::RegistrationFailed(msg)`
+    /// with a user-displayable message.
+    ///
+    /// Proxy support is Phase 5 scope; this variant always uses the process
+    /// default proxy (if any) rather than a per-request override.
     RegisterViaUiaa {
         username: String,
         password: String,
