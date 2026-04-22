@@ -266,6 +266,7 @@ impl WidgetMatchEvent for RegisterScreen {
         let submit = self.view.button(cx, ids!(submit_button));
 
         if back.clicked(actions) {
+            log!("RegisterScreen: back_button clicked -> NavigateToLogin");
             Cx::post_action(RegisterAction::NavigateToLogin);
             return;
         }
@@ -299,6 +300,14 @@ impl WidgetMatchEvent for RegisterScreen {
             || confirm_password_input.returned(actions).is_some();
 
         if submit_triggered {
+            log!(
+                "RegisterScreen: submit_triggered (pending={}) by click={} username_ret={} password_ret={} confirm_ret={}",
+                self.registration_pending,
+                submit.clicked(actions),
+                username_input.returned(actions).is_some(),
+                password_input.returned(actions).is_some(),
+                confirm_password_input.returned(actions).is_some(),
+            );
             if self.registration_pending {
                 return;
             }
@@ -376,6 +385,7 @@ impl WidgetMatchEvent for RegisterScreen {
 
             let homeserver_url = caps.base_url.clone();
 
+            log!("RegisterScreen: dispatching MatrixRequest::RegisterViaUiaa {{ username={:?}, homeserver_url={:?} }}", localpart, homeserver_url);
             self.clear_form_error(cx);
             self.show_status(cx, "Creating your account...");
             self.registration_pending = true;

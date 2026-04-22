@@ -934,6 +934,7 @@ impl MatchEvent for App {
             }
 
             if let Some(RegisterAction::NavigateToLogin) = action.downcast_ref() {
+                log!("app.rs: RegisterAction::NavigateToLogin received -> showing login_screen");
                 self.ui.view(cx, ids!(register_screen_view)).set_visible(cx, false);
                 self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, true);
                 self.ui.redraw(cx);
