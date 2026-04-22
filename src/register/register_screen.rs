@@ -241,6 +241,14 @@ script_mod! {
 pub struct RegisterScreen {
     #[deref] view: View,
     #[rust] last_discovery: Option<HsCapabilities>,
+    /// Normalized user-typed URL that produced `last_discovery`.
+    ///
+    /// Stored separately from `caps.base_url` because `.well-known/matrix/client`
+    /// frequently returns a different string than the user typed (e.g. adds a
+    /// trailing slash, rewrites to a federation host). Comparing the current
+    /// input to `caps.base_url` causes false "homeserver changed" errors on
+    /// every well-known-delegated server. We compare against this instead.
+    #[rust] last_discovery_input_url: Option<String>,
     /// True between submit click and the terminal `RegistrationSuccess` /
     /// `RegistrationFailed` action. Gates duplicate submits so repeat-clicking
     /// "Create Account" can't queue multiple requests into `login_sender`
@@ -266,7 +274,6 @@ impl WidgetMatchEvent for RegisterScreen {
         let submit = self.view.button(cx, ids!(submit_button));
 
         if back.clicked(actions) {
-            log!("RegisterScreen: back_button clicked -> NavigateToLogin");
             Cx::post_action(RegisterAction::NavigateToLogin);
             return;
         }
@@ -276,6 +283,11 @@ impl WidgetMatchEvent for RegisterScreen {
             match normalize_homeserver_url(&raw) {
                 Ok(url) => {
                     self.show_status(cx, "Checking server capabilities...");
+                    // Capture the user-intent URL for the stale-cache check at
+                    // submit time. We must NOT compare against caps.base_url —
+                    // .well-known may return a different string for the same
+                    // server (trailing slash, federation host rewrite, etc).
+                    self.last_discovery_input_url = Some(url.clone());
                     submit_async_request(MatrixRequest::DiscoverHomeserverCapabilities { url });
                 }
                 Err(HomeserverUrlError::Empty) => {
@@ -300,14 +312,6 @@ impl WidgetMatchEvent for RegisterScreen {
             || confirm_password_input.returned(actions).is_some();
 
         if submit_triggered {
-            log!(
-                "RegisterScreen: submit_triggered (pending={}) by click={} username_ret={} password_ret={} confirm_ret={}",
-                self.registration_pending,
-                submit.clicked(actions),
-                username_input.returned(actions).is_some(),
-                password_input.returned(actions).is_some(),
-                confirm_password_input.returned(actions).is_some(),
-            );
             if self.registration_pending {
                 return;
             }
@@ -356,16 +360,22 @@ impl WidgetMatchEvent for RegisterScreen {
             };
 
             // Guard against a stale capability cache: if the user edited the
-            // homeserver input after clicking Next, `caps.base_url` no longer
-            // reflects what they typed. Re-normalize the current input and
-            // refuse to submit if it diverges — otherwise we'd silently create
-            // the account on the previously-probed server.
+            // homeserver input after clicking Next, we must re-probe. We compare
+            // the current normalized input against the input that PRODUCED the
+            // discovery (`last_discovery_input_url`), NOT `caps.base_url` — the
+            // latter may have been rewritten by `.well-known/matrix/client`
+            // (trailing slash, federation host) and a strict string compare
+            // would false-trigger on every well-known-delegated server.
+            //
+            // On mismatch we clear the cache + show an error but keep the form
+            // visible so the user can see the message and react — hiding the
+            // form also hides `form_error_label` (it lives inside the form).
             let current_raw = self.view.text_input(cx, ids!(homeserver_input)).text();
             let current_url = match normalize_homeserver_url(&current_raw) {
                 Ok(u) => u,
                 Err(_) => {
-                    self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
                     self.last_discovery = None;
+                    self.last_discovery_input_url = None;
                     self.show_form_error(
                         cx,
                         "The homeserver URL looks invalid. Please fix it and click Next again.",
@@ -373,9 +383,10 @@ impl WidgetMatchEvent for RegisterScreen {
                     return;
                 }
             };
-            if current_url != caps.base_url {
-                self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
+            let probed_input = self.last_discovery_input_url.as_deref().unwrap_or("");
+            if current_url != probed_input {
                 self.last_discovery = None;
+                self.last_discovery_input_url = None;
                 self.show_form_error(
                     cx,
                     "The homeserver changed since the last check. Click Next to verify this server before creating an account.",
@@ -385,7 +396,6 @@ impl WidgetMatchEvent for RegisterScreen {
 
             let homeserver_url = caps.base_url.clone();
 
-            log!("RegisterScreen: dispatching MatrixRequest::RegisterViaUiaa {{ username={:?}, homeserver_url={:?} }}", localpart, homeserver_url);
             self.clear_form_error(cx);
             self.show_status(cx, "Creating your account...");
             self.registration_pending = true;
@@ -459,6 +469,7 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.clear_form_error(cx);
                     self.show_status(cx, &format!("Could not reach that server: {err}"));
                     self.last_discovery = None;
+                    self.last_discovery_input_url = None;
                 }
                 Some(RegisterAction::RegistrationSubmitted) => {
                     // Feedback already shown by show_status("Creating your account...")

@@ -1668,7 +1668,6 @@ async fn matrix_worker_task(
             }
 
             MatrixRequest::RegisterViaUiaa { username, password, homeserver_url } => {
-                log!("sliding_sync: MatrixRequest::RegisterViaUiaa received, username={username:?}, homeserver_url={homeserver_url:?}");
                 Cx::post_action(crate::register::RegisterAction::RegistrationSubmitted);
                 let register_request = LoginRequest::Register(RegisterAccount {
                     user_id: username,
@@ -1676,7 +1675,6 @@ async fn matrix_worker_task(
                     homeserver: Some(homeserver_url),
                     proxy: None,
                 });
-                log!("sliding_sync: forwarding LoginRequest::Register via login_sender");
                 if let Err(e) = login_sender.send(register_request).await {
                     error!("Error sending register request to login_sender: {e:?}");
                     Cx::post_action(crate::register::RegisterAction::RegistrationFailed(
