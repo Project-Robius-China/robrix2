@@ -379,6 +379,8 @@ impl WidgetMatchEvent for RegisterScreen {
             self.clear_form_error(cx);
             self.show_status(cx, "Creating your account...");
             self.registration_pending = true;
+            submit.set_text(cx, "Creating...");
+            self.view.redraw(cx);
             submit_async_request(MatrixRequest::RegisterViaUiaa {
                 username: localpart,
                 password,
@@ -458,11 +460,13 @@ impl WidgetMatchEvent for RegisterScreen {
                     // ~100-200ms later to complete the transition to the main UI.
                     // Show interim feedback so the delay feels intentional.
                     self.registration_pending = false;
+                    self.view.button(cx, ids!(submit_button)).set_text(cx, "Create Account");
                     self.clear_form_error(cx);
                     self.show_status(cx, "Account created! Loading your account...");
                 }
                 Some(RegisterAction::RegistrationFailed(err)) => {
                     self.registration_pending = false;
+                    self.view.button(cx, ids!(submit_button)).set_text(cx, "Create Account");
                     self.show_form_error(cx, err);
                     self.show_status(
                         cx,
