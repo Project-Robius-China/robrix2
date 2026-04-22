@@ -289,7 +289,16 @@ impl WidgetMatchEvent for RegisterScreen {
             }
         }
 
-        if submit.clicked(actions) {
+        let username_input = self.view.text_input(cx, ids!(username_input));
+        let password_input = self.view.text_input(cx, ids!(password_input));
+        let confirm_password_input = self.view.text_input(cx, ids!(confirm_password_input));
+
+        let submit_triggered = submit.clicked(actions)
+            || username_input.returned(actions).is_some()
+            || password_input.returned(actions).is_some()
+            || confirm_password_input.returned(actions).is_some();
+
+        if submit_triggered {
             if self.registration_pending {
                 return;
             }
@@ -297,9 +306,9 @@ impl WidgetMatchEvent for RegisterScreen {
                 validate_localpart, validate_passwords_match, LocalpartError, PasswordError,
             };
 
-            let username = self.view.text_input(cx, ids!(username_input)).text();
-            let password = self.view.text_input(cx, ids!(password_input)).text();
-            let confirm = self.view.text_input(cx, ids!(confirm_password_input)).text();
+            let username = username_input.text();
+            let password = password_input.text();
+            let confirm = confirm_password_input.text();
 
             let localpart = match validate_localpart(&username) {
                 Ok(l) => l,
