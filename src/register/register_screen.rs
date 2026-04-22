@@ -274,6 +274,15 @@ impl WidgetMatchEvent for RegisterScreen {
         let submit = self.view.button(cx, ids!(submit_button));
 
         if back.clicked(actions) {
+            // Don't let the user abandon the screen mid-POST. The request is
+            // already in login_sender's queue and can't be cancelled — if it
+            // succeeds after we navigate away, LoginAction::LoginSuccess
+            // would auto-log them into an account they thought they were
+            // walking away from. Swallow the click until we hear the
+            // terminal RegisterAction (Success or Failed).
+            if self.registration_pending {
+                return;
+            }
             Cx::post_action(RegisterAction::NavigateToLogin);
             return;
         }
