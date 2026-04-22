@@ -19,74 +19,169 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
-    mod.widgets.RegisterScreen = #(RegisterScreen::register_widget(vm)) {
-        width: Fill,
-        height: Fill,
-        flow: Down,
-        padding: Inset { top: 24, right: 32, bottom: 24, left: 32 }
-        spacing: 16
-        show_bg: true
+    mod.widgets.RegisterScreen = set_type_default() do #(RegisterScreen::register_widget(vm)) {
+        ..mod.widgets.SolidView
+
+        width: Fill, height: Fill,
+        flow: Overlay
+        align: Align{x: 0.5, y: 0.5}
+        show_bg: true,
         draw_bg +: {
-            color: (COLOR_SECONDARY)
+            color: COLOR_SECONDARY
         }
 
-        back_button := RobrixIconButton {
-            width: Fit,
-            height: Fit,
-            text: "← Back to Login"
-        }
-
-        title := Label {
-            width: Fit,
-            height: Fit,
-            text: "Create Account"
-            draw_text +: {
-                color: (COLOR_TEXT)
-                text_style: TITLE_TEXT {font_size: 16.0}
-            }
-        }
-
-        homeserver_row := View {
+        ScrollYView {
             width: Fill,
-            height: Fit,
+            height: Fill,
             flow: Down,
-            spacing: 4
+            align: Align{x: 0.5, y: 0.5}
+            show_bg: true,
+            draw_bg.color: (COLOR_SECONDARY)
 
-            Label {
-                text: "Homeserver URL"
-                draw_text +: {
-                    color: (COLOR_TEXT)
-                    text_style: REGULAR_TEXT {font_size: 10.0}
+            scroll_bars: {
+                show_scroll_x: false,
+                show_scroll_y: true,
+                scroll_bar_y: {
+                    bar_size: 0.0
+                    min_handle_size: 0.0
+                    drag_scrolling: true
                 }
             }
 
-            homeserver_input := RobrixTextInput {
-                width: Fill,
-                height: 40,
-                empty_text: "matrix.org"
-            }
-        }
-
-        next_button := RobrixIconButton {
-            width: Fit,
-            height: Fit,
-            text: "Next"
-        }
-
-        status_area := View {
-            width: Fill,
-            height: Fit,
-            flow: Down,
-            spacing: 8,
-            visible: false
-
-            status_label := Label {
+            RoundedView {
+                margin: Inset{top: 50, bottom: 50}
                 width: Fill,
                 height: Fit,
-                text: ""
-                draw_text +: {
-                    color: (COLOR_TEXT)
-                    text_style: REGULAR_TEXT {font_size: 12.0}
+                align: Align{x: 0.5, y: 0.5}
+                flow: Overlay
+
+                View {
+                    width: Fill,
+                    height: Fit,
+                    flow: Down,
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 15.0
+
+                    logo_image := Image {
+                        fit: ImageFit.Smallest,
+                        width: 80
+                        src: (mod.widgets.IMG_APP_LOGO),
+                    }
+
+                    title := Label {
+                        width: Fit,
+                        height: Fit,
+                        margin: Inset{bottom: 5}
+                        padding: 0,
+                        draw_text +: {
+                            color: (COLOR_TEXT)
+                            text_style: TITLE_TEXT {font_size: 16.0}
+                        }
+                        text: "Create Account"
+                    }
+
+                    View {
+                        width: 275,
+                        height: Fit,
+                        flow: Down,
+
+                        homeserver_input := RobrixTextInput {
+                            width: 275,
+                            height: Fit,
+                            flow: Right,
+                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
+                            empty_text: "matrix.org"
+                        }
+
+                        View {
+                            width: 275,
+                            height: Fit,
+                            flow: Right,
+                            padding: Inset{top: 3, left: 2, right: 2}
+                            spacing: 0.0,
+                            align: Align{x: 0.5, y: 0.5}
+
+                            LineH { draw_bg.color: #C8C8C8 }
+
+                            homeserver_hint_label := Label {
+                                width: Fit,
+                                height: Fit,
+                                padding: 0,
+                                draw_text +: {
+                                    color: #8C8C8C
+                                    text_style: REGULAR_TEXT {font_size: 9}
+                                }
+                                text: "Homeserver URL"
+                            }
+
+                            LineH { draw_bg.color: #C8C8C8 }
+                        }
+                    }
+
+                    next_button := RobrixIconButton {
+                        width: 275,
+                        height: 40
+                        padding: 10
+                        margin: Inset{top: 5, bottom: 10}
+                        align: Align{x: 0.5, y: 0.5}
+                        text: "Next"
+                    }
+
+                    status_area := View {
+                        width: 275,
+                        height: Fit,
+                        flow: Down,
+                        visible: false
+                        padding: Inset{top: 2, bottom: 2, left: 4, right: 4}
+
+                        status_label := Label {
+                            width: Fill,
+                            height: Fit,
+                            draw_text +: {
+                                color: (COLOR_TEXT)
+                                text_style: REGULAR_TEXT {font_size: 10.5}
+                            }
+                            text: ""
+                        }
+                    }
+
+                    LineH {
+                        width: 275
+                        margin: Inset{bottom: -5}
+                        draw_bg.color: #C8C8C8
+                    }
+
+                    View {
+                        width: 275,
+                        height: Fit,
+                        flow: Right,
+                        spacing: 0.0,
+                        align: Align{x: 0.5, y: 0.5}
+
+                        LineH { draw_bg.color: #C8C8C8 }
+
+                        account_prompt_label := Label {
+                            width: Fit,
+                            height: Fit,
+                            padding: Inset{left: 1, right: 1, top: 0, bottom: 0}
+                            draw_text +: {
+                                color: #x6c6c6c
+                                text_style: REGULAR_TEXT {}
+                            }
+                            text: "Already have an account?"
+                        }
+
+                        LineH { draw_bg.color: #C8C8C8 }
+                    }
+
+                    back_button := RobrixIconButton {
+                        width: Fit,
+                        height: Fit,
+                        padding: Inset{left: 15, right: 15, top: 10, bottom: 10}
+                        margin: Inset{bottom: 5}
+                        align: Align{x: 0.5, y: 0.5}
+                        text: "← Back to Login"
+                    }
                 }
             }
         }
