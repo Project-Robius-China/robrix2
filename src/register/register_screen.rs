@@ -336,6 +336,35 @@ impl WidgetMatchEvent for RegisterScreen {
                 self.show_form_error(cx, "Please check the homeserver first (click Next).");
                 return;
             };
+
+            // Guard against a stale capability cache: if the user edited the
+            // homeserver input after clicking Next, `caps.base_url` no longer
+            // reflects what they typed. Re-normalize the current input and
+            // refuse to submit if it diverges — otherwise we'd silently create
+            // the account on the previously-probed server.
+            let current_raw = self.view.text_input(cx, ids!(homeserver_input)).text();
+            let current_url = match normalize_homeserver_url(&current_raw) {
+                Ok(u) => u,
+                Err(_) => {
+                    self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
+                    self.last_discovery = None;
+                    self.show_form_error(
+                        cx,
+                        "The homeserver URL looks invalid. Please fix it and click Next again.",
+                    );
+                    return;
+                }
+            };
+            if current_url != caps.base_url {
+                self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
+                self.last_discovery = None;
+                self.show_form_error(
+                    cx,
+                    "The homeserver changed since the last check. Click Next to verify this server before creating an account.",
+                );
+                return;
+            }
+
             let homeserver_url = caps.base_url.clone();
 
             self.clear_form_error(cx);
