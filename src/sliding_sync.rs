@@ -1656,12 +1656,19 @@ async fn matrix_worker_task(
 
             MatrixRequest::DiscoverHomeserverCapabilities { url } => {
                 tokio::spawn(async move {
+                    let requested_url = url.clone();
                     match discover_homeserver_capabilities(&url).await {
                         Ok(caps) => {
-                            Cx::post_action(crate::register::RegisterAction::CapabilitiesDiscovered(caps));
+                            Cx::post_action(crate::register::RegisterAction::CapabilitiesDiscovered {
+                                requested_url,
+                                caps,
+                            });
                         }
                         Err(e) => {
-                            Cx::post_action(crate::register::RegisterAction::DiscoveryFailed(e.to_string()));
+                            Cx::post_action(crate::register::RegisterAction::DiscoveryFailed {
+                                requested_url,
+                                error: e.to_string(),
+                            });
                         }
                     }
                 });

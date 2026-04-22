@@ -90,9 +90,15 @@ pub enum RegisterAction {
     /// User clicked the back button on RegisterScreen.
     NavigateToLogin,
     /// Sliding-sync reports the result of capability discovery.
-    CapabilitiesDiscovered(HsCapabilities),
+    ///
+    /// `requested_url` echoes the input that initiated this probe, so the
+    /// screen can reject out-of-order responses when the user clicked Next
+    /// against a different homeserver before the previous probe returned.
+    CapabilitiesDiscovered { requested_url: String, caps: HsCapabilities },
     /// Capability discovery failed (network error, bad URL, 5xx).
-    DiscoveryFailed(String),
+    /// `requested_url` is carried for the same out-of-order-drop reason as
+    /// `CapabilitiesDiscovered`.
+    DiscoveryFailed { requested_url: String, error: String },
     /// User submitted the RegistrationForm; first POST is in flight.
     RegistrationSubmitted,
     /// Registration completed and the client has been persisted via

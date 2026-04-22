@@ -412,7 +412,13 @@ impl WidgetMatchEvent for RegisterScreen {
         // Capability discovery results.
         for action in actions {
             match action.downcast_ref::<RegisterAction>() {
-                Some(RegisterAction::CapabilitiesDiscovered(caps)) => {
+                Some(RegisterAction::CapabilitiesDiscovered { requested_url, caps }) => {
+                    // Drop out-of-order responses: the user has since clicked
+                    // Next for a different homeserver, so this probe's answer
+                    // no longer reflects the user's intent.
+                    if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
+                        continue;
+                    }
                     match caps.mode() {
                         RegisterMode::MasWebOnly => {
                             self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
@@ -463,11 +469,17 @@ impl WidgetMatchEvent for RegisterScreen {
                         }
                     }
                     self.last_discovery = Some(caps.clone());
+                    // last_discovery_input_url was set at click time; keep it
+                    // as the correlation key for future out-of-order drops.
                 }
-                Some(RegisterAction::DiscoveryFailed(err)) => {
+                Some(RegisterAction::DiscoveryFailed { requested_url, error }) => {
+                    // Same out-of-order drop as CapabilitiesDiscovered.
+                    if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
+                        continue;
+                    }
                     self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
                     self.clear_form_error(cx);
-                    self.show_status(cx, &format!("Could not reach that server: {err}"));
+                    self.show_status(cx, &format!("Could not reach that server: {error}"));
                     self.last_discovery = None;
                     self.last_discovery_input_url = None;
                 }
