@@ -145,6 +145,55 @@ script_mod! {
                         }
                     }
 
+                    registration_form := View {
+                        width: 275,
+                        height: Fit,
+                        flow: Down,
+                        spacing: 10,
+                        visible: false
+
+                        username_input := RobrixTextInput {
+                            width: 275, height: Fit,
+                            flow: Right,
+                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
+                            empty_text: "Username"
+                        }
+
+                        password_input := RobrixTextInput {
+                            width: 275, height: Fit,
+                            flow: Right,
+                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
+                            empty_text: "Password"
+                            is_password: true,
+                        }
+
+                        confirm_password_input := RobrixTextInput {
+                            width: 275, height: Fit,
+                            flow: Right,
+                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
+                            empty_text: "Confirm password"
+                            is_password: true,
+                        }
+
+                        form_error_label := Label {
+                            width: Fill, height: Fit,
+                            visible: false
+                            draw_text +: {
+                                color: (COLOR_FG_DANGER_RED)
+                                text_style: REGULAR_TEXT {font_size: 10.5}
+                            }
+                            text: ""
+                        }
+
+                        submit_button := RobrixIconButton {
+                            width: 275, height: 40
+                            padding: 10
+                            margin: Inset{top: 5}
+                            align: Align{x: 0.5, y: 0.5}
+                            text: "Create Account"
+                        }
+                    }
+
                     LineH {
                         width: 275
                         margin: Inset{bottom: -5}
@@ -209,6 +258,7 @@ impl WidgetMatchEvent for RegisterScreen {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
         let back = self.view.button(cx, ids!(back_button));
         let next = self.view.button(cx, ids!(next_button));
+        let submit = self.view.button(cx, ids!(submit_button));
 
         if back.clicked(actions) {
             Cx::post_action(RegisterAction::NavigateToLogin);
@@ -234,12 +284,70 @@ impl WidgetMatchEvent for RegisterScreen {
             }
         }
 
+        if submit.clicked(actions) {
+            use crate::register::validation::{
+                validate_localpart, validate_passwords_match, LocalpartError, PasswordError,
+            };
+
+            let username = self.view.text_input(cx, ids!(username_input)).text();
+            let password = self.view.text_input(cx, ids!(password_input)).text();
+            let confirm = self.view.text_input(cx, ids!(confirm_password_input)).text();
+
+            let localpart = match validate_localpart(&username) {
+                Ok(l) => l,
+                Err(LocalpartError::Empty) => {
+                    self.show_form_error(cx, "Please enter a username.");
+                    return;
+                }
+                Err(LocalpartError::TooLong) => {
+                    self.show_form_error(cx, "Username is too long (max 255 characters).");
+                    return;
+                }
+                Err(LocalpartError::InvalidChars) => {
+                    self.show_form_error(
+                        cx,
+                        "Username can contain only lowercase letters, digits, and . _ = - /",
+                    );
+                    return;
+                }
+            };
+
+            if let Err(e) = validate_passwords_match(&password, &confirm) {
+                match e {
+                    PasswordError::Empty => {
+                        self.show_form_error(cx, "Please enter and confirm a password.");
+                    }
+                    PasswordError::Mismatch => {
+                        self.show_form_error(cx, "Passwords don't match. Please re-enter.");
+                    }
+                }
+                return;
+            }
+
+            let Some(caps) = self.last_discovery.as_ref() else {
+                self.show_form_error(cx, "Please check the homeserver first (click Next).");
+                return;
+            };
+            let homeserver_url = caps.base_url.clone();
+
+            self.clear_form_error(cx);
+            self.show_status(cx, "Creating your account...");
+            submit_async_request(MatrixRequest::RegisterViaUiaa {
+                username: localpart,
+                password,
+                homeserver_url,
+            });
+            return;
+        }
+
         // Capability discovery results.
         for action in actions {
             match action.downcast_ref::<RegisterAction>() {
                 Some(RegisterAction::CapabilitiesDiscovered(caps)) => {
                     match caps.mode() {
                         RegisterMode::MasWebOnly => {
+                            self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
+                            self.clear_form_error(cx);
                             match caps.mas_signup_url.as_deref() {
                                 Some(url) => match robius_open::Uri::new(url).open() {
                                     Ok(()) => {
@@ -268,12 +376,16 @@ impl WidgetMatchEvent for RegisterScreen {
                             }
                         }
                         RegisterMode::Uiaa => {
+                            self.view.view(cx, ids!(registration_form)).set_visible(cx, true);
+                            self.clear_form_error(cx);
                             self.show_status(
                                 cx,
-                                "This server allows direct account creation. Phase 3 will handle the form.",
+                                "This homeserver allows direct registration. Fill in your details below to create an account.",
                             );
                         }
                         RegisterMode::Disabled => {
+                            self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
+                            self.clear_form_error(cx);
                             self.show_status(
                                 cx,
                                 "This server does not allow registration. Please choose a different homeserver \
@@ -284,8 +396,21 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.last_discovery = Some(caps.clone());
                 }
                 Some(RegisterAction::DiscoveryFailed(err)) => {
+                    self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
+                    self.clear_form_error(cx);
                     self.show_status(cx, &format!("Could not reach that server: {err}"));
                     self.last_discovery = None;
+                }
+                Some(RegisterAction::RegistrationSubmitted) => {
+                    // Feedback already shown by show_status("Creating your account...")
+                    // at click time; nothing additional to do here.
+                }
+                Some(RegisterAction::RegistrationFailed(err)) => {
+                    self.show_form_error(cx, err);
+                    self.show_status(
+                        cx,
+                        "Registration didn't go through. Please check the error above and retry.",
+                    );
                 }
                 _ => {}
             }
@@ -298,5 +423,15 @@ impl RegisterScreen {
         self.view.view(cx, ids!(status_area)).set_visible(cx, true);
         self.view.label(cx, ids!(status_label)).set_text(cx, message);
         self.view.redraw(cx);
+    }
+
+    fn show_form_error(&mut self, cx: &mut Cx, message: &str) {
+        self.view.label(cx, ids!(form_error_label)).set_text(cx, message);
+        self.view.view(cx, ids!(form_error_label)).set_visible(cx, true);
+        self.view.redraw(cx);
+    }
+
+    fn clear_form_error(&mut self, cx: &mut Cx) {
+        self.view.view(cx, ids!(form_error_label)).set_visible(cx, false);
     }
 }
