@@ -255,6 +255,17 @@ pub struct RegisterScreen {
     /// "Create Account" can't queue multiple requests into `login_sender`
     /// (mirrors the `sso_pending` pattern elsewhere in the app).
     #[rust] registration_pending: bool,
+    /// True between `RegistrationSuccess` and the terminal `LoginSuccess` /
+    /// `LoginFailure`. The account already exists on the server at this point;
+    /// what we're waiting on is `SyncService::build()`. If that build fails
+    /// (e.g. network flapped right after register returned 200), it emits
+    /// `LoginAction::LoginFailure`, but `app.rs` only acts on that failure
+    /// when not in `LoggedOut` state — and we haven't reached `LoginSuccess`
+    /// yet. Without a local `LoginFailure` arm the screen would stay stuck on
+    /// "Account created! Loading your account..." forever. This flag gates
+    /// that arm so we only react to failures from OUR own sync-startup phase,
+    /// not unrelated `LoginFailure`s that might reach a visible register screen.
+    #[rust] awaiting_sync_startup: bool,
 }
 
 impl Widget for RegisterScreen {
@@ -430,13 +441,33 @@ impl WidgetMatchEvent for RegisterScreen {
             return;
         }
 
-        // Final cleanup when the sync service finishes building and app.rs
-        // swaps us out for the main UI. Mirrors the register-screen-visible
-        // side of what LoginScreen does in its own LoginSuccess arm.
+        // Terminal handling for LoginAction emitted by the post-register
+        // sync-startup phase. Either LoginSuccess (happy path, app.rs swaps
+        // us out) or LoginFailure (SyncService::build failed; app.rs skips
+        // the failure because state is still LoggedOut, so WE must recover).
         for action in actions {
-            if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
-                self.view.view(cx, ids!(status_area)).set_visible(cx, false);
-                self.view.label(cx, ids!(status_label)).set_text(cx, "");
+            match action.downcast_ref::<LoginAction>() {
+                Some(LoginAction::LoginSuccess) => {
+                    self.awaiting_sync_startup = false;
+                    self.view.view(cx, ids!(status_area)).set_visible(cx, false);
+                    self.view.label(cx, ids!(status_label)).set_text(cx, "");
+                }
+                Some(LoginAction::LoginFailure(msg)) if self.awaiting_sync_startup => {
+                    // Account WAS created on the server — do not frame this
+                    // as a registration failure. The user's recovery path is
+                    // to go back to the login screen and sign in manually.
+                    // Back button works here because registration_pending
+                    // was cleared on RegistrationSuccess.
+                    self.awaiting_sync_startup = false;
+                    self.show_status(
+                        cx,
+                        &format!(
+                            "Your account was created, but we couldn't start a session:\n{msg}\n\n\
+                             Please click ← Back to Login and sign in with your new account."
+                        ),
+                    );
+                }
+                _ => {}
             }
         }
 
@@ -548,6 +579,10 @@ impl WidgetMatchEvent for RegisterScreen {
                     // the screen would otherwise look frozen. The LoginSuccess
                     // arm below clears it for a clean re-entry state.
                     self.show_status(cx, "Account created! Loading your account...");
+                    // Enter the post-register wait state so a possible
+                    // LoginFailure from SyncService::build() is routed to our
+                    // recovery arm instead of being silently swallowed.
+                    self.awaiting_sync_startup = true;
                 }
                 Some(RegisterAction::RegistrationFailed(err)) => {
                     self.registration_pending = false;
