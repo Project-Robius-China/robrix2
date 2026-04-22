@@ -1661,7 +1661,7 @@ async fn matrix_worker_task(
                         Ok(caps) => {
                             Cx::post_action(crate::register::RegisterAction::CapabilitiesDiscovered {
                                 requested_url,
-                                caps,
+                                caps: Box::new(caps),
                             });
                         }
                         Err(e) => {
@@ -3843,8 +3843,16 @@ async fn matrix_worker_task(
         }
     }
 
-    error!("matrix_worker_task task ended unexpectedly");
-    bail!("matrix_worker_task task ended unexpectedly")
+    if worker_shutdown_is_unexpected(is_logout_in_progress(), is_account_switch_pending()) {
+        error!("matrix_worker_task task ended unexpectedly");
+        bail!("matrix_worker_task task ended unexpectedly")
+    }
+
+    Ok(())
+}
+
+fn worker_shutdown_is_unexpected(logout_in_progress: bool, account_switch_pending: bool) -> bool {
+    !logout_in_progress && !account_switch_pending
 }
 
 async fn attach_room_to_space(client: &Client, child_room: &Room, space_id: &OwnedRoomId) -> Result<()> {
@@ -6805,10 +6813,6 @@ async fn discover_homeserver_capabilities(
             Ok(info) => (true, Some(info)),
             Err(_) => (true, None),
         }
-    } else if status == matrix_sdk::reqwest::StatusCode::FORBIDDEN
-        && body.get("errcode").and_then(|v: &Value| v.as_str()) == Some("M_FORBIDDEN")
-    {
-        (false, None)
     } else {
         (false, None)
     };
@@ -6821,4 +6825,24 @@ async fn discover_homeserver_capabilities(
         sso_providers,
         mas_signup_url,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worker_shutdown_is_unexpected;
+
+    #[test]
+    fn worker_shutdown_is_not_unexpected_during_logout() {
+        assert!(!worker_shutdown_is_unexpected(true, false));
+    }
+
+    #[test]
+    fn worker_shutdown_is_not_unexpected_during_account_switch() {
+        assert!(!worker_shutdown_is_unexpected(false, true));
+    }
+
+    #[test]
+    fn worker_shutdown_is_unexpected_without_controlled_teardown() {
+        assert!(worker_shutdown_is_unexpected(false, false));
+    }
 }

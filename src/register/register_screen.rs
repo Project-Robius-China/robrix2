@@ -16,6 +16,10 @@ use crate::register::{HsCapabilities, RegisterAction, RegisterMode};
 use crate::register::validation::{normalize_homeserver_url, HomeserverUrlError};
 use crate::sliding_sync::{submit_async_request, MatrixRequest};
 
+fn can_start_capability_discovery(registration_pending: bool, awaiting_sync_startup: bool) -> bool {
+    !registration_pending && !awaiting_sync_startup
+}
+
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
@@ -248,6 +252,8 @@ pub struct RegisterScreen {
     #[rust] last_discovery_input_url: Option<String>,
     /// Gates duplicate submits; mirrors `sso_pending`.
     #[rust] registration_pending: bool,
+    /// Drives next_button "Checking..." feedback during slow `.well-known` probes.
+    #[rust] discovery_pending: bool,
     /// Gates the `LoginFailure` arm: true only during the post-register
     /// `SyncService::build()` window, which `app.rs` can't recover from
     /// because state is still `LoggedOut`.
@@ -277,11 +283,16 @@ impl WidgetMatchEvent for RegisterScreen {
             if self.registration_pending {
                 return;
             }
+            self.discovery_pending = false;
+            self.view.button(cx, ids!(next_button)).set_text(cx, "Next");
             Cx::post_action(RegisterAction::NavigateToLogin);
             return;
         }
 
         if next.clicked(actions) {
+            if !can_start_capability_discovery(self.registration_pending, self.awaiting_sync_startup) {
+                return;
+            }
             let raw = self.view.text_input(cx, ids!(homeserver_input)).text();
             match normalize_homeserver_url(&raw) {
                 Ok(url) => {
@@ -291,6 +302,8 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.clear_form_error(cx);
 
                     self.show_status(cx, "Checking server capabilities...");
+                    self.discovery_pending = true;
+                    self.view.button(cx, ids!(next_button)).set_text(cx, "Checking...");
                     self.last_discovery_input_url = Some(url.clone());
                     submit_async_request(MatrixRequest::DiscoverHomeserverCapabilities { url });
                 }
@@ -363,17 +376,8 @@ impl WidgetMatchEvent for RegisterScreen {
                 return;
             };
 
-            // Guard against a stale capability cache: if the user edited the
-            // homeserver input after clicking Next, we must re-probe. We compare
-            // the current normalized input against the input that PRODUCED the
-            // discovery (`last_discovery_input_url`), NOT `caps.base_url` — the
-            // latter may have been rewritten by `.well-known/matrix/client`
-            // (trailing slash, federation host) and a strict string compare
-            // would false-trigger on every well-known-delegated server.
-            //
-            // On mismatch we clear the cache + show an error but keep the form
-            // visible so the user can see the message and react — hiding the
-            // form also hides `form_error_label` (it lives inside the form).
+            // Stale-cache check: compare current input to the input that PRODUCED
+            // the cache, not `caps.base_url` (which `.well-known` may rewrite).
             let current_raw = self.view.text_input(cx, ids!(homeserver_input)).text();
             let current_url = match normalize_homeserver_url(&current_raw) {
                 Ok(u) => u,
@@ -423,6 +427,7 @@ impl WidgetMatchEvent for RegisterScreen {
                 Some(LoginAction::LoginFailure(msg)) if self.awaiting_sync_startup => {
                     // Account already exists on the server; don't frame as registration failure.
                     self.awaiting_sync_startup = false;
+                    Cx::post_action(LoginAction::ClearFailureState);
                     self.show_status(
                         cx,
                         &format!(
@@ -435,7 +440,6 @@ impl WidgetMatchEvent for RegisterScreen {
             }
         }
 
-        // Capability discovery results.
         for action in actions {
             match action.downcast_ref::<RegisterAction>() {
                 Some(RegisterAction::CapabilitiesDiscovered { requested_url, caps }) => {
@@ -443,6 +447,9 @@ impl WidgetMatchEvent for RegisterScreen {
                     if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
                         continue;
                     }
+                    self.discovery_pending = false;
+                    self.view.button(cx, ids!(next_button)).set_text(cx, "Next");
+                    let caps = caps.as_ref();
                     match caps.mode() {
                         RegisterMode::MasWebOnly => {
                             self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
@@ -498,29 +505,23 @@ impl WidgetMatchEvent for RegisterScreen {
                     if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
                         continue;
                     }
+                    self.discovery_pending = false;
+                    self.view.button(cx, ids!(next_button)).set_text(cx, "Next");
                     self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
                     self.clear_form_error(cx);
                     self.show_status(cx, &format!("Could not reach that server: {error}"));
                     self.last_discovery = None;
                     self.last_discovery_input_url = None;
                 }
-                Some(RegisterAction::RegistrationSubmitted) => {
-                    // Feedback already shown by show_status("Creating your account...")
-                    // at click time; nothing additional to do here.
-                }
+                Some(RegisterAction::RegistrationSubmitted) => {}
                 Some(RegisterAction::RegistrationSuccess) => {
-                    // Credentials accepted; the sync service is still building
-                    // in the background and LoginAction::LoginSuccess will fire
-                    // ~100-200ms later to complete the transition to the main UI.
-                    //
-                    // Reset scope is aggressive because this same RegisterScreen
-                    // widget instance will be reused if the user later chooses
-                    // "Sign up here" again (e.g. after a logout). Password input
-                    // values especially must not linger in widget memory.
+                    // Full reset: the same widget instance is reused on re-entry
+                    // (logout → "Sign up here"), so password fields must not linger.
                     self.registration_pending = false;
+                    self.discovery_pending = false;
                     self.view.button(cx, ids!(submit_button)).set_text(cx, "Create Account");
+                    self.view.button(cx, ids!(next_button)).set_text(cx, "Next");
 
-                    // Clear passwords before hiding so they don't linger in widget memory.
                     self.view.text_input(cx, ids!(password_input)).set_text(cx, "");
                     self.view.text_input(cx, ids!(confirm_password_input)).set_text(cx, "");
                     self.view.text_input(cx, ids!(username_input)).set_text(cx, "");
@@ -537,6 +538,7 @@ impl WidgetMatchEvent for RegisterScreen {
                 }
                 Some(RegisterAction::RegistrationFailed(err)) => {
                     self.registration_pending = false;
+                    self.awaiting_sync_startup = false;
                     self.view.button(cx, ids!(submit_button)).set_text(cx, "Create Account");
                     self.show_form_error(cx, err);
                     self.show_status(
@@ -558,13 +560,35 @@ impl RegisterScreen {
     }
 
     fn show_form_error(&mut self, cx: &mut Cx, message: &str) {
-        self.view.label(cx, ids!(form_error_label)).set_text(cx, message);
-        self.view.view(cx, ids!(form_error_label)).set_visible(cx, true);
+        let label = self.view.label(cx, ids!(form_error_label));
+        label.set_text(cx, message);
+        label.set_visible(cx, true);
         self.view.redraw(cx);
     }
 
     fn clear_form_error(&mut self, cx: &mut Cx) {
-        self.view.label(cx, ids!(form_error_label)).set_text(cx, "");
-        self.view.view(cx, ids!(form_error_label)).set_visible(cx, false);
+        let label = self.view.label(cx, ids!(form_error_label));
+        label.set_text(cx, "");
+        label.set_visible(cx, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::can_start_capability_discovery;
+
+    #[test]
+    fn capability_discovery_blocks_while_registration_request_is_in_flight() {
+        assert!(!can_start_capability_discovery(true, false));
+    }
+
+    #[test]
+    fn capability_discovery_blocks_while_waiting_for_post_register_sync_startup() {
+        assert!(!can_start_capability_discovery(false, true));
+    }
+
+    #[test]
+    fn capability_discovery_allows_idle_register_screen() {
+        assert!(can_start_capability_discovery(false, false));
     }
 }

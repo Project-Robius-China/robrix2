@@ -90,7 +90,7 @@ pub enum RegisterAction {
     /// User clicked the back button on RegisterScreen.
     NavigateToLogin,
     /// `requested_url` is echoed so the screen can drop out-of-order responses.
-    CapabilitiesDiscovered { requested_url: String, caps: HsCapabilities },
+    CapabilitiesDiscovered { requested_url: String, caps: Box<HsCapabilities> },
     /// `requested_url` is echoed so the screen can drop out-of-order responses.
     DiscoveryFailed { requested_url: String, error: String },
     /// User submitted the RegistrationForm; first POST is in flight.
