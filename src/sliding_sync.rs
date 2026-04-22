@@ -470,10 +470,14 @@ async fn login(
                             ))
                             .await
                         } else {
-                            bail!(unsupported_registration_flow_message(&uiaa_info.flows));
+                            let msg = unsupported_registration_flow_message(&uiaa_info.flows);
+                            Cx::post_action(crate::register::RegisterAction::RegistrationFailed(msg.clone()));
+                            bail!(msg);
                         }
                     } else {
-                        bail!(registration_uiaa_error_message(&error));
+                        let msg = registration_uiaa_error_message(&error);
+                        Cx::post_action(crate::register::RegisterAction::RegistrationFailed(msg.clone()));
+                        bail!(msg);
                     }
                 }
             }?;
@@ -485,11 +489,16 @@ async fn login(
                 );
                 enqueue_popup_notification(err_msg.clone(), PopupKind::Error, None);
                 enqueue_rooms_list_update(RoomsListUpdate::Status { status: err_msg.clone() });
+                Cx::post_action(crate::register::RegisterAction::RegistrationFailed(err_msg.clone()));
                 bail!(err_msg);
             }
 
-            finalize_authenticated_client(client, client_session, register_result.user_id.as_str(), false)
-                .await
+            let finalized = finalize_authenticated_client(client, client_session, register_result.user_id.as_str(), false)
+                .await;
+            if finalized.is_ok() {
+                Cx::post_action(crate::register::RegisterAction::RegistrationSuccess);
+            }
+            finalized
         }
 
         LoginRequest::LoginBySSOSuccess(client, client_session, is_add_account) => {
@@ -702,6 +711,16 @@ pub enum MatrixRequest {
     DiscoverHomeserverCapabilities {
         /// Already-normalized homeserver URL (has scheme, no trailing slash).
         url: String,
+    },
+    /// Register a new account on a UIAA server using the single-stage
+    /// `m.login.dummy` flow. `homeserver_url` is the already-normalized URL
+    /// from capability discovery. On success the sync service starts
+    /// automatically via the existing login_loop and `LoginAction::LoginSuccess`
+    /// fires. On failure `RegisterAction::RegistrationFailed(message)` fires.
+    RegisterViaUiaa {
+        username: String,
+        password: String,
+        homeserver_url: String,
     },
     /// Request to switch to a different logged-in account.
     SwitchAccount {
@@ -1626,6 +1645,22 @@ async fn matrix_worker_task(
                         }
                     }
                 });
+            }
+
+            MatrixRequest::RegisterViaUiaa { username, password, homeserver_url } => {
+                Cx::post_action(crate::register::RegisterAction::RegistrationSubmitted);
+                let register_request = LoginRequest::Register(RegisterAccount {
+                    user_id: username,
+                    password,
+                    homeserver: Some(homeserver_url),
+                    proxy: None,
+                });
+                if let Err(e) = login_sender.send(register_request).await {
+                    error!("Error sending register request to login_sender: {e:?}");
+                    Cx::post_action(crate::register::RegisterAction::RegistrationFailed(
+                        "Internal error: registration worker is unavailable. Please restart Robrix.".to_owned(),
+                    ));
+                }
             }
 
             MatrixRequest::SwitchAccount { user_id } => {
