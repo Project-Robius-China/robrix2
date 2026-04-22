@@ -7,6 +7,7 @@ use makepad_widgets::ScriptVm;
 
 pub mod register_screen;
 pub mod register_status_modal;
+pub mod uiaa;
 pub mod validation;
 
 pub fn script_mod(vm: &mut ScriptVm) {
