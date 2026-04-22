@@ -242,29 +242,15 @@ script_mod! {
 pub struct RegisterScreen {
     #[deref] view: View,
     #[rust] last_discovery: Option<HsCapabilities>,
-    /// Normalized user-typed URL that produced `last_discovery`.
-    ///
-    /// Stored separately from `caps.base_url` because `.well-known/matrix/client`
-    /// frequently returns a different string than the user typed (e.g. adds a
-    /// trailing slash, rewrites to a federation host). Comparing the current
-    /// input to `caps.base_url` causes false "homeserver changed" errors on
-    /// every well-known-delegated server. We compare against this instead.
+    /// Normalized user-typed URL that produced `last_discovery`. Kept
+    /// separate from `caps.base_url` because `.well-known` may rewrite the
+    /// host; comparing current input against `base_url` causes false mismatches.
     #[rust] last_discovery_input_url: Option<String>,
-    /// True between submit click and the terminal `RegistrationSuccess` /
-    /// `RegistrationFailed` action. Gates duplicate submits so repeat-clicking
-    /// "Create Account" can't queue multiple requests into `login_sender`
-    /// (mirrors the `sso_pending` pattern elsewhere in the app).
+    /// Gates duplicate submits; mirrors `sso_pending`.
     #[rust] registration_pending: bool,
-    /// True between `RegistrationSuccess` and the terminal `LoginSuccess` /
-    /// `LoginFailure`. The account already exists on the server at this point;
-    /// what we're waiting on is `SyncService::build()`. If that build fails
-    /// (e.g. network flapped right after register returned 200), it emits
-    /// `LoginAction::LoginFailure`, but `app.rs` only acts on that failure
-    /// when not in `LoggedOut` state — and we haven't reached `LoginSuccess`
-    /// yet. Without a local `LoginFailure` arm the screen would stay stuck on
-    /// "Account created! Loading your account..." forever. This flag gates
-    /// that arm so we only react to failures from OUR own sync-startup phase,
-    /// not unrelated `LoginFailure`s that might reach a visible register screen.
+    /// Gates the `LoginFailure` arm: true only during the post-register
+    /// `SyncService::build()` window, which `app.rs` can't recover from
+    /// because state is still `LoggedOut`.
     #[rust] awaiting_sync_startup: bool,
 }
 
@@ -286,12 +272,8 @@ impl WidgetMatchEvent for RegisterScreen {
         let submit = self.view.button(cx, ids!(submit_button));
 
         if back.clicked(actions) {
-            // Don't let the user abandon the screen mid-POST. The request is
-            // already in login_sender's queue and can't be cancelled — if it
-            // succeeds after we navigate away, LoginAction::LoginSuccess
-            // would auto-log them into an account they thought they were
-            // walking away from. Swallow the click until we hear the
-            // terminal RegisterAction (Success or Failed).
+            // In-flight request can't be cancelled; leaving now would
+            // auto-log the user into the account on its eventual success.
             if self.registration_pending {
                 return;
             }
@@ -303,22 +285,12 @@ impl WidgetMatchEvent for RegisterScreen {
             let raw = self.view.text_input(cx, ids!(homeserver_input)).text();
             match normalize_homeserver_url(&raw) {
                 Ok(url) => {
-                    // Invalidate any prior probe state BEFORE the new request
-                    // goes out. A submit click landing in the window between
-                    // Next and the fresh response must not be allowed to fire
-                    // a register request against the previous server. Fix 1
-                    // already drops the late CapabilitiesDiscovered action;
-                    // this clears the pre-existing cache the user could
-                    // otherwise still submit against.
+                    // Prevent submit-against-stale-server in the Next→response window.
                     self.last_discovery = None;
                     self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
                     self.clear_form_error(cx);
 
                     self.show_status(cx, "Checking server capabilities...");
-                    // Capture the user-intent URL for the stale-cache check at
-                    // submit time. We must NOT compare against caps.base_url —
-                    // .well-known may return a different string for the same
-                    // server (trailing slash, federation host rewrite, etc).
                     self.last_discovery_input_url = Some(url.clone());
                     submit_async_request(MatrixRequest::DiscoverHomeserverCapabilities { url });
                 }
@@ -441,10 +413,6 @@ impl WidgetMatchEvent for RegisterScreen {
             return;
         }
 
-        // Terminal handling for LoginAction emitted by the post-register
-        // sync-startup phase. Either LoginSuccess (happy path, app.rs swaps
-        // us out) or LoginFailure (SyncService::build failed; app.rs skips
-        // the failure because state is still LoggedOut, so WE must recover).
         for action in actions {
             match action.downcast_ref::<LoginAction>() {
                 Some(LoginAction::LoginSuccess) => {
@@ -453,11 +421,7 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.view.label(cx, ids!(status_label)).set_text(cx, "");
                 }
                 Some(LoginAction::LoginFailure(msg)) if self.awaiting_sync_startup => {
-                    // Account WAS created on the server — do not frame this
-                    // as a registration failure. The user's recovery path is
-                    // to go back to the login screen and sign in manually.
-                    // Back button works here because registration_pending
-                    // was cleared on RegistrationSuccess.
+                    // Account already exists on the server; don't frame as registration failure.
                     self.awaiting_sync_startup = false;
                     self.show_status(
                         cx,
@@ -475,9 +439,7 @@ impl WidgetMatchEvent for RegisterScreen {
         for action in actions {
             match action.downcast_ref::<RegisterAction>() {
                 Some(RegisterAction::CapabilitiesDiscovered { requested_url, caps }) => {
-                    // Drop out-of-order responses: the user has since clicked
-                    // Next for a different homeserver, so this probe's answer
-                    // no longer reflects the user's intent.
+                    // Drop out-of-order response from a superseded Next click.
                     if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
                         continue;
                     }
@@ -531,11 +493,8 @@ impl WidgetMatchEvent for RegisterScreen {
                         }
                     }
                     self.last_discovery = Some(caps.clone());
-                    // last_discovery_input_url was set at click time; keep it
-                    // as the correlation key for future out-of-order drops.
                 }
                 Some(RegisterAction::DiscoveryFailed { requested_url, error }) => {
-                    // Same out-of-order drop as CapabilitiesDiscovered.
                     if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
                         continue;
                     }
@@ -561,9 +520,7 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.registration_pending = false;
                     self.view.button(cx, ids!(submit_button)).set_text(cx, "Create Account");
 
-                    // Clear sensitive + form state. Done before hiding the form
-                    // so the text is gone from the underlying widgets even if
-                    // someone peeks at them via inspector tooling.
+                    // Clear passwords before hiding so they don't linger in widget memory.
                     self.view.text_input(cx, ids!(password_input)).set_text(cx, "");
                     self.view.text_input(cx, ids!(confirm_password_input)).set_text(cx, "");
                     self.view.text_input(cx, ids!(username_input)).set_text(cx, "");
@@ -574,14 +531,8 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
                     self.clear_form_error(cx);
 
-                    // Keep status_label visible as bridging feedback during the
-                    // ~100-200ms gap before LoginAction::LoginSuccess arrives —
-                    // the screen would otherwise look frozen. The LoginSuccess
-                    // arm below clears it for a clean re-entry state.
+                    // Bridging feedback during the ~100-200ms SyncService::build window.
                     self.show_status(cx, "Account created! Loading your account...");
-                    // Enter the post-register wait state so a possible
-                    // LoginFailure from SyncService::build() is routed to our
-                    // recovery arm instead of being silently swallowed.
                     self.awaiting_sync_startup = true;
                 }
                 Some(RegisterAction::RegistrationFailed(err)) => {
