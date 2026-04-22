@@ -405,6 +405,14 @@ impl WidgetMatchEvent for RegisterScreen {
                     // Feedback already shown by show_status("Creating your account...")
                     // at click time; nothing additional to do here.
                 }
+                Some(RegisterAction::RegistrationSuccess) => {
+                    // Credentials accepted; the sync service is still building
+                    // in the background and LoginAction::LoginSuccess will fire
+                    // ~100-200ms later to complete the transition to the main UI.
+                    // Show interim feedback so the delay feels intentional.
+                    self.clear_form_error(cx);
+                    self.show_status(cx, "Account created! Loading your account...");
+                }
                 Some(RegisterAction::RegistrationFailed(err)) => {
                     self.show_form_error(cx, err);
                     self.show_status(
