@@ -282,6 +282,17 @@ impl WidgetMatchEvent for RegisterScreen {
             let raw = self.view.text_input(cx, ids!(homeserver_input)).text();
             match normalize_homeserver_url(&raw) {
                 Ok(url) => {
+                    // Invalidate any prior probe state BEFORE the new request
+                    // goes out. A submit click landing in the window between
+                    // Next and the fresh response must not be allowed to fire
+                    // a register request against the previous server. Fix 1
+                    // already drops the late CapabilitiesDiscovered action;
+                    // this clears the pre-existing cache the user could
+                    // otherwise still submit against.
+                    self.last_discovery = None;
+                    self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
+                    self.clear_form_error(cx);
+
                     self.show_status(cx, "Checking server capabilities...");
                     // Capture the user-intent URL for the stale-cache check at
                     // submit time. We must NOT compare against caps.base_url —
