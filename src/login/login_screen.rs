@@ -1209,6 +1209,19 @@ pub enum LoginAction {
     NavigateToRegister,
     /// Request to cancel adding an account and return to the previous screen.
     CancelAddAccount,
+    /// Posted by the OIDC worker once the browser-based auth flow has been
+    /// launched and robrix2 is waiting for the loopback callback.
+    /// LoginScreen uses this to swap the "Continue in browser" button for the
+    /// "Waiting for callback..." + Cancel affordance.
+    OidcLoginStarted,
+    /// Posted when the OIDC flow was aborted — either via in-app Cancel, via
+    /// the browser's `error=access_denied` redirect, or via the 3-minute
+    /// total timeout. LoginScreen returns to the MAS branch ready-for-retry.
+    OidcLoginCancelled,
+    /// Posted when OIDC failed at any post-click stage (metadata discovery,
+    /// dynamic registration, authorize build, browser open, token exchange).
+    /// Payload is user-displayable; technical details go to logs.
+    OidcLoginFailed(String),
     #[default]
     None,
 }

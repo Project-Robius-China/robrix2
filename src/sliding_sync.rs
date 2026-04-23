@@ -718,6 +718,26 @@ pub enum MatrixRequest {
         /// Already-normalized homeserver URL (has scheme, no trailing slash).
         url: String,
     },
+    /// Begin the OIDC (MAS) login flow for an already-existing account on a
+    /// MAS-delegated homeserver. `homeserver_url` is the normalized URL from
+    /// capability discovery; `proxy` mirrors the password login's optional
+    /// per-request proxy override.
+    ///
+    /// Outcome dispatch:
+    ///   - `LoginAction::OidcLoginStarted` fires once the loopback server is
+    ///     live and the system browser has been opened.
+    ///   - On success, `LoginAction::LoginSuccess` fires after
+    ///     `finalize_authenticated_client()` persists the session.
+    ///   - Cancellation (in-app Cancel, browser `error=access_denied`, or
+    ///     3-min timeout) dispatches `LoginAction::OidcLoginCancelled`.
+    ///   - Any other failure dispatches `LoginAction::OidcLoginFailed(msg)`.
+    StartOidcLogin {
+        homeserver_url: String,
+        proxy: Option<String>,
+    },
+    /// Abort the in-flight OIDC login. Posted by LoginScreen's Cancel button.
+    /// No-op if no OIDC login is currently in flight.
+    CancelOidcLogin,
     /// Register a new account on a UIAA server using the single-stage
     /// `m.login.dummy` flow. `homeserver_url` is the already-normalized URL
     /// from capability discovery.
@@ -1672,6 +1692,18 @@ async fn matrix_worker_task(
                         }
                     }
                 });
+            }
+
+            MatrixRequest::StartOidcLogin { homeserver_url: _, proxy: _ } => {
+                // Stub: wired up in a follow-up commit. For now surface a
+                // failure so the UI state machine can exercise its error path.
+                Cx::post_action(LoginAction::OidcLoginFailed(
+                    "OIDC worker is not yet implemented.".to_string(),
+                ));
+            }
+
+            MatrixRequest::CancelOidcLogin => {
+                // Stub: no in-flight OIDC flow to cancel yet.
             }
 
             MatrixRequest::RegisterViaUiaa { username, password, homeserver_url } => {
