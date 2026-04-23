@@ -1406,36 +1406,49 @@ async fn matrix_worker_task(
                         timeline.paginate_backwards(num_events).await
                     };
 
-                    if direction == PaginationDirection::Backwards
-                        && res
+                    if direction == PaginationDirection::Backwards {
+                        let room_id = timeline_kind.room_id().clone();
+                        let mut invalid_batch_retry_count = 0usize;
+                        while res
                             .as_ref()
                             .err()
                             .is_some_and(is_invalid_batch_token_timeline_error)
-                    {
-                        warning!(
-                            "Detected an invalid cached batch token for {timeline_kind}; clearing the room event cache and retrying once."
-                        );
-                        let room_id = timeline_kind.room_id().clone();
-                        if let Some(room) = client.and_then(|client| client.get_room(&room_id)) {
-                            match room.event_cache().await {
-                                Ok((room_event_cache, _drop_handles)) => {
-                                    match room_event_cache.clear().await {
-                                        Ok(()) => {
-                                            res = timeline.paginate_backwards(num_events).await;
-                                        }
-                                        Err(clear_error) => {
-                                            warning!(
-                                                "Failed to clear event cache for room {room_id} after invalid batch token: {clear_error}"
-                                            );
+                            && invalid_batch_retry_count < 3
+                        {
+                            invalid_batch_retry_count += 1;
+                            warning!(
+                                "Detected an invalid cached batch token for {timeline_kind}; clearing the room event cache and retrying (attempt {invalid_batch_retry_count}/3)."
+                            );
+
+                            let mut should_retry = false;
+                            if let Some(room) = client.as_ref().and_then(|client| client.get_room(&room_id)) {
+                                match room.event_cache().await {
+                                    Ok((room_event_cache, _drop_handles)) => {
+                                        match room_event_cache.clear().await {
+                                            Ok(()) => {
+                                                should_retry = true;
+                                            }
+                                            Err(clear_error) => {
+                                                warning!(
+                                                    "Failed to clear event cache for room {room_id} after invalid batch token: {clear_error}"
+                                                );
+                                            }
                                         }
                                     }
-                                }
-                                Err(event_cache_error) => {
-                                    warning!(
-                                        "Failed to access room event cache for room {room_id} after invalid batch token: {event_cache_error}"
-                                    );
+                                    Err(event_cache_error) => {
+                                        warning!(
+                                            "Failed to access room event cache for room {room_id} after invalid batch token: {event_cache_error}"
+                                        );
+                                    }
                                 }
                             }
+
+                            if !should_retry {
+                                break;
+                            }
+
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            res = timeline.paginate_backwards(num_events).await;
                         }
                     }
 

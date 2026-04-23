@@ -1111,13 +1111,15 @@ impl RoomsList {
             for_each_room_id_in_display_order(self.all_known_rooms_order.iter(), |room_id| {
                 if let Some(jr) = self.all_joined_rooms.get(room_id) {
                     if should_display_room!(self, room_id, jr) {
-                        seen_joined.insert(room_id.clone());
-                        push_joined_room(room_id, jr);
+                        if seen_joined.insert(room_id.clone()) {
+                            push_joined_room(room_id, jr);
+                        }
                     }
                 } else if let Some(ir) = invited_rooms_ref.get(room_id) {
                     if should_display_room!(self, room_id, ir) {
-                        seen_invited.insert(room_id.clone());
-                        new_displayed_invited_rooms.push(room_id.clone());
+                        if seen_invited.insert(room_id.clone()) {
+                            new_displayed_invited_rooms.push(room_id.clone());
+                        }
                     }
                 }
             });
