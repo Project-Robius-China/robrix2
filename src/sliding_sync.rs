@@ -36,7 +36,7 @@ use robius_open::Uri;
 use ruma::{OwnedRoomOrAliasId, RoomId, events::tag::Tags};
 use tokio::{
     runtime::Handle,
-    sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, watch, Notify}, task::JoinHandle, time::error::Elapsed,
+    sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
 };
 use url::Url;
 use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefault, DefaultHasher}, iter::Peekable, ops::{Deref, DerefMut, Not}, path::{ Path, PathBuf }, sync::{Arc, LazyLock, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
@@ -513,10 +513,30 @@ async fn login(
             }
             Ok((client, None, is_add_account, client_session))
         }
+        LoginRequest::LoginByOidcSuccess(client, client_session, is_add_account) => {
+            // Mirrors the SSO arm: the OIDC worker already performed
+            // finish_login, so the client is fully authenticated. We only
+            // need to persist and return — finalize_authenticated_client in
+            // the outer loop handles account-manager + rooms-list status.
+            if let Err(e) = persistence::save_session(&client, client_session.clone()).await {
+                error!("Failed to save session state to storage: {e:?}");
+            }
+            Ok((client, None, is_add_account, client_session))
+        }
         LoginRequest::HomeserverLoginTypesQuery(_) => {
             bail!("LoginRequest::HomeserverLoginTypesQuery not handled earlier");
         }
     }
+}
+
+/// Thin wrapper around `build_client` that exposes just what the OIDC worker
+/// needs, without leaking the private `Cli` type across module boundaries.
+pub(crate) async fn build_client_for_oidc(
+    homeserver: Option<String>,
+    proxy: Option<String>,
+) -> std::result::Result<(Client, ClientSessionPersisted), ClientBuildError> {
+    let cli = Cli { homeserver, proxy, ..Default::default() };
+    build_client(&cli, app_data_dir()).await
 }
 
 
@@ -1582,6 +1602,12 @@ pub enum LoginRequest{
     LoginByPassword(LoginByPassword),
     Register(RegisterAccount),
     LoginBySSOSuccess(Client, ClientSessionPersisted, bool),
+    /// Sent by the OIDC worker task after `OAuth::finish_login()` returns
+    /// successfully. The payload mirrors `LoginBySSOSuccess` — already-built
+    /// client + its session bundle + `is_add_account`. The main login
+    /// handler just persists the session and returns it to the outer loop,
+    /// so sync-service startup is shared with password/SSO flows.
+    LoginByOidcSuccess(Client, ClientSessionPersisted, bool),
     LoginByCli,
     HomeserverLoginTypesQuery(String),
 
@@ -1627,6 +1653,7 @@ async fn matrix_worker_task(
                 let is_add_account = match &login_request {
                     LoginRequest::LoginByPassword(lpw) => lpw.is_add_account,
                     LoginRequest::LoginBySSOSuccess(_, _, is_add) => *is_add,
+                    LoginRequest::LoginByOidcSuccess(_, _, is_add) => *is_add,
                     _ => false,
                 };
 
@@ -1694,16 +1721,53 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::StartOidcLogin { homeserver_url: _, proxy: _ } => {
-                // Stub: wired up in a follow-up commit. For now surface a
-                // failure so the UI state machine can exercise its error path.
-                Cx::post_action(LoginAction::OidcLoginFailed(
-                    "OIDC worker is not yet implemented.".to_string(),
-                ));
+            MatrixRequest::StartOidcLogin { homeserver_url, proxy } => {
+                // If a prior OIDC flow is still hanging on somehow, drop its
+                // cancel tx before installing the new one. The old worker's
+                // rx will see a sender-dropped signal and clean up on its own.
+                let (cancel_tx, cancel_rx) = oneshot::channel();
+                *OIDC_CANCEL_TX.lock().unwrap() = Some(cancel_tx);
+
+                let login_sender = login_sender.clone();
+                tokio::spawn(async move {
+                    let outcome = crate::login::oidc_login::start_oidc_login(
+                        homeserver_url,
+                        proxy,
+                        cancel_rx,
+                    ).await;
+
+                    match outcome {
+                        Ok((client, client_session, user_id)) => {
+                            log!("OIDC login succeeded for {user_id}; forwarding to login pipeline.");
+                            if let Err(e) = login_sender.send(
+                                LoginRequest::LoginByOidcSuccess(client, client_session, false)
+                            ).await {
+                                error!("Failed to forward OIDC login result: {e:?}");
+                                Cx::post_action(LoginAction::OidcLoginFailed(
+                                    "BUG: couldn't hand OIDC login result to the login pipeline.".to_string(),
+                                ));
+                            }
+                        }
+                        Err(crate::login::oidc_login::OidcLoginError::Cancelled) => {
+                            Cx::post_action(LoginAction::OidcLoginCancelled);
+                        }
+                        Err(e) => {
+                            error!("OIDC login failed: {e:?}");
+                            let msg = crate::login::oidc_login::map_oidc_error(&e);
+                            Cx::post_action(LoginAction::OidcLoginFailed(msg));
+                        }
+                    }
+
+                    // Release the cancel slot so the next login attempt can install its own.
+                    *OIDC_CANCEL_TX.lock().unwrap() = None;
+                });
             }
 
             MatrixRequest::CancelOidcLogin => {
-                // Stub: no in-flight OIDC flow to cancel yet.
+                // Pop the cancel sender and fire. If nothing is in flight this is a no-op.
+                if let Some(tx) = OIDC_CANCEL_TX.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
             }
 
             MatrixRequest::RegisterViaUiaa { username, password, homeserver_url } => {
@@ -4100,6 +4164,15 @@ fn get_room_timeline(room_id: &RoomId) -> Option<Arc<Timeline>> {
 
 /// The logged-in Matrix client, which can be freely and cheaply cloned.
 static CLIENT: Mutex<Option<Client>> = Mutex::new(None);
+
+/// Cancel channel for an in-flight `MatrixRequest::StartOidcLogin`.
+///
+/// `Some(tx)` while an OIDC flow is running; set back to `None` once the
+/// worker task finishes (success, cancel, or error). `MatrixRequest::CancelOidcLogin`
+/// pops the sender and fires `()` — the OIDC worker's `tokio::select!` then
+/// takes the cancel branch, aborts matrix-sdk's pending state, and returns
+/// `OidcLoginError::Cancelled`.
+static OIDC_CANCEL_TX: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
 
 pub fn get_client() -> Option<Client> {
     CLIENT.lock().unwrap().clone()
