@@ -7,13 +7,19 @@
 
 FROM rust:bookworm AS builder
 WORKDIR /work
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN rm -rf /var/lib/apt/lists/* /var/lib/apt/extended_states /var/cache/apt/archives/*.deb \
+    && apt-get clean \
+    && apt-get update \
+    && dpkg --configure -a || true \
+    && apt-get install -y --no-install-recommends \
     libclang-dev libpq-dev cmake \
     && rm -rf /var/lib/apt/lists/*
 COPY ./repos/palpo .
+ENV CARGO_PROFILE_RELEASE_LTO=false
+ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    cargo build --release && cp target/release/palpo /usr/local/bin/palpo && cargo clean
+    cargo build --release && cp target/release/palpo /usr/local/bin/palpo
 
 FROM debian:bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
