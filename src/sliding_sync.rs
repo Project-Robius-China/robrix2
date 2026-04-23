@@ -46,7 +46,7 @@ use crate::{
     account_manager::{self, Account},
     app::{AppStateAction, RoomFilterRemoteSearchAction}, app_data_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
         add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
-    }, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
+    }, homeserver::{CapabilityProbeAction, HsCapabilities, IdentityProviderSummary}, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
     }, room::{FetchedRoomAvatar, FetchedRoomPreview, RoomPreviewAction}, shared::{
@@ -713,7 +713,7 @@ pub enum MatrixRequest {
     Login(LoginRequest),
     /// Probe a homeserver's registration capabilities.
     /// Sent from RegisterScreen's Next button; result arrives via
-    /// `RegisterAction::CapabilitiesDiscovered` / `DiscoveryFailed`.
+    /// `CapabilityProbeAction::Discovered` / `Failed`.
     DiscoverHomeserverCapabilities {
         /// Already-normalized homeserver URL (has scheme, no trailing slash).
         url: String,
@@ -1659,13 +1659,13 @@ async fn matrix_worker_task(
                     let requested_url = url.clone();
                     match discover_homeserver_capabilities(&url).await {
                         Ok(caps) => {
-                            Cx::post_action(crate::register::RegisterAction::CapabilitiesDiscovered {
+                            Cx::post_action(CapabilityProbeAction::Discovered {
                                 requested_url,
                                 caps: Box::new(caps),
                             });
                         }
                         Err(e) => {
-                            Cx::post_action(crate::register::RegisterAction::DiscoveryFailed {
+                            Cx::post_action(CapabilityProbeAction::Failed {
                                 requested_url,
                                 error: e.to_string(),
                             });
@@ -6699,8 +6699,7 @@ pub async fn clear_app_state(config: &LogoutConfig) -> Result<()> {
 /// response bodies are read as text and parsed via `serde_json::from_str`.
 async fn discover_homeserver_capabilities(
     raw_url: &str,
-) -> anyhow::Result<crate::register::HsCapabilities> {
-    use crate::register::{HsCapabilities, IdentityProviderSummary};
+) -> anyhow::Result<HsCapabilities> {
     use serde_json::Value;
 
     let http = matrix_sdk::reqwest::Client::builder()
@@ -6717,7 +6716,7 @@ async fn discover_homeserver_capabilities(
 
     // Step 1: .well-known (lenient — default base_url = raw_url on failure).
     let wk_url = format!("{raw_url}/.well-known/matrix/client");
-    let (base_url, is_mas, mas_signup_url) = match http.get(&wk_url).send().await {
+    let (base_url, is_mas, mas_signup_url, mas_issuer_url) = match http.get(&wk_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = body_json(resp).await;
             let base = body
@@ -6734,17 +6733,18 @@ async fn discover_homeserver_capabilities(
             // `account` field is for post-login account management (requires a
             // session) — opening it while unauthenticated loops between
             // /account/ and /login, so we do NOT use it here.
-            let (mas, mas_signup_url) = ["m.authentication", "org.matrix.msc2965.authentication"]
+            let (mas, mas_signup_url, mas_issuer_url) = ["m.authentication", "org.matrix.msc2965.authentication"]
                 .iter()
                 .find_map(|key: &&str| {
                     let issuer = body.get(*key)?.get("issuer").and_then(|v: &Value| v.as_str())?;
-                    let signup = format!("{}/register", issuer.trim_end_matches('/'));
-                    Some((true, Some(signup)))
+                    let issuer = issuer.trim_end_matches('/').to_string();
+                    let signup = format!("{issuer}/register");
+                    Some((true, Some(signup), Some(issuer)))
                 })
-                .unwrap_or((false, None));
-            (base, mas, mas_signup_url)
+                .unwrap_or((false, None, None));
+            (base, mas, mas_signup_url, mas_issuer_url)
         }
-        _ => (raw_url.trim_end_matches('/').to_string(), false, None),
+        _ => (raw_url.trim_end_matches('/').to_string(), false, None, None),
     };
 
     // Step 2: versions — liveness (fatal if unreachable).
@@ -6824,6 +6824,7 @@ async fn discover_homeserver_capabilities(
         uiaa_probe,
         sso_providers,
         mas_signup_url,
+        mas_issuer_url,
     })
 }
 

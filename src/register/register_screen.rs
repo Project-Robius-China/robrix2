@@ -11,8 +11,9 @@
 
 use makepad_widgets::*;
 
+use crate::homeserver::{CapabilityProbeAction, HsCapabilities};
 use crate::login::login_screen::LoginAction;
-use crate::register::{HsCapabilities, RegisterAction, RegisterMode};
+use crate::register::{RegisterAction, RegisterMode};
 use crate::register::validation::{normalize_homeserver_url, HomeserverUrlError};
 use crate::sliding_sync::{submit_async_request, MatrixRequest};
 
@@ -441,8 +442,8 @@ impl WidgetMatchEvent for RegisterScreen {
         }
 
         for action in actions {
-            match action.downcast_ref::<RegisterAction>() {
-                Some(RegisterAction::CapabilitiesDiscovered { requested_url, caps }) => {
+            match action.downcast_ref::<CapabilityProbeAction>() {
+                Some(CapabilityProbeAction::Discovered { requested_url, caps }) => {
                     // Drop out-of-order response from a superseded Next click.
                     if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
                         continue;
@@ -501,7 +502,7 @@ impl WidgetMatchEvent for RegisterScreen {
                     }
                     self.last_discovery = Some(caps.clone());
                 }
-                Some(RegisterAction::DiscoveryFailed { requested_url, error }) => {
+                Some(CapabilityProbeAction::Failed { requested_url, error }) => {
                     if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
                         continue;
                     }
@@ -513,6 +514,12 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.last_discovery = None;
                     self.last_discovery_input_url = None;
                 }
+                _ => {}
+            }
+        }
+
+        for action in actions {
+            match action.downcast_ref::<RegisterAction>() {
                 Some(RegisterAction::RegistrationSubmitted) => {}
                 Some(RegisterAction::RegistrationSuccess) => {
                     // Full reset: the same widget instance is reused on re-entry
