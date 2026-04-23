@@ -4348,7 +4348,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
     let mut initial_client_opt = new_login_opt;
 
     loop {
-        let (client, sync_service, logged_in_user_id) = 'login_loop: loop {
+        let (client, sync_service, logged_in_user_id, client_session) = 'login_loop: loop {
             let (client, _sync_token, validate_session, session) = match initial_client_opt.take() {
                 Some(login) => login,
                 None => {
@@ -4414,7 +4414,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             let account = account_manager::Account {
                 client: client.clone(),
                 user_id: logged_in_user_id.clone(),
-                session,
+                session: session.clone(),
                 display_name: None,
                 avatar_url: None,
             };
@@ -4464,14 +4464,14 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                 }
             };
 
-            break 'login_loop (client, sync_service, logged_in_user_id);
+            break 'login_loop (client, sync_service, logged_in_user_id, session);
         };
 
         let (session_reset_sender, mut session_reset_receiver) =
             tokio::sync::mpsc::unbounded_channel::<SessionResetAction>();
         // Listen for session changes, e.g., when the access token becomes invalid.
         let session_change_handler_task =
-            handle_session_changes(client.clone(), session_reset_sender);
+            handle_session_changes(client.clone(), client_session.clone(), session_reset_sender);
 
         // Signal login success now that SyncService::build() has already succeeded (inside
         // 'login_loop), which is the only step that can fail with an invalid/expired token.
@@ -4630,7 +4630,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             REQUEST_SENDER.lock().unwrap().replace(sender);
             // Restore session for the switched account
             match persistence::restore_session(Some(switch_user_id.clone())).await {
-                Ok((client, _sync_token, _session)) => {
+                Ok((client, _sync_token, session)) => {
                     // Store the client
                     CLIENT.lock().unwrap().replace(client.clone());
 
@@ -4667,7 +4667,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                     let (session_reset_sender, mut session_reset_receiver) =
                         tokio::sync::mpsc::unbounded_channel::<SessionResetAction>();
                     let session_change_handler_task =
-                        handle_session_changes(client.clone(), session_reset_sender);
+                        handle_session_changes(client.clone(), session.clone(), session_reset_sender);
 
                     let mut matrix_worker_task_handle = rt.spawn(matrix_worker_task(receiver, login_sender));
                     let mut room_list_service_task = rt.spawn(room_list_service_loop(room_list_service));
@@ -5529,6 +5529,7 @@ fn is_invalid_token_error(e: &sync_service::Error) -> bool {
 /// so the user is prompted to log in again.
 fn handle_session_changes(
     client: Client,
+    client_session: ClientSessionPersisted,
     session_reset_sender: UnboundedSender<SessionResetAction>,
 ) -> JoinHandle<()> {
     let mut receiver = client.subscribe_to_session_changes();
@@ -5554,7 +5555,14 @@ fn handle_session_changes(
                     // for every rejected request, but one re-login prompt suffices.
                     break;
                 }
-                Ok(SessionChange::TokensRefreshed) => {}
+                Ok(SessionChange::TokensRefreshed) => {
+                    // OAuth refresh lands new access/refresh tokens inside the client;
+                    // save_session() re-reads them via client.session() and rewrites the
+                    // on-disk FullSessionPersisted so a restart picks up the fresh pair.
+                    if let Err(e) = persistence::save_session(&client, client_session.clone()).await {
+                        warning!("Failed to persist refreshed session tokens: {e}");
+                    }
+                }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     warning!("Session change receiver lagged, missed {n} messages.");
                 }
