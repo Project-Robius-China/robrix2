@@ -3,7 +3,7 @@ use std::ops::Not;
 use makepad_widgets::*;
 use url::Url;
 
-use crate::{app::AppState, i18n::{AppLanguage, tr_fmt, tr_key}, sliding_sync::{submit_async_request, AccountSwitchAction, LoginByPassword, LoginRequest, MatrixRequest}};
+use crate::{app::AppState, homeserver::LoginMode, i18n::{AppLanguage, tr_fmt, tr_key}, sliding_sync::{submit_async_request, AccountSwitchAction, LoginByPassword, LoginRequest, MatrixRequest}};
 use crate::register::RegisterAction;
 
 use super::login_status_modal::{LoginStatusModalAction, LoginStatusModalWidgetExt};
@@ -14,6 +14,17 @@ fn should_show_login_failure_modal(
     error: &str,
 ) -> bool {
     !suppress_login_failure_modal && last_failure_message_shown != Some(error)
+}
+
+/// Whether the login_button click should trigger a homeserver capability
+/// probe before attempting to log in.
+///
+/// Pure predicate so the decision can be unit-tested without driving a
+/// LoginScreen instance: we probe whenever we haven't yet classified this
+/// homeserver into Password vs MasOidc, and no OIDC flow is already in
+/// flight (re-probing mid-OAuth would clobber the session we're building).
+fn should_probe_homeserver(login_mode: Option<LoginMode>, oidc_in_flight: bool) -> bool {
+    login_mode.is_none() && !oidc_in_flight
 }
 
 script_mod! {
@@ -1228,7 +1239,8 @@ pub enum LoginAction {
 
 #[cfg(test)]
 mod tests {
-    use super::should_show_login_failure_modal;
+    use super::{should_probe_homeserver, should_show_login_failure_modal};
+    use crate::homeserver::LoginMode;
 
     #[test]
     fn login_failure_modal_is_suppressed_while_register_flow_is_active() {
@@ -1243,5 +1255,21 @@ mod tests {
     #[test]
     fn fresh_login_failure_message_is_shown_when_not_suppressed() {
         assert!(should_show_login_failure_modal(false, Some("old"), "boom"));
+    }
+
+    #[test]
+    fn capability_probe_is_required_when_login_mode_is_unknown() {
+        assert!(should_probe_homeserver(None, false));
+    }
+
+    #[test]
+    fn capability_probe_is_not_required_when_mode_already_classified() {
+        assert!(!should_probe_homeserver(Some(LoginMode::Password), false));
+        assert!(!should_probe_homeserver(Some(LoginMode::MasOidc), false));
+    }
+
+    #[test]
+    fn capability_probe_is_not_required_while_oidc_login_is_in_flight() {
+        assert!(!should_probe_homeserver(None, true));
     }
 }
