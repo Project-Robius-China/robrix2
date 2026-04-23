@@ -754,6 +754,7 @@ pub enum MatrixRequest {
     StartOidcLogin {
         homeserver_url: String,
         proxy: Option<String>,
+        is_add_account: bool,
     },
     /// Abort the in-flight OIDC login. Posted by LoginScreen's Cancel button.
     /// No-op if no OIDC login is currently in flight.
@@ -1721,12 +1722,14 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::StartOidcLogin { homeserver_url, proxy } => {
-                // If a prior OIDC flow is still hanging on somehow, drop its
-                // cancel tx before installing the new one. The old worker's
-                // rx will see a sender-dropped signal and clean up on its own.
-                let (cancel_tx, cancel_rx) = oneshot::channel();
-                *OIDC_CANCEL_TX.lock().unwrap() = Some(cancel_tx);
+            MatrixRequest::StartOidcLogin { homeserver_url, proxy, is_add_account } => {
+                let (flow_id, cancel_rx) = match try_start_oidc_flow() {
+                    Ok(flow) => flow,
+                    Err(msg) => {
+                        warning!("{msg}");
+                        continue;
+                    }
+                };
 
                 let login_sender = login_sender.clone();
                 tokio::spawn(async move {
@@ -1740,7 +1743,7 @@ async fn matrix_worker_task(
                         Ok((client, client_session, user_id)) => {
                             log!("OIDC login succeeded for {user_id}; forwarding to login pipeline.");
                             if let Err(e) = login_sender.send(
-                                LoginRequest::LoginByOidcSuccess(client, client_session, false)
+                                LoginRequest::LoginByOidcSuccess(client, client_session, is_add_account)
                             ).await {
                                 error!("Failed to forward OIDC login result: {e:?}");
                                 Cx::post_action(LoginAction::OidcLoginFailed(
@@ -1758,16 +1761,12 @@ async fn matrix_worker_task(
                         }
                     }
 
-                    // Release the cancel slot so the next login attempt can install its own.
-                    *OIDC_CANCEL_TX.lock().unwrap() = None;
+                    finish_oidc_flow(flow_id);
                 });
             }
 
             MatrixRequest::CancelOidcLogin => {
-                // Pop the cancel sender and fire. If nothing is in flight this is a no-op.
-                if let Some(tx) = OIDC_CANCEL_TX.lock().unwrap().take() {
-                    let _ = tx.send(());
-                }
+                cancel_active_oidc_flow();
             }
 
             MatrixRequest::RegisterViaUiaa { username, password, homeserver_url } => {
@@ -4165,14 +4164,77 @@ fn get_room_timeline(room_id: &RoomId) -> Option<Arc<Timeline>> {
 /// The logged-in Matrix client, which can be freely and cheaply cloned.
 static CLIENT: Mutex<Option<Client>> = Mutex::new(None);
 
-/// Cancel channel for an in-flight `MatrixRequest::StartOidcLogin`.
+struct ActiveOidcFlow {
+    flow_id: u64,
+    cancel_tx: oneshot::Sender<()>,
+}
+
+#[derive(Default)]
+struct OidcFlowSlot {
+    next_flow_id: u64,
+    active_flow: Option<ActiveOidcFlow>,
+}
+
+impl OidcFlowSlot {
+    fn try_start_flow(&mut self) -> std::result::Result<(u64, oneshot::Receiver<()>), &'static str> {
+        if self.active_flow.is_some() {
+            return Err("OIDC login already in progress");
+        }
+
+        self.next_flow_id += 1;
+        let flow_id = self.next_flow_id;
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        self.active_flow = Some(ActiveOidcFlow { flow_id, cancel_tx });
+        Ok((flow_id, cancel_rx))
+    }
+
+    fn finish_flow(&mut self, flow_id: u64) {
+        if self
+            .active_flow
+            .as_ref()
+            .is_some_and(|active| active.flow_id == flow_id)
+        {
+            self.active_flow = None;
+        }
+    }
+
+    fn cancel_active_flow(&mut self) -> bool {
+        if let Some(active) = self.active_flow.take() {
+            let _ = active.cancel_tx.send(());
+            true
+        } else {
+            false
+        }
+    }
+
+    #[cfg(test)]
+    fn has_active_flow(&self) -> bool {
+        self.active_flow.is_some()
+    }
+}
+
+/// Single active OIDC flow slot.
 ///
-/// `Some(tx)` while an OIDC flow is running; set back to `None` once the
-/// worker task finishes (success, cancel, or error). `MatrixRequest::CancelOidcLogin`
-/// pops the sender and fires `()` — the OIDC worker's `tokio::select!` then
-/// takes the cancel branch, aborts matrix-sdk's pending state, and returns
-/// `OidcLoginError::Cancelled`.
-static OIDC_CANCEL_TX: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
+/// We keep this generation-scoped rather than storing a bare sender so that a
+/// late cleanup from an older flow cannot drop the cancel handle for a newer
+/// loopback server. That race would make the browser land on `127.0.0.1`
+/// after the local listener had already been torn down.
+static OIDC_FLOW_SLOT: Mutex<OidcFlowSlot> = Mutex::new(OidcFlowSlot {
+    next_flow_id: 0,
+    active_flow: None,
+});
+
+fn try_start_oidc_flow() -> std::result::Result<(u64, oneshot::Receiver<()>), &'static str> {
+    OIDC_FLOW_SLOT.lock().unwrap().try_start_flow()
+}
+
+fn finish_oidc_flow(flow_id: u64) {
+    OIDC_FLOW_SLOT.lock().unwrap().finish_flow(flow_id);
+}
+
+fn cancel_active_oidc_flow() -> bool {
+    OIDC_FLOW_SLOT.lock().unwrap().cancel_active_flow()
+}
 
 pub fn get_client() -> Option<Client> {
     CLIENT.lock().unwrap().clone()
@@ -6774,6 +6836,7 @@ impl UserPowerLevels {
 
 /// Shuts down the current Tokio runtime completely and takes ownership to ensure proper cleanup.
 pub fn shutdown_background_tasks() {
+    cancel_active_oidc_flow();
     if let Some(runtime) = TOKIO_RUNTIME.lock().unwrap().take() {
         runtime.shutdown_background();
     }
@@ -6782,6 +6845,7 @@ pub fn shutdown_background_tasks() {
 pub async fn clear_app_state(config: &LogoutConfig) -> Result<()> {
     // Clear resources normally, allowing them to be properly dropped
     // This prevents memory leaks when users logout and login again without closing the app
+    cancel_active_oidc_flow();
     CLIENT.lock().unwrap().take();
     SYNC_SERVICE.lock().unwrap().take();
     REQUEST_SENDER.lock().unwrap().take();
@@ -6943,7 +7007,7 @@ async fn discover_homeserver_capabilities(
 
 #[cfg(test)]
 mod tests {
-    use super::worker_shutdown_is_unexpected;
+    use super::{OidcFlowSlot, worker_shutdown_is_unexpected};
 
     #[test]
     fn worker_shutdown_is_not_unexpected_during_logout() {
@@ -6958,5 +7022,31 @@ mod tests {
     #[test]
     fn worker_shutdown_is_unexpected_without_controlled_teardown() {
         assert!(worker_shutdown_is_unexpected(false, false));
+    }
+
+    #[test]
+    fn oidc_flow_slot_rejects_duplicate_start_until_cleared() {
+        let mut slot = OidcFlowSlot::default();
+
+        let _first = slot.try_start_flow().unwrap();
+        assert!(slot.try_start_flow().is_err());
+
+        assert!(slot.cancel_active_flow());
+        assert!(slot.try_start_flow().is_ok());
+    }
+
+    #[test]
+    fn oidc_flow_slot_finish_is_scoped_to_matching_generation() {
+        let mut slot = OidcFlowSlot::default();
+
+        let (first_id, _first_rx) = slot.try_start_flow().unwrap();
+        assert!(slot.cancel_active_flow());
+
+        let (second_id, _second_rx) = slot.try_start_flow().unwrap();
+        slot.finish_flow(first_id);
+        assert!(slot.has_active_flow());
+
+        slot.finish_flow(second_id);
+        assert!(!slot.has_active_flow());
     }
 }

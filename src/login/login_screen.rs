@@ -869,6 +869,54 @@ impl LoginScreen {
         Ok(Some(proxy_url))
     }
 
+    fn clear_homeserver_classification(&mut self) {
+        self.login_mode = None;
+        self.last_discovery_input_url = None;
+        self.discovery_pending = false;
+    }
+
+    fn show_password_login_branch(&mut self, cx: &mut Cx) {
+        self.view.view(cx, ids!(oidc_card)).set_visible(cx, false);
+        self.view.text_input(cx, ids!(user_id_input)).set_visible(cx, true);
+        self.view.text_input(cx, ids!(password_input)).set_visible(cx, true);
+        self.view.button(cx, ids!(login_button)).set_visible(cx, true);
+        self.view.view(cx, ids!(sso_view)).set_visible(cx, true);
+        self.view.label(cx, ids!(sso_prompt_label)).set_visible(cx, true);
+        self.view.label(cx, ids!(oidc_info_title))
+            .set_text(cx, tr_key(self.app_language, "login.oidc.info_title"));
+        self.view.label(cx, ids!(oidc_info_body))
+            .set_text(cx, tr_key(self.app_language, "login.oidc.info_body"));
+        self.view.button(cx, ids!(oidc_continue_button))
+            .set_text(cx, tr_key(self.app_language, "login.button.continue_in_browser"));
+        self.view.button(cx, ids!(oidc_continue_button)).set_visible(cx, true);
+        self.view.label(cx, ids!(oidc_status_label)).set_visible(cx, false);
+        self.view.button(cx, ids!(oidc_cancel_button)).set_visible(cx, false);
+    }
+
+    fn show_oidc_login_branch(&mut self, cx: &mut Cx) {
+        self.view.button(cx, ids!(login_button)).set_visible(cx, false);
+        self.view.text_input(cx, ids!(user_id_input)).set_visible(cx, false);
+        self.view.text_input(cx, ids!(password_input)).set_visible(cx, false);
+        self.view.view(cx, ids!(sso_view)).set_visible(cx, false);
+        self.view.label(cx, ids!(sso_prompt_label)).set_visible(cx, false);
+        self.view.label(cx, ids!(oidc_info_title))
+            .set_text(cx, tr_key(self.app_language, "login.oidc.info_title"));
+        self.view.label(cx, ids!(oidc_info_body))
+            .set_text(cx, tr_key(self.app_language, "login.oidc.info_body"));
+        self.view.button(cx, ids!(oidc_continue_button))
+            .set_text(cx, tr_key(self.app_language, "login.button.continue_in_browser"));
+        self.view.button(cx, ids!(oidc_continue_button)).set_visible(cx, true);
+        self.view.label(cx, ids!(oidc_status_label)).set_visible(cx, false);
+        self.view.button(cx, ids!(oidc_cancel_button)).set_visible(cx, false);
+        self.view.view(cx, ids!(oidc_card)).set_visible(cx, true);
+    }
+
+    fn reset_oidc_screen_state(&mut self, cx: &mut Cx) {
+        self.oidc_in_flight = false;
+        self.clear_homeserver_classification();
+        self.show_password_login_branch(cx);
+    }
+
 }
 
 impl ScriptHook for LoginScreen {
@@ -936,6 +984,14 @@ impl WidgetMatchEvent for LoginScreen {
             self.set_use_proxy_enabled(cx, enabled);
         }
 
+        if homeserver_input.changed(actions).is_some() {
+            self.clear_homeserver_classification();
+            if !self.oidc_in_flight {
+                self.show_password_login_branch(cx);
+                self.redraw(cx);
+            }
+        }
+
         if self.view.button(cx, ids!(proxy_settings_save_button)).clicked(actions) {
             match self.build_proxy_url_from_form(cx) {
                 Ok(proxy_url) => {
@@ -974,10 +1030,10 @@ impl WidgetMatchEvent for LoginScreen {
         if cancel_button.clicked(actions) {
             self.adding_account = false;
             self.reset_sso_state(cx);
+            self.reset_oidc_screen_state(cx);
             // Reset the UI back to normal login mode
             self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
             cancel_button.set_visible(cx, false);
-            self.view.view(cx, ids!(sso_view)).set_visible(cx, true);
             mode_toggle_button.set_visible(cx, true);
             cx.action(LoginAction::CancelAddAccount);
             self.redraw(cx);
@@ -1010,10 +1066,17 @@ impl WidgetMatchEvent for LoginScreen {
             let password = password_input.text();
             let homeserver = homeserver_input.text().trim().to_owned();
 
-            // Invalidate any cached login_mode if the user edited the homeserver
-            // field since the last probe — the classification is tied to that URL.
-            if self.last_discovery_input_url.as_deref() != Some(homeserver.as_str()) {
-                self.login_mode = None;
+            // Defensive backstop for cases where the homeserver field was
+            // updated programmatically rather than through a Changed action.
+            // Compare normalized URLs so `matrix.org` and
+            // `https://matrix.org` count as the same probe target.
+            let normalized_homeserver = homeserver
+                .is_empty()
+                .not()
+                .then(|| normalize_homeserver_url(&homeserver).ok())
+                .flatten();
+            if self.last_discovery_input_url.as_deref() != normalized_homeserver.as_deref() {
+                self.clear_homeserver_classification();
             }
 
             // Defensive guard: in MAS mode the login_button should be hidden
@@ -1113,6 +1176,9 @@ impl WidgetMatchEvent for LoginScreen {
         if self.view.button(cx, ids!(oidc_continue_button)).clicked(actions)
             && !self.oidc_in_flight
         {
+            if !matches!(self.login_mode, Some(LoginMode::MasOidc)) {
+                return;
+            }
             let homeserver = homeserver_input.text().trim().to_owned();
             match self.build_proxy_url_from_form(cx) {
                 Ok(proxy) => {
@@ -1122,6 +1188,7 @@ impl WidgetMatchEvent for LoginScreen {
                     submit_async_request(MatrixRequest::StartOidcLogin {
                         homeserver_url: homeserver,
                         proxy,
+                        is_add_account: self.adding_account,
                     });
                     self.redraw(cx);
                 }
@@ -1166,6 +1233,7 @@ impl WidgetMatchEvent for LoginScreen {
             if let Some(RegisterAction::NavigateToLogin) = action.downcast_ref() {
                 self.suppress_login_failure_modal = false;
                 self.last_failure_message_shown = None;
+                self.reset_oidc_screen_state(cx);
                 login_status_modal.close(cx);
             }
 
@@ -1183,38 +1251,13 @@ impl WidgetMatchEvent for LoginScreen {
                         .set_text(cx, tr_key(self.app_language, "login.button.login"));
                     let resolved = login_mode(caps.as_ref());
                     self.login_mode = Some(resolved);
-                    let oidc_card = self.view.view(cx, ids!(oidc_card));
-                    let sso_view = self.view.view(cx, ids!(sso_view));
-                    let sso_prompt = self.view.label(cx, ids!(sso_prompt_label));
                     match resolved {
                         LoginMode::MasOidc => {
-                            // Flip to the MAS branch: hide password + SSO,
-                            // show the browser-sign-in card with fresh copy.
-                            login_button.set_visible(cx, false);
-                            user_id_input.set_visible(cx, false);
-                            password_input.set_visible(cx, false);
-                            sso_view.set_visible(cx, false);
-                            sso_prompt.set_visible(cx, false);
-                            self.view.label(cx, ids!(oidc_info_title))
-                                .set_text(cx, tr_key(self.app_language, "login.oidc.info_title"));
-                            self.view.label(cx, ids!(oidc_info_body))
-                                .set_text(cx, tr_key(self.app_language, "login.oidc.info_body"));
-                            self.view.button(cx, ids!(oidc_continue_button))
-                                .set_text(cx, tr_key(self.app_language, "login.button.continue_in_browser"));
-                            self.view.button(cx, ids!(oidc_continue_button)).set_visible(cx, true);
-                            self.view.label(cx, ids!(oidc_status_label)).set_visible(cx, false);
-                            self.view.button(cx, ids!(oidc_cancel_button)).set_visible(cx, false);
-                            oidc_card.set_visible(cx, true);
+                            self.show_oidc_login_branch(cx);
                             login_status_modal.close(cx);
                         }
                         LoginMode::Password => {
-                            // Default branch: restore the normal password form.
-                            oidc_card.set_visible(cx, false);
-                            login_button.set_visible(cx, true);
-                            user_id_input.set_visible(cx, true);
-                            password_input.set_visible(cx, true);
-                            sso_view.set_visible(cx, true);
-                            sso_prompt.set_visible(cx, true);
+                            self.show_password_login_branch(cx);
                             login_status_modal.close(cx);
                         }
                     }
@@ -1225,8 +1268,8 @@ impl WidgetMatchEvent for LoginScreen {
                     if self.last_discovery_input_url.as_deref() != Some(requested_url.as_str()) {
                         continue;
                     }
-                    self.discovery_pending = false;
-                    self.last_discovery_input_url = None;
+                    self.clear_homeserver_classification();
+                    self.show_password_login_branch(cx);
                     self.view.button(cx, ids!(login_button))
                         .set_text(cx, tr_key(self.app_language, "login.button.login"));
                     login_status_modal_inner.set_title(
@@ -1248,7 +1291,9 @@ impl WidgetMatchEvent for LoginScreen {
                 Some(LoginAction::ShowLoginScreen) => {
                     self.suppress_login_failure_modal = false;
                     self.last_failure_message_shown = None;
+                    self.reset_oidc_screen_state(cx);
                     login_status_modal.close(cx);
+                    self.redraw(cx);
                 }
                 Some(LoginAction::CliAutoLogin { user_id, homeserver }) => {
                     self.last_failure_message_shown = None;
@@ -1283,20 +1328,10 @@ impl WidgetMatchEvent for LoginScreen {
                     self.suppress_login_failure_modal = false;
                     self.last_failure_message_shown = None;
                     self.adding_account = false;
-                    self.oidc_in_flight = false;
-                    self.login_mode = None;
-                    self.last_discovery_input_url = None;
+                    self.reset_oidc_screen_state(cx);
                     user_id_input.set_text(cx, "");
                     password_input.set_text(cx, "");
                     homeserver_input.set_text(cx, "");
-                    // Clear the MAS branch so re-entry to the login screen
-                    // starts with the default password form visible.
-                    self.view.view(cx, ids!(oidc_card)).set_visible(cx, false);
-                    user_id_input.set_visible(cx, true);
-                    password_input.set_visible(cx, true);
-                    login_button.set_visible(cx, true);
-                    self.view.view(cx, ids!(sso_view)).set_visible(cx, true);
-                    self.view.label(cx, ids!(sso_prompt_label)).set_visible(cx, true);
                     // Reset title and buttons in case we were in add-account mode
                     self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
                     cancel_button.set_visible(cx, false);
@@ -1337,6 +1372,7 @@ impl WidgetMatchEvent for LoginScreen {
                     self.suppress_login_failure_modal = false;
                     self.adding_account = true;
                     self.reset_sso_state(cx);
+                    self.reset_oidc_screen_state(cx);
                     // Update UI to "add account" mode
                     self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "settings.account.button.add_another_account"));
                     cancel_button.set_visible(cx, true);
@@ -1349,6 +1385,7 @@ impl WidgetMatchEvent for LoginScreen {
                     self.suppress_login_failure_modal = false;
                     self.adding_account = false;
                     self.reset_sso_state(cx);
+                    self.reset_oidc_screen_state(cx);
                     user_id_input.set_text(cx, "");
                     password_input.set_text(cx, "");
                     homeserver_input.set_text(cx, "");
@@ -1363,6 +1400,7 @@ impl WidgetMatchEvent for LoginScreen {
                     // Worker has launched the browser; flip the oidc_card to
                     // its waiting state and expose Cancel.
                     self.oidc_in_flight = true;
+                    self.show_oidc_login_branch(cx);
                     self.view.button(cx, ids!(oidc_continue_button)).set_visible(cx, false);
                     let status = self.view.label(cx, ids!(oidc_status_label));
                     status.set_text(cx, tr_key(self.app_language, "login.oidc.waiting_body"));
@@ -1378,9 +1416,7 @@ impl WidgetMatchEvent for LoginScreen {
                     // login.oidc.cancelled as a soft hint in the info body so
                     // they know why they're back here without a modal popup.
                     self.oidc_in_flight = false;
-                    self.view.button(cx, ids!(oidc_continue_button)).set_visible(cx, true);
-                    self.view.label(cx, ids!(oidc_status_label)).set_visible(cx, false);
-                    self.view.button(cx, ids!(oidc_cancel_button)).set_visible(cx, false);
+                    self.show_oidc_login_branch(cx);
                     self.view.label(cx, ids!(oidc_info_body))
                         .set_text(cx, tr_key(self.app_language, "login.oidc.cancelled"));
                     self.redraw(cx);
@@ -1389,9 +1425,7 @@ impl WidgetMatchEvent for LoginScreen {
                     // Same idle reset as cancel, but surface the error via
                     // the login_status_modal so it's unmissable.
                     self.oidc_in_flight = false;
-                    self.view.button(cx, ids!(oidc_continue_button)).set_visible(cx, true);
-                    self.view.label(cx, ids!(oidc_status_label)).set_visible(cx, false);
-                    self.view.button(cx, ids!(oidc_cancel_button)).set_visible(cx, false);
+                    self.show_oidc_login_branch(cx);
                     login_status_modal_inner.set_title(
                         cx,
                         tr_key(self.app_language, "login.status.login_failed"),
