@@ -1114,8 +1114,30 @@ impl WidgetMatchEvent for LoginScreen {
                     login_status_modal_inner.button_ref(cx)
                         .set_text(cx, tr_key(self.app_language, "login.status.cancel"));
                     login_status_modal.open(cx);
+                    let proxy = match self.build_proxy_url_from_form(cx) {
+                        Ok(proxy) => proxy,
+                        Err(proxy_validation_error) => {
+                            login_status_modal_inner.set_title(
+                                cx,
+                                tr_key(self.app_language, "login.status.invalid_proxy.title"),
+                            );
+                            let error_text = tr_fmt(self.app_language, "login.status.invalid_proxy.body", &[
+                                ("error", proxy_validation_error.as_str()),
+                            ]);
+                            login_status_modal_inner.set_status(cx, &error_text);
+                            login_status_modal_inner.button_ref(cx)
+                                .set_text(cx, tr_key(self.app_language, "login.status.okay"));
+                            login_status_modal.open(cx);
+                            self.redraw(cx);
+                            return;
+                        }
+                    };
+                    if let Err(e) = crate::proxy_config::save_proxy_url(proxy.as_deref()) {
+                        warning!("Failed to persist proxy configuration from homeserver probe: {e}");
+                    }
                     submit_async_request(MatrixRequest::DiscoverHomeserverCapabilities {
                         url: normalized,
+                        proxy,
                     });
                     self.redraw(cx);
                     return;

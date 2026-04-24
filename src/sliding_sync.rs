@@ -737,6 +737,9 @@ pub enum MatrixRequest {
     DiscoverHomeserverCapabilities {
         /// Already-normalized homeserver URL (has scheme, no trailing slash).
         url: String,
+        /// Optional proxy override from the login screen. Falls back to the
+        /// saved global proxy when omitted.
+        proxy: Option<String>,
     },
     /// Begin the OIDC (MAS) login flow for an already-existing account on a
     /// MAS-delegated homeserver. `homeserver_url` is the normalized URL from
@@ -1702,10 +1705,10 @@ async fn matrix_worker_task(
                 }
             }
 
-            MatrixRequest::DiscoverHomeserverCapabilities { url } => {
+            MatrixRequest::DiscoverHomeserverCapabilities { url, proxy } => {
                 tokio::spawn(async move {
                     let requested_url = url.clone();
-                    match discover_homeserver_capabilities(&url).await {
+                    match discover_homeserver_capabilities(&url, proxy.as_deref()).await {
                         Ok(caps) => {
                             Cx::post_action(CapabilityProbeAction::Discovered {
                                 requested_url,
@@ -6874,14 +6877,26 @@ pub async fn clear_app_state(config: &LogoutConfig) -> Result<()> {
 ///
 /// Note: `matrix_sdk::reqwest::Response` does not expose `.json()`, so all
 /// response bodies are read as text and parsed via `serde_json::from_str`.
+fn build_discovery_http_client(
+    proxy_override: Option<&str>,
+) -> anyhow::Result<matrix_sdk::reqwest::Client> {
+    let mut builder = matrix_sdk::reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5));
+    if let Some(proxy) = crate::proxy_config::resolve_effective_proxy_url(proxy_override) {
+        crate::proxy_config::validate_proxy_url(&proxy)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        builder = builder.proxy(matrix_sdk::reqwest::Proxy::all(&proxy)?);
+    }
+    Ok(builder.build()?)
+}
+
 async fn discover_homeserver_capabilities(
     raw_url: &str,
+    proxy_override: Option<&str>,
 ) -> anyhow::Result<HsCapabilities> {
     use serde_json::Value;
 
-    let http = matrix_sdk::reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
+    let http = build_discovery_http_client(proxy_override)?;
 
     // Helper: read response text and parse as JSON Value, returning Null on any failure.
     async fn body_json(resp: matrix_sdk::reqwest::Response) -> Value {
@@ -7007,7 +7022,7 @@ async fn discover_homeserver_capabilities(
 
 #[cfg(test)]
 mod tests {
-    use super::{OidcFlowSlot, worker_shutdown_is_unexpected};
+    use super::{OidcFlowSlot, build_discovery_http_client, worker_shutdown_is_unexpected};
 
     #[test]
     fn worker_shutdown_is_not_unexpected_during_logout() {
@@ -7048,5 +7063,18 @@ mod tests {
 
         slot.finish_flow(second_id);
         assert!(!slot.has_active_flow());
+    }
+
+    #[test]
+    fn discovery_http_client_accepts_valid_proxy_override() {
+        let client = build_discovery_http_client(Some("http://127.0.0.1:8080")).unwrap();
+        drop(client);
+    }
+
+    #[test]
+    fn discovery_http_client_rejects_invalid_proxy_override() {
+        let err = build_discovery_http_client(Some("ftp://proxy.invalid"))
+            .expect_err("invalid proxy scheme should be rejected");
+        assert!(err.to_string().contains("Unsupported proxy URL scheme"));
     }
 }
