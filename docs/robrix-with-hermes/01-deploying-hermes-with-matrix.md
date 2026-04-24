@@ -212,11 +212,11 @@ Re-run `hermes gateway` and you should see the success log above.
 >
 > This one always installs. The cost: Hermes won't see messages in encrypted rooms. This is an upstream mautrix-python dependency issue — [mautrix/python](https://github.com/mautrix/python/issues) is the better place to track it. The plaintext variant doesn't stop you from getting the rest of the flow working — just test in a non-encrypted public room (covered in the next section).
 
-### 3.5 Two of the easiest things to trip on
+### 3.5 A common pitfall
 
-These two come up often when testing from Robrix, so worth calling out up front.
+Worth calling out up front before you test from Robrix.
 
-**① Always put your own account into** `MATRIX_ALLOWED_USERS`
+**Always put your own account into** `MATRIX_ALLOWED_USERS`
 
 By default Hermes only responds to people on its allowlist. If **you**, messaging Hermes from your personal account, aren't in `MATRIX_ALLOWED_USERS`, Hermes silently ignores you.
 
@@ -255,8 +255,8 @@ The table below groups issues by where they originate. Most problems aren't on t
 | Start fails with LLM auth error, unknown model, insufficient balance | LLM provider side | Your provider's console |
 | Start fails with `Matrix: connection refused` | Matrix server isn't reachable | Confirm Palpo / your homeserver is running and the address is correct |
 | Start fails with `Matrix: login failed: M_FORBIDDEN` | Wrong account or password | Double-check §3.2 — make sure the `server_name` suffix in your user_id matches the one Palpo declares |
-| Bot receives messages but never replies (no errors in log) | Missing from allowlist | §3.5 ① — add your user_id to `MATRIX_ALLOWED_USERS` |
-| Bot doesn't receive messages in DMs | Encryption lib missing, plaintext mode can't decrypt | §3.5 ② — test in a non-encrypted room, or install the encryption variant of mautrix |
+| Bot receives messages but never replies (no errors in log) | Missing from allowlist | §3.5 — add your user_id to `MATRIX_ALLOWED_USERS` |
+| Bot doesn't receive messages in DMs | Encryption lib missing, plaintext mode can't decrypt | §3.4 — test in a non-encrypted room, or install the encryption variant of mautrix |
 | Robrix can't find the bot account | Registration didn't succeed | Log in as the bot from Element Web to confirm the account actually exists |
 | Other weird Hermes behavior (CLI crashes, odd gateway state, tool-call mess) | Hermes itself | [Hermes official docs](https://hermes-agent.nousresearch.com/docs/) / GitHub Issues |
 
