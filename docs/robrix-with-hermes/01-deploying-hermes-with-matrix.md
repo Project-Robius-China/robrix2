@@ -102,6 +102,8 @@ Hermes is installed. Next we get it to log in to your Matrix server as a regular
 
 This step is just "register a regular account on your Matrix server and pick a name for Hermes to use." The easiest way is to do it from inside Robrix:
 
+![Robrix's Create Account screen with `http://127.0.0.1:8128` filled in as the Homeserver URL (local Palpo case)](images/robrix-create-account-palpo.png)
+
 | Your Matrix server | How to register |
 | --- | --- |
 | Local Palpo | In Robrix, set the homeserver to `http://127.0.0.1:8128` and use the registration page to create a new account |
