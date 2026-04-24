@@ -1662,6 +1662,7 @@ async fn matrix_worker_task(
                     }
                     SignalToUI::set_ui_signal();
 
+                    let mut attempted_invalid_batch_token_recovery = false;
                     let mut res = if direction == PaginationDirection::Forwards {
                         timeline.paginate_forwards(num_events).await
                     } else {
@@ -1674,6 +1675,7 @@ async fn matrix_worker_task(
                             .err()
                             .is_some_and(is_invalid_batch_token_timeline_error)
                     {
+                        attempted_invalid_batch_token_recovery = true;
                         warning!(
                             "Detected an invalid cached batch token for {timeline_kind}; clearing the room event cache and retrying once."
                         );
@@ -1717,6 +1719,25 @@ async fn matrix_worker_task(
                             }
                         }
                         Err(error) => {
+                            if direction == PaginationDirection::Backwards
+                                && attempted_invalid_batch_token_recovery
+                                && is_invalid_batch_token_timeline_error(&error)
+                            {
+                                warning!(
+                                    "Still got invalid batch token for {timeline_kind} after one recovery attempt; treating as fully paginated."
+                                );
+                                if sender.send(TimelineUpdate::PaginationIdle {
+                                    fully_paginated: true,
+                                    direction,
+                                }).is_ok() {
+                                    SignalToUI::set_ui_signal();
+                                } else {
+                                    warning!(
+                                        "Dropping recovered {direction} pagination update for {timeline_kind}: timeline receiver was dropped."
+                                    );
+                                }
+                                return;
+                            }
                             if direction == PaginationDirection::Backwards
                                 && matches!(timeline_kind, TimelineKind::Thread { .. })
                                 && is_thread_unknown_parent_timeline_error(&error)
