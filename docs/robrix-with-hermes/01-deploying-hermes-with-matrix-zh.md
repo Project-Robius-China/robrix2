@@ -269,6 +269,7 @@ MATRIX_ALLOWED_USERS=@your-personal-account:192.168.1.28:8128
 - **Hermes GitHub：** [github.com/NousResearch/Hermes-Agent](https://github.com/NousResearch/Hermes-Agent)
 - **Palpo 部署指南：** [01-deploying-palpo-and-octos-zh.md](../robrix-with-palpo-and-octos/01-deploying-palpo-and-octos-zh.md)
 - **OpenClaw 对照指南：** [01-deploying-openclaw-with-matrix-zh.md](../robrix-with-openclaw/01-deploying-openclaw-with-matrix-zh.md)——OpenClaw 走的是同一种"普通 Matrix 用户"的接入模式，细节可以互相印证
+- **OpenClaw 使用指南（对 Hermes 也适用）：** [02-using-robrix-with-openclaw-zh.md](../robrix-with-openclaw/02-using-robrix-with-openclaw-zh.md)——Robrix 这一侧对任何"以普通 Matrix 用户身份登录"的 bot 看到的 UX 都一样（DM 流程、把 bot 拉进房间、@mention 行为），所以这份也覆盖了 Hermes 的日常使用
 - **Robrix × OpenClaw 架构原理：** [03-how-robrix-and-openclaw-work-together-zh.md](../robrix-with-openclaw/03-how-robrix-and-openclaw-work-together-zh.md)——这份讲的是"AI agent 作为普通 Matrix 客户端"的通用原理，对 Hermes 完全适用
 
 ---

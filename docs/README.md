@@ -68,8 +68,10 @@ For users who want to connect [Hermes Agent](https://github.com/NousResearch/Her
 |-------|------|
 | [1. Deploying Hermes with Matrix](robrix-with-hermes/01-deploying-hermes-with-matrix.md) | **Get Hermes Agent connected to a Matrix homeserver.** Install Hermes, wire up an LLM, log the bot in as a regular Matrix user, and verify end-to-end chat from Robrix. Also covers the local-Palpo `server_name` gotcha and the `mautrix[encryption]` install snag. |
 
+> **Usage and architecture:** Hermes and OpenClaw share the same "AI agent as a regular Matrix client" integration model, so from Robrix's side the usage UX is identical and the architecture is the same. For those topics see the OpenClaw guides: [2. Using Robrix with OpenClaw](robrix-with-openclaw/02-using-robrix-with-openclaw.md) and [3. How Robrix and OpenClaw Work Together](robrix-with-openclaw/03-how-robrix-and-openclaw-work-together.md).
+
 > Chinese:
-> [1. 部署 Hermes + Matrix](robrix-with-hermes/01-deploying-hermes-with-matrix-zh.md)
+> [1. 部署 Hermes + Matrix](robrix-with-hermes/01-deploying-hermes-with-matrix-zh.md) · 使用方式与架构原理同 OpenClaw：[2. 在 Robrix 上使用 OpenClaw](robrix-with-openclaw/02-using-robrix-with-openclaw-zh.md) · [3. Robrix 与 OpenClaw 协作原理](robrix-with-openclaw/03-how-robrix-and-openclaw-work-together-zh.md)
 
 ---
 

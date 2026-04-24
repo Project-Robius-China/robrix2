@@ -269,6 +269,7 @@ The table below groups issues by where they originate. Most problems aren't on t
 - **Hermes GitHub:** [github.com/NousResearch/Hermes-Agent](https://github.com/NousResearch/Hermes-Agent)
 - **Palpo deployment guide:** [01-deploying-palpo-and-octos.md](../robrix-with-palpo-and-octos/01-deploying-palpo-and-octos.md)
 - **OpenClaw companion guide:** [01-deploying-openclaw-with-matrix.md](../robrix-with-openclaw/01-deploying-openclaw-with-matrix.md) — OpenClaw uses the same "regular Matrix user" integration model, so the two guides' details can be cross-checked against each other
+- **OpenClaw usage guide (applies to Hermes too):** [02-using-robrix-with-openclaw.md](../robrix-with-openclaw/02-using-robrix-with-openclaw.md) — from Robrix's side the chat UX is identical for any bot that logs in as a regular Matrix user (DM flow, room invites, @mention behavior), so this covers how to actually use Hermes too
 - **Robrix × OpenClaw architecture:** [03-how-robrix-and-openclaw-work-together.md](../robrix-with-openclaw/03-how-robrix-and-openclaw-work-together.md) — this explains the general "AI agent as a regular Matrix client" model, which applies to Hermes too
 
 ---
