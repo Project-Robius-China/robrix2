@@ -60,6 +60,19 @@ For users who want to connect OpenClaw AI agents to Matrix, then use Robrix to c
 
 ---
 
+## Robrix + Hermes (AI Agent Framework)
+
+For users who want to connect [Hermes Agent](https://github.com/NousResearch/Hermes-Agent) to Matrix, then use Robrix to chat with it:
+
+| Guide | Goal |
+|-------|------|
+| [1. Deploying Hermes with Matrix](robrix-with-hermes/01-deploying-hermes-with-matrix.md) | **Get Hermes Agent connected to a Matrix homeserver.** Install Hermes, wire up an LLM, log the bot in as a regular Matrix user, and verify end-to-end chat from Robrix. Also covers the local-Palpo `server_name` gotcha and the `mautrix[encryption]` install snag. |
+
+> Chinese:
+> [1. 部署 Hermes + Matrix](robrix-with-hermes/01-deploying-hermes-with-matrix-zh.md)
+
+---
+
 ## Palpo and Octos Deployment Files
 
 The [`palpo-and-octos-deploy/`](../palpo-and-octos-deploy/) directory (at the repository root) holds the runnable lightweight-mode deployment — see its [README](../palpo-and-octos-deploy/README.md) for the 3-step Quickstart.
