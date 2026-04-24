@@ -489,14 +489,26 @@ fn push_indent_html(out: &mut String, width: usize) {
 }
 
 fn starts_with_chars(chars: &[char], start: usize, needle: &str) -> bool {
-    let mut idx = start;
-    for needle_ch in needle.chars() {
+    for (idx, needle_ch) in (start..).zip(needle.chars()) {
         if chars.get(idx).copied() != Some(needle_ch) {
             return false;
         }
-        idx += 1;
     }
     true
+}
+
+impl EventSourceModalRef {
+    /// Shows the modal with the given event details and JSON source.
+    pub fn show(
+        &self,
+        cx: &mut Cx,
+        room_id: OwnedRoomId,
+        event_id: Option<OwnedEventId>,
+        original_json: Option<String>,
+    ) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show(cx, room_id, event_id, original_json);
+    }
 }
 
 #[cfg(test)]
@@ -525,19 +537,5 @@ mod tests {
 
         assert!(html.contains("&lt;b&gt;拿捏中&lt;/b&gt;&lt;br&gt;ok"));
         assert!(!html.contains("<b>拿捏中</b>"));
-    }
-}
-
-impl EventSourceModalRef {
-    /// Shows the modal with the given event details and JSON source.
-    pub fn show(
-        &self,
-        cx: &mut Cx,
-        room_id: OwnedRoomId,
-        event_id: Option<OwnedEventId>,
-        original_json: Option<String>,
-    ) {
-        let Some(mut inner) = self.borrow_mut() else { return };
-        inner.show(cx, room_id, event_id, original_json);
     }
 }

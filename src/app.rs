@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use crate::{
     avatar_cache::{self, AvatarCacheEntry, clear_avatar_cache}, home::{
-        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt},
+        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
@@ -86,7 +86,7 @@ script_mod! {
             main_window := Window {
                 window.inner_size: vec2(1280, 800)
                 window.title: "Robrix"
-                pass.clear_color: #FFFFFF00
+                pass.clear_color: (COLOR_SECONDARY)
                 caption_bar +: {
                     draw_bg.color: #F3F3F3
                     caption_label +: {
@@ -99,6 +99,8 @@ script_mod! {
             
 
                 body +: {
+                    show_bg: true
+                    draw_bg.color: (COLOR_SECONDARY)
                     padding: Inset{
                         top: (mod.widgets.SAFE_INSET_PAD_TOP),
                         bottom: (mod.widgets.SAFE_INSET_PAD_BOTTOM),
@@ -269,6 +271,12 @@ script_mod! {
                             }
                         }
 
+                        start_chat_modal := Modal {
+                            content +: {
+                                start_chat_modal_inner := StartChatModal {}
+                            }
+                        }
+
                         // Show the logout confirmation modal.
                         logout_confirm_modal := Modal {
                             content +: {
@@ -349,11 +357,20 @@ pub enum RoomFilterRemoteSearchAction {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AuthUiState {
+    #[default]
+    CheckingSession,
+    LoggedOut,
+    LoggedIn,
+}
+
 #[derive(Script)]
 pub struct App {
     #[live] ui: WidgetRef,
     /// The top-level app state, shared across various parts of the app.
     #[rust] app_state: AppState,
+    #[rust] auth_ui_state: AuthUiState,
     /// The details of a room we're waiting on to be loaded so that we can navigate to it.
     /// This can be either a room we're waiting to join, or one we're waiting to be invited to.
     /// Also includes an optional room ID to be closed once the awaited room has been loaded.
@@ -756,6 +773,7 @@ impl MatchEvent for App {
             match action.downcast_ref() {
                 Some(LogoutAction::LogoutSuccess) => {
                     self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
                     self.ui.modal(cx, ids!(logout_confirm_modal)).close(cx);
                     self.update_login_visibility(cx);
                     self.ui.redraw(cx);
@@ -774,10 +792,21 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            if let Some(LoginAction::ShowLoginScreen) = action.downcast_ref() {
+                if !self.app_state.adding_account {
+                    self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
+                    self.update_login_visibility(cx);
+                    self.ui.redraw(cx);
+                }
+                continue;
+            }
+
             if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
                 log!("Received LoginAction::LoginSuccess, hiding login view.");
                 self.app_state.logged_in = true;
                 self.app_state.adding_account = false;
+                self.auth_ui_state = AuthUiState::LoggedIn;
                 self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
@@ -787,7 +816,7 @@ impl MatchEvent for App {
             if let Some(LoginAction::ShowAddAccountScreen) = action.downcast_ref() {
                 log!("Received LoginAction::ShowAddAccountScreen, showing login view for adding account.");
                 self.app_state.adding_account = true;
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, true);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -799,7 +828,7 @@ impl MatchEvent for App {
                 self.ui
                     .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                     .close(cx);
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, false);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -811,7 +840,7 @@ impl MatchEvent for App {
                 self.ui
                     .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                     .close(cx);
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, false);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -857,9 +886,10 @@ impl MatchEvent for App {
             // by `handle_session_changes`), navigate back to the login screen.
             // When not yet logged in, the login_screen widget handles displaying the failure modal.
             if let Some(LoginAction::LoginFailure(_)) = action.downcast_ref() {
-                if self.app_state.logged_in && !self.app_state.adding_account {
-                    log!("Received LoginAction::LoginFailure while logged in; showing login screen.");
+                if !self.app_state.adding_account && self.auth_ui_state != AuthUiState::LoggedOut {
+                    log!("Received LoginAction::LoginFailure while restoring or logged in; showing login screen.");
                     self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
                     self.update_login_visibility(cx);
                     self.ui.redraw(cx);
                 }
@@ -1370,6 +1400,19 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            match action.downcast_ref() {
+                Some(StartChatModalAction::Open) => {
+                    self.ui.start_chat_modal(cx, ids!(start_chat_modal_inner)).show(cx);
+                    self.ui.modal(cx, ids!(start_chat_modal)).open(cx);
+                    continue;
+                }
+                Some(StartChatModalAction::Close) => {
+                    self.ui.modal(cx, ids!(start_chat_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
             // Handle EventSourceModalAction to open/close the event source modal.
             match action.downcast_ref() {
                 Some(EventSourceModalAction::Open { room_id, event_id, original_json }) => {
@@ -1610,14 +1653,15 @@ impl App {
     }
 
     fn update_login_visibility(&self, cx: &mut Cx) {
-        let show_login = !self.app_state.logged_in;
+        let show_login = self.app_state.adding_account || self.auth_ui_state == AuthUiState::LoggedOut;
+        let show_home = self.auth_ui_state != AuthUiState::LoggedOut;
         if !show_login {
             self.ui
                 .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                 .close(cx);
         }
         self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, show_login);
-        self.ui.view(cx, ids!(home_screen_view)).set_visible(cx, !show_login);
+        self.ui.view(cx, ids!(home_screen_view)).set_visible(cx, show_home);
     }
 
     fn clicked_room_filter_result_index(&self, cx: &mut Cx, actions: &Actions) -> Option<usize> {
@@ -1959,6 +2003,10 @@ impl App {
     /// screen configuration are effectively no-ops — MainDesktopUI handles
     /// room display via dock tabs instead.
     fn push_selected_room_view(&mut self, cx: &mut Cx, selected_room: SelectedRoom) {
+        if self.app_state.selected_room.as_ref().is_some_and(|current| current == &selected_room) {
+            return;
+        }
+
         // Use the actual StackNavigation depth to pick the next room view slot.
         let new_depth = self.ui.stack_navigation(cx, ids!(view_stack)).depth();
 

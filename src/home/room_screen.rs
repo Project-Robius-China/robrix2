@@ -1924,11 +1924,9 @@ script_mod! {
 
                         bot_card_body := HtmlOrPlaintext { }
                         bot_card_markdown := mod.widgets.BotTimelineMarkdown {
-                            visible: false
                             body: ""
                         }
                         bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
-                            visible: false
                             use_code_block_widget: false
                             body: ""
                         }
@@ -2117,11 +2115,9 @@ script_mod! {
 
                         bot_card_body := HtmlOrPlaintext { }
                         bot_card_markdown := mod.widgets.BotTimelineMarkdown {
-                            visible: false
                             body: ""
                         }
                         bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
-                            visible: false
                             use_code_block_widget: false
                             body: ""
                         }
@@ -10787,18 +10783,17 @@ impl Widget for Message {
         // because we don't want any widgets within the replied-to message to be
         // clickable or otherwise interactive.
         match event.hits(cx, self.view(cx, ids!(replied_to_message)).area()) {
-            Hit::FingerDown(fe) => {
-                if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) {
-                    cx.widget_action(
-                        details.room_screen_widget_uid, 
-                        MessageAction::OpenMessageContextMenu {
-                            details: details.clone(),
-                            abs_pos: fe.abs,
-                            opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
-                        }
-                    );
-                }
+            Hit::FingerDown(fe) if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) => {
+                cx.widget_action(
+                    details.room_screen_widget_uid,
+                    MessageAction::OpenMessageContextMenu {
+                        details: details.clone(),
+                        abs_pos: fe.abs,
+                        opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
+                    }
+                );
             }
+            Hit::FingerDown(_) => {}
             Hit::FingerLongPress(lp) => {
                 cx.widget_action(
                     details.room_screen_widget_uid, 
@@ -11001,7 +10996,7 @@ mod tests {
         streaming_messages.insert(missing_event_id.clone(), make_state("missing"));
 
         let event_ids = vec![None, Some(event_id_a.as_ref()), Some(event_id_b.as_ref())];
-        refresh_stream_indices(event_ids.into_iter(), &mut streaming_messages);
+        refresh_stream_indices(event_ids, &mut streaming_messages);
 
         assert_eq!(streaming_messages[&event_id_a].timeline_index, Some(1));
         assert_eq!(streaming_messages[&missing_event_id].timeline_index, None);
@@ -11015,7 +11010,7 @@ mod tests {
         finished.is_live = false;
         finished.last_update_time = Instant::now() - Duration::from_secs(29);
 
-        let timeout = next_stream_timeout([&live, &finished].into_iter()).unwrap();
+        let timeout = next_stream_timeout([&live, &finished]).unwrap();
 
         assert!(timeout <= Duration::from_secs(1));
     }

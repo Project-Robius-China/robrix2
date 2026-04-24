@@ -201,7 +201,7 @@ script_mod! {
 
             draw_bg +: {
                 color: (COLOR_SECONDARY)
-                border_radius: (RADIUS_LG)
+                border_radius: 0.0
             }
 
             CachedWidget {
