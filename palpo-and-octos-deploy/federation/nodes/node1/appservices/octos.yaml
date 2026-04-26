@@ -1,0 +1,33 @@
+# ============================================================
+# AppService Registration — Octos on palpo-1
+# ============================================================
+# Palpo-1 forwards any event targeting a user matching the regex
+# below to Octos at the "url" endpoint.
+#
+# Matches for local federation setup:
+#   @bot:palpo-1:8448          (main bot account)
+#   @bot_<anything>:palpo-1:8448 (virtual users created by Octos)
+#
+# as_token / hs_token MUST match the values in config/botfather.json.
+# For production, regenerate with:  openssl rand -hex 32
+# ============================================================
+
+id: octos-matrix-appservice
+
+# URL where palpo-1 pushes events to Octos. Uses Docker service DNS.
+url: "http://octos:8009"
+
+as_token: "436682e5f10a0113775779eb8fedf702a095254a95e229c7d20f085b9082903b"
+hs_token: "ef642609a1a5b2eda1486a6bada6411f4e861691a7500b10ff26b5b2e16573fd"
+
+sender_localpart: bot
+rate_limited: false
+
+namespaces:
+  users:
+    - exclusive: true
+      regex: "@bot:palpo-1:8448"
+    - exclusive: true
+      regex: "@bot_.*:palpo-1:8448"
+  aliases: []
+  rooms: []

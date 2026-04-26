@@ -6,3 +6,8 @@ repos/
 
 # User's local env file (contains API keys)
 .env
+
+# Federation runtime artifacts (created by gen-certs.sh / docker compose)
+federation/certs/
+federation/data/
+federation/nodes/*/media/

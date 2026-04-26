@@ -1,0 +1,51 @@
+# ============================================================
+# palpo-1 — Matrix homeserver with Octos AppService
+# ============================================================
+# server_name uses the Docker network alias "palpo-1" and port 8448.
+# Since "palpo-1" is only resolvable inside the federation network,
+# this setup is for LOCAL TESTING ONLY.
+# ============================================================
+
+server_name = "palpo-1:8448"
+
+allow_registration = true
+yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = true
+enable_admin_room = true
+
+# Accept the self-signed certificate used by palpo-2.
+# NEVER enable this in production.
+allow_invalid_tls_certificates = true
+
+# Palpo auto-loads all .yaml files from this directory on startup.
+appservice_registration_dir = "/var/palpo/appservices"
+
+# ---------- Listeners ----------
+# Client-Server API (plain HTTP, consumed by Robrix via localhost:6001)
+[[listeners]]
+address = "0.0.0.0:8008"
+
+# Federation API (TLS, consumed by palpo-2)
+[[listeners]]
+address = "0.0.0.0:8448"
+[listeners.tls]
+cert = "/var/palpo/certs/node1.crt"
+key = "/var/palpo/certs/node1.key"
+
+# ---------- Logging ----------
+[logger]
+format = "pretty"
+
+# ---------- Database ----------
+[db]
+url = "postgres://palpo:palpo@palpo-pg-1:5432/palpo_node_1"
+pool_size = 10
+
+# ---------- Federation ----------
+[federation]
+enable = true
+
+# ---------- Well-known ----------
+# Host-side clients (Robrix running on host) use the exposed ports.
+[well_known]
+server = "localhost:6401"
+client = "http://localhost:6001"

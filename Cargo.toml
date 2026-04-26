@@ -10,7 +10,7 @@ license = "MIT"
 readme = "README.md"
 categories = ["gui"]
 repository = "https://github.com/Project-Robius-China/robrix2"
-version = "0.0.1-pre-alpha-4"
+version = "0.1.0-pre-alpha-1"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
 [dependencies]
@@ -268,7 +268,7 @@ frameworks = []
 info_plist_path = "./packaging/Info.plist"
 entitlements = "./packaging/Entitlements.plist"
 # signing_identity = "Developer ID Application: GOSIM FOUNDATION LTD. (HMX6XGJZ3R)"
-signing_identity = "="
+# signing_identity = "="
 
 
 ## Configuration for `cargo packager`'s generation of a macOS `.dmg`.
@@ -294,6 +294,8 @@ non_local_definitions = "forbid"
 unsafe_op_in_unsafe_fn = "forbid"
 unnameable_types = "warn"
 unused_import_braces = "warn"
+unused = { level = "deny", priority = -1 }
+dead_code = "deny"
 
 ## Configuration for clippy lints.
 [lints.clippy]

@@ -3,9 +3,10 @@
   "name": "BotFather",
   "enabled": true,
   "config": {
-    "provider": "deepseek",
-    "model": "deepseek-chat",
-    "api_key_env": "DEEPSEEK_API_KEY",
+    "provider": "moonshot",
+    "model": "kimi-k2.5",
+    "api_key_env": "MOONSHOT_API_KEY",
+    "admin_mode": true,
     "channels": [
       {
         "type": "matrix",
@@ -22,6 +23,19 @@
     "gateway": {
       "max_history": 50,
       "queue_mode": "followup"
+    },
+    "approval_policy": {
+      "default": "allow",
+      "rules": [
+        {
+          "tools": ["shell", "write_file"],
+          "require_approval": true,
+          "risk_level": "critical",
+          "authorized_approvers": ["@alex:127.0.0.1:8128"],
+          "expires_in_secs": 300,
+          "on_timeout": "notify"
+        }
+      ]
     }
   },
   "created_at": "2025-01-01T00:00:00Z",

@@ -8,14 +8,15 @@ use std::{cell::RefCell, collections::HashMap};
 use makepad_widgets::*;
 use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
 use serde::{Deserialize, Serialize};
+use url::Url;
 use crate::{
     avatar_cache::{self, AvatarCacheEntry, clear_avatar_cache}, home::{
-        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt},
+        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::InviteScreenWidgetRefExt, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
+        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::{user_profile::UserProfile, user_profile_cache::clear_user_profile_cache}, room::{BasicRoomDetails, FetchedRoomAvatar}, shared::{avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, TimelineKind, AccountSwitchAction, current_user_id, submit_async_request, get_timeline_update_sender}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::{user_profile::UserProfile, user_profile_cache::clear_user_profile_cache}, room::{BasicRoomDetails, FetchedRoomAvatar}, shared::{avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     }
@@ -85,7 +86,7 @@ script_mod! {
             main_window := Window {
                 window.inner_size: vec2(1280, 800)
                 window.title: "Robrix"
-                pass.clear_color: #FFFFFF00
+                pass.clear_color: (COLOR_SECONDARY)
                 caption_bar +: {
                     draw_bg.color: #F3F3F3
                     caption_label +: {
@@ -98,6 +99,8 @@ script_mod! {
             
 
                 body +: {
+                    show_bg: true
+                    draw_bg.color: (COLOR_SECONDARY)
                     padding: Inset{
                         top: (mod.widgets.SAFE_INSET_PAD_TOP),
                         bottom: (mod.widgets.SAFE_INSET_PAD_BOTTOM),
@@ -268,6 +271,12 @@ script_mod! {
                             }
                         }
 
+                        start_chat_modal := Modal {
+                            content +: {
+                                start_chat_modal_inner := StartChatModal {}
+                            }
+                        }
+
                         // Show the logout confirmation modal.
                         logout_confirm_modal := Modal {
                             content +: {
@@ -311,6 +320,75 @@ script_mod! {
                             }
                         }
 
+                        update_available_modal := Modal {
+                            content +: {
+                                update_available_modal_inner := RoundedView {
+                                    width: 460
+                                    height: Fit
+                                    flow: Down
+                                    padding: Inset{top: 24, right: 24, bottom: 20, left: 24}
+                                    spacing: 10
+                                    show_bg: true
+                                    draw_bg +: {
+                                        color: (COLOR_PRIMARY)
+                                        border_radius: 6.0
+                                    }
+
+                                    update_available_title := Label {
+                                        width: Fill
+                                        height: Fit
+                                        flow: Flow.Right{wrap: true}
+                                        draw_text +: {
+                                            text_style: TITLE_TEXT {font_size: 13}
+                                            color: #000
+                                        }
+                                        text: "Update Available"
+                                    }
+
+                                    update_available_body := Label {
+                                        width: Fill
+                                        height: Fit
+                                        flow: Flow.Right{wrap: true}
+                                        draw_text +: {
+                                            text_style: REGULAR_TEXT {font_size: 11.5}
+                                            color: #000
+                                        }
+                                        text: ""
+                                    }
+
+                                    update_available_buttons := View {
+                                        width: Fill
+                                        height: Fit
+                                        flow: Right
+                                        align: Align{x: 1.0, y: 0.5}
+                                        margin: Inset{top: 8}
+                                        spacing: 10
+
+                                        update_skip_button := RobrixNeutralIconButton {
+                                            width: Fit
+                                            padding: 13
+                                            icon_walk: Walk{width: 0, height: 0, margin: 0}
+                                            text: "Skip This Version"
+                                        }
+
+                                        update_cancel_button := RobrixNeutralIconButton {
+                                            width: 100
+                                            padding: 13
+                                            icon_walk: Walk{width: 0, height: 0, margin: 0}
+                                            text: "Cancel"
+                                        }
+
+                                        update_upgrade_button := RobrixPositiveIconButton {
+                                            width: 100
+                                            padding: 13
+                                            icon_walk: Walk{width: 0, height: 0, margin: 0}
+                                            text: "Upgrade"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         PopupList {}
 
                         // Tooltips must be shown in front of all other UI elements,
@@ -348,11 +426,20 @@ pub enum RoomFilterRemoteSearchAction {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AuthUiState {
+    #[default]
+    CheckingSession,
+    LoggedOut,
+    LoggedIn,
+}
+
 #[derive(Script)]
 pub struct App {
     #[live] ui: WidgetRef,
     /// The top-level app state, shared across various parts of the app.
     #[rust] app_state: AppState,
+    #[rust] auth_ui_state: AuthUiState,
     /// The details of a room we're waiting on to be loaded so that we can navigate to it.
     /// This can be either a room we're waiting to join, or one we're waiting to be invited to.
     /// Also includes an optional room ID to be closed once the awaited room has been loaded.
@@ -363,6 +450,9 @@ pub struct App {
     #[rust] room_filter_modal_results: Vec<RoomFilterResultTarget>,
     #[rust(Timer::empty())] room_filter_debounce_timer: Timer,
     #[rust] pending_room_filter_keywords: String,
+    #[rust] auto_update_check_started: bool,
+    #[rust] skipped_update_version: Option<String>,
+    #[rust] update_prompt_versions: Option<(String, String)>,
 }
 
 impl ScriptHook for App {
@@ -622,6 +712,8 @@ impl MatchEvent for App {
 
         self.update_login_visibility(cx);
         self.sync_app_language(cx);
+        self.skipped_update_version = load_skipped_update_version();
+        self.start_auto_update_check(cx);
 
         log!("App::Startup: starting matrix sdk loop");
         let _tokio_rt_handle = crate::sliding_sync::start_matrix_tokio().unwrap();
@@ -661,6 +753,43 @@ impl MatchEvent for App {
         let positive_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(positive_confirmation_modal_inner));
         if let Some(_accepted) = positive_confirmation_modal_inner.closed(actions) {
             self.ui.modal(cx, ids!(positive_confirmation_modal)).close(cx);
+        }
+
+        if self.ui.button(cx, ids!(update_available_modal_inner.update_upgrade_button)).clicked(actions) {
+            let latest_version = self.update_prompt_versions
+                .as_ref()
+                .map(|(_, latest_version)| latest_version.clone());
+            self.skipped_update_version = None;
+            if let Err(error) = save_skipped_update_version(None) {
+                error!("Failed to clear skipped update version. Error: {error}");
+            }
+            if let Some(latest_version) = latest_version {
+                let release_page_url = update_release_page_url(&latest_version);
+                if let Err(e) = robius_open::Uri::new(&release_page_url).open() {
+                    error!("Failed to open update URL {:?}. Error: {:?}", release_page_url, e);
+                    enqueue_popup_notification(
+                        tr_fmt(self.app_state.app_language, "room_screen.popup.open_url_failed", &[("url", release_page_url.as_str())]),
+                        PopupKind::Error,
+                        Some(10.0),
+                    );
+                }
+            }
+            self.update_prompt_versions = None;
+            self.ui.modal(cx, ids!(update_available_modal)).close(cx);
+        }
+        if self.ui.button(cx, ids!(update_available_modal_inner.update_cancel_button)).clicked(actions) {
+            self.update_prompt_versions = None;
+            self.ui.modal(cx, ids!(update_available_modal)).close(cx);
+        }
+        if self.ui.button(cx, ids!(update_available_modal_inner.update_skip_button)).clicked(actions) {
+            if let Some((_, latest_version)) = self.update_prompt_versions.as_ref() {
+                self.skipped_update_version = Some(latest_version.clone());
+                if let Err(error) = save_skipped_update_version(Some(latest_version.as_str())) {
+                    error!("Failed to persist skipped update version. Error: {error}");
+                }
+            }
+            self.update_prompt_versions = None;
+            self.ui.modal(cx, ids!(update_available_modal)).close(cx);
         }
 
         if let Some(clicked_index) = self.clicked_room_filter_result_index(cx, actions) {
@@ -737,6 +866,24 @@ impl MatchEvent for App {
         }
 
         for action in actions {
+            if let Some(AppUpdateAction::AutoCheckFinished(result)) = action.downcast_ref() {
+                if let UpdateCheckOutcome::UpdateAvailable { current_version, latest_version } = result {
+                    self.show_update_prompt_if_needed(cx, current_version, latest_version, true);
+                } else if let UpdateCheckOutcome::Error(error) = result {
+                    warning!("Automatic update check failed: {error}");
+                }
+                continue;
+            }
+            if let Some(AppUpdateAction::ShowUpdatePrompt { current_version, latest_version, from_auto_check }) = action.downcast_ref() {
+                self.show_update_prompt_if_needed(
+                    cx,
+                    current_version.as_str(),
+                    latest_version.as_str(),
+                    *from_auto_check,
+                );
+                continue;
+            }
+
             match action.downcast_ref() {
                 Some(LogoutConfirmModalAction::Open) => {
                     self.ui.logout_confirm_modal(cx, ids!(logout_confirm_modal_inner)).reset_state(cx);
@@ -755,6 +902,7 @@ impl MatchEvent for App {
             match action.downcast_ref() {
                 Some(LogoutAction::LogoutSuccess) => {
                     self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
                     self.ui.modal(cx, ids!(logout_confirm_modal)).close(cx);
                     self.update_login_visibility(cx);
                     self.ui.redraw(cx);
@@ -765,16 +913,29 @@ impl MatchEvent for App {
                     clear_all_app_state(cx);
                     // Reset all app state to its default.
                     self.app_state = Default::default();
+                    // Keep the navigation tab bar's visual state in sync with app state.
+                    cx.action(NavigationBarAction::TabSelected(SelectedTab::Home));
                     on_clear_appstate.notify_one();
                     continue;
                 }
                 _ => {}
             }
 
+            if let Some(LoginAction::ShowLoginScreen) = action.downcast_ref() {
+                if !self.app_state.adding_account {
+                    self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
+                    self.update_login_visibility(cx);
+                    self.ui.redraw(cx);
+                }
+                continue;
+            }
+
             if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
                 log!("Received LoginAction::LoginSuccess, hiding login view.");
                 self.app_state.logged_in = true;
                 self.app_state.adding_account = false;
+                self.auth_ui_state = AuthUiState::LoggedIn;
                 self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
@@ -784,7 +945,7 @@ impl MatchEvent for App {
             if let Some(LoginAction::ShowAddAccountScreen) = action.downcast_ref() {
                 log!("Received LoginAction::ShowAddAccountScreen, showing login view for adding account.");
                 self.app_state.adding_account = true;
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, true);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -796,7 +957,7 @@ impl MatchEvent for App {
                 self.ui
                     .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                     .close(cx);
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, false);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -808,7 +969,7 @@ impl MatchEvent for App {
                 self.ui
                     .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                     .close(cx);
-                self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, false);
+                self.update_login_visibility(cx);
                 self.ui.redraw(cx);
                 continue;
             }
@@ -854,9 +1015,10 @@ impl MatchEvent for App {
             // by `handle_session_changes`), navigate back to the login screen.
             // When not yet logged in, the login_screen widget handles displaying the failure modal.
             if let Some(LoginAction::LoginFailure(_)) = action.downcast_ref() {
-                if self.app_state.logged_in && !self.app_state.adding_account {
-                    log!("Received LoginAction::LoginFailure while logged in; showing login screen.");
+                if !self.app_state.adding_account && self.auth_ui_state != AuthUiState::LoggedOut {
+                    log!("Received LoginAction::LoginFailure while restoring or logged in; showing login screen.");
                     self.app_state.logged_in = false;
+                    self.auth_ui_state = AuthUiState::LoggedOut;
                     self.update_login_visibility(cx);
                     self.ui.redraw(cx);
                 }
@@ -1017,6 +1179,36 @@ impl MatchEvent for App {
             }
 
             // Handle actions that instruct us to update the top-level app state.
+            if let Some(LeaveRoomResultAction::Left { room_id }) = action.downcast_ref() {
+                enqueue_rooms_list_update(RoomsListUpdate::HideRoom { room_id: room_id.clone() });
+                self.app_state
+                    .bot_settings
+                    .set_room_bound(room_id.clone(), None, false);
+
+                let removed_from_home = self.app_state.saved_dock_state_home.remove_room_id(room_id);
+                let removed_from_spaces: usize = self.app_state.saved_dock_state_per_space
+                    .values_mut()
+                    .map(|saved| saved.remove_room_id(room_id))
+                    .sum();
+                let removed_tabs = removed_from_home + removed_from_spaces;
+                let mut cleared_selected_room = false;
+
+                if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
+                    self.app_state.selected_room = None;
+                    cleared_selected_room = true;
+                }
+                if removed_tabs > 0 || cleared_selected_room {
+                    if let Some(user_id) = current_user_id() {
+                        if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                            error!("Failed to persist app state after leaving room {room_id}. Error: {e}");
+                        }
+                    }
+                }
+
+                cx.action(MainDesktopUiAction::CloseRoomTabs { room_id: room_id.clone() });
+                continue;
+            }
+
             match action.downcast_ref() {
                 Some(AppStateAction::RoomFocused(selected_room)) => {
                     self.app_state.selected_room = Some(selected_room.clone());
@@ -1041,9 +1233,25 @@ impl MatchEvent for App {
                     // Ignore the `logged_in` state that was stored persistently.
                     let logged_in_actual = self.app_state.logged_in;
                     self.app_state = *app_state.clone();
+                    let removed_room_bindings = get_client()
+                        .map(|client| {
+                            self.app_state.bot_settings.remove_room_bindings_where(|room_id, _|
+                                client.get_room(room_id).is_none()
+                            )
+                        })
+                        .unwrap_or(0);
                     self.app_state.logged_in = logged_in_actual;
                     // Initialize the global translation config so RoomInputBar can access it.
                     crate::room::translation::set_global_config(&self.app_state.translation);
+                    if removed_room_bindings > 0 {
+                        if let Some(user_id) = current_user_id() {
+                            if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                                error!(
+                                    "Failed to persist app state after pruning stale room bindings. Error: {e}"
+                                );
+                            }
+                        }
+                    }
                     cx.action(MainDesktopUiAction::LoadDockFromAppState);
                     continue;
                 }
@@ -1094,34 +1302,10 @@ impl MatchEvent for App {
                         message: RoomMessageEventContent::notice_plain(format!("[App Service] {message}")),
                         replied_to: None,
                         target_user_id: None,
+                        explicit_room: false,
                         #[cfg(feature = "tsp")]
                         sign_with_tsp: false,
                     });
-                    self.ui.redraw(cx);
-                    continue;
-                }
-                Some(AppStateAction::BotRoomBindingDetected {
-                    room_id,
-                    bot_user_id,
-                }) => {
-                    if self
-                        .app_state
-                        .bot_settings
-                        .bound_bot_user_id(room_id.as_ref())
-                        .is_some_and(|existing_bot_user_id| existing_bot_user_id.as_str() == bot_user_id.as_str())
-                    {
-                        continue;
-                    }
-                    self.app_state.bot_settings.set_room_bound(
-                        room_id.clone(),
-                        Some(bot_user_id.clone()),
-                        true,
-                    );
-                    if let Some(user_id) = current_user_id() {
-                        if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
-                            error!("Failed to persist detected BotFather room binding. Error: {e}");
-                        }
-                    }
                     self.ui.redraw(cx);
                     continue;
                 }
@@ -1345,6 +1529,19 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            match action.downcast_ref() {
+                Some(StartChatModalAction::Open) => {
+                    self.ui.start_chat_modal(cx, ids!(start_chat_modal_inner)).show(cx);
+                    self.ui.modal(cx, ids!(start_chat_modal)).open(cx);
+                    continue;
+                }
+                Some(StartChatModalAction::Close) => {
+                    self.ui.modal(cx, ids!(start_chat_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
             // Handle EventSourceModalAction to open/close the event source modal.
             match action.downcast_ref() {
                 Some(EventSourceModalAction::Open { room_id, event_id, original_json }) => {
@@ -1362,7 +1559,12 @@ impl MatchEvent for App {
 
             // Handle DirectMessageRoomActions
             match action.downcast_ref() {
-                Some(DirectMessageRoomAction::FoundExisting { room_name_id, .. }) => {
+                Some(DirectMessageRoomAction::FoundExisting { user_id, room_name_id }) => {
+                    self.app_state.bot_settings.bind_dm_target_if_needed(
+                        room_name_id.room_id().to_owned(),
+                        user_id.as_ref(),
+                        current_user_id().as_deref(),
+                    );
                     self.navigate_to_room(cx, None, &BasicRoomDetails::RoomId(room_name_id.clone()));
                 }
                 Some(DirectMessageRoomAction::DidNotExist { user_profile }) => {
@@ -1414,7 +1616,12 @@ impl MatchEvent for App {
                         None,
                     );
                 }
-                Some(DirectMessageRoomAction::NewlyCreated { room_name_id, .. }) => {
+                Some(DirectMessageRoomAction::NewlyCreated { user_profile, room_name_id }) => {
+                    self.app_state.bot_settings.bind_dm_target_if_needed(
+                        room_name_id.room_id().to_owned(),
+                        user_profile.user_id.as_ref(),
+                        current_user_id().as_deref(),
+                    );
                     self.navigate_to_room(cx, None, &BasicRoomDetails::RoomId(room_name_id.clone()));
                 }
                 _ => {}
@@ -1545,6 +1752,66 @@ impl App {
         live_id!(result_item_6), live_id!(result_item_7),
     ];
 
+    fn start_auto_update_check(&mut self, cx: &mut Cx) {
+        if self.auto_update_check_started {
+            return;
+        }
+        self.auto_update_check_started = true;
+        cx.spawn_thread(move || {
+            let result = check_for_updates();
+            Cx::post_action(AppUpdateAction::AutoCheckFinished(result));
+        });
+    }
+
+    fn show_update_prompt_if_needed(
+        &mut self,
+        cx: &mut Cx,
+        current_version: &str,
+        latest_version: &str,
+        from_auto_check: bool,
+    ) {
+        if from_auto_check
+            && self.skipped_update_version
+                .as_deref()
+                .is_some_and(|skipped_version| skipped_version == latest_version)
+        {
+            return;
+        }
+
+        self.update_prompt_versions = Some((current_version.to_owned(), latest_version.to_owned()));
+        self.ui
+            .label(cx, ids!(update_available_modal_inner.update_available_title))
+            .set_text(cx, tr_key(self.app_state.app_language, "settings.update.modal.title"));
+        self.ui
+            .label(cx, ids!(update_available_modal_inner.update_available_body))
+            .set_text(
+                cx,
+                &tr_fmt(self.app_state.app_language, "settings.update.modal.body", &[
+                    ("latest", latest_version),
+                    ("current", current_version),
+                ]),
+            );
+        self.ui
+            .button(cx, ids!(update_available_modal_inner.update_skip_button))
+            .set_text(cx, tr_key(self.app_state.app_language, "settings.update.modal.button.skip"));
+        self.ui
+            .button(cx, ids!(update_available_modal_inner.update_cancel_button))
+            .set_text(cx, tr_key(self.app_state.app_language, "settings.update.modal.button.cancel"));
+        self.ui
+            .button(cx, ids!(update_available_modal_inner.update_upgrade_button))
+            .set_text(cx, tr_key(self.app_state.app_language, "settings.update.modal.button.upgrade"));
+        self.ui
+            .button(cx, ids!(update_available_modal_inner.update_skip_button))
+            .reset_hover(cx);
+        self.ui
+            .button(cx, ids!(update_available_modal_inner.update_cancel_button))
+            .reset_hover(cx);
+        self.ui
+            .button(cx, ids!(update_available_modal_inner.update_upgrade_button))
+            .reset_hover(cx);
+        self.ui.modal(cx, ids!(update_available_modal)).open(cx);
+    }
+
     fn sync_app_language(&self, cx: &mut Cx) {
         let app_language = self.app_state.app_language;
         self.ui.label(cx, ids!(room_filter_modal_inner.search_results_title))
@@ -1575,14 +1842,15 @@ impl App {
     }
 
     fn update_login_visibility(&self, cx: &mut Cx) {
-        let show_login = !self.app_state.logged_in;
+        let show_login = self.app_state.adding_account || self.auth_ui_state == AuthUiState::LoggedOut;
+        let show_home = self.auth_ui_state != AuthUiState::LoggedOut;
         if !show_login {
             self.ui
                 .modal(cx, ids!(login_screen_view.login_screen.login_status_modal))
                 .close(cx);
         }
         self.ui.view(cx, ids!(login_screen_view)).set_visible(cx, show_login);
-        self.ui.view(cx, ids!(home_screen_view)).set_visible(cx, !show_login);
+        self.ui.view(cx, ids!(home_screen_view)).set_visible(cx, show_home);
     }
 
     fn clicked_room_filter_result_index(&self, cx: &mut Cx, actions: &Actions) -> Option<usize> {
@@ -1924,6 +2192,10 @@ impl App {
     /// screen configuration are effectively no-ops — MainDesktopUI handles
     /// room display via dock tabs instead.
     fn push_selected_room_view(&mut self, cx: &mut Cx, selected_room: SelectedRoom) {
+        if self.app_state.selected_room.as_ref().is_some_and(|current| current == &selected_room) {
+            return;
+        }
+
         // Use the actual StackNavigation depth to pick the next room view slot.
         let new_depth = self.ui.stack_navigation(cx, ids!(view_stack)).depth();
 
@@ -2038,6 +2310,8 @@ pub struct BotSettingsState {
     pub enabled: bool,
     /// The configured botfather user, either as a full MXID or localpart.
     pub botfather_user_id: String,
+    /// The Octos service base URL used for health checks.
+    pub octos_service_url: String,
     /// Bots discovered from BotFather `/listbots` replies.
     pub known_bot_user_ids: Vec<OwnedUserId>,
     /// Rooms that Robrix currently considers bot-bound,
@@ -2059,6 +2333,7 @@ impl Default for BotSettingsState {
         Self {
             enabled: false,
             botfather_user_id: Self::DEFAULT_BOTFATHER_LOCALPART.to_string(),
+            octos_service_url: Self::DEFAULT_OCTOS_SERVICE_URL.to_string(),
             known_bot_user_ids: Vec::new(),
             room_bindings: Vec::new(),
         }
@@ -2067,6 +2342,58 @@ impl Default for BotSettingsState {
 
 impl BotSettingsState {
     pub const DEFAULT_BOTFATHER_LOCALPART: &'static str = "bot";
+    pub const DEFAULT_OCTOS_SERVICE_URL: &'static str = "http://127.0.0.1:8010";
+
+    pub fn resolved_octos_service_url(&self) -> &str {
+        let raw = self.octos_service_url.trim();
+        if raw.is_empty() {
+            Self::DEFAULT_OCTOS_SERVICE_URL
+        } else {
+            raw
+        }
+    }
+
+    pub fn validate_octos_service_url(service_url: &str) -> Result<(), String> {
+        let service_url = service_url.trim();
+        if service_url.is_empty() {
+            return Err("Octos service URL cannot be empty.".into());
+        }
+
+        let parsed_url = Url::parse(service_url)
+            .map_err(|e| format!("Invalid Octos service URL: {e}"))?;
+
+        match parsed_url.scheme() {
+            "http" | "https" => {}
+            scheme => {
+                return Err(format!(
+                    "Unsupported Octos service URL scheme `{scheme}`. Use http or https."
+                ));
+            }
+        }
+
+        if parsed_url.host_str().is_none() {
+            return Err("Octos service URL must include a host.".into());
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_botfather_user_id(
+        botfather_user_id: &str,
+        current_user_id: Option<&UserId>,
+    ) -> Result<(), String> {
+        let botfather_user_id = botfather_user_id.trim();
+        if botfather_user_id.is_empty() {
+            return Err("BotFather user ID cannot be empty.".into());
+        }
+
+        Self {
+            botfather_user_id: botfather_user_id.to_string(),
+            ..Self::default()
+        }
+        .resolved_bot_user_id(current_user_id)
+        .map(|_| ())
+    }
 
     fn room_binding_index(
         &self,
@@ -2196,6 +2523,38 @@ impl BotSettingsState {
         }
     }
 
+    /// Auto-binds a DM room when it targets the configured app-service bot or a known bot.
+    ///
+    /// Returns `true` if a bot binding should exist for this room/target pair.
+    pub fn bind_dm_target_if_needed(
+        &mut self,
+        room_id: OwnedRoomId,
+        target_user_id: &UserId,
+        current_user_id: Option<&UserId>,
+    ) -> bool {
+        if !self.enabled {
+            return false;
+        }
+
+        let matches_configured_bot = self
+            .resolved_bot_user_id(current_user_id)
+            .ok()
+            .is_some_and(|configured_bot_user_id|
+                configured_bot_user_id.as_str() == target_user_id.as_str()
+            );
+        let matches_known_bot = self
+            .known_bot_user_ids
+            .iter()
+            .any(|known_bot_user_id| known_bot_user_id.as_str() == target_user_id.as_str());
+
+        if !(matches_configured_bot || matches_known_bot) {
+            return false;
+        }
+
+        self.set_room_bound(room_id, Some(target_user_id.to_owned()), true);
+        true
+    }
+
     /// Updates the remark for a specific room bot binding.
     ///
     /// Returns `true` if a binding existed and was updated.
@@ -2211,6 +2570,16 @@ impl BotSettingsState {
         } else {
             false
         }
+    }
+
+    pub fn remove_room_bindings_where(
+        &mut self,
+        mut predicate: impl FnMut(&RoomId, &UserId) -> bool,
+    ) -> usize {
+        let original_len = self.room_bindings.len();
+        self.room_bindings
+            .retain(|binding| !predicate(binding.room_id.as_ref(), binding.bot_user_id.as_ref()));
+        original_len.saturating_sub(self.room_bindings.len())
     }
 
     /// Returns the configured botfather user ID, resolving a localpart against
@@ -2398,6 +2767,62 @@ impl SelectedRoom {
     }
 }
 
+impl SavedDockState {
+    /// Removes all tabs and selection state that belong to the given room ID.
+    ///
+    /// Returns the number of removed open tabs, including thread tabs tied to the room.
+    pub fn remove_room_id(&mut self, room_id: &RoomId) -> usize {
+        let tab_ids_to_remove: Vec<LiveId> = self.open_rooms.iter()
+            .filter_map(|(tab_id, selected_room)| (selected_room.room_id() == room_id).then_some(*tab_id))
+            .collect();
+
+        let room_order_matches = self.room_order.iter()
+            .any(|selected_room| selected_room.room_id() == room_id);
+        let selected_room_matches = self.selected_room.as_ref()
+            .is_some_and(|selected_room| selected_room.room_id() == room_id);
+
+        if tab_ids_to_remove.is_empty() && !room_order_matches && !selected_room_matches {
+            return 0;
+        }
+
+        for tab_id in &tab_ids_to_remove {
+            self.open_rooms.remove(tab_id);
+            self.dock_items.remove(tab_id);
+        }
+
+        self.room_order.retain(|selected_room| selected_room.room_id() != room_id);
+
+        if selected_room_matches {
+            self.selected_room = self.room_order.last().cloned();
+        }
+
+        tab_ids_to_remove.len()
+    }
+
+    /// Removes all rooms for which `should_remove` returns `true`.
+    ///
+    /// Returns the number of removed open tabs, including thread tabs tied to removed rooms.
+    pub fn remove_room_ids_where<F>(&mut self, mut should_remove: F) -> usize
+    where
+        F: FnMut(&OwnedRoomId) -> bool,
+    {
+        let mut room_ids: Vec<OwnedRoomId> = self.open_rooms.values()
+            .map(|selected_room| selected_room.room_id().clone())
+            .collect();
+        room_ids.extend(self.room_order.iter().map(|selected_room| selected_room.room_id().clone()));
+        if let Some(selected_room) = self.selected_room.as_ref() {
+            room_ids.push(selected_room.room_id().clone());
+        }
+        room_ids.sort();
+        room_ids.dedup();
+
+        room_ids.into_iter()
+            .filter(|room_id| should_remove(room_id))
+            .map(|room_id| self.remove_room_id(&room_id))
+            .sum()
+    }
+}
+
 impl PartialEq for SelectedRoom {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -2421,6 +2846,226 @@ impl PartialEq for SelectedRoom {
 }
 impl Eq for SelectedRoom {}
 
+#[cfg(test)]
+mod tests {
+    use super::{BotSettingsState, RoomBotBindingState, SavedDockState, SelectedRoom};
+    use crate::utils::RoomNameId;
+    use matrix_sdk::{RoomDisplayName, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, UserId}};
+
+    fn joined_room(room_id_str: &str, name: &str) -> SelectedRoom {
+        SelectedRoom::JoinedRoom {
+            room_name_id: RoomNameId::new(
+                RoomDisplayName::Named(name.into()),
+                room_id_str.parse::<OwnedRoomId>().unwrap(),
+            ),
+        }
+    }
+
+    fn thread_room(room_id_str: &str, name: &str, event_id_str: &str) -> SelectedRoom {
+        SelectedRoom::Thread {
+            room_name_id: RoomNameId::new(
+                RoomDisplayName::Named(name.into()),
+                room_id_str.parse::<OwnedRoomId>().unwrap(),
+            ),
+            thread_root_event_id: event_id_str.parse::<OwnedEventId>().unwrap(),
+        }
+    }
+
+    #[test]
+    fn remove_room_id_removes_main_and_thread_tabs() {
+        let joined = joined_room("!room:example.org", "octosbot");
+        let thread = thread_room("!room:example.org", "octosbot", "$thread:example.org");
+        let other = joined_room("!other:example.org", "other");
+        let removed_room_id = joined.room_id().to_owned();
+        let joined_tab = joined.tab_id();
+        let thread_tab = thread.tab_id();
+        let other_tab = other.tab_id();
+
+        let mut saved = SavedDockState {
+            dock_items: [
+                (joined_tab, Default::default()),
+                (thread_tab, Default::default()),
+                (other_tab, Default::default()),
+            ].into_iter().collect(),
+            open_rooms: [
+                (joined_tab, joined.clone()),
+                (thread_tab, thread.clone()),
+                (other_tab, other.clone()),
+            ].into_iter().collect(),
+            room_order: vec![joined, thread, other.clone()],
+            selected_room: Some(thread_room("!room:example.org", "octosbot", "$thread:example.org")),
+        };
+
+        assert_eq!(saved.remove_room_id(&removed_room_id), 2);
+        assert_eq!(saved.open_rooms.len(), 1);
+        assert!(saved.open_rooms.contains_key(&other_tab));
+        assert!(saved.dock_items.contains_key(&other_tab));
+        assert!(!saved.dock_items.contains_key(&joined_tab));
+        assert!(!saved.dock_items.contains_key(&thread_tab));
+        assert_eq!(saved.room_order, vec![other.clone()]);
+        assert_eq!(saved.selected_room, Some(other));
+    }
+
+    #[test]
+    fn remove_room_id_is_noop_for_unknown_room() {
+        let room = joined_room("!room:example.org", "octosbot");
+        let tab_id = room.tab_id();
+        let mut saved = SavedDockState {
+            dock_items: [(tab_id, Default::default())].into_iter().collect(),
+            open_rooms: [(tab_id, room.clone())].into_iter().collect(),
+            room_order: vec![room.clone()],
+            selected_room: Some(room.clone()),
+        };
+
+        assert_eq!(saved.remove_room_id(&"!missing:example.org".parse::<OwnedRoomId>().unwrap()), 0);
+        assert_eq!(saved.open_rooms.len(), 1);
+        assert_eq!(saved.room_order, vec![room.clone()]);
+        assert_eq!(saved.selected_room, Some(room));
+    }
+
+    #[test]
+    fn remove_room_id_clears_selected_room_even_without_open_tab() {
+        let room = joined_room("!room:example.org", "octosbot");
+        let other = joined_room("!other:example.org", "other");
+        let mut saved = SavedDockState {
+            dock_items: Default::default(),
+            open_rooms: Default::default(),
+            room_order: vec![other.clone()],
+            selected_room: Some(room),
+        };
+
+        assert_eq!(saved.remove_room_id(&"!room:example.org".parse::<OwnedRoomId>().unwrap()), 0);
+        assert_eq!(saved.room_order, vec![other.clone()]);
+        assert_eq!(saved.selected_room, Some(other));
+    }
+
+    #[test]
+    fn remove_room_ids_where_prunes_stale_rooms_from_all_state() {
+        let stale_joined = joined_room("!stale:example.org", "octosbot");
+        let stale_thread = thread_room("!stale:example.org", "octosbot", "$thread:example.org");
+        let fresh = joined_room("!fresh:example.org", "fresh");
+        let fresh_tab = fresh.tab_id();
+        let stale_joined_tab = stale_joined.tab_id();
+        let stale_thread_tab = stale_thread.tab_id();
+        let mut saved = SavedDockState {
+            dock_items: [
+                (stale_joined_tab, Default::default()),
+                (stale_thread_tab, Default::default()),
+                (fresh_tab, Default::default()),
+            ].into_iter().collect(),
+            open_rooms: [
+                (stale_joined_tab, stale_joined.clone()),
+                (stale_thread_tab, stale_thread.clone()),
+                (fresh_tab, fresh.clone()),
+            ].into_iter().collect(),
+            room_order: vec![stale_joined, stale_thread, fresh.clone()],
+            selected_room: Some(fresh.clone()),
+        };
+
+        assert_eq!(
+            saved.remove_room_ids_where(|room_id| room_id.as_str() == "!stale:example.org"),
+            2
+        );
+        assert_eq!(saved.open_rooms, [(fresh_tab, fresh.clone())].into_iter().collect());
+        assert_eq!(saved.room_order, vec![fresh.clone()]);
+        assert_eq!(saved.selected_room, Some(fresh));
+    }
+
+    #[test]
+    fn validate_botfather_user_id_accepts_localpart_and_full_mxid() {
+        let current_user_id = UserId::parse("@alex:example.org").unwrap();
+
+        assert!(BotSettingsState::validate_botfather_user_id(
+            "octosbot",
+            Some(current_user_id.as_ref()),
+        ).is_ok());
+        assert!(BotSettingsState::validate_botfather_user_id(
+            "@octosbot:example.org",
+            Some(current_user_id.as_ref()),
+        ).is_ok());
+        assert!(BotSettingsState::validate_botfather_user_id(
+            "",
+            Some(current_user_id.as_ref()),
+        ).is_err());
+    }
+
+    #[test]
+    fn remove_room_bindings_where_prunes_stale_bindings() {
+        let mut settings = BotSettingsState {
+            room_bindings: vec![
+                RoomBotBindingState {
+                    room_id: "!stale:example.org".parse::<OwnedRoomId>().unwrap(),
+                    bot_user_id: "@octosbot:example.org".parse::<OwnedUserId>().unwrap(),
+                    remark: String::new(),
+                },
+                RoomBotBindingState {
+                    room_id: "!fresh:example.org".parse::<OwnedRoomId>().unwrap(),
+                    bot_user_id: "@octosbot:example.org".parse::<OwnedUserId>().unwrap(),
+                    remark: String::new(),
+                },
+            ],
+            ..BotSettingsState::default()
+        };
+
+        let removed = settings.remove_room_bindings_where(|room_id, _| room_id.as_str() == "!stale:example.org");
+
+        assert_eq!(removed, 1);
+        assert_eq!(
+            settings.room_bindings,
+            vec![RoomBotBindingState {
+                room_id: "!fresh:example.org".parse::<OwnedRoomId>().unwrap(),
+                bot_user_id: "@octosbot:example.org".parse::<OwnedUserId>().unwrap(),
+                remark: String::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn dm_target_matching_configured_bot_auto_binds_new_room() {
+        let current_user_id = UserId::parse("@alice:example.org").unwrap();
+        let bot_user_id = UserId::parse("@octosbot:example.org").unwrap();
+        let room_id = "!dm:example.org".parse::<OwnedRoomId>().unwrap();
+        let mut settings = BotSettingsState {
+            enabled: true,
+            botfather_user_id: "octosbot".into(),
+            ..BotSettingsState::default()
+        };
+
+        let auto_bound = settings.bind_dm_target_if_needed(
+            room_id.clone(),
+            bot_user_id.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(auto_bound);
+        assert_eq!(
+            settings.bound_bot_user_ids(room_id.as_ref()),
+            vec![bot_user_id.to_owned()]
+        );
+    }
+
+    #[test]
+    fn ordinary_dm_target_does_not_auto_bind_new_room() {
+        let current_user_id = UserId::parse("@alice:example.org").unwrap();
+        let ordinary_user_id = UserId::parse("@bob:example.org").unwrap();
+        let room_id = "!dm:example.org".parse::<OwnedRoomId>().unwrap();
+        let mut settings = BotSettingsState {
+            enabled: true,
+            botfather_user_id: "octosbot".into(),
+            ..BotSettingsState::default()
+        };
+
+        let auto_bound = settings.bind_dm_target_if_needed(
+            room_id.clone(),
+            ordinary_user_id.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(!auto_bound);
+        assert!(settings.bound_bot_user_ids(room_id.as_ref()).is_empty());
+    }
+}
+
 /// Actions sent to the top-level App in order to update / restore its [`AppState`].
 ///
 /// These are *NOT* widget actions.
@@ -2443,11 +3088,6 @@ pub enum AppStateAction {
         bot_user_id: Option<OwnedUserId>,
         warning: Option<String>,
     },
-    /// A room's member list indicates that the configured BotFather is already present.
-    BotRoomBindingDetected {
-        room_id: OwnedRoomId,
-        bot_user_id: OwnedUserId,
-    },
     /// Bot IDs discovered from BotFather replies (for example, `/listbots`).
     KnownBotUserIdsDiscovered {
         bot_user_ids: Vec<OwnedUserId>,
@@ -2467,6 +3107,21 @@ pub enum AppStateAction {
         destination_room: BasicRoomDetails,
     },
     None,
+}
+
+/// Actions related to application updates.
+///
+/// These are *NOT* widget actions.
+#[derive(Debug)]
+pub enum AppUpdateAction {
+    /// Result of the background update check triggered automatically on startup.
+    AutoCheckFinished(UpdateCheckOutcome),
+    /// Request to show the update prompt modal.
+    ShowUpdatePrompt {
+        current_version: String,
+        latest_version: String,
+        from_auto_check: bool,
+    },
 }
 
 /// An action to show the generic top-level positive confirmation modal.

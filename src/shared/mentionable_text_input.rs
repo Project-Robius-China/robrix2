@@ -94,7 +94,9 @@
 //! - [`MentionSearchState`]: State machine enum managing search lifecycle
 //! - [`MentionableTextInputAction`]: Actions for external communication (power levels, member updates)
 //!
+use crate::app::AppState;
 use crate::avatar_cache::*;
+use crate::i18n::{AppLanguage, tr_key};
 use crate::shared::avatar::AvatarWidgetRefExt;
 use crate::shared::bouncing_dots::BouncingDotsWidgetRefExt;
 use crate::shared::styles::COLOR_UNKNOWN_ROOM_AVATAR;
@@ -108,7 +110,6 @@ use matrix_sdk::ruma::{
     OwnedRoomId, OwnedUserId,
 };
 use matrix_sdk::RoomMemberships;
-use std::collections::{BTreeMap, BTreeSet};
 use unicode_segmentation::UnicodeSegmentation;
 use crate::home::room_screen::RoomScreenProps;
 use crate::shared::command_text_input::CommandTextInput;
@@ -175,6 +176,208 @@ fn popup_status_item_is_selectable(_kind: PopupStatusItemKind) -> bool {
     false
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PopupMode {
+    #[default]
+    None,
+    Mention,
+    SlashCommand,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SlashCommand {
+    command: &'static str,
+    description_key: &'static str,
+    needs_args: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ParsedSlashCommand {
+    pub command: String,
+    pub target_localpart: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TrackedVisibleMention {
+    user_id: OwnedUserId,
+    visible_text: String,
+    start: usize,
+    end: usize,
+}
+
+const MENTION_POPUP_HEADER_TEXT: &str = "Users in this Room";
+const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        command: "/createbot",
+        description_key: "slash_command.createbot.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/deletebot",
+        description_key: "slash_command.deletebot.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/listbots",
+        description_key: "slash_command.listbots.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/bothelp",
+        description_key: "slash_command.bothelp.description",
+        needs_args: false,
+    },
+];
+
+pub(crate) fn is_management_bot_room(
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&OwnedUserId>,
+    resolved_parent_bot_user_id: Option<&OwnedUserId>,
+    _known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    if !app_service_enabled {
+        return false;
+    }
+
+    let Some(bound_bot_user_id) = bound_bot_user_id else {
+        return false;
+    };
+
+    if !is_direct_room && !has_persisted_management_binding {
+        return false;
+    }
+
+    resolved_parent_bot_user_id.is_some_and(|resolved_parent_bot_user_id|
+        bound_bot_user_id == resolved_parent_bot_user_id
+    )
+}
+
+fn bot_command_popup_enabled(
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&OwnedUserId>,
+    resolved_parent_bot_user_id: Option<&OwnedUserId>,
+    known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    is_management_bot_room(
+        app_service_enabled,
+        is_direct_room,
+        has_persisted_management_binding,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+    )
+}
+
+fn find_slash_command_trigger_position(text: &str, cursor_pos: usize) -> Option<usize> {
+    if cursor_pos == 0 || cursor_pos > text.len() {
+        return None;
+    }
+
+    let current_segment = text.get(..cursor_pos)?;
+    let line_start = current_segment.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let line = text.get(line_start..cursor_pos)?;
+
+    if !line.starts_with('/') || line[1..].chars().any(char::is_whitespace) {
+        return None;
+    }
+
+    Some(line_start)
+}
+
+fn matching_slash_commands(search_text: &str) -> Vec<SlashCommand> {
+    let query = search_text.trim().trim_start_matches('/').to_ascii_lowercase();
+    SLASH_COMMANDS
+        .iter()
+        .copied()
+        .filter(|command| {
+            command
+                .command
+                .trim_start_matches('/')
+                .to_ascii_lowercase()
+                .starts_with(&query)
+        })
+        .collect()
+}
+
+pub(crate) fn classify_known_slash_command_for_submission(text: &str) -> Option<SlashCommand> {
+    let first_token = text.split_whitespace().next()?;
+    SLASH_COMMANDS
+        .iter()
+        .copied()
+        .find(|command| command.command == first_token)
+}
+
+pub(crate) fn parse_command_with_at_suffix(input: &str) -> Option<ParsedSlashCommand> {
+    let trimmed = input.trim_start();
+    let first_token = trimmed.split_whitespace().next()?;
+    if !first_token.starts_with('/') || first_token.len() <= 1 {
+        return None;
+    }
+
+    let Some(at_idx) = first_token.find('@') else {
+        return Some(ParsedSlashCommand {
+            command: first_token.to_owned(),
+            target_localpart: None,
+        });
+    };
+
+    if at_idx <= 1 {
+        return None;
+    }
+
+    let command = first_token[..at_idx].to_owned();
+    let suffix = &first_token[at_idx + 1..];
+    let target_localpart = suffix
+        .split(':')
+        .next()
+        .map(str::trim)
+        .filter(|localpart| !localpart.is_empty())
+        .map(ToOwned::to_owned);
+
+    Some(ParsedSlashCommand {
+        command,
+        target_localpart,
+    })
+}
+
+pub(crate) fn normalize_command_with_at_suffix_for_send(input: &str) -> String {
+    let Some(parsed) = parse_command_with_at_suffix(input) else {
+        return input.to_owned();
+    };
+
+    if parsed.target_localpart.is_none() {
+        return input.to_owned();
+    }
+
+    let trimmed = input.trim_start();
+    let first_token_end = trimmed
+        .find(char::is_whitespace)
+        .unwrap_or(trimmed.len());
+    let suffix = &trimmed[first_token_end..];
+    format!("{}{}", parsed.command, suffix)
+}
+
+fn primary_submit_modifiers() -> KeyModifiers {
+    #[cfg(any(target_os = "ios", target_os = "macos", target_os = "tvos"))]
+    {
+        KeyModifiers {
+            logo: true,
+            ..Default::default()
+        }
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "tvos")))]
+    {
+        KeyModifiers {
+            control: true,
+            ..Default::default()
+        }
+    }
+}
+
 fn member_list_ready_for_mentions(member_count: usize, sync_pending: bool) -> bool {
     member_count > 0 && !sync_pending
 }
@@ -195,6 +398,260 @@ fn member_data_change_requires_popup_refresh(
             search_state,
             MentionSearchState::WaitingForMembers { .. } | MentionSearchState::Searching { .. }
         )
+}
+
+fn build_user_mention_insertion(
+    display_name: Option<&str>,
+    user_id: &OwnedUserId,
+) -> String {
+    let visible_text = display_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("@{name}"))
+        .unwrap_or_else(|| format!("@{}", user_id.localpart()));
+    format!("{visible_text} ")
+}
+
+fn apply_text_replacement_preserving_mentions(
+    current_text: &str,
+    start_idx: usize,
+    head: usize,
+    replacement_text: &str,
+    tracked_visible_mentions: &mut Vec<TrackedVisibleMention>,
+) -> (String, usize) {
+    let new_text =
+        utils::safe_replace_by_byte_indices(current_text, start_idx, head, replacement_text);
+    *tracked_visible_mentions = reconcile_visible_mentions_after_text_change(
+        current_text,
+        &new_text,
+        tracked_visible_mentions,
+    );
+    tracked_visible_mentions.sort_by_key(|mention| mention.start);
+
+    let cursor = start_idx + replacement_text.len();
+    (new_text, cursor)
+}
+
+fn apply_user_mention_selection(
+    current_text: &str,
+    start_idx: usize,
+    head: usize,
+    display_name: Option<&str>,
+    user_id: &OwnedUserId,
+    tracked_visible_mentions: &mut Vec<TrackedVisibleMention>,
+) -> (String, usize) {
+    let mention_to_insert = build_user_mention_insertion(display_name, user_id);
+    let (new_text, cursor) = apply_text_replacement_preserving_mentions(
+        current_text,
+        start_idx,
+        head,
+        &mention_to_insert,
+        tracked_visible_mentions,
+    );
+
+    let visible_text = mention_to_insert.trim_end().to_owned();
+    tracked_visible_mentions.push(TrackedVisibleMention {
+        user_id: user_id.clone(),
+        visible_text: visible_text.clone(),
+        start: start_idx,
+        end: start_idx + visible_text.len(),
+    });
+    tracked_visible_mentions.sort_by_key(|mention| mention.start);
+
+    (new_text, cursor)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TextChangeWindow {
+    changed_start: usize,
+    old_changed_end: usize,
+    new_changed_end: usize,
+    delta: isize,
+}
+
+fn compute_text_change_window(old_text: &str, new_text: &str) -> TextChangeWindow {
+    let mut changed_start = 0;
+    let mut old_iter = old_text.chars();
+    let mut new_iter = new_text.chars();
+
+    while let (Some(old_ch), Some(new_ch)) = (old_iter.next(), new_iter.next()) {
+        if old_ch != new_ch {
+            break;
+        }
+        changed_start += old_ch.len_utf8();
+    }
+
+    let mut old_suffix_len = 0;
+    let mut new_suffix_len = 0;
+    let mut old_suffix_iter = old_text[changed_start..].chars().rev();
+    let mut new_suffix_iter = new_text[changed_start..].chars().rev();
+
+    while old_text.len() - old_suffix_len > changed_start
+        && new_text.len() - new_suffix_len > changed_start
+    {
+        match (old_suffix_iter.next(), new_suffix_iter.next()) {
+            (Some(old_ch), Some(new_ch)) if old_ch == new_ch => {
+                old_suffix_len += old_ch.len_utf8();
+                new_suffix_len += new_ch.len_utf8();
+            }
+            _ => break,
+        }
+    }
+
+    let old_changed_end = old_text.len() - old_suffix_len;
+    let new_changed_end = new_text.len() - new_suffix_len;
+
+    TextChangeWindow {
+        changed_start,
+        old_changed_end,
+        new_changed_end,
+        delta: new_changed_end as isize - old_changed_end as isize,
+    }
+}
+
+fn reconcile_visible_mentions_after_text_change(
+    old_text: &str,
+    new_text: &str,
+    tracked_visible_mentions: &[TrackedVisibleMention],
+) -> Vec<TrackedVisibleMention> {
+    let change = compute_text_change_window(old_text, new_text);
+
+    tracked_visible_mentions
+        .iter()
+        .filter_map(|mention| {
+            if mention.end <= change.changed_start {
+                Some(mention.clone())
+            } else if mention.start >= change.old_changed_end {
+                let start = mention.start.saturating_add_signed(change.delta);
+                let end = mention.end.saturating_add_signed(change.delta);
+                Some(TrackedVisibleMention {
+                    user_id: mention.user_id.clone(),
+                    visible_text: mention.visible_text.clone(),
+                    start,
+                    end,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn reset_visible_mention_tracking_for_programmatic_text_set(
+    tracked_visible_mentions: &mut Vec<TrackedVisibleMention>,
+    possible_room_mention: &mut bool,
+) {
+    tracked_visible_mentions.clear();
+    *possible_room_mention = false;
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedOutgoingMentionContent {
+    markdown_text: String,
+    html_text: String,
+    mentions: Mentions,
+}
+
+fn markdown_escape_visible_mention_label(label: &str) -> String {
+    let mut escaped = String::with_capacity(label.len());
+    for ch in label.chars() {
+        match ch {
+            '\\' | '[' | ']' | '(' | ')' | '*' | '_' | '`' | '~' | '!' | '#' | '+' | '-' | '.' | '>' => {
+                escaped.push('\\');
+            }
+            _ => {}
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+fn contains_standalone_room_mention(text: &str) -> bool {
+    let Some(mut search_start) = text.find("@room") else {
+        return false;
+    };
+
+    loop {
+        let before = text[..search_start].chars().next_back();
+        let after = text[search_start + "@room".len()..].chars().next();
+
+        let starts_token = before.is_none_or(|ch| ch.is_whitespace() || ch.is_ascii_punctuation());
+        let ends_token = after.is_none_or(|ch| ch.is_whitespace() || ch.is_ascii_punctuation());
+
+        if starts_token && ends_token {
+            return true;
+        }
+
+        let next_search_from = search_start + "@room".len();
+        let Some(relative_next) = text[next_search_from..].find("@room") else {
+            return false;
+        };
+        search_start = next_search_from + relative_next;
+    }
+}
+
+fn resolve_visible_mentions_for_send(
+    text: &str,
+    tracked_visible_mentions: &[TrackedVisibleMention],
+    possible_room_mention: bool,
+) -> ResolvedOutgoingMentionContent {
+    let mut mentions = Mentions::new();
+    mentions.room = possible_room_mention && contains_standalone_room_mention(text);
+
+    let mut markdown_text = String::with_capacity(text.len());
+    let mut html_text = String::with_capacity(text.len());
+    let mut cursor = 0;
+
+    let mut tracked_mentions = tracked_visible_mentions.iter().collect::<Vec<_>>();
+    tracked_mentions.sort_by_key(|mention| mention.start);
+
+    for mention in tracked_mentions {
+        if mention.start < cursor || mention.start >= mention.end || mention.end > text.len() {
+            continue;
+        }
+
+        let Some(visible_slice) = text.get(mention.start..mention.end) else {
+            continue;
+        };
+
+        if visible_slice != mention.visible_text {
+            continue;
+        }
+
+        let Some(prefix) = text.get(cursor..mention.start) else {
+            continue;
+        };
+
+        markdown_text.push_str(prefix);
+        html_text.push_str(prefix);
+
+        let matrix_uri = mention.user_id.matrix_to_uri().to_string();
+        let escaped_label = markdown_escape_visible_mention_label(&mention.visible_text);
+        markdown_text.push_str(&format!("[{escaped_label}]({matrix_uri})"));
+        html_text.push_str(&format!(
+            "<a href=\"{}\">{}</a>",
+            htmlize::escape_attribute(&matrix_uri),
+            htmlize::escape_text(&mention.visible_text),
+        ));
+
+        mentions.user_ids.insert(mention.user_id.clone());
+        cursor = mention.end;
+    }
+
+    if let Some(suffix) = text.get(cursor..) {
+        markdown_text.push_str(suffix);
+        html_text.push_str(suffix);
+    }
+
+    ResolvedOutgoingMentionContent { markdown_text, html_text, mentions }
+}
+
+fn finalize_popup_selection(cx: &mut Cx, input: &mut MentionableTextInput) {
+    input.cancel_active_search();
+    input.close_mention_popup(cx);
+    input.search_state = MentionSearchState::JustCancelled;
+    input.pending_popup_cleanup = false;
+    input.pending_draw_focus_restore = true;
 }
 
 script_mod! {
@@ -332,6 +789,62 @@ script_mod! {
         }
     }
 
+    mod.widgets.SlashCommandListItem = View {
+        width: Fill
+        height: Fit
+        margin: Inset{left: 4 right: 4}
+        padding: Inset{left: 12 right: 12 top: 8 bottom: 8}
+        cursor: MouseCursor.Hand
+        show_bg: true
+        draw_bg +: {
+            color: (COLOR_PRIMARY)
+            border_radius: 4.0
+            selected: instance(0.0)
+
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.box(0. 0. self.rect_size.x self.rect_size.y self.border_radius)
+                let highlight = #x1E90FF30
+                sdf.fill(Pal.premul(self.color.mix(highlight self.selected)))
+                return sdf.result
+            }
+        }
+
+        animator: Animator {
+            highlight: {
+                default: @off
+                off: AnimatorState {
+                    from: { all: Forward { duration: 0.12 } }
+                    apply: { draw_bg: { selected: 0.0 } }
+                }
+                on: AnimatorState {
+                    from: { all: Forward { duration: 0.08 } }
+                    apply: { draw_bg: { selected: 1.0 } }
+                }
+            }
+        }
+
+        flow: Down
+        spacing: 2.0
+
+        command_name := Label {
+            height: Fit
+            draw_text +: {
+                color: (COLOR_ACTIVE_PRIMARY)
+                text_style: BOLD_TEXT {font_size: 11.0}
+            }
+        }
+
+        description := Label {
+            width: Fill
+            height: Fit
+            draw_text +: {
+                color: #666
+                text_style: REGULAR_TEXT {font_size: 10.0}
+            }
+        }
+    }
+
     // Template for loading indicator when members are being fetched
     mod.widgets.LoadingIndicator = View {
         width: Fill
@@ -454,6 +967,7 @@ script_mod! {
         // Template for user list items in the mention popup
         user_list_item: mod.widgets.UserListItem {}
         room_mention_list_item: mod.widgets.RoomMentionListItem {}
+        slash_command_list_item: mod.widgets.SlashCommandListItem {}
         loading_indicator: mod.widgets.LoadingIndicator {}
         no_matches_indicator: mod.widgets.NoMatchesIndicator {}
     }
@@ -494,20 +1008,20 @@ pub struct MentionableTextInput {
     /// Template for the @room mention list item
     #[live]
     room_mention_list_item: Option<LivePtr>,
+    /// Template for slash command list items
+    #[live]
+    slash_command_list_item: Option<LivePtr>,
     /// Template for loading indicator
     #[live]
     loading_indicator: Option<LivePtr>,
     /// Template for no matches indicator
     #[live]
     no_matches_indicator: Option<LivePtr>,
-    /// The set of users that were mentioned (at one point) in this text input.
-    /// Due to characters being deleted/removed, this list is a *superset*
-    /// of possible users who may have been mentioned.
-    /// All of these mentions may not exist in the final text input content;
-    /// this is just a list of users to search the final sent message for
-    /// when adding in new mentions.
     #[rust]
-    possible_mentions: BTreeMap<OwnedUserId, String>,
+    tracked_visible_mentions: Vec<TrackedVisibleMention>,
+    /// Last text value seen by the widget, used to reconcile tracked mention spans.
+    #[rust]
+    last_text: String,
     /// Indicates if the `@room` option was explicitly selected.
     #[rust]
     possible_room_mention: bool,
@@ -546,6 +1060,9 @@ pub struct MentionableTextInput {
     /// Whether focus should be restored in the next draw_walk cycle
     #[rust]
     pending_draw_focus_restore: bool,
+    /// Which kind of popup content is currently active.
+    #[rust]
+    active_popup_mode: PopupMode,
 }
 
 impl Widget for MentionableTextInput {
@@ -568,6 +1085,33 @@ impl Widget for MentionableTextInput {
                     self.redraw(cx);
                     return; // Don't process other events
                 }
+            }
+        }
+
+        if self.is_slash_command_popup_active() {
+            if let Event::KeyDown(key_event) = event {
+                if key_event.key_code == KeyCode::Escape {
+                    self.close_mention_popup(cx);
+                    self.pending_draw_focus_restore = true;
+                    self.redraw(cx);
+                    return;
+                }
+            }
+        }
+
+        // Intercept Cmd/Ctrl+Return to emit Returned action (send message)
+        // before the multiline TextInput turns it into a newline.
+        if let Event::KeyDown(KeyEvent {
+            key_code: KeyCode::ReturnKey,
+            modifiers,
+            ..
+        }) = event {
+            if modifiers.logo || modifiers.control {
+                let text_input = self.cmd_text_input.text_input(cx, ids!(text_input));
+                let uid = text_input.widget_uid();
+                let text = text_input.text();
+                cx.widget_action(uid, makepad_widgets::text_input::TextInputAction::Returned(text, *modifiers));
+                return;
             }
         }
 
@@ -633,7 +1177,7 @@ impl Widget for MentionableTextInput {
 
             // Handle item selection from mention popup
             if let Some(selected) = self.cmd_text_input.item_selected(actions) {
-                self.on_user_selected(cx, scope, selected);
+                self.on_popup_item_selected(cx, scope, selected);
             }
 
             // Handle build items request
@@ -796,6 +1340,14 @@ impl Widget for MentionableTextInput {
                 self.pending_popup_cleanup = true;
                 // Guarantee cleanup executes even if search completes and stops requesting frames
                 cx.new_next_frame();
+            } else if !has_focus && self.is_slash_command_popup_active() {
+                // Defer the close by one frame: when open_slash_command_popup
+                // is invoked from a button click, set_key_focus is still
+                // pending here, so closing immediately kills the popup we
+                // just opened. The NextFrame handler re-checks has_focus, and
+                // by then focus has committed — so the popup survives.
+                self.pending_popup_cleanup = true;
+                cx.new_next_frame();
             }
         }
 
@@ -830,6 +1382,32 @@ impl Widget for MentionableTextInput {
 }
 
 impl MentionableTextInput {
+    fn current_app_language(scope: &mut Scope) -> AppLanguage {
+        scope
+            .data
+            .get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default()
+    }
+
+    fn set_popup_header_text(&mut self, cx: &mut Cx, text: &str) {
+        self.cmd_text_input
+            .view(cx, ids!(popup.header_view))
+            .set_visible(cx, true);
+        self.cmd_text_input
+            .label(cx, ids!(popup.header_view.header_label))
+            .set_text(cx, text);
+    }
+
+    fn set_popup_header_for_mentions(&mut self, cx: &mut Cx) {
+        self.set_popup_header_text(cx, MENTION_POPUP_HEADER_TEXT);
+    }
+
+    fn set_popup_header_for_slash_commands(&mut self, cx: &mut Cx, scope: &mut Scope) {
+        let app_language = Self::current_app_language(scope);
+        self.set_popup_header_text(cx, tr_key(app_language, "slash_command.header"));
+    }
+
     fn active_search_text(&self) -> Option<String> {
         match &self.search_state {
             MentionSearchState::WaitingForMembers {
@@ -901,6 +1479,10 @@ impl MentionableTextInput {
         )
     }
 
+    fn is_slash_command_popup_active(&self) -> bool {
+        self.active_popup_mode == PopupMode::SlashCommand
+    }
+
     /// Generate the next unique identifier for a background search job.
     fn allocate_search_id(&mut self) -> u64 {
         if self.next_search_id == 0 {
@@ -951,7 +1533,7 @@ impl MentionableTextInput {
         _is_desktop: bool,
     ) -> bool {
         // Don't show @room option in direct messages
-        if false /* TODO: add is_direct_room to RoomScreenProps */ {
+        if room_props.is_direct_room {
             return false;
         }
         if !self.can_notify_room || !("@room".contains(search_text) || search_text.is_empty()) {
@@ -1101,6 +1683,123 @@ impl MentionableTextInput {
         items_added
     }
 
+    fn add_slash_command_items(
+        &mut self,
+        cx: &mut Cx,
+        app_language: AppLanguage,
+        commands: &[SlashCommand],
+    ) -> usize {
+        let Some(item_ptr) = self.slash_command_list_item else {
+            return 0;
+        };
+
+        let mut items_added = 0;
+        for command in commands {
+            let item = crate::widget_ref_from_live_ptr(cx, Some(item_ptr));
+            item.label(cx, ids!(command_name))
+                .set_text(cx, command.command);
+            item.label(cx, ids!(description))
+                .set_text(cx, tr_key(app_language, command.description_key));
+            self.cmd_text_input.add_item(cx, item);
+            items_added += 1;
+        }
+
+        items_added
+    }
+
+    fn update_slash_command_list(&mut self, cx: &mut Cx, scope: &mut Scope, search_text: &str) {
+        let room_props = scope
+            .props
+            .get::<RoomScreenProps>()
+            .expect("RoomScreenProps should be available in scope for MentionableTextInput");
+
+        let enabled = bot_command_popup_enabled(
+            room_props.app_service_enabled,
+            room_props.is_direct_room,
+            room_props.has_persisted_management_binding,
+            room_props.bound_bot_user_id.as_ref(),
+            room_props.resolved_parent_bot_user_id.as_ref(),
+            &room_props.known_bot_user_ids,
+        );
+        if !enabled {
+            if self.is_slash_command_popup_active() {
+                self.close_mention_popup(cx);
+            }
+            return;
+        }
+
+        self.cancel_active_search();
+        self.search_state = MentionSearchState::Idle;
+        self.last_search_text = None;
+        self.loading_indicator_ref = None;
+        self.active_popup_mode = PopupMode::SlashCommand;
+
+        self.cmd_text_input.clear_items(cx);
+        self.cmd_text_input.reset_list_scroll(cx);
+        self.set_popup_header_for_slash_commands(cx, scope);
+
+        let commands = matching_slash_commands(search_text);
+        if commands.is_empty() {
+            self.close_mention_popup(cx);
+            return;
+        }
+
+        let app_language = Self::current_app_language(scope);
+        let items_added = self.add_slash_command_items(cx, app_language, &commands);
+
+        const SLASH_COMMAND_ITEM_HEIGHT: f64 = 48.0;
+        const LIST_PADDING: f64 = 4.0;
+        let max_scroll_height = if cx.display_context.is_desktop() {
+            DESKTOP_MAX_SCROLL_HEIGHT
+        } else {
+            MOBILE_MAX_SCROLL_HEIGHT
+        };
+        let content_height = (items_added as f64 * SLASH_COMMAND_ITEM_HEIGHT) + LIST_PADDING;
+        self.set_list_scroll_height(cx, content_height.min(max_scroll_height));
+
+        let popup = self.cmd_text_input.view(cx, ids!(popup));
+        popup.set_visible(cx, items_added > 0);
+        let text_input_area = self.cmd_text_input.text_input_ref().area();
+        if cx.has_key_focus(text_input_area) {
+            self.cmd_text_input.text_input_ref().set_key_focus(cx);
+        }
+
+        self.redraw(cx);
+    }
+
+    fn emit_primary_submit_action(&self, cx: &mut Cx, text: String) {
+        let text_input = self.cmd_text_input.text_input(cx, ids!(text_input));
+        cx.widget_action(
+            text_input.widget_uid(),
+            makepad_widgets::text_input::TextInputAction::Returned(
+                text,
+                primary_submit_modifiers(),
+            ),
+        );
+    }
+
+    fn open_slash_command_popup(&mut self, cx: &mut Cx, scope: &mut Scope) {
+        let text_input_ref = self.cmd_text_input.text_input_ref();
+        self.set_input_text_preserving_mentions(cx, "/");
+        text_input_ref.set_cursor(
+            cx,
+            Cursor {
+                index: 1,
+                prefer_next_row: false,
+            },
+            false,
+        );
+        self.update_slash_command_list(cx, scope, "/");
+        text_input_ref.set_key_focus(cx);
+        // The button-click event flow races with focus commit: when the user
+        // clicks bot_menu_button, focus lives on the button (not the text
+        // input), so the Event::Actions block below sees `has_focus == false`
+        // for the text input even though we just requested focus. Belt-and-
+        // suspenders: draw_walk will keep retrying focus restore until it
+        // sticks.
+        self.pending_draw_focus_restore = true;
+    }
+
     /// Update popup visibility and layout based on current state
     fn update_popup_visibility(&mut self, cx: &mut Cx, scope: &mut Scope, has_items: bool) {
         let popup = self.cmd_text_input.view(cx, ids!(popup));
@@ -1204,26 +1903,78 @@ impl MentionableTextInput {
                     // Invalid user ID format - skip selection
                     return;
                 };
-                self.possible_mentions
-                    .insert(user_id.clone(), username.clone());
-
-                // Currently, we directly insert the markdown link for user mentions
-                // instead of the user's display name, because we don't yet have a way
-                // to track mentioned display names and replace them later.
-                format!("[{username}]({}) ", user_id.matrix_to_uri(),)
+                let (new_text, new_pos) = apply_user_mention_selection(
+                    &current_text,
+                    start_idx,
+                    head,
+                    Some(&username),
+                    &user_id,
+                    &mut self.tracked_visible_mentions,
+                );
+                self.set_input_text_preserving_mentions(cx, &new_text);
+                text_input_ref.set_cursor(
+                    cx,
+                    Cursor {
+                        index: new_pos,
+                        prefer_next_row: false,
+                    },
+                    false,
+                );
+                finalize_popup_selection(cx, self);
+                return;
             };
 
-            // Use utility function to safely replace text
-            let new_text = utils::safe_replace_by_byte_indices(
+            let (new_text, new_pos) = apply_text_replacement_preserving_mentions(
                 &current_text,
                 start_idx,
                 head,
                 &mention_to_insert,
+                &mut self.tracked_visible_mentions,
             );
 
-            self.cmd_text_input.set_text(cx, &new_text);
-            // Calculate new cursor position
-            let new_pos = start_idx + mention_to_insert.len();
+            self.set_input_text_preserving_mentions(cx, &new_text);
+            text_input_ref.set_cursor(
+                cx,
+                Cursor {
+                    index: new_pos,
+                    prefer_next_row: false,
+                },
+                false,
+            );
+        }
+        finalize_popup_selection(cx, self);
+    }
+
+    fn on_slash_command_selected(&mut self, cx: &mut Cx, selected: WidgetRef) {
+        let command = selected.label(cx, ids!(command_name)).text();
+        if command.is_empty() {
+            return;
+        }
+
+        if classify_known_slash_command_for_submission(&command)
+            .is_some_and(|slash_command| !slash_command.needs_args)
+        {
+            self.close_mention_popup(cx);
+            self.emit_primary_submit_action(cx, command);
+            self.pending_draw_focus_restore = true;
+            return;
+        }
+
+        let text_input_ref = self.cmd_text_input.text_input_ref();
+        let current_text = text_input_ref.text();
+        let head = text_input_ref.borrow().map_or(0, |p| p.cursor().index);
+
+        if let Some(start_idx) = find_slash_command_trigger_position(&current_text, head) {
+            let command_to_insert = format!("{command} ");
+            let (new_text, new_pos) = apply_text_replacement_preserving_mentions(
+                &current_text,
+                start_idx,
+                head,
+                &command_to_insert,
+                &mut self.tracked_visible_mentions,
+            );
+
+            self.set_input_text_preserving_mentions(cx, &new_text);
             text_input_ref.set_cursor(
                 cx,
                 Cursor {
@@ -1234,33 +1985,47 @@ impl MentionableTextInput {
             );
         }
 
-        self.cancel_active_search();
-        self.search_state = MentionSearchState::JustCancelled;
-        // Clear cleanup flag to prevent next-frame cleanup from interfering with focus
-        self.pending_popup_cleanup = false;
         self.close_mention_popup(cx);
-        // Schedule focus restoration for the draw cycle.
-        // This will retry until focus is successfully restored, handling cases where
-        // finger_up events might steal focus after our initial restoration attempt.
         self.pending_draw_focus_restore = true;
+    }
+
+    fn on_popup_item_selected(&mut self, cx: &mut Cx, scope: &mut Scope, selected: WidgetRef) {
+        match self.active_popup_mode {
+            PopupMode::Mention => self.on_user_selected(cx, scope, selected),
+            PopupMode::SlashCommand => self.on_slash_command_selected(cx, selected),
+            PopupMode::None => {}
+        }
     }
 
     /// Core text change handler that manages mention context
     fn handle_text_change(&mut self, cx: &mut Cx, scope: &mut Scope, text: String) {
+        let previous_text = std::mem::replace(&mut self.last_text, text.clone());
+        let tracked_visible_mentions = std::mem::take(&mut self.tracked_visible_mentions);
+        self.tracked_visible_mentions = reconcile_visible_mentions_after_text_change(
+            &previous_text,
+            &text,
+            &tracked_visible_mentions,
+        );
+
         // If search was just cancelled, clear the flag and don't re-trigger search
         if self.is_just_cancelled() {
             self.search_state = MentionSearchState::Idle;
-            return;
         }
 
         // Check if text is empty or contains only whitespace
         let trimmed_text = text.trim();
         if trimmed_text.is_empty() {
-            self.possible_mentions.clear();
-            self.possible_room_mention = false;
-            if self.is_searching() {
+            reset_visible_mention_tracking_for_programmatic_text_set(
+                &mut self.tracked_visible_mentions,
+                &mut self.possible_room_mention,
+            );
+            if self.is_searching() || self.is_slash_command_popup_active() {
                 self.close_mention_popup(cx);
             }
+            return;
+        }
+
+        if self.is_just_cancelled() {
             return;
         }
 
@@ -1271,15 +2036,23 @@ impl MentionableTextInput {
             .map_or(0, |p| p.cursor().index);
 
         // Check if we're currently searching and the @ symbol was deleted
-        if let Some(start_pos) = self.get_trigger_position() {
-            // Check if the @ symbol at the start position still exists
-            if start_pos >= text.len()
-                || text.get(start_pos..start_pos + 1).is_some_and(|c| c != "@")
-            {
-                // The @ symbol was deleted, stop searching
-                self.close_mention_popup(cx);
-                return;
+        if self.active_popup_mode == PopupMode::Mention {
+            if let Some(start_pos) = self.get_trigger_position() {
+                // Check if the @ symbol at the start position still exists
+                if start_pos >= text.len()
+                    || text.get(start_pos..start_pos + 1).is_some_and(|c| c != "@")
+                {
+                    // The @ symbol was deleted, stop searching
+                    self.close_mention_popup(cx);
+                    return;
+                }
             }
+        }
+
+        if self.active_popup_mode == PopupMode::SlashCommand
+            && find_slash_command_trigger_position(&text, cursor_pos).is_none()
+        {
+            self.close_mention_popup(cx);
         }
 
         // Look for trigger position for @ menu
@@ -1318,7 +2091,11 @@ impl MentionableTextInput {
 
             // Redraw to ensure UI updates are visible
             self.redraw(cx);
-        } else if self.is_searching() {
+        } else if let Some(trigger_pos) = find_slash_command_trigger_position(&text, cursor_pos) {
+            let search_text =
+                utils::safe_substring_by_byte_indices(&text, trigger_pos + 1, cursor_pos);
+            self.update_slash_command_list(cx, scope, &search_text);
+        } else if self.is_searching() || self.is_slash_command_popup_active() {
             self.close_mention_popup(cx);
         }
     }
@@ -1542,6 +2319,9 @@ impl MentionableTextInput {
             .props
             .get::<RoomScreenProps>()
             .expect("RoomScreenProps should be available in scope for MentionableTextInput");
+
+        self.active_popup_mode = PopupMode::Mention;
+        self.set_popup_header_for_mentions(cx);
 
         // Get trigger position from current state (if in searching mode)
         let trigger_pos = match &self.search_state {
@@ -1891,6 +2671,7 @@ impl MentionableTextInput {
         self.last_search_text = None;
         self.search_results_pending = false;
         self.loading_indicator_ref = None;
+        self.active_popup_mode = PopupMode::None;
 
         // Reset change detection state
         self.last_member_count = 0;
@@ -1936,8 +2717,11 @@ impl MentionableTextInput {
 
     /// Sets the text content
     pub fn set_text(&mut self, cx: &mut Cx, text: &str) {
-        self.cmd_text_input.text_input_ref().set_text(cx, text);
-        self.cmd_text_input.redraw(cx);
+        reset_visible_mention_tracking_for_programmatic_text_set(
+            &mut self.tracked_visible_mentions,
+            &mut self.possible_room_mention,
+        );
+        self.set_input_text_preserving_mentions(cx, text);
     }
 
     /// Sets whether the current user can notify the entire room (@room mention)
@@ -1948,6 +2732,12 @@ impl MentionableTextInput {
     /// Gets whether the current user can notify the entire room (@room mention)
     pub fn can_notify_room(&self) -> bool {
         self.can_notify_room
+    }
+
+    fn set_input_text_preserving_mentions(&mut self, cx: &mut Cx, text: &str) {
+        self.cmd_text_input.text_input_ref().set_text(cx, text);
+        self.last_text = text.to_owned();
+        self.cmd_text_input.redraw(cx);
     }
 }
 
@@ -1980,6 +2770,12 @@ impl MentionableTextInputRef {
         }
     }
 
+    pub fn open_slash_command_popup(&self, cx: &mut Cx, scope: &mut Scope) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.open_slash_command_popup(cx, scope);
+        }
+    }
+
     /// Sets whether the current user can notify the entire room (@room mention)
     pub fn set_can_notify_room(&self, can_notify: bool) {
         if let Some(mut inner) = self.borrow_mut() {
@@ -1992,76 +2788,82 @@ impl MentionableTextInputRef {
         self.borrow().is_some_and(|inner| inner.can_notify_room())
     }
 
-    /// Returns the mentions actually present in the given html message content.
-    fn get_real_mentions_in_html_text(&self, html: &str) -> Mentions {
-        let mut mentions = Mentions::new();
-
-        let Some(inner) = self.borrow() else {
-            return mentions;
-        };
-
-        let mut user_ids = BTreeSet::new();
-
-        for (user_id, username) in &inner.possible_mentions {
-            if html.contains(&format!(
-                "<a href=\"{}\">{}</a>",
-                user_id.matrix_to_uri(),
-                username,
-            )) {
-                user_ids.insert(user_id.clone());
-            }
-        }
-
-        mentions.user_ids = user_ids;
-        // Check for @room mention in HTML content
-        mentions.room = inner.possible_room_mention && html.contains("@room");
-        mentions
-    }
-
-    /// Returns the mentions actually present in the given markdown message content.
-    fn get_real_mentions_in_markdown_text(&self, markdown: &str) -> Mentions {
-        let mut mentions = Mentions::new();
-
-        let Some(inner) = self.borrow() else {
-            return mentions;
-        };
-
-        let mut user_ids = BTreeSet::new();
-        for (user_id, username) in &inner.possible_mentions {
-            // Check both username format and user_id format for flexibility
-            let username_pattern = format!("[{}]({})", username, user_id.matrix_to_uri());
-            let userid_pattern = format!("[{}]({})", user_id, user_id.matrix_to_uri());
-
-            if markdown.contains(&username_pattern) || markdown.contains(&userid_pattern) {
-                user_ids.insert(user_id.clone());
-            }
-        }
-
-        mentions.user_ids = user_ids;
-        // Check for @room mention in markdown content
-        mentions.room = inner.possible_room_mention && markdown.contains("@room");
-        mentions
-    }
-
     /// Processes entered text and creates a message with mentions based on detected message type.
     /// This method handles /html, /plain prefixes and defaults to markdown.
     pub fn create_message_with_mentions(&self, entered_text: &str) -> RoomMessageEventContent {
-        if let Some(html_text) = entered_text.strip_prefix("/html") {
-            let message = RoomMessageEventContent::text_html(html_text, html_text);
-            message.add_mentions(self.get_real_mentions_in_html_text(html_text))
-        } else if let Some(plain_text) = entered_text.strip_prefix("/plain") {
-            // Plain text messages don't support mentions
-            RoomMessageEventContent::text_plain(plain_text)
-        } else {
-            let message = RoomMessageEventContent::text_markdown(entered_text);
-            message.add_mentions(self.get_real_mentions_in_markdown_text(entered_text))
+        let Some(inner) = self.borrow() else {
+            return create_message_with_tracked_mentions(entered_text, &[], false);
+        };
+
+        create_message_with_tracked_mentions(
+            entered_text,
+            &inner.tracked_visible_mentions,
+            inner.possible_room_mention,
+        )
+    }
+
+    pub fn create_message_with_mentions_for_submission(
+        &self,
+        entered_text: &str,
+    ) -> RoomMessageEventContent {
+        let Some(inner) = self.borrow() else {
+            let normalized_text = normalize_command_with_at_suffix_for_send(entered_text);
+            return create_message_with_tracked_mentions(&normalized_text, &[], false);
+        };
+
+        let normalized_text = normalize_command_with_at_suffix_for_send(entered_text);
+        if normalized_text == entered_text {
+            return create_message_with_tracked_mentions(
+                entered_text,
+                &inner.tracked_visible_mentions,
+                inner.possible_room_mention,
+            );
         }
+
+        let adjusted_mentions = reconcile_visible_mentions_after_text_change(
+            entered_text,
+            &normalized_text,
+            &inner.tracked_visible_mentions,
+        );
+        create_message_with_tracked_mentions(
+            &normalized_text,
+            &adjusted_mentions,
+            inner.possible_room_mention,
+        )
+    }
+}
+
+fn create_message_with_tracked_mentions(
+    entered_text: &str,
+    tracked_visible_mentions: &[TrackedVisibleMention],
+    possible_room_mention: bool,
+) -> RoomMessageEventContent {
+    if let Some(html_text) = entered_text.strip_prefix("/html") {
+        let resolved = resolve_visible_mentions_for_send(
+            html_text,
+            tracked_visible_mentions,
+            possible_room_mention,
+        );
+        let message = RoomMessageEventContent::text_html(html_text, resolved.html_text);
+        message.add_mentions(resolved.mentions)
+    } else if let Some(plain_text) = entered_text.strip_prefix("/plain") {
+        // Plain text messages don't support mentions
+        RoomMessageEventContent::text_plain(plain_text)
+    } else {
+        let resolved = resolve_visible_mentions_for_send(
+            entered_text,
+            tracked_visible_mentions,
+            possible_room_mention,
+        );
+        let message = RoomMessageEventContent::text_markdown(resolved.markdown_text);
+        message.add_mentions(resolved.mentions)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use matrix_sdk::ruma::events::room::message::MessageType;
 
     #[test]
     fn popup_status_items_are_never_selectable() {
@@ -2138,5 +2940,571 @@ mod tests {
                 pending_search_text: "al".to_owned(),
             },
         ));
+    }
+
+    #[test]
+    fn slash_command_popup_requires_management_bot_room() {
+        let parent_bot = OwnedUserId::try_from("@octosbot:example.com").unwrap();
+        let child_bot = OwnedUserId::try_from("@octosbot_child:example.com").unwrap();
+        let mismatched_parent = OwnedUserId::try_from("@bot:example.com").unwrap();
+
+        assert!(bot_command_popup_enabled(
+            true,
+            true,
+            false,
+            Some(&parent_bot),
+            Some(&parent_bot),
+            &[],
+        ));
+        assert!(!bot_command_popup_enabled(
+            true,
+            false,
+            false,
+            Some(&parent_bot),
+            Some(&parent_bot),
+            &[],
+        ));
+        assert!(!bot_command_popup_enabled(
+            true,
+            false,
+            true,
+            Some(&child_bot),
+            Some(&parent_bot),
+            std::slice::from_ref(&child_bot),
+        ));
+        assert!(!bot_command_popup_enabled(
+            true,
+            false,
+            false,
+            None,
+            Some(&parent_bot),
+            &[],
+        ));
+        assert!(!bot_command_popup_enabled(
+            true,
+            false,
+            true,
+            Some(&parent_bot),
+            Some(&mismatched_parent),
+            &[],
+        ));
+        assert!(!bot_command_popup_enabled(
+            true,
+            false,
+            false,
+            Some(&parent_bot),
+            Some(&mismatched_parent),
+            &[],
+        ));
+        assert!(!bot_command_popup_enabled(
+            false,
+            false,
+            true,
+            Some(&parent_bot),
+            Some(&parent_bot),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn slash_command_trigger_is_found_at_input_start() {
+        assert_eq!(find_slash_command_trigger_position("/li", "/li".len()), Some(0));
+    }
+
+    #[test]
+    fn slash_command_trigger_is_found_after_newline() {
+        let text = "hello\n/list";
+        assert_eq!(
+            find_slash_command_trigger_position(text, text.len()),
+            Some("hello\n".len())
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_is_not_found_mid_line() {
+        let text = "hello /list";
+        assert_eq!(find_slash_command_trigger_position(text, text.len()), None);
+    }
+
+    #[test]
+    fn slash_commands_filter_by_prefix_without_leading_slash() {
+        let commands = matching_slash_commands("li");
+        assert_eq!(commands, vec![SlashCommand {
+            command: "/listbots",
+            description_key: "slash_command.listbots.description",
+            needs_args: false,
+        }]);
+    }
+
+    #[test]
+    fn slash_commands_return_empty_for_unknown_prefix() {
+        assert!(matching_slash_commands("zzzznotacommand").is_empty());
+    }
+
+    #[test]
+    fn classify_known_slash_command_for_submission_matches_first_token() {
+        assert_eq!(
+            classify_known_slash_command_for_submission("/listbots"),
+            Some(SlashCommand {
+                command: "/listbots",
+                description_key: "slash_command.listbots.description",
+                needs_args: false,
+            })
+        );
+        assert_eq!(
+            classify_known_slash_command_for_submission("/createbot weather Weather Bot"),
+            Some(SlashCommand {
+                command: "/createbot",
+                description_key: "slash_command.createbot.description",
+                needs_args: true,
+            })
+        );
+        assert_eq!(classify_known_slash_command_for_submission("/unknown arg"), None);
+    }
+
+    #[test]
+    fn test_parse_command_at_localpart() {
+        assert_eq!(
+            parse_command_with_at_suffix("/listbots@octosbot_weather"),
+            Some(ParsedSlashCommand {
+                command: "/listbots".to_owned(),
+                target_localpart: Some("octosbot_weather".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_command_at_full_mxid() {
+        assert_eq!(
+            parse_command_with_at_suffix("/listbots@octosbot:127.0.0.1:8128"),
+            Some(ParsedSlashCommand {
+                command: "/listbots".to_owned(),
+                target_localpart: Some("octosbot".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_bare_command_no_target() {
+        assert_eq!(
+            parse_command_with_at_suffix("/listbots"),
+            Some(ParsedSlashCommand {
+                command: "/listbots".to_owned(),
+                target_localpart: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_command_at_with_args() {
+        assert_eq!(
+            parse_command_with_at_suffix("/createbot@octosbot weather Weather Bot"),
+            Some(ParsedSlashCommand {
+                command: "/createbot".to_owned(),
+                target_localpart: Some("octosbot".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parser_rejects_bare_mention() {
+        assert_eq!(parse_command_with_at_suffix("@octosbot hello"), None);
+    }
+
+    #[test]
+    fn test_parser_rejects_space_before_at() {
+        assert_eq!(
+            parse_command_with_at_suffix("/listbots @octosbot"),
+            Some(ParsedSlashCommand {
+                command: "/listbots".to_owned(),
+                target_localpart: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parameterized_command_at_bot_normalizes() {
+        assert_eq!(
+            normalize_command_with_at_suffix_for_send("/createbot@octosbot weather Weather Bot"),
+            "/createbot weather Weather Bot".to_owned(),
+        );
+    }
+
+    #[test]
+    fn test_input_box_preserves_at_bot_during_typing() {
+        let visible_text = "/listbots@octosbot";
+
+        assert_eq!(visible_text, "/listbots@octosbot");
+        assert_eq!(
+            normalize_command_with_at_suffix_for_send(visible_text),
+            "/listbots".to_owned(),
+        );
+    }
+
+    #[test]
+    fn test_editing_inside_visible_mention_clears_tracking_for_that_mention() {
+        let alice: OwnedUserId = "@alice:example.com".try_into().expect("valid user id");
+        let bob: OwnedUserId = "@bob:example.com".try_into().expect("valid user id");
+        let old_text = "hello @Alice and @Bob";
+        let new_text = "hello @Alicia and @Bob";
+        let tracked_mentions = vec![
+            TrackedVisibleMention {
+                user_id: alice.clone(),
+                visible_text: "@Alice".to_owned(),
+                start: "hello ".len(),
+                end: "hello @Alice".len(),
+            },
+            TrackedVisibleMention {
+                user_id: bob.clone(),
+                visible_text: "@Bob".to_owned(),
+                start: "hello @Alice and ".len(),
+                end: "hello @Alice and @Bob".len(),
+            },
+        ];
+
+        let reconciled = reconcile_visible_mentions_after_text_change(
+            old_text,
+            new_text,
+            &tracked_mentions,
+        );
+
+        assert_eq!(reconciled.len(), 1);
+        let tracked = &reconciled[0];
+        assert_eq!(tracked.user_id, bob);
+        assert_eq!(tracked.visible_text, "@Bob");
+        assert_eq!(tracked.start, "hello @Alicia and ".len());
+        assert_eq!(tracked.end, "hello @Alicia and @Bob".len());
+    }
+
+    #[test]
+    fn test_duplicate_display_name_mentions_preserve_distinct_user_ids() {
+        let first: OwnedUserId = "@sam:example.com".try_into().expect("valid user id");
+        let second: OwnedUserId = "@sam:other.example".try_into().expect("valid user id");
+        let old_text = "@Sam and @Sam";
+        let new_text = "yo @Sam and @Sam";
+        let tracked_mentions = vec![
+            TrackedVisibleMention {
+                user_id: first.clone(),
+                visible_text: "@Sam".to_owned(),
+                start: 0,
+                end: "@Sam".len(),
+            },
+            TrackedVisibleMention {
+                user_id: second.clone(),
+                visible_text: "@Sam".to_owned(),
+                start: "@Sam and ".len(),
+                end: "@Sam and @Sam".len(),
+            },
+        ];
+
+        let reconciled = reconcile_visible_mentions_after_text_change(
+            old_text,
+            new_text,
+            &tracked_mentions,
+        );
+
+        assert_eq!(reconciled.len(), 2);
+        assert_eq!(reconciled[0].user_id, first);
+        assert_eq!(reconciled[0].visible_text, "@Sam");
+        assert_eq!(reconciled[0].start, "yo ".len());
+        assert_eq!(reconciled[0].end, "yo @Sam".len());
+        assert_eq!(reconciled[1].user_id, second);
+        assert_eq!(reconciled[1].visible_text, "@Sam");
+        assert_eq!(reconciled[1].start, "yo @Sam and ".len());
+        assert_eq!(reconciled[1].end, "yo @Sam and @Sam".len());
+    }
+
+    #[test]
+    fn test_visible_mention_spans_shift_when_edit_happens_before_them() {
+        let bob: OwnedUserId = "@bob:example.com".try_into().expect("valid user id");
+        let old_text = "hello @Bob";
+        let new_text = "hello brave @Bob";
+        let tracked_mentions = vec![TrackedVisibleMention {
+            user_id: bob.clone(),
+            visible_text: "@Bob".to_owned(),
+            start: "hello ".len(),
+            end: "hello @Bob".len(),
+        }];
+
+        let reconciled = reconcile_visible_mentions_after_text_change(
+            old_text,
+            new_text,
+            &tracked_mentions,
+        );
+
+        assert_eq!(reconciled.len(), 1);
+        let tracked = &reconciled[0];
+        assert_eq!(tracked.user_id, bob);
+        assert_eq!(tracked.visible_text, "@Bob");
+        assert_eq!(tracked.start, "hello brave ".len());
+        assert_eq!(tracked.end, "hello brave @Bob".len());
+    }
+
+    #[test]
+    fn test_programmatic_set_text_clears_stale_tracked_mention_state() {
+        let alice: OwnedUserId = "@alice:example.com".try_into().expect("valid user id");
+        let mut tracked_mentions = vec![TrackedVisibleMention {
+            user_id: alice,
+            visible_text: "@Alice".to_owned(),
+            start: 0,
+            end: "@Alice".len(),
+        }];
+        let mut possible_room_mention = true;
+
+        reset_visible_mention_tracking_for_programmatic_text_set(
+            &mut tracked_mentions,
+            &mut possible_room_mention,
+        );
+
+        assert!(tracked_mentions.is_empty());
+        assert!(!possible_room_mention);
+    }
+
+    #[test]
+    fn test_inserting_mention_before_existing_mention_shifts_older_span_correctly() {
+        let alice: OwnedUserId = "@alice:example.com".try_into().expect("valid user id");
+        let bob: OwnedUserId = "@bob:example.com".try_into().expect("valid user id");
+        let current_text = "@al @Bob";
+        let start_idx = 0;
+        let head = "@al".len();
+        let mut tracked_mentions = vec![TrackedVisibleMention {
+            user_id: bob.clone(),
+            visible_text: "@Bob".to_owned(),
+            start: "@al ".len(),
+            end: "@al @Bob".len(),
+        }];
+
+        let (new_text, cursor) = apply_user_mention_selection(
+            current_text,
+            start_idx,
+            head,
+            Some("Alice"),
+            &alice,
+            &mut tracked_mentions,
+        );
+
+        assert_eq!(new_text, "@Alice  @Bob");
+        assert_eq!(cursor, "@Alice ".len());
+        assert_eq!(tracked_mentions.len(), 2);
+        assert_eq!(tracked_mentions[0].user_id, alice);
+        assert_eq!(tracked_mentions[0].start, 0);
+        assert_eq!(tracked_mentions[0].end, "@Alice".len());
+        assert_eq!(tracked_mentions[1].user_id, bob);
+        assert_eq!(tracked_mentions[1].start, "@Alice  ".len());
+        assert_eq!(tracked_mentions[1].end, "@Alice  @Bob".len());
+    }
+
+    #[test]
+    fn test_inserting_room_mention_before_existing_mention_shifts_older_span_correctly() {
+        let bob: OwnedUserId = "@bob:example.com".try_into().expect("valid user id");
+        let current_text = "@ro @Bob";
+        let start_idx = 0;
+        let head = "@ro".len();
+        let mut tracked_mentions = vec![TrackedVisibleMention {
+            user_id: bob.clone(),
+            visible_text: "@Bob".to_owned(),
+            start: "@ro ".len(),
+            end: "@ro @Bob".len(),
+        }];
+
+        let (new_text, cursor) = apply_text_replacement_preserving_mentions(
+            current_text,
+            start_idx,
+            head,
+            "@room ",
+            &mut tracked_mentions,
+        );
+
+        assert_eq!(new_text, "@room  @Bob");
+        assert_eq!(cursor, "@room ".len());
+        assert_eq!(tracked_mentions.len(), 1);
+        assert_eq!(tracked_mentions[0].user_id, bob);
+        assert_eq!(tracked_mentions[0].start, "@room  ".len());
+        assert_eq!(tracked_mentions[0].end, "@room  @Bob".len());
+    }
+
+    #[test]
+    fn test_selecting_user_mention_inserts_visible_display_name() {
+        let user_id: OwnedUserId = "@alice:example.com".try_into().expect("valid user id");
+        let current_text = "hello @al";
+        let start_idx = "hello ".len();
+        let head = current_text.len();
+        let mut tracked_mentions = Vec::new();
+        let (new_text, cursor) = apply_user_mention_selection(
+            current_text,
+            start_idx,
+            head,
+            Some("Alice"),
+            &user_id,
+            &mut tracked_mentions,
+        );
+
+        assert_eq!(new_text, "hello @Alice ");
+        assert!(!new_text.contains("matrix.to"));
+        assert_eq!(cursor, "hello @Alice ".len());
+        assert_eq!(tracked_mentions.len(), 1);
+        let tracked = &tracked_mentions[0];
+        assert_eq!(tracked.user_id, user_id);
+        assert_eq!(tracked.visible_text, "@Alice");
+        assert_eq!(tracked.start, start_idx);
+        assert_eq!(tracked.end, start_idx + tracked.visible_text.len());
+    }
+
+    #[test]
+    fn test_selecting_user_mention_without_display_name_falls_back_to_localpart() {
+        let user_id: OwnedUserId = "@octosbot:127.0.0.1:8128".try_into().expect("valid user id");
+        let current_text = "ping @oc";
+        let start_idx = "ping ".len();
+        let head = current_text.len();
+        let mut tracked_mentions = Vec::new();
+        let (new_text, cursor) = apply_user_mention_selection(
+            current_text,
+            start_idx,
+            head,
+            None,
+            &user_id,
+            &mut tracked_mentions,
+        );
+
+        assert_eq!(new_text, "ping @octosbot ");
+        assert!(!new_text.contains("matrix.to"));
+        assert_eq!(cursor, "ping @octosbot ".len());
+        assert_eq!(tracked_mentions.len(), 1);
+        let tracked = &tracked_mentions[0];
+        assert_eq!(tracked.user_id, user_id);
+        assert_eq!(tracked.visible_text, "@octosbot");
+        assert_eq!(tracked.start, start_idx);
+        assert_eq!(tracked.end, start_idx + tracked.visible_text.len());
+    }
+
+    #[test]
+    fn test_create_message_with_visible_mentions_emits_matrix_links_and_mentions() {
+        let alice: OwnedUserId = "@alice:example.com".try_into().expect("valid user id");
+        let sam_one: OwnedUserId = "@sam:example.com".try_into().expect("valid user id");
+        let sam_two: OwnedUserId = "@sam:other.example".try_into().expect("valid user id");
+        let entered_text = "Hello @Alice and @Sam and @Sam";
+        let tracked_mentions = vec![
+            TrackedVisibleMention {
+                user_id: alice.clone(),
+                visible_text: "@Alice".to_owned(),
+                start: "Hello ".len(),
+                end: "Hello @Alice".len(),
+            },
+            TrackedVisibleMention {
+                user_id: sam_one.clone(),
+                visible_text: "@Sam".to_owned(),
+                start: "Hello @Alice and ".len(),
+                end: "Hello @Alice and @Sam".len(),
+            },
+            TrackedVisibleMention {
+                user_id: sam_two.clone(),
+                visible_text: "@Sam".to_owned(),
+                start: "Hello @Alice and @Sam and ".len(),
+                end: "Hello @Alice and @Sam and @Sam".len(),
+            },
+        ];
+
+        let message =
+            create_message_with_tracked_mentions(entered_text, &tracked_mentions, false);
+
+        assert_eq!(
+            message.msgtype.body(),
+            format!(
+                "Hello [@Alice]({}) and [@Sam]({}) and [@Sam]({})",
+                alice.matrix_to_uri(),
+                sam_one.matrix_to_uri(),
+                sam_two.matrix_to_uri(),
+            )
+        );
+        let mentions = message.mentions.expect("markdown send should include mentions");
+        assert_eq!(mentions.user_ids, [alice, sam_one, sam_two].into());
+        assert!(!mentions.room);
+    }
+
+    #[test]
+    fn test_html_message_with_visible_mentions_emits_anchor_and_mentions() {
+        let alice: OwnedUserId = "@alice:example.com".try_into().expect("valid user id");
+        let entered_text = "/html<p>Hello @Alice</p>";
+        let tracked_mentions = vec![TrackedVisibleMention {
+            user_id: alice.clone(),
+            visible_text: "@Alice".to_owned(),
+            start: "<p>Hello ".len(),
+            end: "<p>Hello @Alice".len(),
+        }];
+
+        let message =
+            create_message_with_tracked_mentions(entered_text, &tracked_mentions, false);
+
+        assert_eq!(message.msgtype.body(), "<p>Hello @Alice</p>");
+        let MessageType::Text(text_content) = &message.msgtype else {
+            panic!("expected text message");
+        };
+        let formatted = text_content
+            .formatted
+            .as_ref()
+            .expect("/html send should include formatted html");
+        assert_eq!(
+            formatted.body,
+            format!(
+                "<p>Hello <a href=\"{}\">@Alice</a></p>",
+                alice.matrix_to_uri(),
+            )
+        );
+        let mentions = message.mentions.expect("html send should include mentions");
+        assert_eq!(mentions.user_ids, [alice].into());
+        assert!(!mentions.room);
+    }
+
+    #[test]
+    fn test_plain_mode_visible_mentions_remain_plain_text_without_mentions() {
+        let alice: OwnedUserId = "@alice:example.com".try_into().expect("valid user id");
+        let entered_text = "/plainHello @Alice";
+        let tracked_mentions = vec![TrackedVisibleMention {
+            user_id: alice,
+            visible_text: "@Alice".to_owned(),
+            start: "Hello ".len(),
+            end: "Hello @Alice".len(),
+        }];
+
+        let message =
+            create_message_with_tracked_mentions(entered_text, &tracked_mentions, false);
+
+        assert_eq!(message.msgtype.body(), "Hello @Alice");
+        let MessageType::Text(text_content) = &message.msgtype else {
+            panic!("expected text message");
+        };
+        assert!(text_content.formatted.is_none());
+        assert!(message.mentions.is_none());
+    }
+
+    #[test]
+    fn test_markdown_visible_mentions_escape_markdown_metacharacters_in_label() {
+        let weird: OwnedUserId = "@weird:example.com".try_into().expect("valid user id");
+        let entered_text = r"Hello @A[ice]\*";
+        let tracked_mentions = vec![TrackedVisibleMention {
+            user_id: weird.clone(),
+            visible_text: r"@A[ice]\*".to_owned(),
+            start: "Hello ".len(),
+            end: entered_text.len(),
+        }];
+
+        let message =
+            create_message_with_tracked_mentions(entered_text, &tracked_mentions, false);
+
+        assert_eq!(
+            message.msgtype.body(),
+            format!(
+                r"Hello [@A\[ice\]\\\*]({})",
+                weird.matrix_to_uri(),
+            )
+        );
+        let mentions = message.mentions.expect("markdown send should include mentions");
+        assert_eq!(mentions.user_ids, [weird].into());
+    }
+
+    #[test]
+    fn test_roommate_does_not_count_as_room_mention() {
+        let resolved = resolve_visible_mentions_for_send("@roommate hi", &[], true);
+        assert!(!resolved.mentions.room);
     }
 }

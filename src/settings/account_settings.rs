@@ -182,34 +182,46 @@ script_mod! {
             }
         }
 
-        user_id_section_label := SubsectionLabel {
-            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
-            text: "Your User ID:"
-        }
-
-        View {
+        // --- User ID card ---
+        RoundedView {
             width: Fill, height: Fit
-            flow: Right,
-            spacing: (SPACE_SM)
-
-            copy_user_id_button := RobrixNeutralIconButton {
-                enable_long_press: true,
-                margin: Inset{left: (SPACE_XS)}
-                padding: (SPACE_MD),
-                spacing: 0,
-                draw_icon.svg: (ICON_COPY)
-                icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
             }
 
-            user_id := Label {
+            user_id_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Your User ID:"
+            }
+
+            View {
                 width: Fill, height: Fit
-                flow: Flow.Right{wrap: true},
-                margin: Inset{top: (SPACE_SM)}
-                draw_text +: {
-                    color: (MESSAGE_TEXT_COLOR),
-                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                flow: Right,
+                align: Align{y: 0.5}
+                spacing: (SPACE_SM)
+
+                copy_user_id_button := RobrixNeutralIconButton {
+                    enable_long_press: true,
+                    padding: (SPACE_MD),
+                    spacing: 0,
+                    draw_icon.svg: (ICON_COPY)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
                 }
-                text: "You are not logged in."
+
+                user_id := Label {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true},
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                    }
+                    text: "You are not logged in."
+                }
             }
         }
 
@@ -348,34 +360,44 @@ script_mod! {
             }
         } // end Multiple Accounts card
 
-        other_actions_section_label := SubsectionLabel {
-            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
-            text: "Other actions:"
-        }
-
-        View {
+        // --- Other actions card ---
+        RoundedView {
             width: Fill, height: Fit
-            flow: Flow.Right{wrap: true},
-            align: Align{y: 0.5},
-            spacing: (SPACE_SM)
-            margin: Inset{bottom: (SPACE_LG)}
-
-            manage_account_button := RobrixIconButton {
-                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
-                margin: Inset{left: (SPACE_XS)}
-                draw_bg +: { border_radius: (RADIUS_MD) }
-                draw_icon.svg: (ICON_EXTERNAL_LINK)
-                icon_walk: Walk{width: 16, height: 16}
-                text: "Manage Account"
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM), bottom: (SPACE_LG)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
             }
 
-            logout_button := RobrixNegativeIconButton {
-                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
-                margin: Inset{left: (SPACE_XS)}
-                draw_bg +: { border_radius: (RADIUS_MD) }
-                draw_icon.svg: (ICON_LOGOUT)
-                icon_walk: Walk{ width: 16, height: 16, margin: Inset{right: -2} }
-                text: "Log out"
+            other_actions_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Other actions:"
+            }
+
+            View {
+                width: Fill, height: Fit
+                flow: Flow.Right{wrap: true},
+                align: Align{y: 0.5},
+                spacing: (SPACE_SM)
+
+                manage_account_button := RobrixIconButton {
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_icon.svg: (ICON_EXTERNAL_LINK)
+                    icon_walk: Walk{width: 16, height: 16}
+                    text: "Manage Account"
+                }
+
+                logout_button := RobrixNegativeIconButton {
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_icon.svg: (ICON_LOGOUT)
+                    icon_walk: Walk{ width: 16, height: 16, margin: Inset{right: -2} }
+                    text: "Log out"
+                }
             }
         }
     }
