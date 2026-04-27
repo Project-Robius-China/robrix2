@@ -39,13 +39,13 @@ script_mod! {
                 gradient_fill_horizontal: uniform(0.0)
                 color_2: instance(vec4(-1))
 
-                border_radius: uniform(4.0)
+                border_radius: uniform(0.0)
                 border_size: uniform(0.0)
                 border_color: instance(#0000)
                 border_color_2: instance(vec4(-1))
 
-                shadow_color: instance(#0005)
-                shadow_radius: uniform(12.0)
+                shadow_color: instance(#0002)
+                shadow_radius: uniform(8.0)
                 shadow_offset: uniform(vec2(0.0, 0.0))
 
                 rect_size2: varying(vec2(0))
@@ -111,32 +111,34 @@ script_mod! {
                 }
             }
 
-            padding: Inset{top: 30, bottom: 0}
+            padding: Inset{top: 0, bottom: 0}
             height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT),
 
                 content +: {
                     height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT)
                     button_container +: {
                         width: Fill
-                        flow: Overlay
+                        height: Fill
+                        flow: Right
                         padding: 0,
                         margin: 0
                         left_button +: {
-                            align: Align{x: 0.0, y: 0.5}
-                            width: Fit, height: Fit,
-                            padding: Inset{left: 20, right: 23, top: 10, bottom: 10}
-                            margin: Inset{left: 8, right: 0, top: 0, bottom: 0}
+                            width: 56, height: Fill,
+                            padding: 0,
+                            margin: 0
                             draw_icon +: { color: (ROOM_NAME_TEXT_COLOR) }
-                            icon_walk: Walk{width: 13, height: Fit}
+                            icon_walk: Walk{width: 14, height: Fit}
                             spacing: 0
                             text: ""
                         }
+                        button_spacer := View {
+                            width: Fill, height: Fill
+                        }
                         right_button := ButtonFlatterIcon {
                             visible: false
-                            align: Align{x: 1.0, y: 0.5}
-                            width: Fit, height: Fit,
-                            padding: Inset{left: 23, right: 20, top: 10, bottom: 10}
-                            margin: Inset{left: 0, right: 8, top: 0, bottom: 0}
+                            width: 56, height: Fill,
+                            padding: 0,
+                            margin: 0
                             draw_icon +: {
                                 color: (ROOM_NAME_TEXT_COLOR)
                                 svg: (ICON_INFO)
@@ -147,9 +149,18 @@ script_mod! {
                         }
                     }
                     title_container +: {
-                    padding: Inset{top: 8}
+                    width: Fill
+                    height: Fill
+                    padding: Inset{top: 0, left: 56, right: 56}
+                    align: Align{x: 0.5, y: 0.5}
                     title +: {
+                        width: Fill
+                        margin: 0
+                        flow: Flow.Right{wrap: false}
+                        max_lines: 1
+                        text_overflow: Ellipsis
                         draw_text +: {
+                            text_style: theme.font_bold { font_size: 11.5 }
                             color: (ROOM_NAME_TEXT_COLOR)
                         }
                     }

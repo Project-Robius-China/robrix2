@@ -482,6 +482,15 @@ impl MatchEvent for TspSettingsScreen {
 }
 
 impl TspSettingsScreen {
+    pub fn prepare_for_display(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        if !self.app_language_initialized || self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+        if self.wallets.is_none() {
+            self.refresh_wallets();
+        }
+    }
+
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.app_language_initialized = true;

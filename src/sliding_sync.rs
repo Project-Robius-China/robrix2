@@ -9,23 +9,24 @@ use makepad_widgets::{error, log, warning, Cx, SignalToUI};
 use mime::{IMAGE_JPEG, IMAGE_PNG};
 use matrix_sdk_base::crypto::{DecryptionSettings, TrustRequirement};
 use matrix_sdk::{
-    config::RequestConfig, encryption::EncryptionSettings, event_handler::EventHandlerDropGuard, media::MediaRequestParameters, room::{edit::EditedContent, reply::Reply, IncludeRelations, ListThreadsOptions, RelationsOptions, RoomMember}, ruma::{
+    config::RequestConfig, encryption::EncryptionSettings, event_handler::EventHandlerDropGuard, media::MediaRequestParameters, room::{edit::EditedContent, reply::Reply, IncludeRelations, ListThreadsOptions, RelationsOptions, RoomMember, RoomMemberRole}, ruma::{
         api::{Direction, client::{
             account::register::v3::Request as RegistrationRequest,
-            room::create_room::v3::{Request as CreateRoomRequest, RoomPreset},
+            room::{Visibility, create_room::v3::{Request as CreateRoomRequest, RoomPreset}},
             directory::get_public_rooms_filtered,
             error::ErrorKind,
             profile::{AvatarUrl, DisplayName, set_avatar_url},
             receipt::create_receipt::v3::ReceiptType,
             uiaa::{AuthData, AuthType, Dummy},
         }}, directory::{Filter as PublicRoomsFilter, RoomTypeFilter}, events::{
+            direct::DirectUserIdentifier,
             relation::RelationType,
             room::{
-                encryption::RoomEncryptionEventContent, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
+                encryption::RoomEncryptionEventContent, member::MembershipState, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
             },
             space::{child::SpaceChildEventContent, parent::SpaceParentEventContent},
             InitialStateEvent, MessageLikeEventType, StateEventType
-        }, matrix_uri::MatrixId, EventId, MatrixToUri, MatrixUri, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedMxcUri, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomOrAliasId, UserId, uint
+        }, matrix_uri::MatrixId, EventId, MatrixToUri, MatrixUri, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedMxcUri, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomOrAliasId, UserId, int, uint
     }, sliding_sync::VersionBuilder, Client, ClientBuildError, Error, OwnedServerName, Room, RoomDisplayName, RoomMemberships, RoomState, SessionChange, SuccessorRoom
 };
 use matrix_sdk_ui::{
@@ -824,6 +825,9 @@ pub enum MatrixRequest {
     /// Request to create a new room, optionally underneath a selected parent space.
     CreateRoom {
         room_name: String,
+        topic: Option<String>,
+        is_public: bool,
+        is_encrypted: bool,
         parent_space_id: Option<OwnedRoomId>,
         context: CreateRoomContext,
     },
@@ -884,6 +888,14 @@ pub enum MatrixRequest {
         /// The room ID of the room where the user is a member,
         /// which is only needed because it isn't present in the `RoomMember` object.
         room_id: OwnedRoomId,
+    },
+    /// Request to change the room-member power level for a user.
+    SetRoomMemberPowerLevel {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+        /// * `None` means reset to the room's default user power level.
+        /// * `Some` means set a role preset.
+        room_member_role: Option<RoomMemberRole>,
     },
     /// Request to upload and set the avatar of the current user's account.
     UploadAvatar {
@@ -1125,9 +1137,270 @@ async fn ensure_target_user_joined_room(
     Ok(())
 }
 
+/// Returns whether a DM room in the given state is reusable without rejoining.
+fn is_active_dm_room_state(state: RoomState) -> bool {
+    state == RoomState::Joined
+}
+
+fn is_empty_direct_room_display_name(display_name: Option<&RoomDisplayName>) -> bool {
+    matches!(
+        display_name,
+        Some(RoomDisplayName::Empty | RoomDisplayName::EmptyWas(_))
+    )
+}
+
+fn should_display_joined_room_entry(
+    room_state: RoomState,
+    is_direct: bool,
+    display_name: Option<&RoomDisplayName>,
+) -> bool {
+    !(room_state == RoomState::Joined
+        && is_direct
+        && is_empty_direct_room_display_name(display_name))
+}
+
+/// Semantic result of comparing a Joined room's display eligibility between two
+/// successive sliding-sync snapshots, while the room stays `RoomState::Joined`.
+///
+/// Used by [`update_room`] to decide whether the visibility flip should hide or
+/// restore the room in the sidebar *without* destroying its
+/// [`JoinedRoomDetails`]. Tearing `JoinedRoomDetails` down mid-session orphans
+/// the open `RoomScreen`'s singleton timeline receiver and leaves the pane
+/// blank forever — see `specs/task-dm-joined-room-details-churn.spec.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JoinedRoomDisplayFlip {
+    /// The room became eligible for display (e.g., an Empty direct DM finally
+    /// got a calculated name after the bot joined).
+    BecameDisplayable,
+    /// The room lost display eligibility (e.g., `is_direct` flipped true while
+    /// `display_name` was still `Empty`).
+    BecameHidden,
+    /// No change in display eligibility; the caller should perform no
+    /// visibility-only side effect.
+    NoDisplayChange,
+}
+
+fn classify_joined_room_display_flip(
+    old_should_display: bool,
+    new_should_display: bool,
+) -> JoinedRoomDisplayFlip {
+    match (old_should_display, new_should_display) {
+        (true, false) => JoinedRoomDisplayFlip::BecameHidden,
+        (false, true) => JoinedRoomDisplayFlip::BecameDisplayable,
+        _ => JoinedRoomDisplayFlip::NoDisplayChange,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DmRoomReuseCandidate {
+    room_state: RoomState,
+    display_name: Option<RoomDisplayName>,
+    target_membership: Option<MembershipState>,
+    latest_event_timestamp: Option<u64>,
+}
+
+fn is_reusable_dm_room_candidate(candidate: &DmRoomReuseCandidate) -> bool {
+    is_active_dm_room_state(candidate.room_state)
+        && should_display_joined_room_entry(
+            candidate.room_state,
+            true,
+            candidate.display_name.as_ref(),
+        )
+        && matches!(
+            candidate.target_membership,
+            Some(MembershipState::Join | MembershipState::Invite)
+        )
+}
+
+fn choose_reusable_dm_candidate(candidates: &[DmRoomReuseCandidate]) -> Option<usize> {
+    candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| is_reusable_dm_room_candidate(candidate))
+        .max_by_key(|(_, candidate)| candidate.latest_event_timestamp.unwrap_or(0))
+        .map(|(idx, _)| idx)
+}
+
+async fn find_reusable_direct_message_room(client: &Client, target_user_id: &UserId) -> Option<Room> {
+    let mut candidate_rooms = Vec::new();
+    let mut candidate_metas = Vec::new();
+
+    for room in client.joined_rooms() {
+        let direct_targets = room.direct_targets();
+        if direct_targets.len() != 1
+            || !direct_targets.contains(<&DirectUserIdentifier>::from(target_user_id))
+        {
+            continue;
+        }
+
+        let target_membership = room
+            .get_member_no_sync(target_user_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|member| member.membership().clone());
+        let display_name = room.display_name().await.ok();
+
+        candidate_metas.push(DmRoomReuseCandidate {
+            room_state: room.state(),
+            display_name,
+            target_membership,
+            latest_event_timestamp: room.latest_event_timestamp().map(|ts| u64::from(ts.get())),
+        });
+        candidate_rooms.push(room);
+    }
+
+    choose_reusable_dm_candidate(&candidate_metas)
+        .and_then(|idx| candidate_rooms.into_iter().nth(idx))
+}
+
 #[cfg(test)]
 mod matrix_request_tests {
     use super::*;
+
+    #[test]
+    fn is_active_dm_room_state_only_joined_is_reusable() {
+        assert!(is_active_dm_room_state(RoomState::Joined));
+        assert!(!is_active_dm_room_state(RoomState::Invited));
+        assert!(!is_active_dm_room_state(RoomState::Left));
+        assert!(!is_active_dm_room_state(RoomState::Banned));
+        assert!(!is_active_dm_room_state(RoomState::Knocked));
+    }
+
+    #[test]
+    fn should_display_joined_room_entry_hides_empty_direct_dm() {
+        assert!(!should_display_joined_room_entry(
+            RoomState::Joined,
+            true,
+            Some(&RoomDisplayName::EmptyWas("octosbot".into())),
+        ));
+        assert!(!should_display_joined_room_entry(
+            RoomState::Joined,
+            true,
+            Some(&RoomDisplayName::Empty),
+        ));
+    }
+
+    #[test]
+    fn should_display_joined_room_entry_keeps_non_empty_or_non_direct_rooms() {
+        assert!(should_display_joined_room_entry(
+            RoomState::Joined,
+            true,
+            Some(&RoomDisplayName::Named("octosbot".into())),
+        ));
+        assert!(should_display_joined_room_entry(
+            RoomState::Joined,
+            false,
+            Some(&RoomDisplayName::EmptyWas("room".into())),
+        ));
+        assert!(should_display_joined_room_entry(
+            RoomState::Invited,
+            true,
+            Some(&RoomDisplayName::EmptyWas("octosbot".into())),
+        ));
+    }
+
+    #[test]
+    fn classify_joined_room_display_flip_becomes_hidden() {
+        assert_eq!(
+            classify_joined_room_display_flip(true, false),
+            JoinedRoomDisplayFlip::BecameHidden,
+        );
+    }
+
+    #[test]
+    fn classify_joined_room_display_flip_becomes_displayable() {
+        assert_eq!(
+            classify_joined_room_display_flip(false, true),
+            JoinedRoomDisplayFlip::BecameDisplayable,
+        );
+    }
+
+    #[test]
+    fn classify_joined_room_display_flip_no_change_when_stable() {
+        assert_eq!(
+            classify_joined_room_display_flip(true, true),
+            JoinedRoomDisplayFlip::NoDisplayChange,
+        );
+        assert_eq!(
+            classify_joined_room_display_flip(false, false),
+            JoinedRoomDisplayFlip::NoDisplayChange,
+        );
+    }
+
+    #[test]
+    fn choose_reusable_dm_candidate_prefers_room_where_target_is_still_active() {
+        let candidates = vec![
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("old".into())),
+                target_membership: Some(MembershipState::Leave),
+                latest_event_timestamp: Some(20),
+            },
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("active".into())),
+                target_membership: Some(MembershipState::Join),
+                latest_event_timestamp: Some(10),
+            },
+        ];
+
+        assert_eq!(choose_reusable_dm_candidate(&candidates), Some(1));
+    }
+
+    #[test]
+    fn choose_reusable_dm_candidate_returns_none_when_target_left_every_candidate() {
+        let candidates = vec![
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("old".into())),
+                target_membership: Some(MembershipState::Leave),
+                latest_event_timestamp: Some(20),
+            },
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("missing".into())),
+                target_membership: None,
+                latest_event_timestamp: Some(30),
+            },
+        ];
+
+        assert_eq!(choose_reusable_dm_candidate(&candidates), None);
+    }
+
+    #[test]
+    fn choose_reusable_dm_candidate_prefers_latest_active_candidate() {
+        let candidates = vec![
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("older".into())),
+                target_membership: Some(MembershipState::Invite),
+                latest_event_timestamp: Some(10),
+            },
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::Named("latest".into())),
+                target_membership: Some(MembershipState::Join),
+                latest_event_timestamp: Some(50),
+            },
+        ];
+
+        assert_eq!(choose_reusable_dm_candidate(&candidates), Some(1));
+    }
+
+    #[test]
+    fn choose_reusable_dm_candidate_rejects_empty_direct_room() {
+        let candidates = vec![
+            DmRoomReuseCandidate {
+                room_state: RoomState::Joined,
+                display_name: Some(RoomDisplayName::EmptyWas("octosbot".into())),
+                target_membership: Some(MembershipState::Join),
+                latest_event_timestamp: Some(50),
+            },
+        ];
+
+        assert_eq!(choose_reusable_dm_candidate(&candidates), None);
+    }
 
     #[test]
     fn should_add_octos_target_user_id_to_message_content() {
@@ -1398,6 +1671,7 @@ async fn matrix_worker_task(
                     }
                     SignalToUI::set_ui_signal();
 
+                    let mut attempted_invalid_batch_token_recovery = false;
                     let mut res = if direction == PaginationDirection::Forwards {
                         timeline.paginate_forwards(num_events).await
                     } else {
@@ -1410,6 +1684,7 @@ async fn matrix_worker_task(
                             .err()
                             .is_some_and(is_invalid_batch_token_timeline_error)
                     {
+                        attempted_invalid_batch_token_recovery = true;
                         warning!(
                             "Detected an invalid cached batch token for {timeline_kind}; clearing the room event cache and retrying once."
                         );
@@ -1453,6 +1728,25 @@ async fn matrix_worker_task(
                             }
                         }
                         Err(error) => {
+                            if direction == PaginationDirection::Backwards
+                                && attempted_invalid_batch_token_recovery
+                                && is_invalid_batch_token_timeline_error(&error)
+                            {
+                                warning!(
+                                    "Still got invalid batch token for {timeline_kind} after one recovery attempt; treating as fully paginated."
+                                );
+                                if sender.send(TimelineUpdate::PaginationIdle {
+                                    fully_paginated: true,
+                                    direction,
+                                }).is_ok() {
+                                    SignalToUI::set_ui_signal();
+                                } else {
+                                    warning!(
+                                        "Dropping recovered {direction} pagination update for {timeline_kind}: timeline receiver was dropped."
+                                    );
+                                }
+                                return;
+                            }
                             if direction == PaginationDirection::Backwards
                                 && matches!(timeline_kind, TimelineKind::Thread { .. })
                                 && is_thread_unknown_parent_timeline_error(&error)
@@ -1823,14 +2117,19 @@ async fn matrix_worker_task(
                 let _join_room_task = Handle::current().spawn(async move {
                     log!("Sending request to join room {room_id}...");
                     let result_action = if let Some(room) = client.get_room(&room_id) {
-                        match room.join().await {
-                            Ok(()) => {
-                                log!("Successfully joined known room {room_id}.");
-                                JoinRoomResultAction::Joined { room_id }
-                            }
-                            Err(e) => {
-                                error!("Error joining known room {room_id}: {e:?}");
-                                JoinRoomResultAction::Failed { room_id, error: e }
+                        if room.state() == RoomState::Joined {
+                            log!("Room {room_id} is already joined, skipping join request.");
+                            JoinRoomResultAction::Joined { room_id }
+                        } else {
+                            match room.join().await {
+                                Ok(()) => {
+                                    log!("Successfully joined known room {room_id}.");
+                                    JoinRoomResultAction::Joined { room_id }
+                                }
+                                Err(e) => {
+                                    error!("Error joining known room {room_id}: {e:?}");
+                                    JoinRoomResultAction::Failed { room_id, error: e }
+                                }
                             }
                         }
                     }
@@ -2080,7 +2379,8 @@ async fn matrix_worker_task(
             MatrixRequest::OpenOrCreateDirectMessage { user_profile, allow_create, create_encrypted } => {
                 let Some(client) = get_client() else { continue };
                 let _create_dm_task = Handle::current().spawn(async move {
-                    if let Some(room) = client.get_dm_room(&user_profile.user_id) {
+                    let existing_dm = find_reusable_direct_message_room(&client, &user_profile.user_id).await;
+                    if let Some(room) = existing_dm {
                         log!("Found existing DM room: {}", room.room_id());
                         Cx::post_action(DirectMessageRoomAction::FoundExisting {
                             user_id: user_profile.user_id,
@@ -2121,17 +2421,29 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::CreateRoom { room_name, parent_space_id, context } => {
+            MatrixRequest::CreateRoom { room_name, topic, is_public, is_encrypted, parent_space_id, context } => {
                 let Some(client) = get_client() else { continue };
                 let _create_room_task = Handle::current().spawn(async move {
                     let mut request = CreateRoomRequest::new();
                     request.name = Some(room_name.clone());
-                    request.preset = Some(RoomPreset::PrivateChat);
-                    request.initial_state.push(
-                        InitialStateEvent::with_empty_state_key(
-                            RoomEncryptionEventContent::with_recommended_defaults(),
-                        ).to_raw_any()
-                    );
+                    request.topic = topic;
+                    request.visibility = if is_public {
+                        Visibility::Public
+                    } else {
+                        Visibility::Private
+                    };
+                    request.preset = Some(if is_public {
+                        RoomPreset::PublicChat
+                    } else {
+                        RoomPreset::PrivateChat
+                    });
+                    if is_encrypted {
+                        request.initial_state.push(
+                            InitialStateEvent::with_empty_state_key(
+                                RoomEncryptionEventContent::with_recommended_defaults(),
+                            ).to_raw_any()
+                        );
+                    }
 
                     log!("Creating new room \"{room_name}\"...");
                     match client.create_room(request).await {
@@ -2521,6 +2833,78 @@ async fn matrix_worker_task(
                         num_events: 50,
                         direction: PaginationDirection::Backwards,
                     });
+                });
+            }
+
+            MatrixRequest::SetRoomMemberPowerLevel { room_id, user_id, room_member_role } => {
+                let Some(client) = get_client() else { continue };
+                let _set_room_member_power_level_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        enqueue_popup_notification(
+                            format!("Failed to update power level for {user_id}: room {room_id} not found."),
+                            PopupKind::Error,
+                            None,
+                        );
+                        return;
+                    };
+                    let Some(acting_user_id) = client.user_id() else {
+                        enqueue_popup_notification(
+                            "Failed to update power level: not logged in.",
+                            PopupKind::Error,
+                            None,
+                        );
+                        return;
+                    };
+
+                    let power_levels = match room.power_levels().await {
+                        Ok(power_levels) => power_levels,
+                        Err(e) => {
+                            enqueue_popup_notification(
+                                format!("Failed to load current power levels for room {room_id}: {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                            return;
+                        }
+                    };
+
+                    if !power_levels.user_can_change_user_power_level(acting_user_id, user_id.as_ref()) {
+                        enqueue_popup_notification(
+                            format!("You do not have permission to change power level for {user_id}."),
+                            PopupKind::Error,
+                            None,
+                        );
+                        return;
+                    }
+
+                    let new_level = match room_member_role {
+                        Some(RoomMemberRole::Moderator) => int!(50),
+                        Some(RoomMemberRole::Creator | RoomMemberRole::Administrator) => int!(100),
+                        Some(RoomMemberRole::User) | None => power_levels.users_default,
+                    };
+
+                    match room.update_power_levels(vec![(user_id.as_ref(), new_level)]).await {
+                        Ok(_) => {
+                            enqueue_popup_notification(
+                                format!("Updated power level for {user_id}."),
+                                PopupKind::Success,
+                                Some(3.0),
+                            );
+                            if let Ok(Some(new_room_member)) = room.get_member(user_id.as_ref()).await {
+                                enqueue_user_profile_update(UserProfileUpdate::RoomMemberOnly {
+                                    room_id: room_id.clone(),
+                                    room_member: new_room_member,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            enqueue_popup_notification(
+                                format!("Failed to update power level for {user_id}: {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                        }
+                    }
                 });
             }
 
@@ -3865,6 +4249,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             }
         }
     } else {
+        Cx::post_action(LoginAction::ShowLoginScreen);
         None
     };
     let cli: Cli = cli_parse_result.unwrap_or(Cli::default());
@@ -3958,10 +4343,12 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             // Listen for updates to the ignored user list.
             handle_ignore_user_list_subscriber(client.clone());
 
-            Cx::post_action(LoginAction::Status {
-                title: "Connecting".into(),
-                status: "Setting up sync service...".into(),
-            });
+            if !validate_session {
+                Cx::post_action(LoginAction::Status {
+                    title: "Connecting".into(),
+                    status: "Setting up sync service...".into(),
+                });
+            }
             let sync_service = match SyncService::builder(client.clone())
                 .with_offline_mode()
                 .build()
@@ -4569,6 +4956,32 @@ async fn update_room(
 ) -> Result<()> {
     let new_room_id = new_room.room_id.clone();
     if old_room.room_id == new_room_id {
+        // Display-flip on a still-Joined room must not destroy JoinedRoomDetails,
+        // or the open RoomScreen's singleton timeline receiver is orphaned.
+        let old_should_display = should_display_joined_room_entry(
+            old_room.state,
+            old_room.is_direct,
+            old_room.display_name.as_ref(),
+        );
+        let new_should_display = should_display_joined_room_entry(
+            new_room.state,
+            new_room.is_direct,
+            new_room.display_name.as_ref(),
+        );
+        match classify_joined_room_display_flip(old_should_display, new_should_display) {
+            JoinedRoomDisplayFlip::BecameHidden => {
+                enqueue_rooms_list_update(RoomsListUpdate::HideRoom {
+                    room_id: new_room_id.clone(),
+                });
+            }
+            JoinedRoomDisplayFlip::BecameDisplayable => {
+                enqueue_rooms_list_update(RoomsListUpdate::UnhideRoom {
+                    room_id: new_room_id.clone(),
+                });
+            }
+            JoinedRoomDisplayFlip::NoDisplayChange => {}
+        }
+
         // Handle state transitions for a room.
         if LOG_ROOM_LIST_DIFFS {
             log!("Room {:?} ({new_room_id}) state went from {:?} --> {:?}", new_room.display_name, old_room.state, new_room.state);
@@ -4888,6 +5301,18 @@ async fn add_new_room(
         is_direct: new_room.is_direct,
         is_tombstoned: new_room.is_tombstoned,
     }));
+
+    // Keep the entry in `ALL_JOINED_ROOMS`, but hide it from the sidebar until
+    // the display name resolves — `update_room` will emit `UnhideRoom` then.
+    if !should_display_joined_room_entry(
+        new_room.state,
+        new_room.is_direct,
+        new_room.display_name.as_ref(),
+    ) {
+        rooms_list::enqueue_rooms_list_update(RoomsListUpdate::HideRoom {
+            room_id: new_room.room_id.clone(),
+        });
+    }
 
     Cx::post_action(AppStateAction::RoomLoadedSuccessfully {
         room_name_id,
@@ -6046,7 +6471,7 @@ bitflags! {
         // const RoomMember = 1 << 46;
         // const RoomName = 1 << 47;
         const RoomPinnedEvents = 1 << 48;
-        // const RoomPowerLevels = 1 << 49;
+        const RoomPowerLevels = 1 << 49;
         // const RoomServerAcl = 1 << 50;
         // const RoomThirdPartyInvite = 1 << 51;
         // const RoomTombstone = 1 << 52;
@@ -6074,6 +6499,7 @@ impl UserPowerLevels {
         retval.set(UserPowerLevels::RoomRedaction, user_power >= power_levels.for_message(MessageLikeEventType::RoomRedaction));
         retval.set(UserPowerLevels::Sticker, user_power >= power_levels.for_message(MessageLikeEventType::Sticker));
         retval.set(UserPowerLevels::RoomPinnedEvents, user_power >= power_levels.for_state(StateEventType::RoomPinnedEvents));
+        retval.set(UserPowerLevels::RoomPowerLevels, power_levels.user_can_send_state(user_id, StateEventType::RoomPowerLevels));
         retval
     }
 
@@ -6134,6 +6560,10 @@ impl UserPowerLevels {
     #[doc(alias("unpin"))]
     pub fn can_pin(self) -> bool {
         self.contains(UserPowerLevels::RoomPinnedEvents)
+    }
+
+    pub fn can_change_room_power_levels(self) -> bool {
+        self.contains(UserPowerLevels::RoomPowerLevels)
     }
 }
 

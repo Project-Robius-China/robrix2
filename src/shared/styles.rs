@@ -55,6 +55,10 @@ script_mod! {
         font_size: (10),
     }
 
+    mod.widgets.BOLD_TEXT = theme.font_bold {
+        font_size: (13),
+    }
+
     mod.widgets.TEXT_SUB = theme.font_regular {
         font_size: (10),
     }
@@ -262,6 +266,11 @@ script_mod! {
     // Settings screen layout
     mod.widgets.SETTINGS_CONTENT_PADDING = 16
     mod.widgets.SETTINGS_BUTTON_HEIGHT = 36
+
+    // Text alignment compensation for non-Label widgets (LinkLabel, IconButton)
+    // whose internal rendering origin differs from plain Label.
+    mod.widgets.LINK_LABEL_LEFT_PAD = 6
+    mod.widgets.ICON_BUTTON_LEFT_PAD = 4
 
     mod.widgets.COLOR_IMAGE_VIEWER_BACKGROUND = #333333CC // 80% Opacity
 

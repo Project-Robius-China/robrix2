@@ -95,11 +95,9 @@ script_mod! {
                     }
                 }
 
-                CachedWidget {
-                    rooms_list_header := RoomsListHeader {
-                        open_room_filter_modal_button +: {
-                            visible: false
-                        }
+                rooms_list_header := RoomsListHeader {
+                    open_room_filter_modal_button +: {
+                        visible: false
                     }
                 }
 
@@ -115,7 +113,6 @@ script_mod! {
                         room_filter_input_bar := RoomFilterInputBar {}
                     }
 
-                    search_messages_button := SearchMessagesButton { }
                 }
             }
 
