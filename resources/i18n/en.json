@@ -277,6 +277,7 @@
   "settings.labs.app_service.status.enabled": "Enabled",
   "settings.labs.app_service.status.disabled": "Disabled",
   "settings.labs.app_service.health.service_label": "Octos Service",
+  "settings.labs.app_service.health.gateway_label": "Matrix Gateway",
   "settings.labs.app_service.health.placeholder": "http://127.0.0.1:8010",
   "settings.labs.app_service.health.button.save": "Save",
   "settings.labs.app_service.health.button.check_now": "Check Now",

@@ -51,6 +51,17 @@ Always use `submit_async_request(MatrixRequest::*)`. Do not spawn raw tokio task
 - Runtime `script_apply_eval!` cannot rely on DSL constants like `Right`, `Fit`, or `Align`
 - `Dock.load_state()` can corrupt DrawList references in this project
 
+## Splash Template Authoring
+
+Agent-to-app templates live under `src/home/app_registry/templates/<capability>/<template>.splash`.
+They are loaded through `SplashHost`, not by per-app Rust UI builders.
+
+- Use only widgets registered as public in `src/home/app_registry/widget_manifest.rs`
+- Use only local functions registered in `src/home/app_registry/local_functions.rs`
+- Bind data through `$state.path` values declared by the capability schema
+- Do not set `capability_id`, `display_name`, `icon`, or `trust_badge` in templates
+- Add reusable widgets to the manifest once; do not hard-code per-app Rust renderers
+
 ## Build & Test
 
 ```bash

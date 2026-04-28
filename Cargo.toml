@@ -14,11 +14,9 @@ version = "0.0.1-pre-alpha-4"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
 [dependencies]
-# makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
-# makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
-
-makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "cargo_makepad_ndk_fix", features = ["serde"] }
-makepad-code-editor = { git = "https://github.com/kevinaboos/makepad", branch = "cargo_makepad_ndk_fix" }
+makepad-widgets = { git = "https://github.com/ZhangHanDong/makepad.git", branch = "dev", features = ["serde"] }
+makepad-code-editor = { git = "https://github.com/ZhangHanDong/makepad.git", branch = "dev" }
+makepad-diagram-kit = { git = "https://github.com/Project-Robius-China/makepad-diagram-kit.git", features = ["makepad"] }
 
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
@@ -76,6 +74,8 @@ rangemap = "1.5.0"
 sanitize-filename = "0.6"
 serde = "1.0"
 serde_json = "1.0"
+sha2 = "0.10"
+streaming-markdown-kit = { git = "https://github.com/Project-Robius-China/streaming-markdown-kit.git", features = ["mermaid"] }
 thiserror = "2.0.16"
 tokio = { version = "1.43.1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3.17"

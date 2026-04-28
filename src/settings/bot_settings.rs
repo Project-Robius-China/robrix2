@@ -1,4 +1,5 @@
 use makepad_widgets::*;
+use url::Url;
 
 use crate::{
     app::{AppState, BotSettingsState},
@@ -8,7 +9,8 @@ use crate::{
     sliding_sync::current_user_id,
 };
 
-const OCTOS_HEALTH_REQUEST_ID: LiveId = live_id!(octos_health);
+const OCTOS_SERVICE_HEALTH_REQUEST_ID: LiveId = live_id!(octos_service_health);
+const MATRIX_GATEWAY_HEALTH_REQUEST_ID: LiveId = live_id!(matrix_gateway_health);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum OctosHealthStatus {
@@ -32,6 +34,8 @@ struct OctosHealthState {
     status: OctosHealthStatus,
     probe_stage: OctosHealthProbeStage,
     in_flight: bool,
+    current_base_url: Option<String>,
+    alternate_base_url: Option<String>,
 }
 
 impl OctosHealthState {
@@ -39,32 +43,51 @@ impl OctosHealthState {
         if self.in_flight {
             return None;
         }
+        let normalized_base_url = normalize_octos_base_url(base_url);
         self.status = OctosHealthStatus::Checking;
         self.probe_stage = OctosHealthProbeStage::Health;
         self.in_flight = true;
-        Some(normalize_octos_probe_url(base_url, "/health"))
+        self.current_base_url = Some(normalized_base_url.clone());
+        self.alternate_base_url = local_octos_alternate_base_url(&normalized_base_url);
+        Some(normalize_octos_probe_url(&normalized_base_url, "/health"))
     }
 
-    fn handle_http_result(&mut self, base_url: &str, status_code: u16) -> Option<String> {
+    fn handle_http_result(&mut self, status_code: u16) -> Option<String> {
         if status_code == 200 {
             self.finish(OctosHealthStatus::Reachable);
             None
         } else {
-            self.handle_failure(base_url)
+            self.handle_failure()
         }
     }
 
-    fn handle_transport_error(&mut self, base_url: &str) -> Option<String> {
-        self.handle_failure(base_url)
+    fn handle_transport_error(&mut self) -> Option<String> {
+        self.handle_failure()
     }
 
-    fn handle_failure(&mut self, base_url: &str) -> Option<String> {
+    fn handle_failure(&mut self) -> Option<String> {
+        let Some(current_base_url) = self.current_base_url.clone() else {
+            self.finish(OctosHealthStatus::Unreachable);
+            return None;
+        };
         match self.probe_stage {
             OctosHealthProbeStage::Health => {
                 self.probe_stage = OctosHealthProbeStage::ApiStatus;
-                Some(normalize_octos_probe_url(base_url, "/api/status"))
+                Some(normalize_octos_probe_url(&current_base_url, "/api/status"))
             }
-            OctosHealthProbeStage::ApiStatus | OctosHealthProbeStage::Idle => {
+            OctosHealthProbeStage::ApiStatus => {
+                if let Some(alternate_base_url) = self.alternate_base_url.clone()
+                    && alternate_base_url != current_base_url
+                {
+                    self.current_base_url = Some(alternate_base_url.clone());
+                    self.probe_stage = OctosHealthProbeStage::Health;
+                    Some(normalize_octos_probe_url(&alternate_base_url, "/health"))
+                } else {
+                    self.finish(OctosHealthStatus::Unreachable);
+                    None
+                }
+            }
+            OctosHealthProbeStage::Idle => {
                 self.finish(OctosHealthStatus::Unreachable);
                 None
             }
@@ -75,11 +98,116 @@ impl OctosHealthState {
         self.status = status;
         self.probe_stage = OctosHealthProbeStage::Idle;
         self.in_flight = false;
+        self.current_base_url = None;
+        self.alternate_base_url = None;
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct MatrixGatewayHealthState {
+    status: OctosHealthStatus,
+    in_flight: bool,
+}
+
+impl MatrixGatewayHealthState {
+    fn begin_check(&mut self, base_url: &str) -> Option<String> {
+        let probe_url = matrix_gateway_probe_url(base_url);
+        self.status = if probe_url.is_some() {
+            OctosHealthStatus::Checking
+        } else {
+            OctosHealthStatus::Unreachable
+        };
+        self.in_flight = probe_url.is_some();
+        probe_url
+    }
+
+    fn handle_http_result(&mut self, status_code: u16) -> Option<String> {
+        if matches!(status_code, 200 | 401 | 405) {
+            self.finish(OctosHealthStatus::Reachable);
+        } else {
+            self.finish(OctosHealthStatus::Unreachable);
+        }
+        None
+    }
+
+    fn handle_transport_error(&mut self) -> Option<String> {
+        self.finish(OctosHealthStatus::Unreachable);
+        None
+    }
+
+    fn finish(&mut self, status: OctosHealthStatus) {
+        self.status = status;
+        self.in_flight = false;
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct AppServiceHealthState {
+    octos_service: OctosHealthState,
+    matrix_gateway: MatrixGatewayHealthState,
+}
+
+impl AppServiceHealthState {
+    fn begin_check(&mut self, base_url: &str) -> Vec<(LiveId, String)> {
+        if self.in_flight() {
+            return Vec::new();
+        }
+        let mut requests = Vec::with_capacity(2);
+        if let Some(url) = self.octos_service.begin_check(base_url) {
+            requests.push((OCTOS_SERVICE_HEALTH_REQUEST_ID, url));
+        }
+        if let Some(url) = self.matrix_gateway.begin_check(base_url) {
+            requests.push((MATRIX_GATEWAY_HEALTH_REQUEST_ID, url));
+        }
+        requests
+    }
+
+    fn in_flight(&self) -> bool {
+        self.octos_service.in_flight || self.matrix_gateway.in_flight
+    }
+}
+
+fn normalize_octos_base_url(base_url: &str) -> String {
+    base_url.trim().trim_end_matches('/').to_string()
+}
+
+fn local_octos_alternate_base_url(base_url: &str) -> Option<String> {
+    let mut parsed_url = Url::parse(base_url).ok()?;
+    let host = parsed_url.host_str()?;
+    if !matches!(host, "127.0.0.1" | "localhost" | "0.0.0.0") {
+        return None;
+    }
+    let alternate_port = match parsed_url.port_or_known_default()? {
+        8010 => 8080,
+        8080 => 8010,
+        _ => return None,
+    };
+    parsed_url.set_port(Some(alternate_port)).ok()?;
+    Some(normalize_octos_base_url(parsed_url.as_str()))
+}
+
 fn normalize_octos_probe_url(base_url: &str, path: &str) -> String {
-    format!("{}/{}", base_url.trim().trim_end_matches('/'), path.trim_start_matches('/'))
+    format!("{}/{}", normalize_octos_base_url(base_url), path.trim_start_matches('/'))
+}
+
+fn matrix_gateway_probe_url(base_url: &str) -> Option<String> {
+    let mut parsed_url = Url::parse(&normalize_octos_base_url(base_url)).ok()?;
+    parsed_url.set_port(Some(8009)).ok()?;
+    parsed_url.set_path("/_matrix/app/v1/transactions/test");
+    parsed_url.set_query(None);
+    parsed_url.set_fragment(None);
+    Some(parsed_url.to_string())
+}
+
+fn build_app_service_health_request(request_id: LiveId, url: &str) -> HttpRequest {
+    if request_id == MATRIX_GATEWAY_HEALTH_REQUEST_ID {
+        let mut req = HttpRequest::new(url.to_string(), HttpMethod::PUT);
+        req.set_header("Content-Type".into(), "application/json".into());
+        req.set_body(br#"{}"#.to_vec());
+        req
+    } else {
+        HttpRequest::new(url.to_string(), HttpMethod::GET)
+    }
 }
 
 script_mod! {
@@ -223,33 +351,93 @@ script_mod! {
             octos_health_controls := View {
                 width: Fill
                 height: Fit
-                flow: Right
-                spacing: (SPACE_SM)
-                align: Align{y: 0.5}
+                flow: Down
+                spacing: 6
                 margin: Inset{top: 2}
 
-                save_octos_service_button := RobrixIconButton {
-                    padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
-                    icon_walk: Walk{width: 0, height: 0}
-                    spacing: 0
-                    text: "Save"
-                }
-
-                octos_health_status_label := Label {
-                    width: Fit
+                octos_health_button_row := View {
+                    width: Fill
                     height: Fit
-                    draw_text +: {
-                        color: (COLOR_DISABLED_TEXT)
-                        text_style: REGULAR_TEXT { font_size: 10.5 }
+                    flow: Right
+                    spacing: (SPACE_SM)
+                    align: Align{y: 0.5}
+
+                    save_octos_service_button := RobrixIconButton {
+                        padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
+                        icon_walk: Walk{width: 0, height: 0}
+                        spacing: 0
+                        text: "Save"
                     }
-                    text: "Unknown"
+
+                    check_now_button := RobrixNeutralIconButton {
+                        padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
+                        icon_walk: Walk{width: 0, height: 0}
+                        spacing: 0
+                        text: "Check Now"
+                    }
                 }
 
-                check_now_button := RobrixNeutralIconButton {
-                    padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
-                    icon_walk: Walk{width: 0, height: 0}
-                    spacing: 0
-                    text: "Check Now"
+                octos_health_statuses := View {
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 4
+
+                    octos_service_status_row := View {
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        spacing: 8
+                        align: Align{y: 0.5}
+
+                        octos_service_status_name := Label {
+                            width: Fit
+                            height: Fit
+                            draw_text +: {
+                                color: (COLOR_FIELD_LABEL)
+                                text_style: REGULAR_TEXT { font_size: 10 }
+                            }
+                            text: "Octos Service"
+                        }
+
+                        octos_service_status_label := Label {
+                            width: Fit
+                            height: Fit
+                            draw_text +: {
+                                color: (COLOR_DISABLED_TEXT)
+                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                            }
+                            text: "Unknown"
+                        }
+                    }
+
+                    matrix_gateway_status_row := View {
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        spacing: 8
+                        align: Align{y: 0.5}
+
+                        matrix_gateway_status_name := Label {
+                            width: Fit
+                            height: Fit
+                            draw_text +: {
+                                color: (COLOR_FIELD_LABEL)
+                                text_style: REGULAR_TEXT { font_size: 10 }
+                            }
+                            text: "Matrix Gateway"
+                        }
+
+                        matrix_gateway_status_label := Label {
+                            width: Fit
+                            height: Fit
+                            draw_text +: {
+                                color: (COLOR_DISABLED_TEXT)
+                                text_style: REGULAR_TEXT { font_size: 10.5 }
+                            }
+                            text: "Unknown"
+                        }
+                    }
                 }
             }
         }
@@ -263,7 +451,7 @@ pub struct BotSettings {
     #[rust]
     app_language: AppLanguage,
     #[rust]
-    octos_health: OctosHealthState,
+    app_service_health: AppServiceHealthState,
 }
 
 impl Widget for BotSettings {
@@ -279,22 +467,50 @@ impl Widget for BotSettings {
             for response in responses {
                 match response {
                     NetworkResponse::HttpResponse { request_id, response }
-                        if *request_id == OCTOS_HEALTH_REQUEST_ID =>
+                        if *request_id == OCTOS_SERVICE_HEALTH_REQUEST_ID =>
                     {
-                        let service_url = self.current_service_url(cx);
-                        if let Some(fallback_url) = self.octos_health.handle_http_result(&service_url, response.status_code) {
-                            self.send_octos_health_request(cx, &fallback_url);
+                        if let Some(fallback_url) = self
+                            .app_service_health
+                            .octos_service
+                            .handle_http_result(response.status_code)
+                        {
+                            self.send_app_service_health_request(
+                                cx,
+                                OCTOS_SERVICE_HEALTH_REQUEST_ID,
+                                &fallback_url,
+                            );
                         }
-                        self.sync_octos_health_ui(cx);
+                        self.sync_app_service_health_ui(cx);
+                    }
+                    NetworkResponse::HttpResponse { request_id, response }
+                        if *request_id == MATRIX_GATEWAY_HEALTH_REQUEST_ID =>
+                    {
+                        self.app_service_health
+                            .matrix_gateway
+                            .handle_http_result(response.status_code);
+                        self.sync_app_service_health_ui(cx);
                     }
                     NetworkResponse::HttpError { request_id, .. }
-                        if *request_id == OCTOS_HEALTH_REQUEST_ID =>
+                        if *request_id == OCTOS_SERVICE_HEALTH_REQUEST_ID =>
                     {
-                        let service_url = self.current_service_url(cx);
-                        if let Some(fallback_url) = self.octos_health.handle_transport_error(&service_url) {
-                            self.send_octos_health_request(cx, &fallback_url);
+                        if let Some(fallback_url) = self
+                            .app_service_health
+                            .octos_service
+                            .handle_transport_error()
+                        {
+                            self.send_app_service_health_request(
+                                cx,
+                                OCTOS_SERVICE_HEALTH_REQUEST_ID,
+                                &fallback_url,
+                            );
                         }
-                        self.sync_octos_health_ui(cx);
+                        self.sync_app_service_health_ui(cx);
+                    }
+                    NetworkResponse::HttpError { request_id, .. }
+                        if *request_id == MATRIX_GATEWAY_HEALTH_REQUEST_ID =>
+                    {
+                        self.app_service_health.matrix_gateway.handle_transport_error();
+                        self.sync_app_service_health_ui(cx);
                     }
                     _ => {}
                 }
@@ -371,28 +587,18 @@ impl WidgetMatchEvent for BotSettings {
                     return;
                 }
             };
-            if let Some(url) = self.octos_health.begin_check(&service_url) {
-                self.sync_octos_health_ui(cx);
-                self.send_octos_health_request(cx, &url);
+            let requests = self.app_service_health.begin_check(&service_url);
+            if !requests.is_empty() {
+                self.sync_app_service_health_ui(cx);
+                for (request_id, url) in requests {
+                    self.send_app_service_health_request(cx, request_id, &url);
+                }
             }
         }
     }
 }
 
 impl BotSettings {
-    fn current_service_url(&self, cx: &mut Cx) -> String {
-        let service_url = self.view
-            .text_input(cx, ids!(octos_service_input))
-            .text()
-            .trim()
-            .to_string();
-        if service_url.is_empty() {
-            BotSettingsState::DEFAULT_OCTOS_SERVICE_URL.to_string()
-        } else {
-            service_url
-        }
-    }
-
     fn save_app_service_settings(&mut self, cx: &mut Cx, app_state: &mut AppState) -> Result<String, String> {
         let botfather_user_id = self.view
             .text_input(cx, ids!(botfather_user_id_input))
@@ -434,9 +640,9 @@ impl BotSettings {
         Ok(service_url)
     }
 
-    fn send_octos_health_request(&self, cx: &mut Cx, url: &str) {
-        let req = HttpRequest::new(url.to_string(), HttpMethod::GET);
-        cx.http_request(OCTOS_HEALTH_REQUEST_ID, req);
+    fn send_app_service_health_request(&self, cx: &mut Cx, request_id: LiveId, url: &str) {
+        let req = build_app_service_health_request(request_id, url);
+        cx.http_request(request_id, req);
     }
 
     fn set_switch_state_label(&mut self, cx: &mut Cx, enabled: bool) {
@@ -458,8 +664,10 @@ impl BotSettings {
         }
     }
 
-    fn set_octos_health_status_label(&mut self, cx: &mut Cx) {
-        let (text_key, color) = match self.octos_health.status {
+    fn app_service_status_text_and_color(
+        status: OctosHealthStatus,
+    ) -> (&'static str, Vec4) {
+        match status {
             OctosHealthStatus::Unknown => (
                 "settings.labs.app_service.health.status.unknown",
                 vec4(0.6, 0.6, 0.6, 1.0),
@@ -476,8 +684,12 @@ impl BotSettings {
                 "settings.labs.app_service.health.status.unreachable",
                 vec4(0.8, 0.0, 0.0, 1.0),
             ),
-        };
-        let mut label = self.view.label(cx, ids!(octos_health_status_label));
+        }
+    }
+
+    fn set_health_status_label(&mut self, cx: &mut Cx, label_id: &[LiveId], status: OctosHealthStatus) {
+        let (text_key, color) = Self::app_service_status_text_and_color(status);
+        let mut label = self.view.label(cx, label_id);
         script_apply_eval!(cx, label, {
             text: #(tr_key(self.app_language, text_key)),
             draw_text +: {
@@ -486,12 +698,21 @@ impl BotSettings {
         });
     }
 
-    fn sync_octos_health_ui(&mut self, cx: &mut Cx) {
-        self.set_octos_health_status_label(cx);
+    fn sync_app_service_health_ui(&mut self, cx: &mut Cx) {
+        self.set_health_status_label(
+            cx,
+            ids!(octos_service_status_label),
+            self.app_service_health.octos_service.status,
+        );
+        self.set_health_status_label(
+            cx,
+            ids!(matrix_gateway_status_label),
+            self.app_service_health.matrix_gateway.status,
+        );
         self.view.button(cx, ids!(save_octos_service_button))
-            .set_enabled(cx, !self.octos_health.in_flight);
+            .set_enabled(cx, !self.app_service_health.in_flight());
         self.view.button(cx, ids!(check_now_button))
-            .set_enabled(cx, !self.octos_health.in_flight);
+            .set_enabled(cx, !self.app_service_health.in_flight());
         self.view.redraw(cx);
     }
 
@@ -528,18 +749,24 @@ impl BotSettings {
         self.view
             .button(cx, ids!(check_now_button))
             .set_text(cx, tr_key(self.app_language, "settings.labs.app_service.health.button.check_now"));
+        self.view
+            .label(cx, ids!(octos_service_status_name))
+            .set_text(cx, tr_key(self.app_language, "settings.labs.app_service.health.service_label"));
+        self.view
+            .label(cx, ids!(matrix_gateway_status_name))
+            .set_text(cx, tr_key(self.app_language, "settings.labs.app_service.health.gateway_label"));
         self.set_switch_state_label(
             cx,
             self.view.check_box(cx, ids!(app_service_switch)).active(cx),
         );
-        self.sync_octos_health_ui(cx);
+        self.sync_app_service_health_ui(cx);
         self.view.redraw(cx);
     }
 
     fn sync_ui(&mut self, cx: &mut Cx, bot_settings: &BotSettingsState) {
         self.view
             .check_box(cx, ids!(app_service_switch))
-            .set_active(cx, bot_settings.enabled);
+            .set_active(cx, bot_settings.enabled, Animate::No);
         self.view
             .text_input(cx, ids!(botfather_user_id_input))
             .set_text(cx, bot_settings.botfather_user_id.trim());
@@ -547,7 +774,7 @@ impl BotSettings {
             .text_input(cx, ids!(octos_service_input))
             .set_text(cx, bot_settings.resolved_octos_service_url());
         self.set_switch_state_label(cx, bot_settings.enabled);
-        self.sync_octos_health_ui(cx);
+        self.sync_app_service_health_ui(cx);
         self.view.redraw(cx);
     }
 
@@ -585,8 +812,92 @@ fn persist_bot_settings(app_state: &AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{OctosHealthProbeStage, OctosHealthState, OctosHealthStatus};
+    use super::{
+        build_app_service_health_request, matrix_gateway_probe_url, AppServiceHealthState,
+        OctosHealthProbeStage, OctosHealthState, OctosHealthStatus,
+        MATRIX_GATEWAY_HEALTH_REQUEST_ID, OCTOS_SERVICE_HEALTH_REQUEST_ID,
+    };
     use crate::app::BotSettingsState;
+    use makepad_widgets::HttpMethod;
+
+    #[test]
+    fn test_app_service_health_check_starts_octos_service_and_matrix_gateway_probes() {
+        let mut state = AppServiceHealthState::default();
+        let bot_settings = BotSettingsState::default();
+
+        let requests = state.begin_check(bot_settings.resolved_octos_service_url());
+
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].1, "http://127.0.0.1:8010/health");
+        assert_eq!(
+            requests[1].1,
+            "http://127.0.0.1:8009/_matrix/app/v1/transactions/test"
+        );
+        assert_eq!(state.octos_service.status, OctosHealthStatus::Checking);
+        assert_eq!(state.matrix_gateway.status, OctosHealthStatus::Checking);
+        assert!(state.in_flight());
+    }
+
+    #[test]
+    fn test_matrix_gateway_probe_uses_local_port_8009() {
+        assert_eq!(
+            matrix_gateway_probe_url("http://127.0.0.1:8010").as_deref(),
+            Some("http://127.0.0.1:8009/_matrix/app/v1/transactions/test")
+        );
+        assert_eq!(
+            matrix_gateway_probe_url("http://localhost:8080/").as_deref(),
+            Some("http://localhost:8009/_matrix/app/v1/transactions/test")
+        );
+    }
+
+    #[test]
+    fn test_matrix_gateway_401_counts_as_reachable() {
+        let mut state = AppServiceHealthState::default();
+        let bot_settings = BotSettingsState::default();
+
+        state.begin_check(bot_settings.resolved_octos_service_url());
+        assert_eq!(state.matrix_gateway.handle_http_result(401), None);
+        assert_eq!(state.matrix_gateway.status, OctosHealthStatus::Reachable);
+    }
+
+    #[test]
+    fn test_app_service_health_remains_in_flight_until_both_checks_finish() {
+        let mut state = AppServiceHealthState::default();
+        let bot_settings = BotSettingsState::default();
+
+        state.begin_check(bot_settings.resolved_octos_service_url());
+        state.matrix_gateway.handle_http_result(405);
+        assert!(state.in_flight());
+
+        assert_eq!(state.octos_service.handle_http_result(200), None);
+        assert!(!state.in_flight());
+    }
+
+    #[test]
+    fn test_matrix_gateway_probe_uses_put_json_request_shape() {
+        let req = build_app_service_health_request(
+            MATRIX_GATEWAY_HEALTH_REQUEST_ID,
+            "http://127.0.0.1:8009/_matrix/app/v1/transactions/test",
+        );
+
+        assert_eq!(req.method, HttpMethod::PUT);
+        assert_eq!(
+            req.headers.get("Content-Type"),
+            Some(&vec!["application/json".to_string()])
+        );
+        assert_eq!(req.body.as_deref(), Some(br#"{}"#.as_slice()));
+    }
+
+    #[test]
+    fn test_octos_service_probe_stays_get_without_body() {
+        let req = build_app_service_health_request(
+            OCTOS_SERVICE_HEALTH_REQUEST_ID,
+            "http://127.0.0.1:8010/health",
+        );
+
+        assert_eq!(req.method, HttpMethod::GET);
+        assert!(req.body.is_none());
+    }
 
     #[test]
     fn test_app_service_health_defaults_to_unknown_with_editable_local_url() {
@@ -631,7 +942,7 @@ mod tests {
         assert!(state.in_flight);
         assert_eq!(state.probe_stage, OctosHealthProbeStage::Health);
 
-        assert_eq!(state.handle_http_result(bot_settings.resolved_octos_service_url(), 200), None);
+        assert_eq!(state.handle_http_result(200), None);
         assert_eq!(state.status, OctosHealthStatus::Reachable);
         assert!(!state.in_flight);
         assert_eq!(state.probe_stage, OctosHealthProbeStage::Idle);
@@ -644,27 +955,69 @@ mod tests {
 
         state.begin_check(bot_settings.resolved_octos_service_url());
         assert_eq!(
-            state.handle_transport_error(bot_settings.resolved_octos_service_url()).as_deref(),
+            state.handle_transport_error().as_deref(),
             Some("http://127.0.0.1:8010/api/status")
         );
         assert_eq!(state.status, OctosHealthStatus::Checking);
         assert!(state.in_flight);
         assert_eq!(state.probe_stage, OctosHealthProbeStage::ApiStatus);
 
-        assert_eq!(state.handle_http_result(bot_settings.resolved_octos_service_url(), 200), None);
+        assert_eq!(state.handle_http_result(200), None);
         assert_eq!(state.status, OctosHealthStatus::Reachable);
         assert!(!state.in_flight);
         assert_eq!(state.probe_stage, OctosHealthProbeStage::Idle);
     }
 
     #[test]
-    fn test_app_service_health_check_sets_unreachable_when_both_probes_fail() {
+    fn test_app_service_health_check_tries_native_local_octos_port_after_8010_fails() {
         let mut state = OctosHealthState::default();
         let bot_settings = BotSettingsState::default();
 
         state.begin_check(bot_settings.resolved_octos_service_url());
-        state.handle_transport_error(bot_settings.resolved_octos_service_url());
-        assert_eq!(state.handle_transport_error(bot_settings.resolved_octos_service_url()), None);
+        assert_eq!(
+            state.handle_transport_error().as_deref(),
+            Some("http://127.0.0.1:8010/api/status")
+        );
+        assert_eq!(
+            state.handle_transport_error().as_deref(),
+            Some("http://127.0.0.1:8080/health")
+        );
+        assert_eq!(state.status, OctosHealthStatus::Checking);
+        assert!(state.in_flight);
+        assert_eq!(state.probe_stage, OctosHealthProbeStage::Health);
+        assert_eq!(state.handle_http_result(200), None);
+        assert_eq!(state.status, OctosHealthStatus::Reachable);
+        assert!(!state.in_flight);
+        assert_eq!(state.probe_stage, OctosHealthProbeStage::Idle);
+    }
+
+    #[test]
+    fn test_app_service_health_check_sets_unreachable_when_both_local_ports_fail() {
+        let mut state = OctosHealthState::default();
+        let bot_settings = BotSettingsState::default();
+
+        state.begin_check(bot_settings.resolved_octos_service_url());
+        state.handle_transport_error();
+        state.handle_transport_error();
+        state.handle_transport_error();
+        assert_eq!(state.handle_transport_error(), None);
+        assert_eq!(state.status, OctosHealthStatus::Unreachable);
+        assert!(!state.in_flight);
+        assert_eq!(state.probe_stage, OctosHealthProbeStage::Idle);
+    }
+
+    #[test]
+    fn test_app_service_health_check_does_not_try_local_alt_port_for_remote_url() {
+        let mut state = OctosHealthState::default();
+        let mut bot_settings = BotSettingsState::default();
+        bot_settings.octos_service_url = "https://octos.example.com:9443".into();
+
+        state.begin_check(bot_settings.resolved_octos_service_url());
+        assert_eq!(
+            state.handle_transport_error().as_deref(),
+            Some("https://octos.example.com:9443/api/status")
+        );
+        assert_eq!(state.handle_transport_error(), None);
         assert_eq!(state.status, OctosHealthStatus::Unreachable);
         assert!(!state.in_flight);
         assert_eq!(state.probe_stage, OctosHealthProbeStage::Idle);
@@ -698,8 +1051,10 @@ mod tests {
 
         let mut state = OctosHealthState::default();
         state.begin_check(bot_settings.resolved_octos_service_url());
-        state.handle_transport_error(bot_settings.resolved_octos_service_url());
-        state.handle_transport_error(bot_settings.resolved_octos_service_url());
+        state.handle_transport_error();
+        state.handle_transport_error();
+        state.handle_transport_error();
+        state.handle_transport_error();
 
         assert_eq!(bot_settings, before);
         assert_eq!(state.status, OctosHealthStatus::Unreachable);

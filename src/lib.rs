@@ -6,6 +6,7 @@ use makepad_widgets::ScriptNew;
 use robius_directories::ProjectDirs;
 
 pub use makepad_widgets;
+pub use makepad_diagram_kit;
 
 #[macro_export]
 macro_rules! live {

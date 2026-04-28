@@ -29,14 +29,18 @@ L2b 卡内按钮、L3 host runtime、具体注册表模块的最终命名（本 
 
 ### Weather type JSON schema
 
-- **`type` 注册表 key**：`"weather"`，version `1`
+- **`type` 注册表 key**：`"weather"`；**当前正式版本 `2`**，consumer 同时
+  兼容 legacy `1` payload（见 §当前实际版本）。下方字段定义是 v1 的
+  原始集合，v2 在此基础上扩展——扩展字段分两部分：§Schema 扩展 addendum
+  承认的（`language`/`focus`），和 §Out of Scope 中暂未声明的 v2 字段级
+  schema
 - **`org.octos.app.initial_state` 必填字段**：
   - `location: string` — 地点名称，长度 1..=64 字符（字符数，不是字节数），超长按 §校验
     规则截断 + warning
   - `temp_c: number` — 当前温度摄氏度，合法范围 `-80..=80`，超范围 fail closed
   - `condition: string` — 天气状况枚举：`"sunny" | "cloudy" | "rainy" | "snowy" | "stormy" | "foggy"`；
     未知值 fall back 到 `"sunny"`（见 §校验规则）
-- **`org.octos.app.initial_state` 可选字段**：
+- **`org.octos.app.initial_state` 可选字段（v1 原始集合）**：
   - `feels_like_c: number` — 体感温度，范围和校验同 `temp_c`
   - `humidity: integer` — 相对湿度百分比，`0..=100`
   - `wind_kph: number` — 风速，`>= 0`
@@ -44,10 +48,67 @@ L2b 卡内按钮、L3 host runtime、具体注册表模块的最终命名（本 
     close 整张卡片
   - `forecast: array` — 未来若干天预报，每项是 `{day: string, high_c: number, low_c: number, condition: string}`；
     长度 0..=7；超过 7 条按 §校验规则截断 + warning
+- **`org.octos.app.initial_state` 可选字段（v2 新增，producer-routing 与 v2
+  guidance card 引入）**（对应
+  [`task-agent-to-app-l1-weather-v2-doc-sync`](task-agent-to-app-l1-weather-v2-doc-sync.spec.md) 同步进来的字段）：
+  - `high_c: number` — 当日最高温摄氏度；范围和校验同 `temp_c`（超范围
+    fail closed）。代码见 `src/home/app_registry/weather.rs:57`
+  - `low_c: number` — 当日最低温摄氏度；范围和校验同 `temp_c`（超范围
+    fail closed）。**不强制** `low_c <= high_c`——consumer 当前不做交叉
+    校验，本 spec 忠实记录为不校验
+  - `uv_index_max: number` — 最大 UV 指数；`>= 0`；负值 fail closed
+    （`weather.rs:59`）
+  - `precipitation_probability_max: number` — 当日最大降水概率百分比；
+    `0..=100`；超范围 fail closed（`weather.rs:60-62`）
+  - `periods: array` — 日内周期天气数组；最多 3 项，**超出静默截断**（见
+    §校验规则）。每项 object 结构：
+    - `slot: enum{"morning","noon","night"}` — 必填；未知值 fail closed
+      （`weather.rs:483-485`）
+    - `temp_c: number` — 必填，范围和校验同根级 `temp_c`；超范围 fail
+      closed
+    - `condition: string` — optional，枚举同根级 `condition`；未知值
+      fall back 到 `"sunny"`，**但不 warning log**（与根级 `condition`
+      的"未知值 warning"行为不同，见 §校验规则）
+    - `precipitation_probability: number` — optional，`0..=100`；代码
+      同时接受整数和浮点（浮点先 `round()` 再范围校验，最终存储为 `u32`，
+      `weather.rs:507-515`）；超范围 fail closed
 - **未来 schema 演进**：新增字段必须设置默认值向后兼容；删除或改语义的字段必须 bump
   `version`，registry 对不支持的 `version` 直接 fall back 到 plain text + warning。
 - **v1 不支持的字段**：天气图标 URL（只用 `condition` 枚举映射文本 emoji）、
   multi-location、小时级预报、空气质量。这些在 v2 再议。
+
+### 当前实际版本（事实声明，不 bump）
+
+- **`WeatherFactory::supported_version()` 返回 `2`**，`supports_version(v)`
+  同时接受 `1 | 2`（代码见 `src/home/app_registry/weather.rs:36-42`）。本
+  spec 在此**显式承认** v2 是当前正式版本；producer 合同（
+  [task-agent-to-app-producer-routing](task-agent-to-app-producer-routing.spec.md)）
+  依赖此事实作为 `org.octos.app.version` 的默认发送值。
+- v2 引入的所有字段现已在本 spec 内完整承认：
+  - `language`、`focus` 在下方 §Schema 扩展 addendum
+  - `high_c`、`low_c`、`uv_index_max`、`precipitation_probability_max`、
+    `periods`（含子结构）在 §Weather type JSON schema 的 "v2 新增" 段
+  - 对应行为规则在 §校验规则
+  - 同步来源：[`task-agent-to-app-l1-weather-v2-doc-sync`](task-agent-to-app-l1-weather-v2-doc-sync.spec.md)（doc-sync 任务）
+
+### Schema 扩展（producer-routing 接续 addendum）
+
+以下 optional 字段由 [`task-agent-to-app-producer-routing`](task-agent-to-app-producer-routing.spec.md) 引入并已在
+consumer 代码实现，本 spec 在此承认它们为合法的 `initial_state` optional
+扩展，**不 bump `version`**：
+
+- `language: enum{"en","zh-CN"}` — payload 级语言覆盖。存在时 render 必须用
+  此字段而非全局 `AppLanguage`；当前实现在 `src/home/app_registry/weather.rs:47`
+  和 `:292`。Producer 侧规则（什么时候发、何时省略）由 producer-routing
+  spec 管。
+- `focus: enum{"overview","clothing","umbrella","outdoor"}` — 指导卡焦点。
+  consumer 收到未知值时 fall back 到 `"overview"` 并 warning。Producer 侧
+  分派规则由 producer-routing spec 管。
+
+**其余 v2 字段位置**：本 addendum 只承认 `language` 与 `focus`；v2 的数据
+结构字段（`high_c` / `low_c` / `uv_index_max` / `precipitation_probability_max` /
+`periods`）见 §Weather type JSON schema 的 "v2 新增" 段与 §校验规则的
+periods 相关条目。
 
 ### Registry 条目
 
@@ -58,7 +119,13 @@ L2b 卡内按钮、L3 host runtime、具体注册表模块的最终命名（本 
   - factory trait 只要求：
     - `init(initial_state: &JsonValue) -> Result<RenderedApp, ValidationError>`
     - `render(state: &RenderedApp, app_language: AppLanguage) -> String`
-  - `render` **必须**接受 `app_language` 参数（从调用方的 `scope.data` 经 `AppState::app_language` 取到）；i18n 标签通过显式传入的 `AppLanguage` 解析，**不得**使用任何线程局部或全局语言状态
+  - `render` **必须**接受 `app_language` 参数；i18n 标签通过显式传入的
+    `AppLanguage` 解析，**不得**使用任何线程局部或全局语言状态
+  - 调用方负责在调用 `render` 前计算 **effective language**：若
+    `initial_state.language` 存在且合法，effective = payload language；
+    否则 effective = `AppState::app_language`。`render` 看到的就是这个
+    effective language，函数本身不再做 fallback 判断（语言来源由 §Schema
+    扩展 addendum 钉死，本条与之兼容）
   - L1 类型**只**实现这两个方法——不提供 `on_tick` / `on_action` / `teardown`
 - **注册时机**：registry 在 `RoomScreen::init` 或等价的 room-level 初始化
   路径上构造一次，此后只读。不动态注册。
@@ -139,6 +206,16 @@ L2b 卡内按钮、L3 host runtime、具体注册表模块的最终命名（本 
 - **`forecast` 超长（> 7 条）**：取前 7 条，warning log 记录丢弃数量。
 - **`updated_at` 解析失败**：字段设为 `None`，卡片正常渲染但不显示更新时间戳。
   不 fail close 整张卡片。
+- **`periods` 超长（> 3 条）**：**静默截断**取前 3 条——**不** warning log
+  （`weather.rs:475` 的 `.take(3)` 行为）。与 `forecast` 的"截断 + warning"
+  行为有意不同，本 spec 忠实记录为静默。
+- **`periods[].condition` 未知值**：fall back 到 `"sunny"`，**不** warning
+  log（`weather.rs:499-503`）。与根级 `condition` 的"未知值 + warning"行为
+  有意不同——差异来自代码现状，本 spec 忠实记录，对齐属于行为变更，归独立
+  任务。
+- **`periods[].precipitation_probability` 浮点输入**：代码先 `as_i64()`，
+  失败时回退 `as_f64().map(|raw| raw.round() as i64)`；再做 `0..=100` 范围
+  检查（`weather.rs:507-515`）。非数字类型 fail closed；超范围 fail closed。
 - **Splash-safe 字符串转义**：所有从 `initial_state` 来的字符串字段在插入
   Splash DSL 前必须转义以下字符：
   - `"` → `\"`
@@ -156,8 +233,9 @@ L2b 卡内按钮、L3 host runtime、具体注册表模块的最终命名（本 
   - `agent_to_app.weather.wind` → EN: "Wind" / ZH: "风速"
   - `agent_to_app.weather.forecast` → EN: "Forecast" / ZH: "预报"
   - `agent_to_app.weather.updated_at_prefix` → EN: "Updated" / ZH: "更新于"
-- Label 文案在 render 时已经按当前 `app_language` 解析成字符串，不在 Splash
-  DSL 里保留 i18n key。
+- Label 文案在 render 时已经按 **effective language** 解析成字符串
+  （`initial_state.language` 优先于 `AppState::app_language`，见 §Registry
+  条目），不在 Splash DSL 里保留 i18n key。
 
 ## Boundaries
 
@@ -202,6 +280,9 @@ L2b 卡内按钮、L3 host runtime、具体注册表模块的最终命名（本 
 - 多地点同屏对比
 - 小时级预报
 - 空气质量 / AQI
+- **v3+ schema 演进**：超出 v2 已承认字段集（`language` / `focus` +
+  `high_c` / `low_c` / `uv_index_max` / `precipitation_probability_max` /
+  `periods`）之外的新字段，归独立的 weather v3 spec；本 spec 不前瞻声明
 - 跨 restart 持久化上一次渲染的 weather payload
 - 自动从外部 API 拉取天气数据（那是 agent 侧的事，不是 Robrix 的事）
 - i18n 扩展到 EN/zh-CN 之外
@@ -348,10 +429,21 @@ Scenario: Raw org.octos.splash_card path is NOT used when org.octos.app is prese
   And the raw `splash_card` string is ignored
   And a debug log notes that app envelope took priority
 
-Scenario: i18n labels resolve via the current app language, not hardcoded English
+Scenario: i18n labels resolve via the current app language when payload language is absent
   Test: test_weather_labels_resolve_via_i18n
-  Given a valid weather payload with `humidity = 65` and the app language is `zh-CN`
+  Given a valid weather payload with `humidity = 65` and no `initial_state.language`
+  And the app language is `zh-CN`
   When the factory's `render` produces the Splash DSL string
   Then the output contains the literal text `湿度`
   And the output does NOT contain the literal text `Humidity`
   And switching app language to `en` produces output containing `Humidity` instead
+
+Scenario: payload language overrides app UI language for i18n labels
+  Test: test_payload_language_overrides_app_language_for_guidance_card
+  Given a valid weather payload with `initial_state.language = "zh-CN"` and `humidity = 65`
+  And the app's current `AppLanguage` is `en`
+  When the factory's `render` is called with the effective language resolved per §Registry 条目
+  Then the output contains the literal text `湿度`
+  And the output does NOT contain the literal text `Humidity`
+  And switching `AppLanguage` to `zh-CN` (matching the payload) leaves the output unchanged
+  And switching `AppLanguage` back to `en` does NOT revert the output to English while `initial_state.language = "zh-CN"` is present

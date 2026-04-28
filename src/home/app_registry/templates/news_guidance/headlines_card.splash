@@ -1,0 +1,56 @@
+RoundedView {
+  width: Fill height: Fit flow: Down
+  padding: Inset{left: 18. right: 18. top: 16. bottom: 16.}
+  spacing: 12.
+  draw_bg.color: $state.hero.bg_color
+  draw_bg.border_radius: 14.
+
+  View { width: Fill height: Fit flow: Right spacing: 8.
+    View { width: Fill height: Fit flow: Down spacing: 5.
+      Label { text: "$state.topic_label" draw_text.color: #ffffffcc draw_text.text_style.font_size: 11. }
+      Label { text: "$state.headline" draw_text.color: #ffffff draw_text.text_style.font_size: 21. }
+    }
+    Label { visible: $state.updated.visible text: "$state.updated.text" draw_text.color: #ffffffbb draw_text.text_style.font_size: 10. }
+  }
+
+  RoundedView {
+    width: Fill height: Fit flow: Down spacing: 8.
+    padding: Inset{left: 14. right: 14. top: 14. bottom: 14.}
+    draw_bg.color: #xffffff
+    draw_bg.border_radius: 12.
+
+    Label { text: "$state.summary" draw_text.color: #x223047 draw_text.text_style.font_size: 13. }
+
+    View { width: Fill height: Fit flow: Down spacing: 6.
+      RoundedView {
+        visible: $state.item_1.visible
+        width: Fill height: Fit flow: Down spacing: 3.
+        padding: Inset{left: 10. right: 10. top: 9. bottom: 9.}
+        draw_bg.color: #xEAF3FF
+        draw_bg.border_radius: 9.
+        Label { text: "$state.item_1.title" draw_text.color: #x172238 draw_text.text_style.font_size: 13. }
+        Label { text: "$state.item_1.source" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+      }
+
+      RoundedView {
+        visible: $state.item_2.visible
+        width: Fill height: Fit flow: Down spacing: 3.
+        padding: Inset{left: 10. right: 10. top: 9. bottom: 9.}
+        draw_bg.color: #xEAF3FF
+        draw_bg.border_radius: 9.
+        Label { text: "$state.item_2.title" draw_text.color: #x172238 draw_text.text_style.font_size: 13. }
+        Label { text: "$state.item_2.source" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+      }
+
+      RoundedView {
+        visible: $state.item_3.visible
+        width: Fill height: Fit flow: Down spacing: 3.
+        padding: Inset{left: 10. right: 10. top: 9. bottom: 9.}
+        draw_bg.color: #xEAF3FF
+        draw_bg.border_radius: 9.
+        Label { text: "$state.item_3.title" draw_text.color: #x172238 draw_text.text_style.font_size: 13. }
+        Label { text: "$state.item_3.source" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+      }
+    }
+  }
+}

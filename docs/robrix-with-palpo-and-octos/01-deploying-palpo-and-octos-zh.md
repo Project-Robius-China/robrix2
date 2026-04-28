@@ -127,7 +127,7 @@ docker compose ps
    - 打开 **Enabled** 开关
    - 填入:
      - **BotFather User ID**：`@octosbot:127.0.0.1:8128`
-     - **Octos Service**：`http://127.0.0.1:8010`
+     - **Octos Service**：如果 Octos 在 Docker 里跑，用 `http://127.0.0.1:8010`；如果在宿主机本地跑 `octos serve --port 8080`，用 `http://127.0.0.1:8080`
    - 点 **Save**,再点 **Check Now** —— 应该显示绿色的 **Reachable** 字样
 
 5. **与 AI 机器人对话**：登录后，创建一个房间并邀请机器人：
@@ -186,7 +186,7 @@ openssl rand -hex 32   # → 用作 hs_token
 
 ```yaml
 id: octos-matrix-appservice
-url: "http://octos:8009"
+url: "http://host.docker.internal:8009"
 
 as_token: "d1f46062a08e4833b18286d95c5e09a5f3e4a1b2c3d4e5f6a7b8c9d0e1f2a3b4"
 hs_token: "e2a57173b19f5944c29397ea6d6f1ab6a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9"
@@ -207,7 +207,7 @@ namespaces:
 | 字段 | 说明 |
 |------|------|
 | `id` | 此应用服务注册的唯一标识符。 |
-| `url` | Palpo 发送事件的目标地址。使用 Docker 服务名 `octos`（不是 `localhost`），因为两个容器在同一个 Docker 网络中。 |
+| `url` | Palpo 发送事件的目标地址。如果 Palpo 在 Docker 内、Octos 在宿主机本地运行，使用 `http://host.docker.internal:8009`。如果 Octos 也在 Docker 内运行，再改回 `http://octos:8009`。 |
 | `as_token` | Octos 调用 Palpo API 时使用的令牌。**必须**与 `botfather.json` 匹配。 |
 | `hs_token` | Palpo 向 Octos 推送事件时使用的令牌。**必须**与 `botfather.json` 匹配。 |
 | `sender_localpart` | 机器人的 Matrix 本地用户名。最终变为 `@octosbot:127.0.0.1:8128`。 |
@@ -255,7 +255,7 @@ client = "http://127.0.0.1:8128"
 
 > **注意：** `server_name` 值 `"127.0.0.1:8128"` 仅用于本地开发。生产环境部署时，请替换为你的实际域名（如 `"chat.example.com"`）。更改 `server_name` 时，你还需要同步更新 `octos-registration.yaml`（正则表达式部分）和 `botfather.json`（`server_name` 字段）。
 
-> **重要：** 在这个本地 Docker 示例里，Matrix 身份统一使用 `127.0.0.1:8128`。因此 `server_name`、应用服务正则和机器人用户 ID 都必须写成 `127.0.0.1:8128`。只有容器之间通信时才使用 `palpo:8008`、`octos:8009` 这类 Docker 服务名。
+> **重要：** 在这个本地环境里，Matrix 身份统一使用 `127.0.0.1:8128`。因此 `server_name`、应用服务正则和机器人用户 ID 都必须写成 `127.0.0.1:8128`。传输地址取决于拓扑：宿主机原生 Octos 用 `host.docker.internal:8009`，Docker 内 Octos 用 `octos:8009`。
 
 ### 3.5 Octos 机器人配置（`config/botfather.json`）
 
@@ -308,7 +308,7 @@ client = "http://127.0.0.1:8128"
 | 字段 | 说明 |
 |------|------|
 | `type` | 必须为 `"matrix"`。 |
-| `homeserver` | Palpo 的内部 URL。使用 Docker 服务名 `palpo`，不是 `localhost`。 |
+| `homeserver` | Octos 视角下的 Palpo 地址。Octos 在 Docker 内时使用 `http://palpo:8008`；Octos 在宿主机本地运行时使用 `http://127.0.0.1:8128`。 |
 | `as_token` / `hs_token` | 必须与应用服务注册 YAML 文件匹配。 |
 | `server_name` | Matrix 域名。必须与 `palpo.toml` 中的 `server_name` 一致。 |
 | `sender_localpart` | 机器人用户名。必须与注册文件一致。 |
@@ -316,7 +316,43 @@ client = "http://127.0.0.1:8128"
 | `port` | Octos 监听 Palpo 应用服务事件的端口。 |
 | `allowed_senders` | 允许与机器人对话的 Matrix 用户 ID。空数组 `[]` = 所有人都可以对话。 |
 
-> **重要：** `homeserver` 是 Octos 访问 Palpo 时使用的 Docker 内部 URL；`server_name` 是写进 Matrix 用户 ID 的域名部分。两者相关但不能混用。详见 [架构原理](03-how-robrix-palpo-octos-work-together-zh.md)。
+> **重要：** `homeserver` 是 Octos 实际访问的 HTTP 地址；`server_name` 是写进 Matrix 用户 ID 的域名部分。两者相关但不能混用。详见 [架构原理](03-how-robrix-palpo-octos-work-together-zh.md)。
+
+#### 3.5.1 宿主机原生 Octos 本地开发配置
+
+如果你保持 `palpo` 在 Docker 中运行，但直接在本地 repo 里启动 Octos，需要把下面几处配置对齐：
+
+- Palpo 应用服务注册文件：`palpo-and-octos-deploy/appservices/octos-registration.yaml`
+  - `url: "http://host.docker.internal:8009"`
+  - `sender_localpart: octosbot`
+- 本机 Octos profile：先把 `octos/examples/matrix-appservice/botfather-local.json` 复制为 `.octos/profiles/botfather-local.host.json`
+  - `homeserver: "http://127.0.0.1:8128"`
+  - `server_name: "127.0.0.1:8128"`
+  - `sender_localpart: "octosbot"`
+  - `user_prefix: "octosbot_"`
+  - `as_token` / `hs_token` 必须与 Palpo 注册文件完全一致
+
+本机二进制必须带上 `matrix` feature 重新编译。否则 Octos 会打印 `channel not supported, skipping channel="matrix"`，并且永远不会监听 `8009`。复制完示例 profile 后，还要把复制出来的本地文件改成上面对齐过的 Matrix channel 配置。
+
+```bash
+cd /path/to/octos
+cargo build -p octos-cli --release --features matrix
+# 不要直接改 examples；本机值放到 gitignore 的本地 profile 里
+cp examples/matrix-appservice/botfather-local.json .octos/profiles/botfather-local.host.json
+# 然后编辑 .octos/profiles/botfather-local.host.json，填入本机 homeserver / token
+target/release/octos gateway \
+  --profile .octos/profiles/botfather-local.host.json \
+  --data-dir /tmp/octos-local
+```
+
+健康启动的标志：
+
+- 日志中出现 `Starting Matrix appservice channel`
+- 日志中出现 `Matrix appservice listening on 0.0.0.0:8009`
+- `lsof -nP -iTCP:8009 -sTCP:LISTEN` 能看到本机 `octos` 进程
+- `curl -i http://127.0.0.1:8009/_matrix/app/v1/transactions/test` 返回 `405 Method Not Allowed`，并带有 `allow: PUT`
+
+如果你还在宿主机上跑了 `octos serve --port 8080` 供 Robrix 健康检查使用，那么 `Settings -> Labs` 里的 **Octos Service** 应填 `http://127.0.0.1:8080`。`8010` 只适用于 Docker 里的 Octos 映射端口。
 
 **Gateway 设置：**
 

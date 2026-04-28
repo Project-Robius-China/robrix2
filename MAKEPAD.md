@@ -72,6 +72,7 @@ For Makepad 2.0 questions, route based on keywords:
 | DSL syntax, `script_mod!`, property, colon syntax, `mod.widgets` | makepad-2.0-dsl |
 | layout, width, height, Flow, Fill, Fit, Inset, spacing, align | makepad-2.0-layout |
 | View, Button, Label, TextInput, PortalList, Dock, Modal, widget | makepad-2.0-widgets |
+| agent-to-app template authoring, `.splash` templates under `app_registry/templates`, `$state.path`, W5/W7 guards | makepad-2.0-design-judgment + makepad-2.0-splash |
 | event, action, `handle_event`, `on_click`, `on_render`, Hit, ids! | makepad-2.0-events |
 | animation, animator, state, transition, Forward, Snap, Loop | makepad-2.0-animation |
 | shader, `draw_bg`, Sdf2d, GPU, pixel fn, vertex fn, DrawQuad | makepad-2.0-shaders |

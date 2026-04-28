@@ -260,7 +260,7 @@ fn routing_directives_for_message(
     } else {
         resolved_target_user_id(resolved_target)
     };
-    let explicit_room = target_user_id.is_none();
+    let explicit_room = matches!(resolved_target, ResolvedTarget::ExplicitRoom);
     (target_user_id, explicit_room)
 }
 
@@ -342,9 +342,16 @@ fn is_management_bot_room_for_context(
         return false;
     }
 
-    resolved_parent_bot_user_id.is_some_and(|resolved_parent_bot_user_id|
+    if resolved_parent_bot_user_id.is_some_and(|resolved_parent_bot_user_id|
         bound_bot_user_id == resolved_parent_bot_user_id
-    )
+    ) {
+        return true;
+    }
+
+    let bound_bot_is_known_child = _known_bot_user_ids
+        .iter()
+        .any(|known_bot_user_id| known_bot_user_id.as_str() == bound_bot_user_id.as_str());
+    has_persisted_management_binding && !_known_bot_user_ids.is_empty() && !bound_bot_is_known_child
 }
 
 fn is_management_bot_room(room_screen_props: &RoomScreenProps) -> bool {

@@ -277,6 +277,7 @@
   "settings.labs.app_service.status.enabled": "已启用",
   "settings.labs.app_service.status.disabled": "未启用",
   "settings.labs.app_service.health.service_label": "Octos 服务",
+  "settings.labs.app_service.health.gateway_label": "Matrix 网关",
   "settings.labs.app_service.health.placeholder": "http://127.0.0.1:8010",
   "settings.labs.app_service.health.button.save": "保存",
   "settings.labs.app_service.health.button.check_now": "立即检查",
