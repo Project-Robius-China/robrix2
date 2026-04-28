@@ -1,0 +1,44 @@
+# Palpo — Matrix Homeserver Configuration
+# -----------------------------------------
+# Palpo is the Matrix homeserver that sits between Robrix (client)
+# and Octos (AI bot appservice).
+#
+# For full configuration reference, see:
+# https://github.com/palpo-im/palpo
+
+server_name = "127.0.0.1:8128"
+
+# Allow new users to register from Robrix.
+# Set to false in production if you want invite-only registration.
+allow_registration = true
+# Required when allow_registration = true. This flag name is intentionally
+# long to remind you of the security implications of open registration.
+yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = true
+
+# Enable the admin room for server management.
+enable_admin_room = true
+
+# Palpo auto-loads all .yaml files from this directory on startup.
+# This is where the Octos appservice registration lives.
+appservice_registration_dir = "/var/palpo/appservices"
+
+# ---------- Listeners ----------
+# HTTP listener (Client-Server API — Robrix connects here)
+[[listeners]]
+address = "0.0.0.0:8008"
+
+# ---------- Logging ----------
+[logger]
+format = "pretty"    # Use "pretty" for development, "json" for production
+
+# ---------- Database ----------
+[db]
+url = "postgres://palpo:palpo_dev_password@palpo_postgres:5432/palpo"
+pool_size = 10
+
+# ---------- Well-Known ----------
+# Used by clients and other servers for discovery.
+# Must match the externally-reachable addresses.
+[well_known]
+server = "127.0.0.1:8128"
+client = "http://127.0.0.1:8128"

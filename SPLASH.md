@@ -1,7 +1,7 @@
 # Splash Script Manual (Terse AI Reference)
 
-Splash is Makepad's UI scripting language. It is whitespace-delimited, but Robrix prefers either newlines or commas to separate properties, for readability's sake. 
-**Please always use newlines or commas to separate properties, not just whitespace.**
+Splash is Makepad's UI scripting language. It is whitespace-delimited, but Robrix uses commas or newlines to separate properties for readability (commas are treated as whitespace by the tokenizer).
+**Please use commas or newlines to separate properties, matching the surrounding code style.**
 
 **Do NOT use `Root{}` or `Window{}`** — those are host-level wrappers handled externally. Your output is the content inside a body/splash widget.
 
@@ -1551,6 +1551,102 @@ ExpDecay {d1: 0.82, d2: 0.97, max: 100}
 Pow {begin: 0.0, end: 1.0}
 Bezier {cp0: 0.0, cp1: 0.0, cp2: 1.0, cp3: 1.0}
 ```
+
+## Runtime Property Updates (`script_apply_eval!`)
+
+From Rust code, use `script_apply_eval!` to patch widget properties at runtime:
+
+```rust
+let color = vec4(1.0, 0.0, 0.0, 1.0);
+let height = 36.0_f64;
+script_apply_eval!(cx, my_widget, {
+    draw_bg +: { color: #(color) }
+    height: #(height)
+});
+```
+
+Use `#(rust_expr)` to interpolate Rust values into the script.
+
+### What works in `script_apply_eval!`
+- Numeric values: `height: #(h)`, `spacing: 10`
+- Hex colors: `draw_bg +: { color: #ff0000 }`
+- Rust expression interpolation: `#(my_vec4_variable)`
+- Property paths: `draw_bg +: { ... }`, `draw_text +: { ... }`
+
+### What does NOT work in `script_apply_eval!`
+
+**DSL constants are NOT available at runtime:**
+```rust
+// WRONG — these all fail with "variable not found in scope"
+script_apply_eval!(cx, item, {
+    flow: Right              // ❌ Right not found
+    height: Fit              // ❌ Fit not found
+    align: Align{y: 0.5}    // ❌ Align not found
+    cursor: MouseCursor.Hand // ❌ MouseCursor not found
+});
+
+// CORRECT — bake layout into DSL template, or use numeric values
+script_apply_eval!(cx, item, {
+    height: #(36.0_f64)      // ✅ numeric value via interpolation
+    draw_bg +: { color: #(c) } // ✅ color via interpolation
+});
+```
+
+**Dynamic widgets ignore `script_apply_eval!` entirely:**
+
+Widgets created via `widget_ref_from_live_ptr()` (or `cx.with_vm(|vm| WidgetRef::script_from_value(...))`) have `ScriptObject::ZERO` as their script source. All `script_apply_eval!` calls on them silently do nothing.
+
+To change visual state on dynamic widgets, use **Animator + shader instance variables**:
+
+```
+// In DSL template definition:
+mod.widgets.MyItem = View {
+    show_bg: true
+    draw_bg +: {
+        color: #fff
+        selected: instance(0.0)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.box(0. 0. self.rect_size.x self.rect_size.y 4.0)
+            let highlight = #x1E90FF30
+            sdf.fill(Pal.premul(self.color.mix(highlight self.selected)))
+            return sdf.result
+        }
+    }
+    animator: Animator {
+        highlight: {
+            default: @off
+            off: AnimatorState {
+                from: { all: Forward { duration: 0.12 } }
+                apply: { draw_bg: { selected: 0.0 } }
+            }
+            on: AnimatorState {
+                from: { all: Forward { duration: 0.08 } }
+                apply: { draw_bg: { selected: 1.0 } }
+            }
+        }
+    }
+}
+```
+
+```rust
+// In Rust — toggle state via Animator (works on ALL widgets including dynamic ones):
+let view = item.as_view();
+view.animator_cut(cx, ids!(highlight.on));   // highlight on
+view.animator_cut(cx, ids!(highlight.off));  // highlight off
+```
+
+### `draw_bg:` vs `draw_bg +:`
+
+**Always use `+:` when modifying sub-properties:**
+```
+draw_bg +: { color: #f00 }    // ✅ merges — keeps border_radius, shader, etc.
+draw_bg: { color: #f00 }      // ❌ replaces — loses ALL other draw_bg properties
+```
+
+This applies in both DSL definitions and `script_apply_eval!`.
+
+---
 
 ## Theme Variables (prefix: `theme.`)
 

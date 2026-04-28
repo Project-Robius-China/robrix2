@@ -1,7 +1,7 @@
 //! A `HtmlOrPlaintext` view can display either plaintext or rich HTML content.
 
 use makepad_widgets::*;
-use matrix_sdk::{ruma::{matrix_uri::MatrixId, OwnedMxcUri}, OwnedServerName};
+use matrix_sdk::{ruma::{matrix_uri::{MatrixId, MatrixToUri, MatrixUri}, OwnedMxcUri}, OwnedServerName};
 
 use crate::{avatar_cache::{self, AvatarCacheEntry}, profile::user_profile_cache, sliding_sync::{current_user_id, submit_async_request, MatrixRequest}, utils};
 
@@ -116,11 +116,7 @@ script_mod! {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
         }
-        text_style_fixed: theme.font_code {
-            font_size: (MESSAGE_FONT_SIZE)
-            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
-            top_drop: 0.21
-        }
+        text_style_fixed: mod.widgets.MESSAGE_CODE_TEXT_STYLE { }
         draw_block +: {
             line_color: (MESSAGE_TEXT_COLOR)
             sep_color: (MESSAGE_TEXT_COLOR)
@@ -242,10 +238,9 @@ impl Widget for RobrixHtmlLink {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        // TODO: this is currently disabled because Makepad doesn't yet support
-        // partial vertical alignment of inline Html subwidgets with the surrounding text.
-        // Once makepad supports that, we can re-enable this to show the Pill widgets.
-        /*
+        // Try to render Matrix mention pills for matrix:// URIs.
+        // Note: vertical alignment with surrounding text may not be perfect
+        // (known Makepad limitation with inline Html subwidgets).
         if let Ok(matrix_to_uri) = MatrixToUri::parse(&self.url) {
             self.draw_matrix_pill(cx, matrix_to_uri.id(), matrix_to_uri.via());
         } else if let Ok(matrix_uri) = MatrixUri::parse(&self.url) {
@@ -253,8 +248,6 @@ impl Widget for RobrixHtmlLink {
         } else {
             self.draw_html_link(cx);
         }
-        */
-        self.draw_html_link(cx);
         self.view.draw_walk(cx, scope, walk)
     }
 
@@ -271,17 +264,34 @@ impl Widget for RobrixHtmlLink {
 impl RobrixHtmlLink {
     #[allow(unused)]
     fn draw_matrix_pill(&mut self, cx: &mut Cx, matrix_id: &MatrixId, via: &[OwnedServerName]) {
-        if let Some(mut pill) = self.matrix_link_pill(cx, ids!(matrix_link)).borrow_mut() {
+        {
+            let matrix_link_pill = self.matrix_link_pill(cx, ids!(matrix_link));
+            let Some(mut pill) = matrix_link_pill.borrow_mut() else {
+                self.draw_html_link(cx);
+                return;
+            };
             pill.populate_pill(cx, self.url.clone(), matrix_id, via);
         }
-        self.view(cx, ids!(matrix_link_view)).set_visible(cx, true);
-        self.view(cx, ids!(html_link_view)).set_visible(cx, false);
+        let matrix_link_view = self.view(cx, ids!(matrix_link_view));
+        let html_link_view = self.view(cx, ids!(html_link_view));
+        let visibility_changed = !matrix_link_view.visible() || html_link_view.visible();
+        matrix_link_view.set_visible(cx, true);
+        html_link_view.set_visible(cx, false);
+        if visibility_changed {
+            self.redraw(cx);
+        }
     }
 
     /// Shows the inner plain HTML link and hides the Matrix link pill view.
     fn draw_html_link(&mut self, cx: &mut Cx) {
-        self.view(cx, ids!(html_link_view)).set_visible(cx, true);
-        self.view(cx, ids!(matrix_link_view)).set_visible(cx, false);
+        let html_link_view = self.view(cx, ids!(html_link_view));
+        let matrix_link_view = self.view(cx, ids!(matrix_link_view));
+        let visibility_changed = !html_link_view.visible() || matrix_link_view.visible();
+        html_link_view.set_visible(cx, true);
+        matrix_link_view.set_visible(cx, false);
+        if visibility_changed {
+            self.redraw(cx);
+        }
         let mut html_link = self.html_link(cx, ids!(html_link));
         html_link.set_url(&self.url);
         html_link.set_text(cx, self.text.as_ref());

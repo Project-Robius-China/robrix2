@@ -7,9 +7,11 @@ use ruma::{OwnedRoomAliasId, OwnedRoomId, room::{JoinRuleSummary, RoomType}};
 
 use crate::utils::RoomNameId;
 
+pub mod member_search;
 pub mod reply_preview;
 pub mod room_input_bar;
 pub mod room_display_filter;
+pub mod translation;
 pub mod typing_notice;
 
 pub fn script_mod(vm: &mut ScriptVm) {

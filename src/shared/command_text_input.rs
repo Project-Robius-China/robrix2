@@ -111,8 +111,13 @@ script_mod! {
                 }
             }
 
-            list := mod.widgets.CommandTextInputList{
-                height: Fit
+            list_scroll := ScrollYView {
+                width: Fill
+                height: 200
+                clip_y: true
+                list := mod.widgets.CommandTextInputList{
+                    height: Fit
+                }
             }
         }
 
@@ -208,6 +213,7 @@ pub struct CommandTextInput {
     /// Remember which was the last cursor position handled, to support `inline_search`.
     #[rust]
     prev_cursor_position: usize,
+
 }
 
 impl Widget for CommandTextInput {
@@ -311,10 +317,8 @@ impl Widget for CommandTextInput {
             for (idx, item) in self.selectable_widgets.iter().enumerate() {
                 let item = item.as_view();
 
-                if item
-                    .finger_down(actions)
-                    .map(|fe| fe.tap_count == 1)
-                    .unwrap_or(false)
+                let fd = item.finger_down(actions);
+                if fd.as_ref().map(|fe| fe.tap_count == 1).unwrap_or(false)
                 {
                     selected_by_click = Some((*item).clone());
 
@@ -520,6 +524,8 @@ impl CommandTextInput {
             false,
         );
         self.clear_items(cx);
+        self.reset_list_scroll(cx);
+        self.reset_list_scroll_height(cx);
     }
 
     /// Clears the list of items.
@@ -539,6 +545,24 @@ impl CommandTextInput {
         self.list(cx, ids!(list)).add(widget.clone());
         self.selectable_widgets.push(widget);
         self.keyboard_focus_index = self.keyboard_focus_index.or(Some(0));
+    }
+
+    /// Resets the list scroll position to the top.
+    ///
+    /// Call this when starting a new search or closing the popup,
+    /// NOT on every streaming result refresh (which would cause scroll jumping).
+    pub fn reset_list_scroll(&mut self, cx: &mut Cx) {
+        self.list_scroll_view(cx).set_scroll_pos(cx, DVec2 { x: 0.0, y: 0.0 });
+    }
+
+    /// Resets the scroll viewport height to zero.
+    /// Prevents a stale tall viewport from showing as a blank box
+    /// between searches.
+    pub fn reset_list_scroll_height(&self, cx: &Cx) {
+        let scroll_view = self.list_scroll_view(cx);
+        if let Some(mut inner) = scroll_view.borrow_mut() {
+            inner.walk.height = Size::Fixed(0.0);
+        }
     }
 
     /// Add a custom unselectable item to the list.
@@ -704,6 +728,11 @@ impl CommandTextInput {
         self.child_by_path(ids!(search_input)).as_text_input()
     }
 
+    /// Returns a reference to the scroll view wrapping the list.
+    pub fn list_scroll_view(&self, cx: &Cx) -> ViewRef {
+        self.view(cx, ids!(list_scroll))
+    }
+
     fn trigger_grapheme(&self) -> Option<&str> {
         self.trigger.as_ref().and_then(|t| graphemes(t).next())
     }
@@ -741,39 +770,84 @@ impl CommandTextInput {
         // This ensures keyboard navigation and mouse hover don't appear simultaneously
         self.pointer_hover_index = None;
 
+        // Auto-scroll to keep the focused item visible within the scroll container
+        self.scroll_to_focused_item(cx);
+
         self.redraw(cx);
     }
 
+    /// Scrolls the list scroll view so the currently focused item is visible.
+    ///
+    /// Derives the current scroll offset from the list content's screen position
+    /// relative to the scroll view, so it works correctly even after manual
+    /// wheel/trackpad scrolling (no stale tracked state).
+    fn scroll_to_focused_item(&mut self, cx: &mut Cx) {
+        let Some(focus_idx) = self.keyboard_focus_index else { return };
+        let Some(widget) = self.selectable_widgets.get(focus_idx) else { return };
+
+        let item_rect = widget.area().rect(cx);
+        let scroll_view = self.list_scroll_view(cx);
+        let scroll_rect = scroll_view.area().rect(cx);
+
+        // Rects are invalid before the first draw
+        if item_rect.size.y <= 0.0 || scroll_rect.size.y <= 0.0 {
+            return;
+        }
+
+        let view_height = scroll_rect.size.y;
+
+        // Item's screen position relative to scroll view top.
+        // This accounts for any scroll state (programmatic or manual).
+        let item_screen_top = item_rect.pos.y - scroll_rect.pos.y;
+        let item_screen_bottom = item_screen_top + item_rect.size.y;
+
+        if item_screen_bottom <= view_height && item_screen_top >= 0.0 {
+            return; // Already fully visible, no scroll needed
+        }
+
+        // Derive the current scroll offset from the list content's position.
+        // The list widget (inner content) is drawn at its full height inside the scroll view.
+        // When scroll=0, list top = scroll view top. When scrolled down by S,
+        // list top is S pixels above scroll view top.
+        //
+        // NOTE: Must access List.area directly via borrow(), NOT via .as_view().area().
+        // List stores its drawn area in its own `area` field (set by end_turtle_with_area),
+        // while the deref View's area is never populated.
+        let list_ref = self.list(cx, ids!(list));
+        let list_rect = if let Some(inner) = list_ref.borrow() {
+            let r = inner.area.rect(cx);
+            if r.size.y <= 0.0 {
+                return; // List hasn't been drawn yet
+            }
+            r
+        } else {
+            return;
+        };
+        let current_scroll = scroll_rect.pos.y - list_rect.pos.y;
+
+        let new_scroll_y = if item_screen_bottom > view_height {
+            // Item extends below the visible area — scroll down
+            current_scroll + (item_screen_bottom - view_height)
+        } else {
+            // Item is above the visible area — scroll up
+            (current_scroll + item_screen_top).max(0.0)
+        };
+
+        scroll_view.set_scroll_pos(cx, DVec2 { x: 0.0, y: new_scroll_y });
+    }
+
     fn update_highlights(&mut self, cx: &mut Cx) {
-        // Check if currently there is a keyboard-focused item
         let has_keyboard_focus = self.keyboard_focus_index.is_some();
 
         for (idx, item) in self.selectable_widgets.iter().enumerate() {
-            let mut item = item.clone();
-            script_apply_eval!(cx, item, {
-                show_bg: true,
-                cursor: MouseCursor.Hand
-            });
+            let is_highlighted = Some(idx) == self.keyboard_focus_index
+                || (Some(idx) == self.pointer_hover_index && !has_keyboard_focus);
 
-            // If there is a keyboard focus, prioritize it over mouse hover
-            // If there is no keyboard focus, show mouse hover
-            if Some(idx) == self.keyboard_focus_index {
-                // Keyboard-selected item is highlighted in blue
-                let color = self.color_focus;
-                script_apply_eval!(cx, item, {
-                    draw_bg.color: #(color)
-                });
-            } else if Some(idx) == self.pointer_hover_index && !has_keyboard_focus {
-                // Mouse-hovered item is highlighted in gray, but only when there is no keyboard focus
-                let color = self.color_hover;
-                script_apply_eval!(cx, item, {
-                    draw_bg.color: #(color)
-                });
+            let view = item.as_view();
+            if is_highlighted {
+                view.animator_cut(cx, ids!(highlight.on));
             } else {
-                // Default state
-                script_apply_eval!(cx, item, {
-                    draw_bg.color: #00000000
-                });
+                view.animator_cut(cx, ids!(highlight.off));
             }
         }
     }
@@ -864,6 +938,68 @@ fn get_head(text_input: &TextInputRef) -> usize {
 
 fn is_whitespace(grapheme: &str) -> bool {
     grapheme.chars().all(char::is_whitespace)
+}
+
+#[cfg(test)]
+fn popup_item_highlight_color(
+    idx: usize,
+    keyboard_focus_index: Option<usize>,
+    pointer_hover_index: Option<usize>,
+    color_focus: Vec4f,
+    color_hover: Vec4f,
+) -> Vec4f {
+    if Some(idx) == keyboard_focus_index {
+        if color_focus == Vec4f::default() {
+            vec4(0.11, 0.15, 0.30, 1.0)
+        } else {
+            color_focus
+        }
+    } else if Some(idx) == pointer_hover_index && keyboard_focus_index.is_none() {
+        if color_hover == Vec4f::default() {
+            vec4(0.11, 0.15, 0.30, 0.7)
+        } else {
+            color_hover
+        }
+    } else {
+        vec4(0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highlight_prefers_keyboard_focus_over_hover() {
+        let focus = vec4(0.11, 0.15, 0.30, 1.0);
+        let hover = vec4(0.80, 0.80, 0.80, 1.0);
+
+        assert_eq!(
+            popup_item_highlight_color(1, Some(1), Some(1), focus, hover),
+            focus,
+        );
+    }
+
+    #[test]
+    fn highlight_uses_hover_only_without_keyboard_focus() {
+        let focus = vec4(0.11, 0.15, 0.30, 1.0);
+        let hover = vec4(0.80, 0.80, 0.80, 1.0);
+
+        assert_eq!(
+            popup_item_highlight_color(1, None, Some(1), focus, hover),
+            hover,
+        );
+    }
+
+    #[test]
+    fn highlight_falls_back_to_dark_blue_when_focus_color_missing() {
+        let hover = vec4(0.80, 0.80, 0.80, 1.0);
+
+        assert_eq!(
+            popup_item_highlight_color(0, Some(0), None, Vec4f::default(), hover),
+            vec4(0.11, 0.15, 0.30, 1.0),
+        );
+    }
 }
 
 /// Reduced and adapted copy of the `List` widget from Moly.

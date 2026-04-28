@@ -13,7 +13,7 @@ use matrix_sdk::{RoomDisplayName, RoomState};
 use ruma::{OwnedRoomAliasId, OwnedRoomId, room::JoinRuleSummary};
 
 use crate::{
-    home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, shared::{avatar::AvatarWidgetRefExt, room_filter_input_bar::RoomFilterAction}, utils::{self, RoomNameId}
+    app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, shared::{avatar::AvatarWidgetRefExt, room_filter_input_bar::MainFilterAction}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
 };
 
 script_mod! {
@@ -100,6 +100,8 @@ script_mod! {
             flow: Flow.Right{wrap: false}, // do not wrap
             padding: 0,
             align: Align{x: 0.5}
+            max_lines: 1
+            text_overflow: Ellipsis
             draw_text +: {
                 active: instance(0.0)
                 hover: instance(0.0)
@@ -257,6 +259,7 @@ pub struct SpacesBarEntry {
     #[apply_default] animator: Animator,
 
     #[rust] space_name_id: Option<RoomNameId>,
+    #[rust] app_language: AppLanguage,
 }
 
 impl Widget for SpacesBarEntry {
@@ -273,7 +276,7 @@ impl Widget for SpacesBarEntry {
                 TooltipAction::HoverIn {
                     widget_rect: area.rect(cx),
                     text: this.space_name_id.as_ref().map_or(
-                        String::from("Unknown Space Name"),
+                        String::from(tr_key(this.app_language, "spaces_bar.tooltip.unknown_space_name")),
                         |sni| sni.to_string(),
                     ),
                     options: CalloutTooltipOptions {
@@ -343,21 +346,24 @@ impl Widget for SpacesBarEntry {
 }
 
 impl SpacesBarEntry {
-    fn set_metadata(&mut self, cx: &mut Cx, space_name_id: RoomNameId, is_selected: bool) {
+    fn set_metadata(&mut self, cx: &mut Cx, space_name_id: RoomNameId, is_selected: bool, app_language: AppLanguage) {
         self.space_name_id = Some(space_name_id);
+        self.app_language = app_language;
         self.animator_toggle(cx, is_selected, Animate::No, ids!(active.on), ids!(active.off));
     }
 }
 impl SpacesBarEntryRef {
-    pub fn set_metadata(&self, cx: &mut Cx, space_name_id: RoomNameId, is_selected: bool) {
+    pub fn set_metadata(&self, cx: &mut Cx, space_name_id: RoomNameId, is_selected: bool, app_language: AppLanguage) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.set_metadata(cx, space_name_id, is_selected);
+        inner.set_metadata(cx, space_name_id, is_selected, app_language);
     }
 }
 
 pub struct JoinedSpaceInfo {
     /// The display name and ID of the space.
     pub space_name_id: RoomNameId,
+    /// Lowercased searchable text cached for fast local search.
+    pub search_text: String,
     /// The canonical alias of the space, if any.
     pub canonical_alias: Option<OwnedRoomAliasId>,
     /// The topic of the space, if any.
@@ -374,6 +380,27 @@ pub struct JoinedSpaceInfo {
     pub guest_can_join: bool,
     /// The number of children rooms this space has.
     pub children_count: u64,
+}
+
+pub fn build_space_search_text(
+    space_name_id: &RoomNameId,
+    canonical_alias: &Option<OwnedRoomAliasId>,
+    topic: &Option<String>,
+) -> String {
+    let mut search_text = format!(
+        "{} {}",
+        space_name_id.to_string().to_lowercase(),
+        space_name_id.room_id().as_str().to_lowercase(),
+    );
+    if let Some(alias) = canonical_alias {
+        search_text.push(' ');
+        search_text.push_str(&alias.as_str().to_lowercase());
+    }
+    if let Some(topic) = topic {
+        search_text.push(' ');
+        search_text.push_str(&topic.to_lowercase());
+    }
+    search_text
 }
 
 
@@ -497,9 +524,21 @@ impl Widget for SpacesBar {
 
         if let Event::Actions(actions) = event {
             for action in actions {
-                // The room filter input bar is also used to filter which spaces are visible.
-                if let RoomFilterAction::Changed(keywords) = action.as_widget_action().cast() {
-                    self.update_displayed_spaces(cx, &keywords);
+                if let Some(LogoutAction::ClearAppState { .. }) = action.downcast_ref() {
+                    while PENDING_SPACE_UPDATES.pop().is_some() {}
+                    self.all_joined_spaces.clear();
+                    self.display_filter = RoomDisplayFilter::default();
+                    self.displayed_spaces.clear();
+                    self.is_filtered = false;
+                    self.selected_space = None;
+                    self.redraw(cx);
+                    continue;
+                }
+
+                // Only handle filter changes from the home screen's filter bar,
+                // not from any other RoomFilterInputBar instance (e.g., SpaceLobbyScreen's).
+                if let Some(MainFilterAction::Changed(keywords)) = action.downcast_ref() {
+                    self.update_displayed_spaces(cx, keywords);
                     continue;
                 }
 
@@ -526,11 +565,33 @@ impl Widget for SpacesBar {
                     }
                     continue;
                 }
+
+                // Handle login success - clear and redraw spaces
+                if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
+                    self.all_joined_spaces.clear();
+                    self.displayed_spaces.clear();
+                    self.selected_space = None;
+                    self.redraw(cx);
+                    continue;
+                }
+
+                // Handle account switch - clear and redraw spaces
+                if let Some(AccountSwitchAction::Switched(_)) = action.downcast_ref() {
+                    self.all_joined_spaces.clear();
+                    self.displayed_spaces.clear();
+                    self.selected_space = None;
+                    self.redraw(cx);
+                    continue;
+                }
             }
         }
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+
         while let Some(widget_to_draw) = self.view.draw_walk(cx, scope, walk).step() {
             // We only care about drawing the portal list.
             let portal_list_ref = widget_to_draw.as_portal_list();
@@ -557,9 +618,9 @@ impl Widget for SpacesBar {
                         item.label(cx, ids!(label)).set_text(
                             cx,
                             if self.is_filtered {
-                                "Found no\nmatching spaces."
+                                tr_key(app_language, "spaces_bar.status.none_matching")
                             } else {
-                                "Found no\njoined spaces."
+                                tr_key(app_language, "spaces_bar.status.none_joined")
                             }
                         );
                         item
@@ -605,17 +666,41 @@ impl Widget for SpacesBar {
                             cx,
                             space.space_name_id.clone(),
                             self.selected_space.as_ref().is_some_and(|id| id == space.space_name_id.room_id()),
+                            app_language,
                         );
                         item
                     }
                     else if portal_list_index == len {
                         let item = list.item(cx, portal_list_index, id!(StatusLabel));
-                        let descriptor = if self.is_filtered { "matching" } else { "joined" }; 
                         let text = match len {
-                            0      => format!("Found no\n{descriptor} spaces."),
-                            1      => format!("Found 1\n{descriptor} space."),
-                            2..100 => format!("Found {len}\n{descriptor} spaces."),
-                            100..  => format!("Found 99+\n{descriptor} spaces."),
+                            0 => {
+                                if self.is_filtered {
+                                    tr_key(app_language, "spaces_bar.status.none_matching").to_string()
+                                } else {
+                                    tr_key(app_language, "spaces_bar.status.none_joined").to_string()
+                                }
+                            }
+                            1 => {
+                                if self.is_filtered {
+                                    tr_key(app_language, "spaces_bar.status.one_matching").to_string()
+                                } else {
+                                    tr_key(app_language, "spaces_bar.status.one_joined").to_string()
+                                }
+                            }
+                            2..100 => {
+                                if self.is_filtered {
+                                    tr_fmt(app_language, "spaces_bar.status.n_matching", &[("count", &len.to_string())])
+                                } else {
+                                    tr_fmt(app_language, "spaces_bar.status.n_joined", &[("count", &len.to_string())])
+                                }
+                            }
+                            100.. => {
+                                if self.is_filtered {
+                                    tr_key(app_language, "spaces_bar.status.many_matching").to_string()
+                                } else {
+                                    tr_key(app_language, "spaces_bar.status.many_joined").to_string()
+                                }
+                            }
                         };
                         item.label(cx, ids!(label)).set_text(cx, &text);
                         item
@@ -678,6 +763,7 @@ impl SpacesBar {
                     if let Some(space) = self.all_joined_spaces.get_mut(&space_id) {
                         let was_displayed = (self.display_filter)(space);
                         space.canonical_alias = new_canonical_alias;
+                        space.search_text = build_space_search_text(&space.space_name_id, &space.canonical_alias, &space.topic);
                         let should_display = (self.display_filter)(space);
                         adjust_displayed_spaces(was_displayed, should_display, space_id, &mut self.displayed_spaces);
                     } else {
@@ -692,6 +778,7 @@ impl SpacesBar {
                             RoomDisplayName::Named(new_space_name),
                             space_id.clone(),
                         );
+                        space.search_text = build_space_search_text(&space.space_name_id, &space.canonical_alias, &space.topic);
                         let should_display = (self.display_filter)(space);
                         adjust_displayed_spaces(was_displayed, should_display, space_id, &mut self.displayed_spaces);
                     } else {
@@ -704,6 +791,7 @@ impl SpacesBar {
                         // We don't currently support filtering by topic.
                         // let was_displayed = (self.display_filter)(space);
                         space.topic = topic;
+                        space.search_text = build_space_search_text(&space.space_name_id, &space.canonical_alias, &space.topic);
                         // let should_display = (self.display_filter)(space);
                         // adjust_displayed_spaces(was_displayed, should_display, space_id, &mut self.displayed_spaces);
                     } else {
@@ -773,8 +861,7 @@ impl SpacesBar {
                     if let Some(index) = self.displayed_spaces.iter().position(|s| s == &space_id) {
                         let portal_list = self.view.portal_list(cx, ids!(spaces_list));
                         let speed = 40.0;
-                        // Scroll to just above the space to make it more visible.
-                        portal_list.smooth_scroll_to(cx, index.saturating_sub(1), speed, Some(10));
+                        portal_list.smooth_scroll_to(cx, index, speed, Some(10), 10.0);
                     }
                 }
             }
@@ -820,8 +907,34 @@ impl SpacesBar {
         } else {
             filtered_spaces_iter.map(|(space_id, _)| space_id.clone()).collect()
         };
+        if self.displayed_spaces.is_empty() {
+            self.is_filtered = false;
+            self.display_filter = RoomDisplayFilter::default();
+            self.displayed_spaces = self.all_joined_spaces.keys().cloned().collect();
+        }
 
         portal_list.set_first_id_and_scroll(0, 0.0);
         self.redraw(cx);
+    }
+}
+
+impl SpacesBarRef {
+    /// Returns local spaces matching `keywords`, up to `max_results`.
+    pub fn get_matching_space_items(&self, keywords: &str, max_results: usize) -> Vec<(RoomNameId, FetchedRoomAvatar)> {
+        let Some(inner) = self.borrow() else { return Vec::new(); };
+        let keywords = keywords.trim().to_lowercase();
+        if keywords.is_empty() {
+            return Vec::new();
+        }
+        let mut items = Vec::new();
+        for space in inner.all_joined_spaces.values() {
+            if space.search_text.contains(&keywords) {
+                items.push((space.space_name_id.clone(), space.space_avatar.clone()));
+                if items.len() >= max_results {
+                    break;
+                }
+            }
+        }
+        items
     }
 }

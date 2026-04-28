@@ -4,7 +4,7 @@ use std::{borrow::Cow, ops::{Deref, DerefMut}};
 use makepad_widgets::*;
 use matrix_sdk::{room::{RoomMember, RoomMemberRole}, ruma::{events::room::member::MembershipState, OwnedRoomId, OwnedUserId}};
 use crate::{
-    avatar_cache, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, current_user_id, is_user_ignored, submit_async_request}, utils
+    app::AppState, avatar_cache, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, current_user_id, is_user_ignored, submit_async_request}, utils
 };
 use super::user_profile_cache;
 
@@ -161,6 +161,52 @@ script_mod! {
                 }
                 text: "Unknown"
             }
+
+            power_level_controls := View {
+                visible: false,
+                width: Fill,
+                height: Fit,
+                flow: Down,
+                spacing: 6,
+                margin: Inset{top: 8}
+
+                power_level_label := Label {
+                    margin: Inset{ left: 7 }
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                    }
+                    text: "Power Level"
+                }
+
+                power_level_dropdown := DropDownFlat {
+                    width: Fill
+                    height: 40
+                    align: Align{y: 0.5}
+                    padding: Inset{left: 12, top: 11, bottom: 11, right: 30}
+                    draw_text +: {
+                        text_style: REGULAR_TEXT { font_size: 11.5 }
+                        color: #333
+                        color_hover: uniform(#222)
+                        color_focus: uniform(#222)
+                        color_down: uniform(#222)
+                    }
+                    draw_bg +: {
+                        color: uniform(#fff)
+                        color_hover: uniform(#F0F0F2)
+                        color_focus: uniform(#F0F0F2)
+                        color_down: uniform(#E8E8EA)
+                        border_color: uniform(#CCC)
+                        border_color_hover: uniform(#AAA)
+                        border_color_focus: uniform((COLOR_ACTIVE_PRIMARY))
+                        arrow_color: uniform(#888)
+                        arrow_color_hover: uniform(#555)
+                    }
+                    labels: ["Default", "Moderator", "Admin"]
+                }
+            }
         }
 
         LineH { padding: 15 }
@@ -299,6 +345,7 @@ pub struct UserProfilePaneInfo {
     pub profile_and_room_id: UserProfileAndRoomId,
     pub room_name: String,
     pub room_member: Option<RoomMember>,
+    pub can_change_room_power_levels: bool,
 }
 impl Deref for UserProfilePaneInfo {
     type Target = UserProfileAndRoomId;
@@ -463,8 +510,46 @@ impl Widget for UserProfileSlidingPane {
         let Some(info) = self.info.as_ref() else { return };
 
         if let Event::Actions(actions) = event {
+            let power_level_dropdown = self.drop_down(cx, ids!(power_level_dropdown));
+            if power_level_dropdown.changed(actions).is_some()
+                && info.can_change_room_power_levels
+                && let Some(room_member) = info.room_member.as_ref()
+                && !room_member.is_account_user()
+            {
+                let selected_item = power_level_dropdown.selected_item();
+                let selected_role = match selected_item {
+                    0 => None,
+                    1 => Some(RoomMemberRole::Moderator),
+                    2 => Some(RoomMemberRole::Administrator),
+                    _ => None,
+                };
+                let current_selected_item = match room_member.suggested_role_for_power_level() {
+                    RoomMemberRole::Creator | RoomMemberRole::Administrator => 2,
+                    RoomMemberRole::Moderator => 1,
+                    RoomMemberRole::User => 0,
+                };
+                if selected_item != current_selected_item {
+                    submit_async_request(MatrixRequest::SetRoomMemberPowerLevel {
+                        room_id: info.room_id.clone(),
+                        user_id: info.user_id.clone(),
+                        room_member_role: selected_role,
+                    });
+                }
+            }
+
             if self.button(cx, ids!(direct_message_button)).clicked(actions) {
+                let create_encrypted = scope
+                    .data
+                    .get::<AppState>()
+                    .map(|app_state| {
+                        app_state.bot_settings.should_create_encrypted_dm(
+                            info.user_profile.user_id.as_ref(),
+                            current_user_id().as_deref(),
+                        )
+                    })
+                    .unwrap_or(true);
                 submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
+                    create_encrypted,
                     user_profile: info.user_profile.clone(),
                     // Don't just create a new DM room; we want to first get confirmation from the user.
                     allow_create: false,
@@ -554,6 +639,21 @@ impl Widget for UserProfileSlidingPane {
         let is_pane_showing_current_account = info.room_member.as_ref()
             .map(|rm| rm.is_account_user())
             .unwrap_or_else(|| current_user_id().is_some_and(|uid| uid == info.user_id));
+
+        let show_power_level_controls = info.can_change_room_power_levels
+            && !is_pane_showing_current_account
+            && info.room_member.is_some();
+        self.view(cx, ids!(power_level_controls)).set_visible(cx, show_power_level_controls);
+        if show_power_level_controls
+            && let Some(room_member) = info.room_member.as_ref()
+        {
+            let selected_item = match room_member.suggested_role_for_power_level() {
+                RoomMemberRole::Creator | RoomMemberRole::Administrator => 2,
+                RoomMemberRole::Moderator => 1,
+                RoomMemberRole::User => 0,
+            };
+            self.drop_down(cx, ids!(power_level_dropdown)).set_selected_item(cx, selected_item);
+        }
 
         self.button(cx, ids!(direct_message_button)).set_visible(cx, !is_pane_showing_current_account);
 

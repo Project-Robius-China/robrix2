@@ -1,8 +1,14 @@
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::cell::RefCell;
 
 use makepad_widgets::{text::selection::Cursor, *};
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use rfd::FileDialog;
+use matrix_sdk::ruma::OwnedUserId;
 
-use crate::{app::ConfirmDeleteAction, avatar_cache::{self}, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::user_profile::UserProfile, shared::{avatar::{AvatarState, AvatarWidgetExt}, confirmation_modal::ConfirmationModalContent, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{AccountDataAction, MatrixRequest, submit_async_request}, utils};
+use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{AccountDataAction, AccountSwitchAction, MatrixRequest, submit_async_request}, utils};
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use crate::{app::ConfirmDeleteAction, shared::confirmation_modal::ConfirmationModalContent};
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -14,191 +20,384 @@ script_mod! {
         width: Fill, height: Fit
         flow: Down
 
-        TitleLabel {
+        account_settings_title := TitleLabel {
             text: "Account Settings"
         }
 
-        SubsectionLabel {
-            text: "Your Avatar:"
-        }
-
-        View {
+        // --- Avatar card ---
+        RoundedView {
             width: Fill, height: Fit
-            // TODO: I'd like to use RightWrap here, but Makepad doesn't yet
-            //       support RightWrap with align: Align{y: 0.5}.
-            flow: Right,
-            align: Align{y: 0.5}
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
+            }
 
-            our_own_avatar := Avatar {
-                width: 100,
-                height: 100,
-                margin: 10,
-                text_view +: {
-                    text +: {
-                        draw_text +: {
-                            text_style: theme.font_regular { font_size: 35.0 }
+            avatar_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Your Avatar:"
+            }
+
+            View {
+                width: Fill, height: Fit
+                // TODO: I'd like to use RightWrap here, but Makepad doesn't yet
+                //       support RightWrap with align: Align{y: 0.5}.
+                flow: Right,
+                align: Align{y: 0.5}
+
+                our_own_avatar := Avatar {
+                    width: 100,
+                    height: 100,
+                    margin: (SPACE_SM),
+                    text_view +: {
+                        text +: {
+                            draw_text +: {
+                                text_style: theme.font_regular { font_size: 35.0 }
+                            }
+                        }
+                    }
+                }
+
+                View {
+                    width: Fit, height: Fit
+                    flow: Down,
+                    align: Align{y: 0.5}
+                    padding: Inset{ left: (SPACE_SM), right: (SPACE_SM) }
+                    spacing: (SPACE_SM)
+
+                    View {
+                        width: Fit, height: Fit
+                        flow: Right,
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_SM)
+
+                        upload_avatar_button := RobrixIconButton {
+                            width: 140,
+                            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                            margin: 0,
+                            draw_bg +: { border_radius: (RADIUS_MD) }
+                            draw_icon.svg: (ICON_UPLOAD)
+                            icon_walk: Walk{width: 16, height: 16}
+                            text: "Upload Avatar"
+                        }
+
+                        upload_avatar_spinner := LoadingSpinner {
+                            width: 16, height: 16
+                            visible: false
+                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                        }
+                    }
+
+                    View {
+                        width: Fit, height: Fit
+                        flow: Right,
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_SM)
+
+                        delete_avatar_button := RobrixNegativeIconButton {
+                            width: 140,
+                            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                            margin: 0,
+                            draw_bg +: { border_radius: (RADIUS_MD) }
+                            draw_icon.svg: (ICON_TRASH)
+                            icon_walk: Walk{ width: 16, height: 16 }
+                            text: "Delete Avatar"
+                        }
+
+                        delete_avatar_spinner := LoadingSpinner {
+                            width: 16, height: 16
+                            visible: false
+                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
                         }
                     }
                 }
             }
+        }
+
+        // --- Display Name card ---
+        RoundedView {
+            width: Fill, height: Fit
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
+            }
+
+            display_name_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Your Display Name:"
+            }
+
+            display_name_input := RobrixTextInput {
+                margin: Inset{top: 3, left: (SPACE_XS), right: (SPACE_XS), bottom: (SPACE_SM)},
+                width: 216, height: Fit
+                empty_text: "Add a display name..."
+            }
 
             View {
-                width: Fit, height: Fit
-                flow: Down,
-                align: Align{y: 0.5}
-                padding: Inset{ left: 10, right: 10 }
-                spacing: 10
-
-                View {
-                    width: Fit, height: Fit
-                    flow: Right,
-                    align: Align{y: 0.5}
-                    spacing: 10
-
-                    upload_avatar_button := RobrixIconButton {
-                        width: 140,
-                        padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                        margin: 0,
-                        draw_icon.svg: (ICON_UPLOAD)
-                        icon_walk: Walk{width: 16, height: 16}
-                        text: "Upload Avatar"
-                    }
-
-                    upload_avatar_spinner := LoadingSpinner {
-                        width: 16, height: 16
-                        visible: false
-                        draw_bg.color: (COLOR_ACTIVE_PRIMARY)
-                    }
-                }
-
-                View {
-                    width: Fit, height: Fit
-                    flow: Right,
-                    align: Align{y: 0.5}
-                    spacing: 10
-
-                    delete_avatar_button := RobrixNegativeIconButton {
-                        width: 140,
-                        padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                        margin: 0,
-                        draw_icon.svg: (ICON_TRASH)
-                        icon_walk: Walk{ width: 16, height: 16 }
-                        text: "Delete Avatar"
-                    }
-
-                    delete_avatar_spinner := LoadingSpinner {
-                        width: 16, height: 16
-                        visible: false
-                        draw_bg.color: (COLOR_ACTIVE_PRIMARY)
-                    }
-                }
-            }
-        }
-
-        SubsectionLabel {
-            text: "Your Display Name:"
-        }
-
-        display_name_input := RobrixTextInput {
-            margin: Inset{top: 3, left: 5, right: 5, bottom: 8},
-            width: 216, height: Fit
-            empty_text: "Add a display name..."
-        }
-
-        View {
-            width: Fill, height: Fit
-            flow: Flow.Right{wrap: true},
-            align: Align{y: 0.5},
-            spacing: 10
-
-            // These buttons are disabled by default, and enabled when the user
-            // changes the `display_name_input` text.
-            // These buttons start disabled; Rust code enables them and swaps
-            // their styles to RobrixNeutralIconButton / RobrixPositiveIconButton.
-            cancel_display_name_button := RobrixNeutralIconButton {
-                enabled: false,
-                width: Fit, height: Fit,
-                padding: 10,
-                margin: Inset{left: 5},
-                draw_icon.svg: (ICON_FORBIDDEN)
-                icon_walk: Walk{width: 16, height: 16, margin: 0}
-                text: "Cancel"
-            }
-
-            accept_display_name_button := RobrixPositiveIconButton {
-                enabled: false,
-                width: Fit, height: Fit,
-                padding: 10,
-                margin: Inset{left: 5},
-                draw_bg.border_radius: 5.0
-                draw_icon.svg: (ICON_CHECKMARK)
-                icon_walk: Walk{width: 16, height: 16, margin: 0}
-                text: "Save Name"
-            }
-
-            save_name_spinner := LoadingSpinner {
-                width: 16, height: 16
-                margin: Inset{left: 5, top: 13} // vertically center with buttons
-                visible: false
-                draw_bg.color: (COLOR_ACTIVE_PRIMARY)
-            }
-        }
-
-        SubsectionLabel {
-            text: "Your User ID:"
-        }
-
-        View {
-            width: Fill, height: Fit
-            flow: Right,
-            spacing: 10
-
-            copy_user_id_button := RobrixNeutralIconButton {
-                enable_long_press: true,
-                margin: Inset{left: 5}
-                padding: 12,
-                spacing: 0,
-                draw_icon.svg: (ICON_COPY)
-                icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
-            }
-
-            user_id := Label {
                 width: Fill, height: Fit
                 flow: Flow.Right{wrap: true},
-                margin: Inset{top: 10}
+                align: Align{y: 0.5},
+                spacing: (SPACE_SM)
+
+                // These buttons are disabled by default, and enabled when the user
+                // changes the `display_name_input` text.
+                // These buttons start disabled; Rust code enables them and swaps
+                // their styles to RobrixNeutralIconButton / RobrixPositiveIconButton.
+                cancel_display_name_button := RobrixNeutralIconButton {
+                    enabled: false,
+                    width: Fit, height: Fit,
+                    padding: (SPACE_SM),
+                    margin: Inset{left: (SPACE_XS)},
+                    draw_icon.svg: (ICON_FORBIDDEN)
+                    icon_walk: Walk{width: 16, height: 16, margin: 0}
+                    text: "Cancel"
+                }
+
+                accept_display_name_button := RobrixPositiveIconButton {
+                    enabled: false,
+                    width: Fit, height: Fit,
+                    padding: (SPACE_SM),
+                    margin: Inset{left: (SPACE_XS)},
+                    draw_bg.border_radius: (RADIUS_MD)
+                    draw_icon.svg: (ICON_CHECKMARK)
+                    icon_walk: Walk{width: 16, height: 16, margin: 0}
+                    text: "Save Name"
+                }
+
+                save_name_spinner := LoadingSpinner {
+                    width: 16, height: 16
+                    margin: Inset{left: (SPACE_XS), top: 13} // vertically center with buttons
+                    visible: false
+                    draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                }
+            }
+        }
+
+        // --- User ID card ---
+        RoundedView {
+            width: Fill, height: Fit
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
+            }
+
+            user_id_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Your User ID:"
+            }
+
+            View {
+                width: Fill, height: Fit
+                flow: Right,
+                align: Align{y: 0.5}
+                spacing: (SPACE_SM)
+
+                copy_user_id_button := RobrixNeutralIconButton {
+                    enable_long_press: true,
+                    padding: (SPACE_MD),
+                    spacing: 0,
+                    draw_icon.svg: (ICON_COPY)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
+                }
+
+                user_id := Label {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true},
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                    }
+                    text: "You are not logged in."
+                }
+            }
+        }
+
+        // --- Multiple Accounts card ---
+        RoundedView {
+            width: Fill, height: Fit
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
+            }
+
+            multiple_accounts_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Multiple Accounts:"
+            }
+
+            View {
+                width: Fill, height: Fit
+                flow: Down,
+                spacing: (SPACE_SM),
+
+            // Account entries will be shown here
+            // Active account (current)
+            active_account_view := RoundedView {
+                width: Fill, height: Fit
+                flow: Right,
+                align: Align{y: 0.5}
+                padding: Inset{left: (SPACE_MD), right: (SPACE_LG), top: (SPACE_SM), bottom: (SPACE_SM)}
+                spacing: (SPACE_SM)
+                show_bg: true
+                draw_bg +: {
+                    color: (COLOR_ACCOUNT_ACTIVE_BG)
+                    border_radius: (RADIUS_LG)
+                }
+
+                View {
+                    width: Fill, height: Fit
+                    flow: Down,
+                    spacing: 2
+
+                    active_account_label := Label {
+                        width: Fill, height: Fit
+                        draw_text +: {
+                            color: (COLOR_PRIMARY),
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                        }
+                        text: "@user:server"
+                    }
+
+                    active_account_status_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (COLOR_PRIMARY),
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 9 },
+                        }
+                        text: "Active"
+                    }
+                }
+            }
+
+            // Other accounts section (populated dynamically)
+            other_accounts_label := Label {
+                width: Fill, height: Fit
+                margin: Inset{top: (SPACE_XS), left: (SPACE_XS)}
+                visible: false
                 draw_text +: {
                     color: (MESSAGE_TEXT_COLOR),
-                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 10 },
                 }
-                text: "You are not logged in."
+                text: "Other accounts:"
             }
-        }
 
-        SubsectionLabel {
-            text: "Other actions:"
-        }
+            // Container for other account entries (simplified: show one other account)
+            other_account_entry := RoundedView {
+                width: Fill, height: Fit
+                flow: Right,
+                align: Align{y: 0.5}
+                padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
+                spacing: (SPACE_SM)
+                visible: false
+                show_bg: true
+                draw_bg +: {
+                    color: (COLOR_SECONDARY)
+                    border_radius: (RADIUS_LG)
+                    border_size: 1.0
+                    border_color: (COLOR_INACTIVE_BORDER)
+                }
 
-        View {
-            // margin: Inset{top: 20},
-            width: Fill, height: Fit
-            flow: Flow.Right{wrap: true},
-            align: Align{y: 0.5},
-            spacing: 10
+                View {
+                    width: Fill, height: Fit
+                    flow: Down,
+                    spacing: 2
 
-            manage_account_button := RobrixIconButton {
-                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                margin: Inset{left: 5}
-                draw_icon.svg: (ICON_EXTERNAL_LINK)
+                    other_account_label := Label {
+                        width: Fill, height: Fit
+                        draw_text +: {
+                            color: (COLOR_TEXT),
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                        }
+                        text: "@other:server"
+                    }
+                }
+
+                switch_account_button := RobrixIconButton {
+                    width: Fit, height: Fit
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM), right: (SPACE_SM)}
+                    draw_icon.svg: (ICON_JUMP)
+                    icon_walk: Walk{width: 14, height: 14}
+                    text: "Switch"
+                }
+            }
+
+            account_count_label := Label {
+                width: Fill, height: Fit
+                margin: Inset{top: (SPACE_XS), bottom: (SPACE_XS), left: (SPACE_XS)}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR),
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 10 },
+                }
+                text: "1 account logged in"
+            }
+
+            add_account_button := RobrixIconButton {
+                width: Fit,
+                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                margin: Inset{top: (SPACE_XS)}
+                draw_bg +: { border_radius: (RADIUS_MD) }
+                draw_icon.svg: (ICON_ADD)
                 icon_walk: Walk{width: 16, height: 16}
-                text: "Manage Account"
+                text: "Add Another Account"
+            }
+            }
+        } // end Multiple Accounts card
+
+        // --- Other actions card ---
+        RoundedView {
+            width: Fill, height: Fit
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM), bottom: (SPACE_LG)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
             }
 
-            logout_button := RobrixNegativeIconButton {
-                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
-                margin: Inset{left: 5}
-                draw_icon.svg: (ICON_LOGOUT)
-                icon_walk: Walk{ width: 16, height: 16, margin: Inset{right: -2} }
-                text: "Log out"
+            other_actions_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Other actions:"
+            }
+
+            View {
+                width: Fill, height: Fit
+                flow: Flow.Right{wrap: true},
+                align: Align{y: 0.5},
+                spacing: (SPACE_SM)
+
+                manage_account_button := RobrixIconButton {
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_icon.svg: (ICON_EXTERNAL_LINK)
+                    icon_walk: Walk{width: 16, height: 16}
+                    text: "Manage Account"
+                }
+
+                logout_button := RobrixNegativeIconButton {
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_icon.svg: (ICON_LOGOUT)
+                    icon_walk: Walk{ width: 16, height: 16, margin: Inset{right: -2} }
+                    text: "Log out"
+                }
             }
         }
     }
@@ -210,10 +409,19 @@ pub struct AccountSettings {
     #[deref] view: View,
 
     #[rust] own_profile: Option<UserProfile>,
+    #[rust] app_language: AppLanguage,
+    /// List of other account user IDs (not the currently active one)
+    #[rust] other_accounts: Vec<OwnedUserId>,
 }
 
 impl Widget for AccountSettings {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
         self.match_event(cx, event);
 
         let copy_user_id_button = self.view.button(cx, ids!(copy_user_id_button));
@@ -223,7 +431,7 @@ impl Widget for AccountSettings {
                 cx.widget_action(
                     copy_user_id_button.widget_uid(), 
                     TooltipAction::HoverIn {
-                        text: "Copy User ID".to_string(),
+                        text: tr_key(self.app_language, "settings.account.tooltip.copy_user_id").to_string(),
                         widget_rect: copy_user_id_button_area.rect(cx),
                         options: CalloutTooltipOptions {
                             position: TooltipPosition::Top,
@@ -245,19 +453,45 @@ impl Widget for AccountSettings {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
         self.view.draw_walk(cx, scope, walk)
     }
 }
 
 impl MatchEvent for AccountSettings {
     fn handle_signal(&mut self, cx: &mut Cx) {
+        // If we don't have a profile yet, try to get it
         if self.own_profile.is_none() {
+            user_profile_cache::process_user_profile_updates(cx);
+            if let Some(new_profile) = get_own_profile(cx) {
+                self.own_profile = Some(new_profile.clone());
+                self.view.label(cx, ids!(user_id))
+                    .set_text(cx, new_profile.user_id.as_str());
+                self.view.text_input(cx, ids!(display_name_input))
+                    .set_text(cx, new_profile.username.as_deref().unwrap_or_default());
+                self.populate_avatar_views(cx);
+                self.populate_account_list(cx);
+                self.view.redraw(cx);
+            }
             return;
         }
+        // Process avatar updates from the cache
         avatar_cache::process_avatar_updates(cx);
 
+        // Update avatar from cache if we have a profile
         if let Some(profile) = self.own_profile.as_mut() {
-            profile.avatar_state.update_from_cache(cx);
+            if profile.avatar_state.uri().is_some() {
+                let new_data = profile.avatar_state.update_from_cache(cx);
+                if new_data.is_some() {
+                    self.populate_avatar_views(cx);
+                    self.view.redraw(cx);
+                }
+            }
         }
     }
 
@@ -272,7 +506,11 @@ impl MatchEvent for AccountSettings {
             // Handle LogoutAction::InProgress to update button state
             if let Some(LogoutAction::InProgress(is_in_progress)) = action.downcast_ref() {
                 let logout_button = self.view.button(cx, ids!(logout_button));
-                logout_button.set_text(cx, if *is_in_progress { "Logging out..." } else { "Log out" });
+                logout_button.set_text(cx, if *is_in_progress {
+                    tr_key(self.app_language, "settings.account.button.logging_out")
+                } else {
+                    tr_key(self.app_language, "settings.account.button.log_out")
+                });
                 logout_button.set_enabled(cx, !*is_in_progress);
                 logout_button.reset_hover(cx);
                 continue;
@@ -291,7 +529,11 @@ impl MatchEvent for AccountSettings {
                         profile.avatar_state.update_from_cache(cx);
                         self.populate_avatar_views(cx);
                         enqueue_popup_notification(
-                            format!("Successfully {} avatar.", if new_avatar_url.is_some() { "updated" } else { "deleted" }),
+                            if new_avatar_url.is_some() {
+                                tr_key(self.app_language, "settings.account.popup.avatar_updated")
+                            } else {
+                                tr_key(self.app_language, "settings.account.popup.avatar_deleted")
+                            },
                             PopupKind::Success,
                             Some(4.0),
                         );
@@ -329,7 +571,11 @@ impl MatchEvent for AccountSettings {
                     display_name_input.set_disabled(cx, false);
                     Self::enable_display_name_buttons(cx, false, &accept_display_name_button, &cancel_display_name_button);
                     enqueue_popup_notification(
-                        format!("Successfully {} display name.", if new_name.is_some() { "updated" } else { "removed" }),
+                        if new_name.is_some() {
+                            tr_key(self.app_language, "settings.account.popup.display_name_updated")
+                        } else {
+                            tr_key(self.app_language, "settings.account.popup.display_name_removed")
+                        },
                         PopupKind::Success,
                         Some(4.0),
                     );
@@ -368,32 +614,55 @@ impl MatchEvent for AccountSettings {
             }
         }
 
+        if self.view.button(cx, ids!(logout_button)).clicked(actions) {
+            cx.action(LogoutConfirmModalAction::Open);
+            return;
+        }
+
         let Some(own_profile) = &self.own_profile else { return };
 
         if upload_avatar_button.clicked(actions) {
-            // TODO: uncomment the below once avatar uploading is implemented
-            // Self::enable_upload_avatar_button(cx, false, &upload_avatar_button);
-            // Self::enable_delete_avatar_button(cx, false, &delete_avatar_button);
-            enqueue_popup_notification(
-                "Avatar uploading is not yet implemented.",
-                PopupKind::Warning,
-                Some(4.0),
-            );
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            {
+                if let Some(avatar_path) = FileDialog::new()
+                    .add_filter("Image", &["png", "jpg", "jpeg"])
+                    .pick_file()
+                {
+                    submit_async_request(MatrixRequest::UploadAvatar { avatar_path });
+                    cx.action(AccountSettingsAction::AvatarUploadStarted);
+                    enqueue_popup_notification(
+                        tr_key(self.app_language, "settings.account.popup.uploading_avatar"),
+                        PopupKind::Info,
+                        Some(5.0),
+                    );
+                }
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+            {
+                enqueue_popup_notification(
+                    tr_key(self.app_language, "settings.account.popup.avatar_upload_not_implemented"),
+                    PopupKind::Warning,
+                    Some(4.0),
+                );
+            }
         }
 
         if delete_avatar_button.clicked(actions) {
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            {
             // Don't immediately disable the buttons. Instead, we wait for the user
             // to confirm the action in the confirmation modal,
             // and then we disable the buttons in the AvatarDeleteStarted action handler.
+            let app_language = self.app_language;
             let content = ConfirmationModalContent {
-                title_text: "Delete Avatar".into(),
-                body_text: "Are you sure you want to delete your avatar?".into(),
-                accept_button_text: Some("Delete".into()),
-                on_accept_clicked: Some(Box::new(|cx| {
+                title_text: tr_key(app_language, "settings.account.modal.delete_avatar.title").into(),
+                body_text: tr_key(app_language, "settings.account.modal.delete_avatar.body").into(),
+                accept_button_text: Some(tr_key(app_language, "settings.account.modal.delete_avatar.accept").into()),
+                on_accept_clicked: Some(Box::new(move |cx| {
                     submit_async_request(MatrixRequest::SetAvatar { avatar_url: None });
                     cx.action(AccountSettingsAction::AvatarDeleteStarted);
                     enqueue_popup_notification(
-                        "Deleting your avatar...",
+                        tr_key(app_language, "settings.account.popup.deleting_avatar"),
                         PopupKind::Info,
                         Some(5.0),
                     );
@@ -401,6 +670,15 @@ impl MatchEvent for AccountSettings {
                 ..Default::default()
             };
             cx.action(ConfirmDeleteAction::Show(RefCell::new(Some(content))));
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+            {
+                enqueue_popup_notification(
+                    "Deleting avatar is not yet supported on this platform.",
+                    PopupKind::Warning,
+                    Some(4.0),
+                );
+            }
         }
 
         // Enable the name change buttons if the user modified the display name to be different.
@@ -431,7 +709,7 @@ impl MatchEvent for AccountSettings {
             display_name_input.set_is_read_only(cx, true);
             Self::enable_display_name_buttons(cx, false, &accept_display_name_button, &cancel_display_name_button);
             enqueue_popup_notification(
-                "Uploading new display name...",
+                tr_key(self.app_language, "settings.account.popup.uploading_display_name"),
                 PopupKind::Info,
                 Some(5.0),
             );
@@ -440,7 +718,7 @@ impl MatchEvent for AccountSettings {
         if self.view.button(cx, ids!(copy_user_id_button)).clicked(actions) {
             cx.copy_to_clipboard(own_profile.user_id.as_str());
             enqueue_popup_notification(
-                "Copied your User ID to the clipboard.",
+                tr_key(self.app_language, "settings.account.popup.copied_user_id"),
                 PopupKind::Success,
                 Some(3.0),
             );
@@ -450,7 +728,7 @@ impl MatchEvent for AccountSettings {
             // TODO: support opening the user's account management page in a browser,
             //       or perhaps in an in-app pane if that's what is needed for regular UN+PW login.
             enqueue_popup_notification(
-                "Account management is not yet implemented.",
+                tr_key(self.app_language, "settings.account.popup.account_management_not_implemented"),
                 PopupKind::Warning,
                 Some(4.0),
             );
@@ -459,10 +737,139 @@ impl MatchEvent for AccountSettings {
         if self.view.button(cx, ids!(logout_button)).clicked(actions) {
             cx.action(LogoutConfirmModalAction::Open);
         }
+
+        // Handle "Switch Account" button click
+        if self.view.button(cx, ids!(switch_account_button)).clicked(actions) {
+            // Switch to the first other account
+            if let Some(other_id) = self.other_accounts.first().cloned() {
+                log!("Switching to account: {}", other_id);
+                submit_async_request(MatrixRequest::SwitchAccount { user_id: other_id });
+            }
+        }
+
+        // Handle "Add Account" button click
+        if self.view.button(cx, ids!(add_account_button)).clicked(actions) {
+            // Navigate to login screen in "add account" mode
+            cx.action(LoginAction::ShowAddAccountScreen);
+        }
+
+        // Handle account switch result and new account added
+        for action in actions {
+            if let Some(AccountSwitchAction::Switched(new_user_id)) = action.downcast_ref() {
+                log!("Account switched to: {}, refreshing profile and account list", new_user_id);
+                // Refresh the profile with new account's data
+                if let Some(new_profile) = get_own_profile(cx) {
+                    self.own_profile = Some(new_profile.clone());
+                    // Update the UI with new profile
+                    self.view.label(cx, ids!(user_id))
+                        .set_text(cx, new_profile.user_id.as_str());
+                    self.view.text_input(cx, ids!(display_name_input))
+                        .set_text(cx, new_profile.username.as_deref().unwrap_or_default());
+                    self.populate_avatar_views(cx);
+                } else {
+                    // Profile not yet available, at least update the user_id label
+                    self.view.label(cx, ids!(user_id))
+                        .set_text(cx, new_user_id.as_str());
+                    self.view.text_input(cx, ids!(display_name_input))
+                        .set_text(cx, "");
+                    // Clear the old avatar
+                    self.own_profile = None;
+                }
+                // Refresh the account list to show new active account
+                self.populate_account_list(cx);
+                self.view.redraw(cx);
+            }
+            // Refresh account list when a new account is added
+            if let Some(LoginAction::AddAccountSuccess) = action.downcast_ref() {
+                log!("New account added, refreshing account list");
+                self.populate_account_list(cx);
+                self.view.redraw(cx);
+            }
+            // Refresh profile and account list after login success
+            if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
+                log!("Login success, refreshing profile and account list");
+                if let Some(new_profile) = get_own_profile(cx) {
+                    self.own_profile = Some(new_profile.clone());
+                    self.view.label(cx, ids!(user_id))
+                        .set_text(cx, new_profile.user_id.as_str());
+                    self.view.text_input(cx, ids!(display_name_input))
+                        .set_text(cx, new_profile.username.as_deref().unwrap_or_default());
+                    self.populate_avatar_views(cx);
+                }
+                self.populate_account_list(cx);
+                self.view.redraw(cx);
+            }
+        }
     }
 }
 
 impl AccountSettings {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.sync_app_language(cx);
+    }
+
+    fn sync_app_language(&mut self, cx: &mut Cx) {
+        self.view
+            .label(cx, ids!(account_settings_title))
+            .set_text(cx, tr_key(self.app_language, "settings.account.title"));
+        self.view
+            .label(cx, ids!(avatar_section_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.section.your_avatar"));
+        self.view
+            .button(cx, ids!(upload_avatar_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.upload_avatar"));
+        self.view
+            .button(cx, ids!(delete_avatar_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.delete_avatar"));
+        self.view
+            .label(cx, ids!(display_name_section_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.section.your_display_name"));
+        self.view
+            .text_input(cx, ids!(display_name_input))
+            .set_empty_text(cx, tr_key(self.app_language, "settings.account.display_name.placeholder").to_string());
+        self.view
+            .button(cx, ids!(cancel_display_name_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.cancel"));
+        self.view
+            .button(cx, ids!(accept_display_name_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.save_name"));
+        self.view
+            .label(cx, ids!(user_id_section_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.section.your_user_id"));
+        if self.own_profile.is_none() {
+            self.view
+                .label(cx, ids!(user_id))
+                .set_text(cx, tr_key(self.app_language, "settings.account.user_id.not_logged_in"));
+        }
+        self.view
+            .label(cx, ids!(multiple_accounts_section_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.section.multiple_accounts"));
+        self.view
+            .label(cx, ids!(active_account_status_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.active_status"));
+        self.view
+            .label(cx, ids!(other_accounts_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.other_accounts"));
+        self.view
+            .button(cx, ids!(switch_account_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.switch"));
+        self.view
+            .button(cx, ids!(add_account_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.add_another_account"));
+        self.view
+            .label(cx, ids!(other_actions_section_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.section.other_actions"));
+        self.view
+            .button(cx, ids!(manage_account_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.manage_account"));
+        self.view
+            .button(cx, ids!(logout_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.log_out"));
+        self.populate_account_list(cx);
+        self.view.redraw(cx);
+    }
+
     /// Populate avatar-related views with the user's profile data.
     ///
     /// This does nothing if `self.own_profile` is `None`.
@@ -517,6 +924,7 @@ impl AccountSettings {
 
         self.own_profile = Some(own_profile);
         self.populate_avatar_views(cx);
+        self.sync_app_language(cx);
 
         self.view.button(cx, ids!(upload_avatar_button)).reset_hover(cx);
         self.view.button(cx, ids!(delete_avatar_button)).reset_hover(cx);
@@ -526,6 +934,54 @@ impl AccountSettings {
         self.view.button(cx, ids!(manage_account_button)).reset_hover(cx);
         self.view.button(cx, ids!(logout_button)).reset_hover(cx);
         self.view.redraw(cx);
+    }
+
+    /// Populate the account list with logged-in accounts from the AccountManager.
+    fn populate_account_list(&mut self, cx: &mut Cx) {
+        let count = account_manager::account_count();
+        let label_text = if count == 0 {
+            tr_key(self.app_language, "settings.account.account_count.none").to_string()
+        } else if count == 1 {
+            tr_key(self.app_language, "settings.account.account_count.one").to_string()
+        } else {
+            tr_fmt(
+                self.app_language,
+                "settings.account.account_count.many",
+                &[("count", &count.to_string())],
+            )
+        };
+        self.view.label(cx, ids!(account_count_label)).set_text(cx, &label_text);
+
+        // Get the active account
+        let active_user_id = account_manager::get_active_user_id();
+
+        // Show/hide active account view based on whether there's an active account
+        let has_active = active_user_id.is_some();
+        self.view.view(cx, ids!(active_account_view)).set_visible(cx, has_active);
+
+        // Show the active account
+        if let Some(ref active_id) = active_user_id {
+            self.view.label(cx, ids!(active_account_label))
+                .set_text(cx, active_id.as_str());
+        }
+
+        // Get other accounts (excluding active)
+        let all_accounts = account_manager::get_all_user_ids();
+        self.other_accounts = all_accounts
+            .into_iter()
+            .filter(|id| Some(id) != active_user_id.as_ref())
+            .collect();
+
+        // Show "Other accounts" label and entry only if there are other accounts
+        let has_other_accounts = !self.other_accounts.is_empty();
+        self.view.label(cx, ids!(other_accounts_label)).set_visible(cx, has_other_accounts);
+        self.view.view(cx, ids!(other_account_entry)).set_visible(cx, has_other_accounts);
+
+        // If there's at least one other account, show it
+        if let Some(other_id) = self.other_accounts.first() {
+            self.view.label(cx, ids!(other_account_label))
+                .set_text(cx, other_id.as_str());
+        }
     }
 
     /// Enable or disable the delete avatar button.
@@ -636,6 +1092,11 @@ impl AccountSettingsRef {
     pub fn populate(&self, cx: &mut Cx, own_profile: UserProfile) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.populate(cx, own_profile);
+    }
+
+    pub fn set_app_language(&self, cx: &mut Cx, app_language: AppLanguage) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_app_language(cx, app_language);
     }
 }
 

@@ -423,8 +423,8 @@ pub fn stringify_pagination_error(
             return format!("Failed to load earlier messages in \"{room_name}\": \
                 pagination is not supported in this timeline focus mode.");
         }
-        TimelineError::PaginationError(PaginationError::Paginator(PaginatorError::SdkError(sdk_error)))
-        | TimelineError::EventCacheError(EventCacheError::BackpaginationError(sdk_error)) =>
+        TimelineError::PaginationError(PaginationError::Pagination(PaginatorError::SdkError(sdk_error)))
+        | TimelineError::EventCacheError(EventCacheError::PaginationError(sdk_error)) =>
         {
             if let Some(message) = match_sdk_error(sdk_error) {
                 return message; 
@@ -695,17 +695,20 @@ pub fn ends_with_href(text: &str) -> bool {
     // Search backwards for a single quote, double quote, or an equals sign.
     match substr.as_bytes().last() {
         Some(b'\'' | b'"') => {
-            if substr
+            let Some(before_quote) = substr
                 .get(.. substr.len().saturating_sub(1))
-                .map(|s| {
-                    substr = s.trim_end();
-                    substr.as_bytes().last() == Some(&b'=')
-                })
-                .unwrap_or(false)
-            {
-                substr = &substr[..substr.len().saturating_sub(1)];
-            } else {
+                .map(str::trim_end)
+            else {
                 return false;
+            };
+
+            match before_quote.as_bytes().last() {
+                Some(b'=') => {
+                    substr = &before_quote[..before_quote.len().saturating_sub(1)];
+                }
+                _ => {
+                    return false;
+                }
             }
         }
         Some(b'=') => {
@@ -1004,6 +1007,25 @@ impl From<(&RoomDisplayName, &OwnedRoomId)> for RoomNameId {
 impl From<(Option<RoomDisplayName>, OwnedRoomId)> for RoomNameId {
     fn from((display_name, room_id): (Option<RoomDisplayName>, OwnedRoomId)) -> Self {
         Self::new(display_name.unwrap_or(RoomDisplayName::Empty), room_id)
+    }
+}
+
+/// Formats a file size in bytes to a human-readable string.
+///
+/// Examples: "1.5 KB", "2.3 MB", "4.0 GB"
+pub fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
     }
 }
 

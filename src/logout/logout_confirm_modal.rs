@@ -15,7 +15,7 @@ script_mod! {
         width: Fit,
         height: Fit,
 
-        RoundedView {
+        modal_card := RoundedView {
             width: 400,
             height: Fit,
             flow: Down,
@@ -86,6 +86,7 @@ script_mod! {
 #[derive(Script, ScriptHook, Widget)]
 pub struct LogoutConfirmModal {
     #[deref] view: View,
+    #[rust] modal_width: f64,
     /// Whether the modal is in a final state, meaning the user can only click "Okay" to close it.
     ///
     /// * Set to `Some(true)` after a successful logout Action
@@ -168,6 +169,7 @@ pub enum ClearedComponentType {
 
 impl Widget for LogoutConfirmModal {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.sync_modal_layout(cx);
         self.view.handle_event(cx, event, scope);
         self.widget_match_event(cx, event, scope);
     }
@@ -293,6 +295,23 @@ impl WidgetMatchEvent for LogoutConfirmModal {
 }
 
 impl LogoutConfirmModal {
+    fn sync_modal_layout(&mut self, cx: &mut Cx) {
+        let rect = self.view.area().rect(cx);
+        if rect.size.x <= 1.0 {
+            return;
+        }
+        let available_width = (rect.size.x - 28.0).max(280.0);
+        let modal_width = available_width.min(400.0);
+        if (self.modal_width - modal_width).abs() <= 0.5 {
+            return;
+        }
+        self.modal_width = modal_width;
+        let mut modal_card = self.view.view(cx, ids!(modal_card));
+        script_apply_eval!(cx, modal_card, {
+            width: #(modal_width)
+        });
+    }
+
     /// Sets the message text displayed in the body of the modal.
     pub fn set_message(&mut self, cx: &mut Cx, message: &str) {
         self.label(cx, ids!(message)).set_text(cx, message);

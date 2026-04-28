@@ -6,9 +6,9 @@ use makepad_widgets::*;
 use matrix_sdk::ruma::OwnedEventId;
 use matrix_sdk_ui::timeline::{EventTimelineItem, MsgLikeContent, TimelineEventItemId};
 
-use crate::sliding_sync::UserPowerLevels;
+use crate::{i18n::{AppLanguage, tr_key}, sliding_sync::UserPowerLevels};
 
-use super::room_screen::MessageAction;
+use super::{ContextMenuOpenGesture, consume_context_menu_opening_finger_up, room_screen::MessageAction};
 
 const BUTTON_HEIGHT: f64 = 35.0; // KEEP IN SYNC WITH BUTTON_HEIGHT BELOW
 const MENU_WIDTH: f64 = 215.0;   // KEEP IN SYNC WITH MENU_WIDTH BELOW
@@ -300,6 +300,8 @@ pub struct NewMessageContextMenu {
     #[deref] view: View,
     #[source] source: ScriptObjectRef,
     #[rust] details: Option<MessageDetails>,
+    #[rust] app_language: AppLanguage,
+    #[rust] pending_open_gesture: Option<ContextMenuOpenGesture>,
 }
 
 impl Widget for NewMessageContextMenu {
@@ -336,9 +338,15 @@ impl Widget for NewMessageContextMenu {
                     false
                 }
                 Hit::FingerUp(fue) if fue.is_over => {
-                    !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    if consume_context_menu_opening_finger_up(&mut self.pending_open_gesture, &fue) {
+                        false
+                    } else {
+                        !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    }
                 }
-                Hit::FingerScroll(_) => true,
+                // Ignore zero-scroll events: macOS trackpad generates FingerScroll(0,0)
+                // on two-finger press (right-click), which would incorrectly dismiss the menu.
+                Hit::FingerScroll(fse) => fse.scroll.x != 0.0 || fse.scroll.y != 0.0,
                 _ => false,
             }
         };
@@ -485,6 +493,30 @@ impl WidgetMatchEvent for NewMessageContextMenu {
 }
 
 impl NewMessageContextMenu {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.view.button(cx, ids!(react_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.add_reaction"));
+        self.view.text_input(cx, ids!(reaction_input_view.reaction_text_input))
+            .set_empty_text(cx, tr_key(self.app_language, "new_message_context_menu.input.reaction_placeholder").to_string());
+        self.view.button(cx, ids!(reply_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.reply"));
+        self.view.button(cx, ids!(edit_message_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.edit_message"));
+        self.view.button(cx, ids!(copy_text_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_text"));
+        self.view.button(cx, ids!(copy_html_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_text_html"));
+        self.view.button(cx, ids!(copy_link_to_message_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_link"));
+        self.view.button(cx, ids!(view_source_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.view_source"));
+        self.view.button(cx, ids!(jump_to_related_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.jump_related"));
+        self.view.button(cx, ids!(delete_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.delete"));
+    }
+
     /// Returns `true` if this menu is currently being shown.
     pub fn is_currently_shown(&self, _cx: &mut Cx) -> bool {
         self.visible
@@ -494,8 +526,10 @@ impl NewMessageContextMenu {
     ///
     /// Returns the expected (approximate) dimensions of the context menu,
     /// which can be used to proactively reposition it such that it fits on screen.
-    pub fn show(&mut self, cx: &mut Cx, details: MessageDetails) -> DVec2 {
+    pub fn show(&mut self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage, opening_gesture: ContextMenuOpenGesture) -> DVec2 {
+        self.set_app_language(cx, app_language);
         self.details = Some(details);
+        self.pending_open_gesture = Some(opening_gesture);
         self.visible = true;
         cx.set_key_focus(self.view.area());
 
@@ -550,15 +584,15 @@ impl NewMessageContextMenu {
         self.view.view(cx, ids!(divider_after_react_reply)).set_visible(cx, show_divider_after_react_reply);
         edit_button.set_visible(cx, show_edit);
         if details.thread_root_event_id.is_some() {
-            thread_button.set_text(cx, "Open Thread");
+            thread_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.open_thread"));
         } else {
-            thread_button.set_text(cx, "Reply in Thread");
+            thread_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.reply_in_thread"));
         }
         if details.abilities.contains(MessageAbilities::CanPin) {
-            pin_button.set_text(cx, "Pin Message");
+            pin_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.pin_message"));
             show_pin = true;
         } else if details.abilities.contains(MessageAbilities::CanUnpin) {
-            pin_button.set_text(cx, "Unpin Message");
+            pin_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.unpin_message"));
             show_pin = true;
         } else {
             show_pin = false;
@@ -615,6 +649,7 @@ impl NewMessageContextMenu {
     fn close(&mut self, cx: &mut Cx) {
         self.visible = false;
         self.details = None;
+        self.pending_open_gesture = None;
         cx.revert_key_focus();
         self.redraw(cx);
     }
@@ -628,8 +663,8 @@ impl NewMessageContextMenuRef {
     }
 
     /// See [`NewMessageContextMenu::show()`].
-    pub fn show(&self, cx: &mut Cx, details: MessageDetails) -> DVec2 {
+    pub fn show(&self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage, opening_gesture: ContextMenuOpenGesture) -> DVec2 {
         let Some(mut inner) = self.borrow_mut() else { return DVec2::default()};
-        inner.show(cx, details)
+        inner.show(cx, details, app_language, opening_gesture)
     }
 }

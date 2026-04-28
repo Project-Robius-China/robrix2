@@ -44,6 +44,8 @@ script_mod! {
     mod.widgets.ICON_WARNING          = crate_resource("self://resources/icons/warning.svg")
     mod.widgets.ICON_ZOOM_IN          = crate_resource("self://resources/icons/zoom_in.svg")
     mod.widgets.ICON_ZOOM_OUT         = crate_resource("self://resources/icons/zoom_out.svg")
+    mod.widgets.ICON_ADD_ATTACHMENT   = crate_resource("self://resources/icons/add_attachment.svg")
+    mod.widgets.ICON_FILE             = crate_resource("self://resources/icons/file.svg")
 
     mod.widgets.TITLE_TEXT = theme.font_regular {
         font_size: (13),
@@ -51,6 +53,10 @@ script_mod! {
 
     mod.widgets.REGULAR_TEXT = theme.font_regular {
         font_size: (10),
+    }
+
+    mod.widgets.BOLD_TEXT = theme.font_bold {
+        font_size: (13),
     }
 
     mod.widgets.TEXT_SUB = theme.font_regular {
@@ -83,6 +89,56 @@ script_mod! {
     mod.widgets.MESSAGE_TEXT_STYLE = theme.font_regular {
         font_size: (mod.widgets.MESSAGE_FONT_SIZE),
         line_spacing: (mod.widgets.MESSAGE_TEXT_LINE_SPACING),
+    }
+
+    // Code blocks need a real monospace latin font for CodeView layout,
+    // plus a Chinese fallback so mixed CJK comments remain readable.
+    mod.widgets.MESSAGE_CODE_TEXT_STYLE = TextStyle {
+        font_family: FontFamily{
+            latin := FontMember{
+                res: crate_resource("self://resources/fonts/LiberationMono-Regular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            chinese := FontMember{
+                res: crate_resource("self://resources/fonts/LXGWWenKaiRegular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            emoji := FontMember{
+                res: crate_resource("self://resources/fonts/NotoColorEmoji.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+        }
+        font_size: (mod.widgets.MESSAGE_FONT_SIZE),
+        line_spacing: (mod.widgets.MESSAGE_TEXT_LINE_SPACING),
+        top_drop: 0.21,
+    }
+
+    // Event source JSON benefits from a slightly looser code style than
+    // bot markdown blocks, especially when CJK glyph fallback is involved.
+    mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE = TextStyle {
+        font_family: FontFamily{
+            latin := FontMember{
+                res: crate_resource("self://resources/fonts/LiberationMono-Regular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            chinese := FontMember{
+                res: crate_resource("self://resources/fonts/LXGWWenKaiRegular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            emoji := FontMember{
+                res: crate_resource("self://resources/fonts/NotoColorEmoji.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+        }
+        font_size: 11.0,
+        line_spacing: 1.58,
+        top_drop: 0.18,
     }
 
     mod.widgets.MESSAGE_REPLY_PREVIEW_FONT_SIZE = 9.5
@@ -183,6 +239,39 @@ script_mod! {
     mod.widgets.COLOR_NAVIGATION_TAB_BG_HOVER = (mod.widgets.COLOR_SECONDARY * 0.85)
     mod.widgets.COLOR_NAVIGATION_TAB_BG_ACTIVE = #9
 
+    // Layout spacing constants (4px grid)
+    mod.widgets.SPACE_XS  = 4
+    mod.widgets.SPACE_SM  = 8
+    mod.widgets.SPACE_MD  = 12
+    mod.widgets.SPACE_LG  = 16
+    mod.widgets.SPACE_XL  = 20
+    mod.widgets.SPACE_XXL = 24
+
+    // Border radius constants
+    mod.widgets.RADIUS_SM = 4.0
+    mod.widgets.RADIUS_MD = 6.0
+    mod.widgets.RADIUS_LG = 8.0
+
+    // Settings screen colors
+    mod.widgets.COLOR_ACCOUNT_ACTIVE_BG = #3B8CFF  // softer blue for active account bar
+    mod.widgets.COLOR_DROPDOWN_TEXT = #x333333        // text in dropdown selectors
+    mod.widgets.COLOR_DROPDOWN_BORDER = #xC8D9F2      // dropdown border (light blue-gray)
+    mod.widgets.COLOR_DROPDOWN_POPUP_BORDER = #xD3E1F6 // popup border (slightly lighter)
+    mod.widgets.COLOR_DROPDOWN_ARROW = #x888888        // dropdown arrow icon
+    mod.widgets.COLOR_INACTIVE_BORDER = #xBBBBBB       // inactive account entry border
+    mod.widgets.COLOR_DESCRIPTION_TEXT = #x7A7A7A      // secondary description text
+    mod.widgets.COLOR_FIELD_LABEL = #x555555           // form field labels
+    mod.widgets.COLOR_DISABLED_TEXT = #x999999          // disabled/inactive state text
+
+    // Settings screen layout
+    mod.widgets.SETTINGS_CONTENT_PADDING = 16
+    mod.widgets.SETTINGS_BUTTON_HEIGHT = 36
+
+    // Text alignment compensation for non-Label widgets (LinkLabel, IconButton)
+    // whose internal rendering origin differs from plain Label.
+    mod.widgets.LINK_LABEL_LEFT_PAD = 6
+    mod.widgets.ICON_BUTTON_LEFT_PAD = 4
+
     mod.widgets.COLOR_IMAGE_VIEWER_BACKGROUND = #333333CC // 80% Opacity
 
     mod.widgets.COLOR_IMAGE_VIEWER_META_BACKGROUND = #E8E8E8
@@ -194,6 +283,15 @@ script_mod! {
         align: Align{y: 0.5}
         margin: 0,
         padding: 10,
+
+        // For multiline text inputs, we want to show a light-colored scroll bar.
+        scroll_bar +: {
+            draw_bg +: {
+                color: #00000040
+                color_hover: #00000060
+                color_drag: #00000080
+            }
+        }
 
         draw_bg +: {
             border_radius: 4.0 // was previously 2.0

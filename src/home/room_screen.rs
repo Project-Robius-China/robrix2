@@ -1,14 +1,14 @@
 //! The `RoomScreen` widget is the UI view that displays a single room or thread's timeline
 //! of events (messages，state changes, etc.), along with an input bar at the bottom.
 
-use std::{borrow::Cow, cell::RefCell, ops::{DerefMut, Range}, sync::Arc};
+use std::{borrow::Cow, cell::{Cell, RefCell}, ops::{DerefMut, Range}, sync::Arc, time::Duration};
 
 use bytesize::ByteSize;
 use hashbrown::{HashMap, HashSet};
 use imbl::Vector;
 use makepad_widgets::{image_cache::ImageBuffer, *};
 use matrix_sdk::{
-    OwnedServerName, media::{MediaFormat, MediaRequestParameters}, room::RoomMember, ruma::{
+    OwnedServerName, media::{MediaFormat, MediaRequestParameters}, room::{RoomMember, RoomMemberRole}, ruma::{
         EventId, MatrixToUri, MatrixUri, OwnedEventId, OwnedMxcUri, OwnedRoomId, UserId, events::{
             receipt::Receipt,
             room::{
@@ -21,29 +21,31 @@ use matrix_sdk::{
     }
 };
 use matrix_sdk_ui::timeline::{
-    self, EmbeddedEvent, EncryptedMessage, EventTimelineItem, InReplyToDetails, MemberProfileChange, MembershipChange, MsgLikeContent, MsgLikeKind, OtherMessageLike, PollState, RoomMembershipChange, TimelineDetails, TimelineEventItemId, TimelineItem, TimelineItemContent, TimelineItemKind, VirtualTimelineItem
+    self, EmbeddedEvent, EncryptedMessage, EventTimelineItem, InReplyToDetails, LiveLocationState, MemberProfileChange, MembershipChange, MsgLikeContent, MsgLikeKind, OtherMessageLike, PollState, RoomMembershipChange, TimelineDetails, TimelineEventItemId, TimelineItem, TimelineItemContent, TimelineItemKind, VirtualTimelineItem
 };
-use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent}, owned_room_id};
+use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent}};
 
+use matrix_sdk_ui::sync_service::State;
 use crate::{
-    app::{AppState, AppStateAction, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, tombstone_footer::SuccessorRoomDetails}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
+    app::{AppState, AppStateAction, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{bot_binding_modal::BotBindingModalAction, create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, invite_modal::InviteModalAction, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
         user_profile::{ShowUserProfileAction, UserProfile, UserProfileAndRoomId, UserProfilePaneInfo, UserProfileSlidingPaneRef, UserProfileSlidingPaneWidgetExt},
         user_profile_cache,
     },
-    room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, typing_notice::TypingNoticeWidgetExt},
+    room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
-    sliding_sync::{BackwardsPaginateUntilEventRequest, MatrixRequest, PaginationDirection, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
+    sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
+use crate::home::streaming_animation::StreamingAnimState;
 use crate::room::room_input_bar::RoomInputBarWidgetExt;
 use crate::shared::mentionable_text_input::MentionableTextInputAction;
 
 use rangemap::RangeSet;
 
-use super::{event_reaction_list::ReactionData, loading_pane::LoadingPaneRef, new_message_context_menu::{MessageAbilities, MessageDetails}, room_read_receipt::{self, populate_read_receipts, MAX_VISIBLE_AVATARS_IN_READ_RECEIPT}};
+use super::{ContextMenuOpenGesture, event_reaction_list::ReactionData, invite_modal::is_invite_modal_open, loading_pane::LoadingPaneRef, new_message_context_menu::{MessageAbilities, MessageDetails}, room_read_receipt::{self, populate_read_receipts, MAX_VISIBLE_AVATARS_IN_READ_RECEIPT}};
 
 /// The maximum number of timeline items to search through
 /// when looking for a particular event.
@@ -55,12 +57,1077 @@ const MAX_ITEMS_TO_SEARCH_THROUGH: usize = 100;
 /// The max size (width or height) of a blurhash image to decode.
 const BLURHASH_IMAGE_MAX_SIZE: u32 = 500;
 
-static UNNAMED_ROOM: &str = "Unnamed Room";
+/// Use a larger batch when we are trying to fill the initial viewport,
+/// otherwise many short messages can trigger a long chain of tiny paginations.
+const VIEWPORT_FILL_PAGINATION_SIZE: u16 = 150;
+const TOPIC_PREVIEW_CHARS: usize = 140;
+const ROOM_INFO_PANE_DESKTOP_WIDTH: f32 = 320.0;
+const ROOM_INFO_PANE_MOBILE_BREAKPOINT: f32 = 700.0;
+const TRANSLATION_LANG_POPUP_WIDTH: f64 = 220.0;
+const TRANSLATION_LANG_POPUP_SCROLL_HEIGHT: f64 = 288.0;
+const TRANSLATION_LANG_POPUP_HEIGHT: f64 = TRANSLATION_LANG_POPUP_SCROLL_HEIGHT + 8.0;
+const TRANSLATION_LANG_POPUP_GAP: f64 = 6.0;
+const TRANSLATION_LANG_POPUP_MARGIN: f64 = 8.0;
+const MESSAGE_PROFILE_TOP_MARGIN: f64 = 4.5;
+const MESSAGE_PROFILE_AVATAR_SIZE: f64 = 48.0;
+const MESSAGE_USERNAME_ROW_HEIGHT: f64 = 18.0;
+const MESSAGE_USERNAME_ROW_BOTTOM_MARGIN: f64 = 9.0;
+const MESSAGE_USERNAME_RIGHT_MARGIN: f64 = 4.0;
+const BOT_BADGE_HEIGHT: f64 = 16.0;
+const BOT_BADGE_HORIZONTAL_PADDING: f64 = 6.0;
+const BOT_BADGE_BORDER_RADIUS: f64 = 3.0;
+const BOT_BADGE_TEXT_FONT_SIZE: f64 = 8.5;
+const BOT_BADGE_TEXT_TOP_DROP: f64 = -0.08;
+const MAX_OCTOS_ACTION_BUTTONS: usize = 6;
+
+const fn centered_top_margin(outer_top_margin: f64, outer_height: f64, inner_height: f64) -> f64 {
+    outer_top_margin + ((outer_height - inner_height) * 0.5)
+}
+
+#[cfg(test)]
+const fn center_y(top_margin: f64, height: f64) -> f64 {
+    top_margin + (height * 0.5)
+}
+
+const MESSAGE_USERNAME_ROW_TOP_MARGIN: f64 = centered_top_margin(
+    MESSAGE_PROFILE_TOP_MARGIN,
+    MESSAGE_PROFILE_AVATAR_SIZE,
+    MESSAGE_USERNAME_ROW_HEIGHT,
+);
+
+#[cfg(test)]
+fn message_profile_avatar_center_y() -> f64 {
+    center_y(MESSAGE_PROFILE_TOP_MARGIN, MESSAGE_PROFILE_AVATAR_SIZE)
+}
+
+#[cfg(test)]
+fn message_username_row_center_y() -> f64 {
+    center_y(MESSAGE_USERNAME_ROW_TOP_MARGIN, MESSAGE_USERNAME_ROW_HEIGHT)
+}
+
+#[cfg(test)]
+fn bot_badge_center_y_within_username_row() -> f64 {
+    let bot_badge_top_margin = MESSAGE_USERNAME_ROW_TOP_MARGIN
+        + ((MESSAGE_USERNAME_ROW_HEIGHT - BOT_BADGE_HEIGHT) * 0.5);
+    center_y(bot_badge_top_margin, BOT_BADGE_HEIGHT)
+}
+
+#[cfg(test)]
+fn bot_badge_label_center_y() -> f64 {
+    let bot_badge_label_top_margin = (BOT_BADGE_HEIGHT - BOT_BADGE_TEXT_FONT_SIZE) * 0.5
+        + (BOT_BADGE_TEXT_FONT_SIZE * BOT_BADGE_TEXT_TOP_DROP);
+    center_y(bot_badge_label_top_margin, BOT_BADGE_TEXT_FONT_SIZE)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BotTimelineLayers {
+    status: Option<String>,
+    provider: Option<String>,
+    body: String,
+    footer: Option<String>,
+}
+
+impl BotTimelineLayers {
+    fn plain(body: &str) -> Self {
+        Self {
+            status: None,
+            provider: None,
+            body: body.to_string(),
+            footer: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BotTimelineRenderState {
+    show_card: bool,
+    show_body_card: bool,
+    show_status_strip: bool,
+    show_metadata_footer: bool,
+    status: Option<String>,
+    provider: Option<String>,
+    body: String,
+    footer: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OctosActionStyle {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosActionButton {
+    id: String,
+    label: String,
+    style: OctosActionStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActionButtonRenderSlot {
+    id: String,
+    label: String,
+    style: OctosActionStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedOctosActionState {
+    id: String,
+    label: String,
+    style: OctosActionStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApprovalCardRenderState {
+    title: String,
+    summary: String,
+    buttons_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActionButtonRenderState {
+    show_container: bool,
+    show_button_row: bool,
+    approval_card: Option<ApprovalCardRenderState>,
+    buttons_enabled: bool,
+    visible_slots: Vec<ActionButtonRenderSlot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedOctosActionPayload {
+    approval_request: Option<OctosApprovalRequest>,
+    actions: Vec<OctosActionButton>,
+    malformed_approval_request: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OctosApprovalRiskLevel {
+    Normal,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OctosApprovalTimeoutBehavior {
+    Notify,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosApprovalRequest {
+    request_id: String,
+    tool_name: String,
+    tool_args_digest: String,
+    title: String,
+    summary: String,
+    risk_level: OctosApprovalRiskLevel,
+    authorized_approvers: Vec<String>,
+    expires_at: String,
+    on_timeout: OctosApprovalTimeoutBehavior,
+}
+
+fn parse_octos_action_style(style: Option<&str>) -> OctosActionStyle {
+    match style {
+        Some("primary") => OctosActionStyle::Primary,
+        Some("danger") => OctosActionStyle::Danger,
+        _ => OctosActionStyle::Secondary,
+    }
+}
+
+fn effective_octos_message_content(content: &serde_json::Value) -> &serde_json::Value {
+    content.get("m.new_content").unwrap_or(content)
+}
+
+fn latest_effective_event_content_json(
+    event_tl_item: &EventTimelineItem,
+) -> Option<serde_json::Value> {
+    event_tl_item.latest_edit_json()
+        .or_else(|| event_tl_item.original_json())
+        .and_then(|raw| raw.get_field::<serde_json::Value>("content").ok())
+        .flatten()
+        .map(|content| effective_octos_message_content(&content).clone())
+}
+
+fn original_event_content_json(
+    event_tl_item: &EventTimelineItem,
+) -> Option<serde_json::Value> {
+    event_tl_item.original_json()
+        .and_then(|raw| raw.get_field::<serde_json::Value>("content").ok())
+        .flatten()
+}
+
+fn parse_octos_approval_risk_level(value: Option<&str>) -> Option<OctosApprovalRiskLevel> {
+    match value {
+        Some("normal") => Some(OctosApprovalRiskLevel::Normal),
+        Some("critical") => Some(OctosApprovalRiskLevel::Critical),
+        _ => None,
+    }
+}
+
+fn parse_octos_approval_timeout_behavior(value: Option<&str>) -> Option<OctosApprovalTimeoutBehavior> {
+    match value {
+        Some("notify") => Some(OctosApprovalTimeoutBehavior::Notify),
+        _ => None,
+    }
+}
+
+fn parse_octos_approval_request_from_content(content: &serde_json::Value) -> Option<OctosApprovalRequest> {
+    let approval = content.get("org.octos.approval_request")?;
+    let request_id = approval.get("request_id")?.as_str()?.trim();
+    let tool_name = approval.get("tool_name")?.as_str()?.trim();
+    let tool_args_digest = approval.get("tool_args_digest")?.as_str()?.trim();
+    let title = approval.get("title")?.as_str()?.trim();
+    let summary = approval.get("summary")?.as_str()?.trim();
+    let risk_level = parse_octos_approval_risk_level(
+        approval.get("risk_level").and_then(|value| value.as_str()).map(str::trim),
+    )?;
+
+    let approvers = approval.get("authorized_approvers")?.as_array()?;
+    let authorized_approvers = approvers
+        .iter()
+        .filter_map(|value| value.as_str().map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if authorized_approvers.is_empty() {
+        return None;
+    }
+
+    let expires_at = approval.get("expires_at")?.as_str()?.trim();
+    let on_timeout = parse_octos_approval_timeout_behavior(
+        approval.get("on_timeout").and_then(|value| value.as_str()).map(str::trim),
+    )?;
+
+    if request_id.is_empty()
+        || tool_name.is_empty()
+        || tool_args_digest.is_empty()
+        || title.is_empty()
+        || summary.is_empty()
+        || expires_at.is_empty()
+    {
+        return None;
+    }
+
+    Some(OctosApprovalRequest {
+        request_id: request_id.to_owned(),
+        tool_name: tool_name.to_owned(),
+        tool_args_digest: tool_args_digest.to_owned(),
+        title: title.to_owned(),
+        summary: summary.to_owned(),
+        risk_level,
+        authorized_approvers,
+        expires_at: expires_at.to_owned(),
+        on_timeout,
+    })
+}
+
+fn parse_octos_actions_from_content(content: &serde_json::Value) -> Vec<OctosActionButton> {
+    let Some(actions) = effective_octos_message_content(content)
+        .get("org.octos.actions")
+        .and_then(|value| value.as_array())
+    else {
+        return Vec::new();
+    };
+
+    let mut parsed = Vec::new();
+    for (index, action) in actions.iter().enumerate() {
+        if parsed.len() >= MAX_OCTOS_ACTION_BUTTONS {
+            warning!(
+                "org.octos.actions: truncated {} extra buttons",
+                actions.len().saturating_sub(MAX_OCTOS_ACTION_BUTTONS)
+            );
+            break;
+        }
+
+        let Some(id) = action.get("id").and_then(|value| value.as_str()).map(str::trim) else {
+            warning!("org.octos.actions: skipping malformed entry at index {index}");
+            continue;
+        };
+        let Some(label) = action.get("label").and_then(|value| value.as_str()).map(str::trim) else {
+            warning!("org.octos.actions: skipping malformed entry at index {index}");
+            continue;
+        };
+        if id.is_empty() || label.is_empty() {
+            warning!("org.octos.actions: skipping malformed entry at index {index}");
+            continue;
+        }
+
+        parsed.push(OctosActionButton {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            style: parse_octos_action_style(action.get("style").and_then(|value| value.as_str())),
+        });
+    }
+
+    parsed
+}
+
+fn parse_octos_approval_actions_from_content(content: &serde_json::Value) -> Vec<OctosActionButton> {
+    parse_octos_actions_from_content(content)
+        .into_iter()
+        .filter(|action| matches!(action.id.as_str(), "approve" | "deny"))
+        .collect()
+}
+
+fn parse_octos_action_payload_for_render(
+    content: Option<&serde_json::Value>,
+    original_content: Option<&serde_json::Value>,
+) -> ParsedOctosActionPayload {
+    let approval_request = original_content
+        .and_then(parse_octos_approval_request_from_content);
+    let malformed_approval_request = original_content
+        .is_some_and(|content| content.get("org.octos.approval_request").is_some())
+        && approval_request.is_none();
+
+    let actions = if malformed_approval_request {
+        Vec::new()
+    } else if approval_request.is_some() {
+        original_content
+            .map(parse_octos_approval_actions_from_content)
+            .unwrap_or_default()
+    } else {
+        content
+            .map(parse_octos_actions_from_content)
+            .unwrap_or_default()
+    };
+
+    ParsedOctosActionPayload {
+        approval_request,
+        actions,
+        malformed_approval_request,
+    }
+}
+
+fn compute_action_button_render_state(
+    actions: &[OctosActionButton],
+    approval_request: Option<&OctosApprovalRequest>,
+    current_user_id: Option<&UserId>,
+) -> ActionButtonRenderState {
+    let approval_card = approval_request
+        .and_then(|approval_request| (!actions.is_empty()).then(|| ApprovalCardRenderState {
+            title: approval_request.title.clone(),
+            summary: approval_request.summary.clone(),
+            buttons_enabled: local_user_can_approve(approval_request, current_user_id),
+        }));
+    let visible_slots = actions
+        .iter()
+        .take(MAX_OCTOS_ACTION_BUTTONS)
+        .map(|action| ActionButtonRenderSlot {
+            id: action.id.clone(),
+            label: action.label.clone(),
+            style: action.style,
+        })
+        .collect::<Vec<_>>();
+
+    let buttons_enabled = approval_card
+        .as_ref()
+        .map(|approval_card| approval_card.buttons_enabled)
+        .unwrap_or(true);
+    let show_button_row = !visible_slots.is_empty();
+
+    ActionButtonRenderState {
+        show_container: approval_card.is_some() || show_button_row,
+        show_button_row,
+        approval_card,
+        buttons_enabled,
+        visible_slots,
+    }
+}
+
+fn action_button_render_slots_for_display(
+    render_state: &ActionButtonRenderState,
+    selected_action: Option<&SelectedOctosActionState>,
+) -> Vec<ActionButtonRenderSlot> {
+    if let Some(selected_action) = selected_action {
+        vec![ActionButtonRenderSlot {
+            id: selected_action.id.clone(),
+            label: format!("✓ {}", selected_action.label),
+            style: selected_action.style,
+        }]
+    } else {
+        render_state.visible_slots.clone()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosActionResponseRequest {
+    timeline_kind: TimelineKind,
+    content: serde_json::Value,
+    target_user_id: OwnedUserId,
+    explicit_room: bool,
+    source_event_id: OwnedEventId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OctosActionButtonRequest {
+    Generic {
+        action_id: String,
+        label: String,
+        style: OctosActionStyle,
+    },
+    Approval {
+        request_id: String,
+        title: String,
+        decision: String,
+        label: String,
+        tool_args_digest: String,
+        style: OctosActionStyle,
+    },
+}
+
+impl OctosActionButtonRequest {
+    fn action_id(&self) -> &str {
+        match self {
+            Self::Generic { action_id, .. } => action_id,
+            Self::Approval { decision, .. } => decision,
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::Generic { label, .. } => label,
+            Self::Approval { label, .. } => label,
+        }
+    }
+
+    fn style(&self) -> OctosActionStyle {
+        match self {
+            Self::Generic { style, .. } | Self::Approval { style, .. } => *style,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosActionButtonContext {
+    source_event_id: OwnedEventId,
+    original_sender: OwnedUserId,
+    request: OctosActionButtonRequest,
+}
+
+fn build_octos_approval_response_request(
+    timeline_kind: &TimelineKind,
+    title: &str,
+    request_id: &str,
+    decision: &str,
+    tool_args_digest: &str,
+    source_event_id: &EventId,
+    original_sender: &UserId,
+) -> OctosActionResponseRequest {
+    OctosActionResponseRequest {
+        timeline_kind: timeline_kind.clone(),
+        content: serde_json::json!({
+            "msgtype": "m.text",
+            "body": format!("[Approval: {decision}] {title}"),
+            "org.octos.approval_response": {
+                "request_id": request_id,
+                "decision": decision,
+                "source_event_id": source_event_id.as_str(),
+                "tool_args_digest": tool_args_digest,
+            },
+            "m.relates_to": {
+                "m.in_reply_to": {
+                    "event_id": source_event_id.as_str(),
+                }
+            }
+        }),
+        target_user_id: original_sender.to_owned(),
+        explicit_room: false,
+        source_event_id: source_event_id.to_owned(),
+    }
+}
+
+fn build_octos_action_response_request(
+    timeline_kind: &TimelineKind,
+    label: &str,
+    action_id: &str,
+    source_event_id: &EventId,
+    original_sender: &UserId,
+) -> OctosActionResponseRequest {
+    OctosActionResponseRequest {
+        timeline_kind: timeline_kind.clone(),
+        content: serde_json::json!({
+            "msgtype": "m.text",
+            "body": format!("[Action: {label}]"),
+            "org.octos.action_response": {
+                "action_id": action_id,
+                "source_event_id": source_event_id.as_str(),
+            },
+            "m.relates_to": {
+                "m.in_reply_to": {
+                    "event_id": source_event_id.as_str(),
+                }
+            }
+        }),
+        target_user_id: original_sender.to_owned(),
+        explicit_room: false,
+        source_event_id: source_event_id.to_owned(),
+    }
+}
+
+fn local_user_can_approve(
+    approval_request: &OctosApprovalRequest,
+    current_user_id: Option<&UserId>,
+) -> bool {
+    let Some(current_user_id) = current_user_id else {
+        return false;
+    };
+
+    approval_request.authorized_approvers
+        .iter()
+        .any(|approver| approver == current_user_id.as_str())
+}
+
+fn mark_action_buttons_disabled(
+    disabled_source_event_ids: &mut HashSet<OwnedEventId>,
+    source_event_id: &OwnedEventId,
+) {
+    disabled_source_event_ids.insert(source_event_id.clone());
+}
+
+fn mark_selected_octos_action(
+    selected_actions: &mut HashMap<OwnedEventId, SelectedOctosActionState>,
+    source_event_id: &OwnedEventId,
+    action_id: &str,
+    label: &str,
+    style: OctosActionStyle,
+) {
+    selected_actions.insert(source_event_id.clone(), SelectedOctosActionState {
+        id: action_id.to_owned(),
+        label: label.to_owned(),
+        style,
+    });
+}
+
+fn clear_selected_octos_action(
+    selected_actions: &mut HashMap<OwnedEventId, SelectedOctosActionState>,
+    source_event_id: &EventId,
+) {
+    selected_actions.remove(source_event_id);
+}
+
+fn clear_action_buttons_disabled(
+    disabled_source_event_ids: &mut HashSet<OwnedEventId>,
+    source_event_id: &EventId,
+) {
+    disabled_source_event_ids.remove(source_event_id);
+}
+
+fn are_action_buttons_disabled(
+    disabled_source_event_ids: &HashSet<OwnedEventId>,
+    source_event_id: &EventId,
+) -> bool {
+    disabled_source_event_ids.contains(source_event_id)
+}
+
+fn octos_action_button_paths(index: usize) -> (&'static [LiveId], &'static [LiveId], &'static [LiveId], &'static [LiveId]) {
+    match index {
+        0 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(danger_button)],
+        ),
+        1 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(danger_button)],
+        ),
+        2 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(danger_button)],
+        ),
+        3 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(danger_button)],
+        ),
+        4 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(danger_button)],
+        ),
+        _ => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(danger_button)],
+        ),
+    }
+}
+
+fn is_bot_provider_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("via ") && trimmed.contains('(') && trimmed.ends_with(')')
+}
+
+fn strip_streaming_cursor_suffix(line: &str) -> &str {
+    line
+        .trim_end()
+        .strip_suffix('\u{25CF}')
+        .map(str::trim_end)
+        .unwrap_or_else(|| line.trim_end())
+}
+
+fn is_bot_footer_line(line: &str) -> bool {
+    let trimmed = strip_streaming_cursor_suffix(line);
+    trimmed.starts_with('_')
+        && trimmed.ends_with('_')
+        && trimmed.contains("·")
+        && trimmed.contains(" in")
+        && trimmed.contains(" out")
+}
+
+fn looks_like_metrics_line(line: &str) -> bool {
+    let trimmed = strip_streaming_cursor_suffix(line).trim();
+    !trimmed.is_empty()
+        && trimmed.chars().count() <= 40
+        && trimmed.chars().any(|ch| ch.is_ascii_digit())
+        && (trimmed.contains('s') || trimmed.contains(" in") || trimmed.contains(" out"))
+}
+
+fn looks_like_status_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty()
+        && !trimmed.starts_with("via ")
+        && !trimmed.starts_with('_')
+        && trimmed.chars().count() <= 32
+        && !trimmed.contains("  ")
+}
+
+fn trim_structured_body_lines(lines: &[&str]) -> String {
+    let mut start = 0;
+    let mut end = lines.len();
+
+    while start < end && lines[start].trim().is_empty() {
+        start += 1;
+    }
+    while end > start && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+
+    lines[start..end].join("\n")
+}
+
+fn is_viable_bot_body(body: &str) -> bool {
+    let trimmed = body.trim();
+    !trimmed.is_empty()
+        && trimmed.chars().any(|c| c.is_alphanumeric())
+}
+
+fn parse_bot_timeline_layers(raw_body: &str, is_bot_sender: bool) -> BotTimelineLayers {
+    if !is_bot_sender || raw_body.trim().is_empty() {
+        return BotTimelineLayers::plain(raw_body);
+    }
+
+    let lines: Vec<&str> = raw_body.lines().collect();
+    if lines.is_empty() {
+        return BotTimelineLayers::plain(raw_body);
+    }
+
+    let (status, provider, mut content_start) =
+        if lines.len() >= 2 && looks_like_status_line(lines[0]) && is_bot_provider_line(lines[1]) {
+            (
+                Some(lines[0].trim().to_string()),
+                Some(lines[1].trim().to_string()),
+                2usize,
+            )
+        } else if is_bot_provider_line(lines[0]) {
+            (None, Some(lines[0].trim().to_string()), 1usize)
+        } else {
+            (None, None, 0usize)
+        };
+
+    while content_start < lines.len() && lines[content_start].trim().is_empty() {
+        content_start += 1;
+    }
+
+    let mut footer = None;
+    let mut content_end = lines.len();
+    let last_non_empty = lines.iter().rposition(|line| !line.trim().is_empty());
+
+    if let Some(last_idx) = last_non_empty {
+        if is_bot_footer_line(lines[last_idx]) {
+            footer = Some(strip_streaming_cursor_suffix(lines[last_idx]).trim().to_string());
+            content_end = last_idx;
+            while content_end > content_start && lines[content_end - 1].trim().is_empty() {
+                content_end -= 1;
+            }
+        }
+    }
+
+    if content_start >= content_end {
+        return if status.is_some() || provider.is_some() || footer.is_some() {
+            BotTimelineLayers {
+                status,
+                provider,
+                body: String::new(),
+                footer,
+            }
+        } else {
+            BotTimelineLayers::plain(raw_body)
+        };
+    }
+
+    let content_lines = &lines[content_start..content_end];
+    let mut body = trim_structured_body_lines(content_lines);
+    if footer.is_none() && content_lines.len() == 1 && looks_like_metrics_line(content_lines[0]) {
+        footer = Some(strip_streaming_cursor_suffix(content_lines[0]).trim().to_string());
+        body.clear();
+    }
+    if !is_viable_bot_body(&body) {
+        return if status.is_some() || provider.is_some() || footer.is_some() {
+            BotTimelineLayers {
+                status,
+                provider,
+                body,
+                footer,
+            }
+        } else {
+            BotTimelineLayers::plain(raw_body)
+        };
+    }
+
+    BotTimelineLayers {
+        status,
+        provider,
+        body,
+        footer,
+    }
+}
+
+fn compute_bot_timeline_render_state(raw_body: &str, is_bot_sender: bool) -> BotTimelineRenderState {
+    let layers = parse_bot_timeline_layers(raw_body, is_bot_sender);
+    let show_card = is_bot_sender;
+    let show_body_card = show_card && !layers.body.trim().is_empty();
+
+    BotTimelineRenderState {
+        show_card,
+        show_body_card,
+        show_status_strip: show_card && layers.status.is_some(),
+        show_metadata_footer: show_card && (layers.provider.is_some() || layers.footer.is_some()),
+        status: layers.status,
+        provider: layers.provider,
+        body: layers.body,
+        footer: layers.footer,
+    }
+}
+
+fn display_bot_footer_text(footer: &str) -> &str {
+    strip_streaming_cursor_suffix(footer)
+        .strip_prefix('_')
+        .and_then(|trimmed| trimmed.strip_suffix('_'))
+        .unwrap_or(footer)
+}
+
+fn has_rich_markdown_syntax(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && (
+            trimmed.contains("```")
+            || trimmed.starts_with("## ")
+            || trimmed.starts_with("### ")
+            || trimmed.contains("\n## ")
+            || trimmed.contains("\n### ")
+            || trimmed.starts_with("|")
+            || trimmed.contains("\n|")
+            || trimmed.starts_with("- ")
+            || trimmed.contains("\n- ")
+            || trimmed.starts_with("* ")
+            || trimmed.contains("\n* ")
+            || trimmed.contains("**")
+            || trimmed.contains("`")
+        )
+}
+
+fn should_render_streaming_full_snapshot(
+    body: &str,
+    formatted_body: Option<&FormattedBody>,
+    is_bot_sender: bool,
+) -> bool {
+    is_bot_sender
+        && (
+            formatted_body.is_some_and(|formatted| formatted.format == MessageFormat::Html)
+            || has_rich_markdown_syntax(body)
+        )
+}
+
+fn select_bot_timeline_body_formatted_body(
+    render_state: &BotTimelineRenderState,
+    formatted_body: Option<&FormattedBody>,
+) -> Option<FormattedBody> {
+    if render_state.status.is_none()
+        && render_state.provider.is_none()
+        && render_state.footer.is_none()
+    {
+        return formatted_body
+            .cloned()
+            .or_else(|| has_rich_markdown_syntax(&render_state.body)
+                .then(|| FormattedBody::markdown(&render_state.body))
+                .flatten());
+    }
+
+    FormattedBody::markdown(&render_state.body)
+}
+
+fn should_render_bot_timeline_body_with_markdown_widget(
+    render_state: &BotTimelineRenderState,
+) -> bool {
+    render_state.show_body_card
+        && render_state.body.contains("```")
+}
+
+fn contains_cjk(text: &str) -> bool {
+    text.chars().any(|ch|
+        matches!(ch as u32,
+            0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2B820..=0x2CEAF
+            | 0x2CEB0..=0x2EBEF
+            | 0x3000..=0x303F
+            | 0x3040..=0x30FF
+            | 0x31F0..=0x31FF
+            | 0xAC00..=0xD7AF
+        )
+    )
+}
+
+fn fenced_code_blocks_contain_cjk(text: &str) -> bool {
+    let mut in_fence = false;
+    let mut fence_has_cjk = false;
+
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            if in_fence && fence_has_cjk {
+                return true;
+            }
+            in_fence = !in_fence;
+            fence_has_cjk = false;
+            continue;
+        }
+
+        if in_fence && contains_cjk(line) {
+            fence_has_cjk = true;
+        }
+    }
+
+    in_fence && fence_has_cjk
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BotTimelineCodeBlockMode {
+    None,
+    Highlighted,
+    Plain,
+}
+
+fn bot_timeline_code_block_mode(render_state: &BotTimelineRenderState) -> BotTimelineCodeBlockMode {
+    if !should_render_bot_timeline_body_with_markdown_widget(render_state) {
+        return BotTimelineCodeBlockMode::None;
+    }
+
+    if fenced_code_blocks_contain_cjk(&render_state.body) {
+        BotTimelineCodeBlockMode::Plain
+    } else {
+        BotTimelineCodeBlockMode::Highlighted
+    }
+}
+
+fn streaming_update_requires_content_invalidation(
+    state: &StreamingAnimState,
+    new_text: &str,
+    is_live: bool,
+    render_full_target: bool,
+) -> bool {
+    state.target_text != new_text
+        || state.is_live != is_live
+        || state.render_full_target != render_full_target
+}
+
+thread_local! {
+    static ROOM_INFO_ACTION_MODAL_OPEN: Cell<bool> = const { Cell::new(false) };
+}
+
+fn set_room_info_action_modal_open(open: bool) {
+    ROOM_INFO_ACTION_MODAL_OPEN.with(|state| state.set(open));
+}
+
+fn is_room_info_action_modal_open() -> bool {
+    ROOM_INFO_ACTION_MODAL_OPEN.with(|state| state.get())
+}
+
 
 /// #FFF4E5
 const COLOR_THREAD_SUMMARY_BG: Vec4 = vec4(1.0, 0.957, 0.898, 1.0);
 /// #FFEACC
 const COLOR_THREAD_SUMMARY_BG_HOVER: Vec4 = vec4(1.0, 0.918, 0.8, 1.0);
+
+fn item_event_id(item: &Arc<TimelineItem>) -> Option<&EventId> {
+    let TimelineItemKind::Event(event) = item.kind() else {
+        return None;
+    };
+    event.event_id()
+}
+
+/// Check if an event carries the MSC4357 `org.matrix.msc4357.live` field,
+/// indicating that the message content is still being streamed.
+///
+/// For edit events (`m.replace`), the live field lives inside `m.new_content`
+/// rather than at the top level of `content`, so we check both locations.
+fn content_has_msc4357_live_marker(content: &serde_json::Value) -> bool {
+    let effective = content.get("m.new_content").unwrap_or(content);
+    match effective.get("org.matrix.msc4357.live") {
+        Some(serde_json::Value::Bool(value)) => *value,
+        Some(_) => true,
+        None => false,
+    }
+}
+
+fn is_msc4357_live(event_tl_item: &EventTimelineItem) -> bool {
+    let message_is_edited = event_tl_item
+        .content()
+        .as_message()
+        .is_some_and(|message| message.is_edited());
+    event_tl_item.latest_edit_json()
+        .or_else(|| (!message_is_edited).then(|| event_tl_item.original_json()).flatten())
+        .and_then(|raw| raw.get_field::<serde_json::Value>("content").ok())
+        .flatten()
+        .map(|content| content_has_msc4357_live_marker(&content))
+        .unwrap_or(false)
+}
+
+fn compute_translation_lang_popup_abs_pos(button_rect: Rect, container_rect: Rect) -> DVec2 {
+    let min_x = container_rect.pos.x + TRANSLATION_LANG_POPUP_MARGIN;
+    let max_x = (container_rect.pos.x + container_rect.size.x - TRANSLATION_LANG_POPUP_WIDTH - TRANSLATION_LANG_POPUP_MARGIN)
+        .max(min_x);
+    let popup_x = button_rect.pos.x
+        .max(min_x)
+        .min(max_x);
+
+    let min_y = container_rect.pos.y + TRANSLATION_LANG_POPUP_MARGIN;
+    let max_y = (container_rect.pos.y + container_rect.size.y - TRANSLATION_LANG_POPUP_HEIGHT - TRANSLATION_LANG_POPUP_MARGIN)
+        .max(min_y);
+    let popup_y_above = button_rect.pos.y - TRANSLATION_LANG_POPUP_HEIGHT - TRANSLATION_LANG_POPUP_GAP;
+    let popup_y = if popup_y_above >= min_y {
+        popup_y_above
+    } else {
+        (button_rect.pos.y + button_rect.size.y + TRANSLATION_LANG_POPUP_GAP)
+            .max(min_y)
+            .min(max_y)
+    };
+
+    dvec2(popup_x, popup_y)
+}
+
+fn streaming_scan_range(
+    clear_cache: bool,
+    changed_indices: &Range<usize>,
+    _old_len: usize,
+    new_len: usize,
+) -> Range<usize> {
+    if clear_cache {
+        0..new_len
+    } else {
+        let start = changed_indices.start.min(new_len);
+        let end = changed_indices.end.min(new_len);
+        start..end
+    }
+}
+
+fn refresh_stream_indices<'a, I>(
+    event_ids: I,
+    streaming_messages: &mut HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>,
+)
+where
+    I: IntoIterator<Item = Option<&'a EventId>>,
+{
+    for state in streaming_messages.values_mut() {
+        state.timeline_index = None;
+    }
+
+    for (idx, event_id) in event_ids.into_iter().enumerate() {
+        let Some(event_id) = event_id else {
+            continue;
+        };
+        if let Some(state) = streaming_messages.get_mut(event_id) {
+            state.timeline_index = Some(idx);
+        }
+    }
+}
+
+fn any_timeline_indices_visible<I, F>(
+    indices: I,
+    is_visible: F,
+) -> bool
+where
+    I: IntoIterator<Item = Option<usize>>,
+    F: FnMut(usize) -> bool,
+{
+    indices.into_iter().flatten().any(is_visible)
+}
+
+fn streaming_candidates_from_items<'a>(
+    items: &'a Vector<Arc<TimelineItem>>,
+) -> impl Iterator<Item = (OwnedEventId, String, bool)> + 'a {
+    items.iter().filter_map(|item| {
+        let TimelineItemKind::Event(event) = item.kind() else {
+            return None;
+        };
+        let event_id = event.event_id()?.to_owned();
+        let text = RoomScreen::extract_message_text(item)?;
+        Some((event_id, text, is_msc4357_live(event)))
+    })
+}
+
+fn rebuild_streaming_messages_for_full_snapshot<I>(
+    items: I,
+    previous_streaming_messages: Option<&HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>>,
+) -> (HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>, bool)
+where
+    I: IntoIterator<Item = (OwnedEventId, String, bool)>,
+{
+    use crate::home::streaming_animation::StreamingAnimState;
+
+    let mut rebuilt = HashMap::new();
+    let mut should_schedule_frame = false;
+
+    for (event_id, new_text, live) in items {
+        if !live {
+            continue;
+        }
+
+        // Only restore animations that were already tracked before the
+        // snapshot reset.  Never create brand-new animations here — during
+        // initial/reconnect loads the SDK may not have aggregated edits yet,
+        // so completed messages can still appear as `live`.  Genuinely new
+        // streams will be picked up on the next live sync update.
+        if let Some(previous_state) = previous_streaming_messages
+            .and_then(|states| states.get(&event_id))
+        {
+            let state = StreamingAnimState::restore(previous_state, &new_text, true);
+            should_schedule_frame |= state.needs_frame();
+            rebuilt.insert(event_id, state);
+        }
+    }
+
+    (rebuilt, should_schedule_frame)
+}
+
+fn next_stream_timeout<'a>(
+    states: impl IntoIterator<Item = &'a super::streaming_animation::StreamingAnimState>,
+) -> Option<Duration> {
+    states
+        .into_iter()
+        .map(|state| state.timeout_after().saturating_sub(state.last_update_time.elapsed()))
+        .min()
+}
 
 fn escape_slash_command_arg(value: &str) -> String {
     value.trim().replace('\\', "\\\\").replace('"', "\\\"")
@@ -90,10 +1157,11 @@ fn format_delete_bot_command(matrix_user_id: &UserId) -> String {
 fn resolve_delete_bot_user_id(
     user_id_or_localpart: &str,
     current_user_id: Option<&UserId>,
+    app_language: AppLanguage,
 ) -> Result<OwnedUserId, String> {
     let raw = user_id_or_localpart.trim();
     if raw.is_empty() {
-        return Err("Please enter the bot Matrix user ID to delete.".into());
+        return Err(tr_key(app_language, "room_screen.bot.delete.error.empty_user_id").into());
     }
 
     if raw.starts_with('@') || raw.contains(':') {
@@ -104,19 +1172,23 @@ fn resolve_delete_bot_user_id(
         };
         return UserId::parse(&full_user_id)
             .map(|user_id| user_id.to_owned())
-            .map_err(|_| format!("Invalid Matrix user ID: {full_user_id}"));
+            .map_err(|_| tr_fmt(app_language, "room_screen.bot.delete.error.invalid_user_id", &[
+                ("full_user_id", full_user_id.as_str()),
+            ]));
     }
 
     let Some(current_user_id) = current_user_id else {
         return Err(
-            "Current user ID is unavailable, so the bot homeserver cannot be resolved.".into(),
+            tr_key(app_language, "room_screen.bot.delete.error.current_user_unavailable").into(),
         );
     };
 
     let full_user_id = format!("@{raw}:{}", current_user_id.server_name());
     UserId::parse(&full_user_id)
         .map(|user_id| user_id.to_owned())
-        .map_err(|_| format!("Invalid Matrix user ID: {full_user_id}"))
+        .map_err(|_| tr_fmt(app_language, "room_screen.bot.delete.error.invalid_user_id", &[
+            ("full_user_id", full_user_id.as_str()),
+        ]))
 }
 
 fn detected_bot_binding_for_members(
@@ -128,19 +1200,284 @@ fn detected_bot_binding_for_members(
         return None;
     }
 
-    let Ok(bot_user_id) = app_state
-        .bot_settings
-        .resolved_bot_user_id_for_room(room_id, current_user_id().as_deref())
-    else {
-        return None;
-    };
-
-    members
+    let own_user_id = current_user_id();
+    let mut non_self_members = members
         .iter()
-        .any(|room_member| room_member.user_id() == bot_user_id)
-        .then_some(bot_user_id)
+        .filter(|room_member|
+            own_user_id
+                .as_deref()
+                .is_none_or(|own_user_id| room_member.user_id() != own_user_id)
+        )
+        .collect::<Vec<_>>();
+    non_self_members.sort_by(|lhs, rhs| lhs.user_id().as_str().cmp(rhs.user_id().as_str()));
+
+    if let Ok(configured_bot_user_id) = app_state
+        .bot_settings
+        .resolved_bot_user_id(current_user_id().as_deref())
+    {
+        if non_self_members
+            .iter()
+            .any(|room_member| room_member.user_id().as_str() == configured_bot_user_id.as_str())
+        {
+            return Some(configured_bot_user_id);
+        }
+    }
+
+    let known_bot_user_ids = app_state.bot_settings.known_bot_user_ids();
+    if let Some(bot_member) = non_self_members
+        .iter()
+        .find(|room_member|
+            known_bot_user_ids
+                .iter()
+                .any(|known_bot_user_id| known_bot_user_id.as_str() == room_member.user_id().as_str())
+        )
+    {
+        return Some(bot_member.user_id().to_owned());
+    }
+
+    if non_self_members.len() == 1 {
+        let dm_counterparty = non_self_members[0];
+        let localpart = dm_counterparty.user_id().localpart().to_ascii_lowercase();
+        let localpart_likely_bot = localpart == "bot"
+            || localpart == "botfather"
+            || localpart.starts_with("bot_")
+            || localpart.starts_with("bot-")
+            || localpart.starts_with("bot.");
+        let display_name_likely_bot = dm_counterparty
+            .display_name()
+            .is_some_and(|display_name| display_name.to_ascii_lowercase().contains("bot"));
+        if localpart_likely_bot || display_name_likely_bot {
+            return Some(dm_counterparty.user_id().to_owned());
+        }
+    }
+
+    if non_self_members
+        .iter()
+        .any(|room_member| room_member.user_id().localpart().eq_ignore_ascii_case("botfather"))
+    {
+        return non_self_members
+            .iter()
+            .find(|room_member| room_member.user_id().localpart().eq_ignore_ascii_case("botfather"))
+            .map(|room_member| room_member.user_id().to_owned());
+    };
+    None
 }
 
+fn is_likely_bot_user_id(
+    user_id: &UserId,
+    resolved_parent_bot_user_id: Option<&UserId>,
+) -> bool {
+    if resolved_parent_bot_user_id.is_some_and(|parent| parent == user_id) {
+        return true;
+    }
+
+    let localpart = user_id.localpart().to_ascii_lowercase();
+    localpart == "bot"
+        || localpart == "botfather"
+        || localpart.starts_with("bot_")
+        || localpart.starts_with("bot-")
+        || localpart.starts_with("bot.")
+        || localpart.ends_with("_bot")
+        || (localpart.ends_with("bot") && localpart.len() > 3)
+}
+
+pub(crate) fn is_known_or_likely_bot(
+    user_id: &UserId,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    known_bot_user_ids
+        .iter()
+        .any(|known_bot_user_id| known_bot_user_id.as_str() == user_id.as_str())
+        || resolved_parent_bot_user_id.is_some_and(|parent| parent == user_id)
+        || is_likely_bot_user_id(user_id, resolved_parent_bot_user_id)
+}
+
+fn is_timeline_sender_bot(
+    user_id: &UserId,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+) -> bool {
+    room_bot_user_ids
+        .iter()
+        .any(|room_bot_user_id| room_bot_user_id.as_str() == user_id.as_str())
+        || is_known_or_likely_bot(
+            user_id,
+            resolved_parent_bot_user_id,
+            known_bot_user_ids,
+        )
+}
+
+fn collect_room_bot_user_ids(
+    room_members: &[RoomMember],
+    resolved_parent_bot_user_id: Option<&UserId>,
+    known_bot_user_ids: &[OwnedUserId],
+    persisted_room_bot_user_ids: &[OwnedUserId],
+) -> Vec<OwnedUserId> {
+    let own_user_id = current_user_id();
+    let mut room_bot_user_ids = Vec::<OwnedUserId>::new();
+
+    for persisted_room_bot_user_id in persisted_room_bot_user_ids {
+        if room_bot_user_ids
+            .iter()
+            .all(|existing_user_id| existing_user_id.as_str() != persisted_room_bot_user_id.as_str())
+        {
+            room_bot_user_ids.push(persisted_room_bot_user_id.clone());
+        }
+    }
+
+    for room_member in room_members.iter().filter(|room_member|
+        own_user_id
+            .as_deref()
+            .is_none_or(|own_user_id| room_member.user_id() != own_user_id)
+    ) {
+        if is_known_or_likely_bot(
+            room_member.user_id(),
+            resolved_parent_bot_user_id,
+            known_bot_user_ids,
+        ) || is_likely_bot_member(room_member, resolved_parent_bot_user_id)
+        {
+            let user_id = room_member.user_id().to_owned();
+            if room_bot_user_ids
+                .iter()
+                .all(|existing_user_id| existing_user_id.as_str() != user_id.as_str())
+            {
+                room_bot_user_ids.push(user_id);
+            }
+        }
+    }
+
+    room_bot_user_ids.sort_by(|lhs, rhs| lhs.as_str().cmp(rhs.as_str()));
+    room_bot_user_ids
+}
+
+fn compute_timeline_bot_context(
+    app_state: Option<&AppState>,
+    room_id: &OwnedRoomId,
+    room_members: Option<&Arc<Vec<RoomMember>>>,
+) -> (Option<OwnedUserId>, Vec<OwnedUserId>, Vec<OwnedUserId>) {
+    app_state
+        .map(|app_state| {
+            let app_service_enabled = app_state.bot_settings.enabled;
+            let persisted_room_bot_user_ids = if app_service_enabled {
+                app_state.bot_settings.bound_bot_user_ids(room_id)
+            } else {
+                Vec::new()
+            };
+            let resolved_parent_bot_user_id = if app_service_enabled {
+                app_state
+                    .bot_settings
+                    .resolved_bot_user_id(current_user_id().as_deref())
+                    .ok()
+            } else {
+                None
+            };
+            let known_bot_user_ids = if app_service_enabled {
+                app_state.bot_settings.known_bot_user_ids()
+            } else {
+                Vec::new()
+            };
+            let room_bot_user_ids = room_members
+                .map(|members|
+                    collect_room_bot_user_ids(
+                        members.as_ref(),
+                        resolved_parent_bot_user_id.as_deref(),
+                        &known_bot_user_ids,
+                        &persisted_room_bot_user_ids,
+                    )
+                )
+                .unwrap_or(persisted_room_bot_user_ids);
+            (
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            )
+        })
+        .unwrap_or((None, Vec::new(), Vec::new()))
+}
+
+fn is_likely_bot_member(
+    room_member: &RoomMember,
+    resolved_parent_bot_user_id: Option<&UserId>,
+) -> bool {
+    if is_likely_bot_user_id(room_member.user_id(), resolved_parent_bot_user_id) {
+        return true;
+    }
+
+    room_member.display_name().is_some_and(|display_name| {
+        let display_name = display_name.trim().to_ascii_lowercase();
+        display_name == "bot"
+            || display_name == "botfather"
+            || display_name.starts_with("bot ")
+            || display_name.ends_with(" bot")
+            || display_name.contains(" bot ")
+    })
+}
+
+fn extract_bot_user_ids_from_listbots_reply(
+    text: &str,
+    default_server_name: Option<&OwnedServerName>,
+) -> Vec<OwnedUserId> {
+    let mut bot_user_ids = Vec::<OwnedUserId>::new();
+
+    let mut push_bot = |bot_user_id: OwnedUserId| {
+        if !bot_user_ids
+            .iter()
+            .any(|existing_bot_user_id| existing_bot_user_id.as_str() == bot_user_id.as_str())
+        {
+            bot_user_ids.push(bot_user_id);
+        }
+    };
+
+    for token in text.split(|ch: char|
+        !(ch.is_ascii_alphanumeric() || matches!(ch, '@' | ':' | '_' | '-' | '.'))
+    ) {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+
+        if token.starts_with('@') && token.contains(':') {
+            if let Ok(bot_user_id) = UserId::parse(token).map(|user_id| user_id.to_owned()) {
+                push_bot(bot_user_id);
+            }
+            continue;
+        }
+
+        if token.contains(':') && !token.starts_with('@') {
+            let full_user_id = format!("@{token}");
+            if let Ok(bot_user_id) = UserId::parse(&full_user_id).map(|user_id| user_id.to_owned()) {
+                push_bot(bot_user_id);
+            }
+            continue;
+        }
+
+        let localpart_lc = token.to_ascii_lowercase();
+        let is_likely_bot_localpart = (
+                localpart_lc == "bot"
+                || localpart_lc.starts_with("bot_")
+                || localpart_lc.starts_with("bot-")
+                || localpart_lc.starts_with("bot.")
+            )
+            && localpart_lc != "bots"
+            && localpart_lc != "botfather"
+            && token
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.');
+        if !is_likely_bot_localpart {
+            continue;
+        }
+
+        let Some(default_server_name) = default_server_name else { continue };
+        let full_user_id = format!("@{token}:{default_server_name}");
+        if let Ok(bot_user_id) = UserId::parse(&full_user_id).map(|user_id| user_id.to_owned()) {
+            push_bot(bot_user_id);
+        }
+    }
+
+    bot_user_ids
+}
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -157,6 +1494,172 @@ script_mod! {
     mod.widgets.COLOR_THREAD_SUMMARY_BG_HOVER = #FFEACC
     mod.widgets.COLOR_THREAD_SUMMARY_BORDER = #E8C99A
     mod.widgets.COLOR_THREAD_SUMMARY_REPLY_COUNT = #A35A00
+    mod.widgets.COLOR_BOT_CARD_BG = #xF7FAFE
+    mod.widgets.COLOR_BOT_CARD_BORDER = #xD8E3F0
+    mod.widgets.COLOR_BOT_STATUS_BG = #xEEF4FB
+    mod.widgets.COLOR_BOT_STATUS_TEXT = #x5A6F86
+    mod.widgets.COLOR_BOT_PROVIDER_TEXT = #x708399
+    mod.widgets.COLOR_BOT_FOOTER_TEXT = #x8B98A7
+    mod.widgets.COLOR_BOT_CODE_BG = #xECF2F8
+    mod.widgets.COLOR_BOT_CODE_BORDER = #xD5E0ED
+
+    mod.widgets.MessageActionPrimaryButton = RobrixPositiveIconButton {
+        width: Fit
+        height: Fit
+        spacing: 6.0
+        padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        draw_text +: {
+            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+        }
+    }
+
+    mod.widgets.MessageActionSecondaryButton = Button {
+        width: Fit
+        height: Fit
+        spacing: 6.0
+        padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        draw_text +: {
+            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+        }
+        text: ""
+    }
+
+    mod.widgets.MessageActionDangerButton = RobrixNegativeIconButton {
+        width: Fit
+        height: Fit
+        spacing: 6.0
+        padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        draw_text +: {
+            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+        }
+    }
+
+    mod.widgets.MessageActionButtonSlot = View {
+        visible: false
+        width: Fit
+        height: Fit
+        flow: Overlay
+
+        primary_button := mod.widgets.MessageActionPrimaryButton {
+            visible: false
+        }
+        secondary_button := mod.widgets.MessageActionSecondaryButton {
+            visible: false
+        }
+        danger_button := mod.widgets.MessageActionDangerButton {
+            visible: false
+        }
+    }
+
+    mod.widgets.BotTimelineMarkdown = Markdown {
+        width: Fill
+        height: Fit
+        padding: 0.0
+        font_size: (MESSAGE_FONT_SIZE)
+        font_color: (MESSAGE_TEXT_COLOR)
+        paragraph_spacing: 10.0
+        pre_code_spacing: 8.0
+        heading_base_scale: 1.45
+        inline_code_padding: Inset{ top: 3, bottom: 3, left: 4, right: 4 }
+        inline_code_margin: Inset{ left: 3, right: 3, bottom: 2, top: 2 }
+        use_code_block_widget: true
+
+        draw_text +: {
+            color: (MESSAGE_TEXT_COLOR)
+        }
+        text_style_normal: mod.widgets.MESSAGE_TEXT_STYLE {
+            font_size: (MESSAGE_FONT_SIZE)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        text_style_italic: theme.font_italic {
+            font_size: (MESSAGE_FONT_SIZE)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        text_style_bold: theme.font_bold {
+            font_size: (MESSAGE_FONT_SIZE)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        text_style_bold_italic: theme.font_bold_italic {
+            font_size: (MESSAGE_FONT_SIZE)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        text_style_fixed: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
+            font_size: (MESSAGE_FONT_SIZE - 0.5)
+            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+        }
+        draw_block +: {
+            line_color: (MESSAGE_TEXT_COLOR)
+            sep_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
+            quote_bg_color: #xEFF5FB
+            quote_fg_color: #x7892AC
+            code_color: (mod.widgets.COLOR_BOT_CODE_BG)
+        }
+        code_layout: Layout{
+            flow: Flow.Right{wrap: true}
+            padding: Inset{ left: 0.0, right: 0.0, top: 0.0, bottom: 0.0 }
+        }
+        code_walk: Walk{ width: Fill, height: Fit, margin: Inset{ top: 10.0, bottom: 10.0 } }
+        quote_layout: Layout{
+            flow: Flow.Right{wrap: true}
+            padding: Inset{ left: 12.0, right: 12.0, top: 8.0, bottom: 8.0 }
+        }
+        quote_walk: Walk{ width: Fill, height: Fit, margin: Inset{ top: 6.0, bottom: 6.0 } }
+        list_item_layout: Layout{
+            flow: Flow.Right{wrap: true}
+            padding: Inset{ left: 0.0, right: 0.0, top: 1.0, bottom: 1.0 }
+        }
+        list_item_walk: Walk{ width: Fill, height: Fit, margin: Inset{ top: 0.0, bottom: 1.0 } }
+
+        code_block := RoundedView {
+            width: Fill
+            height: Fit
+            flow: Overlay
+            padding: 0.0
+            new_batch: true
+            show_bg: true
+            draw_bg +: {
+                color: (mod.widgets.COLOR_BOT_CODE_BG)
+                border_radius: 10.0
+                border_size: 1.0
+                border_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
+            }
+
+            code_view := mod.widgets.CodeView {
+                keep_cursor_at_end: false
+                editor +: {
+                    width: Fill
+                    height: Fit
+                    margin: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                    draw_bg +: { color: #0000 }
+                    draw_text +: {
+                        text_style: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
+                            font_size: (MESSAGE_FONT_SIZE - 0.5)
+                            line_spacing: (MESSAGE_TEXT_LINE_SPACING)
+                        }
+                    }
+                    token_colors +: {
+                        whitespace: #x6a737d
+                        delimiter: #x24292e
+                        delimiter_highlight: #x005cc5
+                        error_decoration: #xcb2431
+                        warning_decoration: #xb08800
+                        unknown: #x24292e
+                        branch_keyword: #xd73a49
+                        constant: #x005cc5
+                        identifier: #x24292e
+                        loop_keyword: #xd73a49
+                        number: #x005cc5
+                        other_keyword: #xd73a49
+                        punctuator: #x24292e
+                        string: #x22863a
+                        function: #x6f42c1
+                        typename: #xe36209
+                        comment: #x6a737d
+                    }
+                }
+            }
+        }
+    }
 
     // An empty view that takes up no space in the portal list.
     mod.widgets.Empty = View { }
@@ -202,6 +1705,8 @@ script_mod! {
 
         thread_summary_latest := MessageHtml {
             flow: Right,
+            max_lines: 2
+            text_overflow: Ellipsis
         }
     }
 
@@ -303,11 +1808,11 @@ script_mod! {
                 align: Align{x: 0.5, y: 0.0} // centered horizontally, top aligned
                 width: 65.0,
                 height: Fit,
-                margin: Inset{top: 4.5, right: 10}
+                margin: Inset{top: #(MESSAGE_PROFILE_TOP_MARGIN), right: 10}
                 flow: Down,
                 avatar := Avatar {
-                    width: 48,
-                    height: 48,
+                    width: #(MESSAGE_PROFILE_AVATAR_SIZE),
+                    height: #(MESSAGE_PROFILE_AVATAR_SIZE),
                 }
                 timestamp := Timestamp {
                     margin: Inset{ top: 5.9 }
@@ -324,22 +1829,201 @@ script_mod! {
 
                 username_view := View {
                     flow: Right,
-                    width: Fill,
-                    height: Fit,
+                    align: Align{y: 0.5},
+                    width: Fit,
+                    height: #(MESSAGE_USERNAME_ROW_HEIGHT),
+                    margin: Inset{
+                        top: #(MESSAGE_USERNAME_ROW_TOP_MARGIN),
+                        bottom: #(MESSAGE_USERNAME_ROW_BOTTOM_MARGIN),
+                    }
                     username := Label {
-                        width: Fill,
+                        width: Fit,
                         flow: Right, // do not wrap
                         padding: 0,
-                        margin: Inset{bottom: 9.0, top: 20.0, right: 10.0,}
+                        margin: Inset{right: #(MESSAGE_USERNAME_RIGHT_MARGIN)}
+                        max_lines: 1
+                        text_overflow: Ellipsis
                         draw_text +: {
                             text_style: USERNAME_TEXT_STYLE {},
                             color: (USERNAME_TEXT_COLOR)
                         }
-                        text: "<Username not available>"
+                        text: ""
+                    }
+                    bot_badge := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: #(BOT_BADGE_HEIGHT)
+                        align: Align{x: 0.5, y: 0.5}
+                        new_batch: true
+                        padding: Inset{left: #(BOT_BADGE_HORIZONTAL_PADDING), right: #(BOT_BADGE_HORIZONTAL_PADDING)}
+                        show_bg: true
+                        draw_bg +: {
+                            color: (COLOR_ACTIVE_PRIMARY)
+                            border_radius: #(BOT_BADGE_BORDER_RADIUS)
+                        }
+                        bot_badge_label := Label {
+                            width: Fit
+                            height: Fit
+                            padding: 0
+                            draw_text +: {
+                                text_style: REGULAR_TEXT {
+                                    font_size: #(BOT_BADGE_TEXT_FONT_SIZE)
+                                    top_drop: #(BOT_BADGE_TEXT_TOP_DROP)
+                                }
+                                color: #fff
+                            }
+                            text: "bot"
+                        }
+                    }
+                }
+
+                bot_message_card := View {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 6.0
+                    margin: Inset{ top: 1.0, bottom: 3.0 }
+
+                    bot_status_strip := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: Fit
+                        new_batch: true
+                        padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
+                            border_radius: 10.0
+                        }
+
+                        bot_status_label := Label {
+                            width: Fit
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+
+                    bot_body_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        new_batch: true
+                        padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_CARD_BG)
+                            border_radius: 14.0
+                            border_size: 1.0
+                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                        }
+
+                        bot_card_body := HtmlOrPlaintext { }
+                        bot_card_markdown := mod.widgets.BotTimelineMarkdown {
+                            body: ""
+                        }
+                        bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
+                            use_code_block_widget: false
+                            body: ""
+                        }
+                    }
+
+                    bot_metadata_footer := View {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 2.0
+                        padding: Inset{ left: 2.0 }
+
+                        bot_provider_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
+                            }
+                            text: ""
+                        }
+
+                        bot_footer_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
+                            }
+                            text: ""
+                        }
                     }
                 }
 
                 message := HtmlOrPlaintext { }
+                splash_card := Splash { visible: false }
+                action_buttons := View {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 6.0
+                    margin: Inset{ top: 8.0, bottom: 2.0 }
+
+                    approval_request_view := RoundedView {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        new_batch: true
+                        spacing: 4.0
+                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
+                            border_radius: 12.0
+                            border_size: 1.0
+                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                        }
+
+                        approval_title_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: theme.font_bold { font_size: 10.5 }
+                                color: (mod.widgets.COLOR_TEXT)
+                            }
+                            text: ""
+                        }
+
+                        approval_summary_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+
+                    action_button_row := View {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Flow.Right{wrap: true}
+                        spacing: 8.0
+
+                        action_button_slot_0 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_1 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_2 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_3 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_4 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_5 := mod.widgets.MessageActionButtonSlot {}
+                    }
+                }
                 link_preview_view := mod.widgets.LinkPreview {}
                 View {
                     width: Fill,
@@ -384,7 +2068,152 @@ script_mod! {
                 flow: Down,
                 padding: Inset{ left: 10.0 }
 
+                bot_message_card := View {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 6.0
+                    margin: Inset{ top: 1.0, bottom: 3.0 }
+
+                    bot_status_strip := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: Fit
+                        new_batch: true
+                        padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
+                            border_radius: 10.0
+                        }
+
+                        bot_status_label := Label {
+                            width: Fit
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+
+                    bot_body_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        new_batch: true
+                        padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_CARD_BG)
+                            border_radius: 14.0
+                            border_size: 1.0
+                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                        }
+
+                        bot_card_body := HtmlOrPlaintext { }
+                        bot_card_markdown := mod.widgets.BotTimelineMarkdown {
+                            body: ""
+                        }
+                        bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
+                            use_code_block_widget: false
+                            body: ""
+                        }
+                    }
+
+                    bot_metadata_footer := View {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 2.0
+                        padding: Inset{ left: 2.0 }
+
+                        bot_provider_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
+                            }
+                            text: ""
+                        }
+
+                        bot_footer_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+                }
+
                 message := HtmlOrPlaintext { }
+                action_buttons := View {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 6.0
+                    margin: Inset{ top: 8.0, bottom: 2.0 }
+
+                    approval_request_view := RoundedView {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        new_batch: true
+                        spacing: 4.0
+                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
+                            border_radius: 12.0
+                            border_size: 1.0
+                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                        }
+
+                        approval_title_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: theme.font_bold { font_size: 10.5 }
+                                color: (mod.widgets.COLOR_TEXT)
+                            }
+                            text: ""
+                        }
+
+                        approval_summary_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                            }
+                            text: ""
+                        }
+                    }
+
+                    action_button_row := View {
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        flow: Flow.Right{wrap: true}
+                        spacing: 8.0
+
+                        action_button_slot_0 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_1 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_2 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_3 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_4 := mod.widgets.MessageActionButtonSlot {}
+                        action_button_slot_5 := mod.widgets.MessageActionButtonSlot {}
+                    }
+                }
                 link_preview_view := mod.widgets.LinkPreview {}
                 View {
                     width: Fill,
@@ -495,7 +2324,7 @@ script_mod! {
                 draw_icon.svg: (ICON_ADD_USER)
                 draw_text.text_style: SMALL_STATE_TEXT_STYLE {}
                 icon_walk: Walk{width: 15, height: Fit, margin: Inset{right: -4}}
-                text: "Invite to Room"
+                text: ""
             }
 
             content := Label {
@@ -535,7 +2364,7 @@ script_mod! {
                 text_style: TEXT_SUB {},
                 color: (COLOR_DIVIDER_DARK)
             }
-            text: "<date>"
+            text: ""
         }
 
         right_line := LineH { }
@@ -550,7 +2379,7 @@ script_mod! {
 
         date := Label {
             draw_text.color: (mod.widgets.COLOR_READ_MARKER)
-            text: "New Messages"
+            text: ""
         }
 
         right_line := LineH {
@@ -579,7 +2408,742 @@ script_mod! {
                 text_style: MESSAGE_TEXT_STYLE { font_size: 10 },
                 color: (TIMESTAMP_TEXT_COLOR)
             }
-            text: "Loading earlier messages..."
+            text: ""
+        }
+    }
+
+    mod.widgets.ThreadsPaneEntry = #(ThreadsPaneEntry::register_widget(vm)) {
+        ..mod.widgets.RoundedView
+
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 5
+        padding: Inset{top: 12, right: 12, bottom: 12, left: 12}
+        margin: Inset{left: 12, right: 12, top: 6, bottom: 0}
+        cursor: MouseCursor.Hand
+
+        show_bg: true
+        draw_bg +: {
+            color: #F8FAFD
+            border_radius: 4.0
+            border_size: 1.0
+            border_color: #D8E0EA
+        }
+
+        title_row := View {
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 8
+
+            title := Label {
+                width: Fill
+                height: Fit
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    text_style: USERNAME_TEXT_STYLE { font_size: 10.8 }
+                    color: #1F1F1F
+                }
+                text: ""
+            }
+
+            time := Label {
+                width: Fit
+                height: Fit
+                draw_text +: {
+                    text_style: TIMESTAMP_TEXT_STYLE { font_size: 7.5 }
+                    color: (TIMESTAMP_TEXT_COLOR)
+                }
+                text: ""
+            }
+        }
+
+        subtitle := Label {
+            width: Fill
+            height: Fit
+            flow: Flow.Right{wrap: true}
+            draw_text +: {
+                text_style: MESSAGE_TEXT_STYLE { font_size: 9.8 }
+                color: #7B7B7B
+            }
+            text: ""
+        }
+
+        preview := Label {
+            width: Fill
+            height: Fit
+            flow: Flow.Right{wrap: true}
+            draw_text +: {
+                text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                color: (COLOR_TEXT)
+            }
+            text: ""
+        }
+    }
+
+    mod.widgets.ThreadsSlidingPane = #(ThreadsSlidingPane::register_widget(vm)) {
+        visible: false,
+        flow: Overlay,
+        width: Fill,
+        height: Fill,
+        align: Align{x: 1.0, y: 0}
+
+        bg_view := SolidView {
+            width: Fill
+            height: Fill
+            visible: false,
+            show_bg: true
+            draw_bg.color: #000000BB
+        }
+
+        main_content := SolidView {
+            width: 320,
+            height: Fill
+            flow: Down,
+            align: Align{x: 1.0}
+
+            show_bg: true,
+            draw_bg.color: (COLOR_PRIMARY)
+
+            header := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                padding: Inset{top: 12, right: 10, bottom: 12, left: 15}
+
+                title := Label {
+                    width: Fit
+                    height: Fit
+                    draw_text +: {
+                        text_style: USERNAME_TEXT_STYLE { font_size: 12.5 }
+                        color: #000
+                    }
+                    text: "Threads"
+                }
+
+                spacer := View {
+                    width: Fill
+                    height: Fit
+                }
+
+                close_button := RobrixNeutralIconButton {
+                    width: Fit,
+                    height: Fit,
+                    spacing: 0,
+                    padding: 15,
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 14, height: 14}
+                    text: ""
+                }
+            }
+
+            room_name := Label {
+                width: Fill
+                height: Fit
+                flow: Flow.Right{wrap: true}
+                padding: Inset{left: 15, right: 15, bottom: 10}
+                draw_text +: {
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                    color: #6E6E6E
+                }
+                text: ""
+            }
+
+            loading_indicator := View {
+                visible: false
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                spacing: 8
+                padding: Inset{left: 15, right: 15, top: 6, bottom: 10}
+
+                spinner := LoadingSpinner {
+                    width: 18
+                    height: 18
+                }
+
+                loading_label := Label {
+                    width: Fit
+                    height: Fit
+                    draw_text +: {
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                        color: #7B7B7B
+                    }
+                    text: "Loading threads..."
+                }
+            }
+
+            empty_state := Label {
+                visible: false
+                width: Fill
+                height: Fit
+                flow: Flow.Right{wrap: true}
+                padding: Inset{left: 15, right: 15, top: 20, bottom: 20}
+                draw_text +: {
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                    color: #7B7B7B
+                }
+                text: "No threads yet."
+            }
+
+            threads_list := PortalList {
+                width: Fill
+                height: Fill
+                flow: Down
+                max_pull_down: 0.0
+
+                ThreadEntry := mod.widgets.ThreadsPaneEntry {}
+            }
+        }
+
+        slide: 1.0,
+
+        animator: Animator {
+            panel: {
+                default: @hide
+                show: AnimatorState{
+                    redraw: true,
+                    from: {all: Forward {duration: 0.5}}
+                    ease: Ease.ExpDecay {d1: 0.80, d2: 0.97}
+                    apply: {
+                        slide: 0.0
+                    }
+                }
+                hide: AnimatorState{
+                    redraw: true,
+                    from: {all: Forward {duration: 0.5}}
+                    ease: Ease.ExpDecay {d1: 0.80, d2: 0.97}
+                    apply: {
+                        slide: 1.0
+                    }
+                }
+            }
+        }
+    }
+
+    mod.widgets.RoomInfoPeopleEntry = #(RoomInfoPeopleEntry::register_widget(vm)) {
+        width: Fill
+        height: Fit
+        flow: Right
+        align: Align{y: 0.5}
+        spacing: 9
+        padding: Inset{left: 10, right: 10, top: 10, bottom: 10}
+        margin: Inset{left: 0, right: 0, top: 0, bottom: 6}
+        cursor: MouseCursor.Hand
+
+        show_bg: true
+        draw_bg +: {
+            color: #F8FAFD
+            border_radius: 4.0
+            border_size: 1.0
+            border_color: #D8E0EA
+        }
+
+        avatar := Avatar {
+            width: 34
+            height: 34
+        }
+
+        display_name := Label {
+            width: Fill
+            height: Fit
+            flow: Flow.Right{wrap: true}
+            draw_text +: {
+                text_style: USERNAME_TEXT_STYLE { font_size: 11.2 }
+                color: #1F1F1F
+            }
+            text: ""
+        }
+
+        level := Label {
+            width: Fit
+            height: Fit
+            draw_text +: {
+                text_style: MESSAGE_TEXT_STYLE { font_size: 10.2 }
+                color: #6D7682
+            }
+            text: ""
+        }
+    }
+
+    mod.widgets.RoomInfoSlidingPane = #(RoomInfoSlidingPane::register_widget(vm)) {
+        visible: false,
+        flow: Overlay,
+        width: Fill,
+        height: Fill,
+        align: Align{x: 1.0, y: 0}
+
+        bg_view := SolidView {
+            width: Fill
+            height: Fill
+            visible: false,
+            show_bg: true
+            draw_bg.color: #000000BB
+        }
+
+        main_content := SolidView {
+            width: 320,
+            height: Fill
+            flow: Down,
+            align: Align{x: 1.0}
+
+            show_bg: true,
+            draw_bg.color: (COLOR_PRIMARY)
+
+            header := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                padding: Inset{top: 12, right: 10, bottom: 12, left: 15}
+
+                back_button := RobrixNeutralIconButton {
+                    visible: false
+                    width: Fit,
+                    height: Fit,
+                    spacing: 0,
+                    padding: 12,
+                    draw_icon.svg: (ICON_JUMP)
+                    icon_walk: Walk{width: 14, height: 14}
+                    text: ""
+                }
+
+                title := Label {
+                    width: Fit
+                    height: Fit
+                    draw_text +: {
+                        text_style: USERNAME_TEXT_STYLE { font_size: 12.5 }
+                        color: #000
+                    }
+                    text: "Info"
+                }
+
+                spacer := View {
+                    width: Fill
+                    height: Fit
+                }
+
+                close_button := RobrixNeutralIconButton {
+                    width: Fit,
+                    height: Fit,
+                    spacing: 0,
+                    padding: 15,
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 14, height: 14}
+                    text: ""
+                }
+            }
+
+            content_scroll := ScrollYView {
+                width: Fill
+                height: Fill
+                flow: Down
+
+                info_view := View {
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 10
+                    padding: Inset{left: 12, right: 12, top: 12, bottom: 12}
+
+                    summary_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        spacing: 10
+                        align: Align{y: 0.5}
+                        padding: Inset{left: 10, right: 10, top: 10, bottom: 10}
+
+                        show_bg: true
+                        draw_bg +: {
+                            color: #F8FAFD
+                            border_radius: 4.0
+                            border_size: 1.0
+                            border_color: #D8E0EA
+                        }
+
+                        room_avatar := Avatar {
+                            width: 40
+                            height: 40
+                        }
+
+                        room_meta := View {
+                            width: Fill
+                            height: Fit
+                            flow: Down
+                            spacing: 4
+
+                            room_name_value := Label {
+                                width: Fill
+                                height: Fit
+                                flow: Flow.Right{wrap: true}
+                                draw_text +: {
+                                    text_style: USERNAME_TEXT_STYLE { font_size: 11.0 }
+                                    color: #1F1F1F
+                                }
+                                text: ""
+                            }
+
+                            room_id_row := View {
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: 5
+
+                                room_id_value := Label {
+                                    width: Fill
+                                    height: Fit
+                                    flow: Flow.Right{wrap: true}
+                                    draw_text +: {
+                                        text_style: MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                        color: #6A6A6A
+                                    }
+                                    text: ""
+                                }
+
+                                copy_room_id_button := RobrixNeutralIconButton {
+                                    width: 24
+                                    height: 22
+                                    padding: 4
+                                    spacing: 0
+                                    draw_icon.svg: (ICON_COPY)
+                                    icon_walk: Walk{width: 11, height: 11}
+                                    text: ""
+                                }
+                            }
+                        }
+                    }
+
+                    topic_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 5
+                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
+
+                        show_bg: true
+                        draw_bg +: {
+                            color: #F8FAFD
+                            border_radius: 4.0
+                            border_size: 1.0
+                            border_color: #D8E0EA
+                        }
+
+                        topic_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
+                                color: #4A4A4A
+                            }
+                            text: "Topic"
+                        }
+
+                        topic_value := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            draw_text +: {
+                                text_style: MESSAGE_TEXT_STYLE { font_size: 10.2 }
+                                color: #6A6A6A
+                            }
+                            text: ""
+                        }
+
+                        topic_toggle_button := RobrixNeutralIconButton {
+                            visible: false
+                            width: Fit
+                            height: 30
+                            align: Align{x: 0.0, y: 0.5}
+                            padding: Inset{left: 9, right: 9, top: 6, bottom: 6}
+                            spacing: 0
+                            icon_walk: Walk{width: 0, height: 0}
+                            text: "Expand"
+                        }
+                    }
+
+                    facts_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 6
+                        padding: Inset{left: 10, right: 10, top: 9, bottom: 9}
+
+                        show_bg: true
+                        draw_bg +: {
+                            color: #F8FAFD
+                            border_radius: 4.0
+                            border_size: 1.0
+                            border_color: #D8E0EA
+                        }
+
+                        visibility_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+
+                            visibility_label := Label {
+                                width: 78
+                                height: Fit
+                                draw_text +: {
+                                    text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
+                                    color: #4A4A4A
+                                }
+                                text: "Visibility"
+                            }
+
+                            visibility_value := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                                    color: (COLOR_TEXT)
+                                }
+                                text: ""
+                            }
+                        }
+
+                        encryption_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+
+                            encryption_label := Label {
+                                width: 78
+                                height: Fit
+                                draw_text +: {
+                                    text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
+                                    color: #4A4A4A
+                                }
+                                text: "Encryption"
+                            }
+
+                            encryption_value := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                                    color: (COLOR_TEXT)
+                                }
+                                text: ""
+                            }
+                        }
+                    }
+
+                    actions_row := View {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        spacing: 8
+
+                        invite_button := RobrixNeutralIconButton {
+                            width: Fill
+                            height: 40
+                            padding: 10
+                            draw_icon.svg: (ICON_ADD_USER)
+                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                            text: "Invite"
+                        }
+
+                        people_button := RobrixNeutralIconButton {
+                            width: Fill
+                            height: 40
+                            padding: 10
+                            draw_icon.svg: (ICON_ADD_USER)
+                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                            text: "People"
+                        }
+
+                        report_room_button := RobrixNeutralIconButton {
+                            width: Fill
+                            height: 40
+                            padding: 10
+                            draw_icon.svg: (ICON_INFO)
+                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                            text: "Report room"
+                        }
+
+                        leave_room_button := RobrixNegativeIconButton {
+                            width: Fill
+                            height: 40
+                            padding: 10
+                            draw_icon.svg: (ICON_CLOSE)
+                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                            text: "Leave Room"
+                        }
+                    }
+                }
+
+            }
+
+            people_view := View {
+                visible: false
+                width: Fill
+                height: Fill
+                flow: Down
+                spacing: 6
+                padding: Inset{left: 12, right: 12, top: 12, bottom: 10}
+
+                member_count := Label {
+                    width: Fill
+                    height: Fit
+                    draw_text +: {
+                        text_style: USERNAME_TEXT_STYLE { font_size: 10.5 }
+                        color: #4A4A4A
+                    }
+                    text: ""
+                }
+
+                loading_label := Label {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    draw_text +: {
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                        color: #6D7682
+                    }
+                    text: "Loading members..."
+                }
+
+                empty_label := Label {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    draw_text +: {
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                        color: #6D7682
+                    }
+                    text: "No members found."
+                }
+
+                people_list := PortalList {
+                    width: Fill
+                    height: Fill
+                    flow: Down
+                    max_pull_down: 0.0
+
+                    PersonEntry := mod.widgets.RoomInfoPeopleEntry {}
+                }
+            }
+        }
+
+        slide: 1.0,
+
+        animator: Animator {
+            panel: {
+                default: @hide
+                show: AnimatorState{
+                    redraw: true,
+                    from: {all: Forward {duration: 0.5}}
+                    ease: Ease.ExpDecay {d1: 0.80, d2: 0.97}
+                    apply: {
+                        slide: 0.0
+                    }
+                }
+                hide: AnimatorState{
+                    redraw: true,
+                    from: {all: Forward {duration: 0.5}}
+                    ease: Ease.ExpDecay {d1: 0.80, d2: 0.97}
+                    apply: {
+                        slide: 1.0
+                    }
+                }
+            }
+        }
+    }
+
+    mod.widgets.ReportRoomModalLabel = Label {
+        width: Fill
+        height: Fit
+        draw_text +: {
+            text_style: REGULAR_TEXT { font_size: 10.5 }
+            color: #333
+        }
+        text: ""
+    }
+
+    mod.widgets.ReportRoomModal = #(ReportRoomModal::register_widget(vm)) {
+        width: Fit
+        height: Fit
+
+        RoundedView {
+            width: 430
+            height: Fit
+            align: Align{x: 0.5}
+            flow: Down
+            padding: Inset{top: 26, right: 22, bottom: 18, left: 22}
+            spacing: 14
+
+            show_bg: true
+            draw_bg +: {
+                color: (COLOR_PRIMARY)
+                border_radius: 6.0
+            }
+
+            title := Label {
+                width: Fill
+                height: Fit
+                draw_text +: {
+                    text_style: TITLE_TEXT { font_size: 13 }
+                    color: #000
+                }
+                text: "Report Room"
+            }
+
+            body := mod.widgets.ReportRoomModalLabel {
+                text: ""
+            }
+
+            reason_input := RobrixTextInput {
+                width: Fill
+                height: Fit
+                padding: 10
+                draw_text +: {
+                    text_style: REGULAR_TEXT { font_size: 11.5 }
+                    color: #000
+                }
+                empty_text: "Describe why you are reporting this room"
+            }
+
+            status_label := Label {
+                width: Fill
+                height: Fit
+                draw_text +: {
+                    text_style: REGULAR_TEXT { font_size: 10.2 }
+                    color: #000
+                }
+                text: ""
+            }
+
+            buttons := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{x: 1.0, y: 0.5}
+                spacing: 16
+
+                cancel_button := RobrixNeutralIconButton {
+                    width: 110
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 12
+                    draw_icon.svg: (ICON_FORBIDDEN)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1}}
+                    text: "Cancel"
+                }
+
+                report_button := RobrixNegativeIconButton {
+                    width: 130
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 12
+                    draw_icon.svg: (ICON_INFO)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1}}
+                    text: "Report room"
+                }
+            }
         }
     }
 
@@ -604,7 +3168,7 @@ script_mod! {
                     text_style: USERNAME_TEXT_STYLE { font_size: 10.8 }
                     color: (COLOR_ACTIVE_PRIMARY)
                 }
-                text: "BotFather"
+                text: ""
             }
 
             sender_tag := Label {
@@ -614,7 +3178,7 @@ script_mod! {
                     text_style: REGULAR_TEXT { font_size: 9.5 }
                     color: #8A8A8A
                 }
-                text: "bot"
+                text: ""
             }
         }
 
@@ -646,7 +3210,7 @@ script_mod! {
                         text_style: USERNAME_TEXT_STYLE { font_size: 11.2 }
                         color: #1F1F1F
                     }
-                    text: "App Service Actions"
+                    text: ""
                 }
 
                 spacer := View {
@@ -672,9 +3236,8 @@ script_mod! {
                 draw_text +: {
                     text_style: REGULAR_TEXT { font_size: 10.5 }
                     color: (COLOR_TEXT)
-                    wrap: Word
                 }
-                text: "Create a bot through BotFather. Robrix only sends the matching slash command."
+                text: ""
             }
 
             footer := View {
@@ -690,7 +3253,7 @@ script_mod! {
                         text_style: REGULAR_TEXT { font_size: 8.8 }
                         color: #9A9A9A
                     }
-                    text: "now"
+                    text: ""
                 }
             }
         }
@@ -713,7 +3276,7 @@ script_mod! {
                     padding: 10
                     draw_icon.svg: (ICON_CHECKMARK)
                     icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1}}
-                    text: "Create Bot"
+                    text: ""
                 }
 
                 list_button := RobrixNeutralIconButton {
@@ -722,7 +3285,7 @@ script_mod! {
                     padding: 10
                     draw_icon.svg: (ICON_SEARCH)
                     icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
-                    text: "List Bots"
+                    text: ""
                 }
             }
 
@@ -738,7 +3301,7 @@ script_mod! {
                     padding: 10
                     draw_icon.svg: (ICON_CLOSE)
                     icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
-                    text: "Delete Bot"
+                    text: ""
                 }
 
                 help_button := RobrixNeutralIconButton {
@@ -747,7 +3310,7 @@ script_mod! {
                     padding: 10
                     draw_icon.svg: (ICON_INFO)
                     icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
-                    text: "Bot Help"
+                    text: ""
                 }
             }
 
@@ -757,13 +3320,22 @@ script_mod! {
                 flow: Right
                 spacing: 8
 
+                view_bound_button := RobrixNeutralIconButton {
+                    width: 156
+                    height: 46
+                    padding: 10
+                    draw_icon.svg: (ICON_SEARCH)
+                    icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                    text: "View Bound Bots"
+                }
+
                 unbind_button := RobrixNeutralIconButton {
                     width: 156
                     height: 46
                     padding: 10
                     draw_icon.svg: (ICON_CLOSE)
                     icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
-                    text: "Unbind"
+                    text: ""
                 }
             }
         }
@@ -800,6 +3372,27 @@ script_mod! {
         jump_to_bottom_button := JumpToBottomButton { }
     }
 
+    mod.widgets.TranslationLangPopupButton = RobrixIconButton {
+        width: Fill
+        height: 36
+        spacing: 0
+        margin: 0
+        padding: Inset{left: 12, right: 12, top: 8, bottom: 8}
+        icon_walk: Walk{width: 0, height: 0}
+        draw_text +: {
+            color: (COLOR_TEXT)
+            color_hover: (COLOR_TEXT)
+            color_down: (COLOR_TEXT)
+            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+        }
+        draw_bg +: {
+            color: #0000
+            color_hover: #xF0F4FA
+            color_down: #xE8EEF8
+            border_size: 0.0
+            border_radius: 0.0
+        }
+    }
 
     mod.widgets.RoomScreen = #(RoomScreen::register_widget(vm)) {
         width: Fill, height: Fill,
@@ -834,11 +3427,68 @@ script_mod! {
                 }
             }
 
+            translation_lang_modal := Modal {
+                align: Align{x: 0, y: 0}
+                bg_view.draw_bg.color: #00000000
+                content +: {
+                    width: Fill
+                    height: Fill
+                    flow: Overlay
+                    align: Align{x: 0, y: 0}
+
+                    translation_lang_popup := RoundedView {
+                        width: 220
+                        height: Fit
+                        margin: Inset{left: 0, top: 0}
+                        padding: Inset{top: 4, bottom: 4}
+                        show_bg: true
+                        new_batch: true
+                        draw_bg +: {
+                            color: (COLOR_PRIMARY)
+                            border_radius: 6.0
+                            border_size: 1.0
+                            border_color: #ddd
+                            shadow_color: #0003
+                            shadow_radius: 8.0
+                            shadow_offset: vec2(0.0, 2.0)
+                        }
+
+                        translation_lang_scroll := ScrollYView {
+                            width: Fill
+                            height: 288
+                            flow: Down
+                            spacing: 0
+
+                            lang_en := mod.widgets.TranslationLangPopupButton { text: "en  English" }
+                            lang_zh := mod.widgets.TranslationLangPopupButton { text: "zh  简体中文" }
+                            lang_zh_tw := mod.widgets.TranslationLangPopupButton { text: "zh-TW  繁體中文" }
+                            lang_ja := mod.widgets.TranslationLangPopupButton { text: "ja  日本語" }
+                            lang_ko := mod.widgets.TranslationLangPopupButton { text: "ko  한국어" }
+                            lang_es := mod.widgets.TranslationLangPopupButton { text: "es  Español" }
+                            lang_fr := mod.widgets.TranslationLangPopupButton { text: "fr  Français" }
+                            lang_de := mod.widgets.TranslationLangPopupButton { text: "de  Deutsch" }
+                            lang_ru := mod.widgets.TranslationLangPopupButton { text: "ru  Русский" }
+                            lang_pt := mod.widgets.TranslationLangPopupButton { text: "pt  Português" }
+                            lang_ar := mod.widgets.TranslationLangPopupButton { text: "ar  العربية" }
+                            lang_vi := mod.widgets.TranslationLangPopupButton { text: "vi  Tiếng Việt" }
+                            lang_th := mod.widgets.TranslationLangPopupButton { text: "th  ไทย" }
+                            lang_id := mod.widgets.TranslationLangPopupButton { text: "id  Bahasa Indonesia" }
+                            lang_ms := mod.widgets.TranslationLangPopupButton { text: "ms  Bahasa Melayu" }
+                            lang_tr := mod.widgets.TranslationLangPopupButton { text: "tr  Türkçe" }
+                            lang_hi := mod.widgets.TranslationLangPopupButton { text: "hi  हिन्दी" }
+                        }
+                    }
+                }
+            }
+
             // Note: here, we're within a View that has an Overlay flow,
             // so the order that we define the below views determines which one is on top.
 
             // The top space should be displayed as an overlay at the top of the timeline.
             top_space := mod.widgets.TopSpace { }
+
+            threads_sliding_pane := mod.widgets.ThreadsSlidingPane { }
+            room_info_sliding_pane := mod.widgets.RoomInfoSlidingPane { }
 
             // The user profile sliding pane should be displayed on top of other "static" subviews
             // (on top of all other views that are always visible).
@@ -857,6 +3507,18 @@ script_mod! {
             delete_bot_modal := Modal {
                 content +: {
                     delete_bot_modal_inner := mod.widgets.DeleteBotModal {}
+                }
+            }
+
+            report_room_modal := Modal {
+                content +: {
+                    report_room_modal_inner := mod.widgets.ReportRoomModal {}
+                }
+            }
+
+            leave_room_confirm_modal := Modal {
+                content +: {
+                    leave_room_confirm_modal_inner := mod.widgets.NegativeConfirmationModal {}
                 }
             }
 
@@ -883,6 +3545,768 @@ script_mod! {
     }
 }
 
+#[derive(Clone, Default, Debug)]
+pub enum ThreadsPaneAction {
+    OpenThread(OwnedEventId),
+    LoadMoreRequested,
+    #[default]
+    None,
+}
+
+impl ActionDefaultRef for ThreadsPaneAction {
+    fn default_ref() -> &'static Self {
+        static DEFAULT: ThreadsPaneAction = ThreadsPaneAction::None;
+        &DEFAULT
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+pub enum RoomInfoPaneAction {
+    InviteUser,
+    ShowPeoplePage,
+    OpenPeopleProfile(OwnedUserId),
+    ReportRoom,
+    LeaveRoom,
+    #[default]
+    None,
+}
+
+impl ActionDefaultRef for RoomInfoPaneAction {
+    fn default_ref() -> &'static Self {
+        static DEFAULT: RoomInfoPaneAction = RoomInfoPaneAction::None;
+        &DEFAULT
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ThreadsPaneEntryInfo {
+    thread_root_event_id: OwnedEventId,
+    title: String,
+    subtitle: String,
+    time: String,
+    preview: String,
+}
+
+#[derive(Clone, Debug)]
+struct ThreadsPaneInfo {
+    room_name: String,
+    entries: Vec<ThreadsPaneEntryInfo>,
+    status_text: String,
+    show_entries: bool,
+    loading_text: String,
+    show_loading: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RoomInfoPaneInfo {
+    room_name: String,
+    room_id: String,
+    topic: String,
+    visibility: String,
+    encryption: String,
+    room_avatar_uri: Option<OwnedMxcUri>,
+    room_avatar_fallback_text: String,
+    people_entries: Vec<RoomInfoPeopleEntryInfo>,
+    people_count_text: String,
+    show_people_loading: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RoomInfoPeopleEntryInfo {
+    user_id: OwnedUserId,
+    display_name: String,
+    level: String,
+    is_bot: bool,
+    avatar_uri: Option<OwnedMxcUri>,
+    avatar_fallback_text: String,
+}
+
+#[derive(Default)]
+struct ThreadsPaneState {
+    room_id: Option<OwnedRoomId>,
+    entries: Vec<FetchedRoomThread>,
+    prev_batch_token: Option<String>,
+    is_loading: bool,
+    initialized: bool,
+    status_text: String,
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct ThreadsPaneEntry {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+
+    #[rust] thread_root_event_id: Option<OwnedEventId>,
+}
+
+impl Widget for ThreadsPaneEntry {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+
+        let Some(thread_root_event_id) = self.thread_root_event_id.clone() else { return };
+        match event.hits(cx, self.view.area()) {
+            Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
+                cx.widget_action(
+                    self.widget_uid(),
+                    ThreadsPaneAction::OpenThread(thread_root_event_id),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl ThreadsPaneEntry {
+    fn set_entry(&mut self, cx: &mut Cx, entry: &ThreadsPaneEntryInfo) {
+        self.thread_root_event_id = Some(entry.thread_root_event_id.clone());
+        self.label(cx, ids!(title)).set_text(cx, &entry.title);
+        self.label(cx, ids!(time)).set_text(cx, &entry.time);
+        self.label(cx, ids!(subtitle)).set_text(cx, &entry.subtitle);
+        self.label(cx, ids!(preview)).set_text(cx, &entry.preview);
+    }
+}
+
+impl ThreadsPaneEntryRef {
+    fn set_entry(&self, cx: &mut Cx, entry: &ThreadsPaneEntryInfo) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_entry(cx, entry);
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct RoomInfoPeopleEntry {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+
+    #[rust] user_id: Option<OwnedUserId>,
+}
+
+impl Widget for RoomInfoPeopleEntry {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+
+        let Some(user_id) = self.user_id.clone() else { return };
+        match event.hits(cx, self.view.area()) {
+            Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::OpenPeopleProfile(user_id),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl RoomInfoPeopleEntry {
+    fn set_entry(&mut self, cx: &mut Cx, entry: &RoomInfoPeopleEntryInfo) {
+        self.user_id = Some(entry.user_id.clone());
+        let display_name = if entry.is_bot {
+            format!("{} [bot]", entry.display_name)
+        } else {
+            entry.display_name.clone()
+        };
+        self.label(cx, ids!(display_name)).set_text(cx, &display_name);
+        self.label(cx, ids!(level)).set_text(cx, &entry.level);
+        self.label(cx, ids!(level)).set_visible(cx, !entry.level.is_empty());
+
+        let avatar = self.avatar(cx, ids!(avatar));
+        if let Some(uri) = entry.avatar_uri.as_ref()
+            && let avatar_cache::AvatarCacheEntry::Loaded(image_data) = avatar_cache::get_or_fetch_avatar(cx, uri)
+        {
+            let res = avatar.show_image(
+                cx,
+                None,
+                |cx, img_ref| utils::load_png_or_jpg(&img_ref, cx, &image_data),
+            );
+            if res.is_err() {
+                avatar.show_text(cx, None, None, &entry.avatar_fallback_text);
+            }
+        } else {
+            avatar.show_text(cx, None, None, &entry.avatar_fallback_text);
+        }
+    }
+}
+
+impl RoomInfoPeopleEntryRef {
+    fn set_entry(&self, cx: &mut Cx, entry: &RoomInfoPeopleEntryInfo) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_entry(cx, entry);
+    }
+}
+
+#[derive(Script, ScriptHook, Widget, Animator)]
+pub struct ThreadsSlidingPane {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+    #[apply_default] animator: Animator,
+    #[live] slide: f32,
+
+    #[rust] info: Option<ThreadsPaneInfo>,
+    #[rust] is_animating_out: bool,
+}
+
+impl Widget for ThreadsSlidingPane {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+
+        if !self.visible { return; }
+
+        let animator_action = self.animator_handle_event(cx, event);
+        if animator_action.must_redraw() {
+            self.redraw(cx);
+        }
+
+        if self.is_animating_out && !self.animator.is_track_animating(id!(panel)) {
+            self.visible = false;
+            self.is_animating_out = false;
+            cx.revert_key_focus();
+            self.view(cx, ids!(bg_view)).set_visible(cx, false);
+            self.redraw(cx);
+            return;
+        }
+
+        let area = self.view.area();
+        let close_pane = {
+            matches!(
+                event,
+                Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
+            )
+            || event.back_pressed()
+            || match event.hits_with_capture_overload(cx, area, true) {
+                Hit::KeyUp(key) => key.key_code == KeyCode::Escape,
+                Hit::FingerDown(_fde) => {
+                    cx.set_key_focus(area);
+                    false
+                }
+                Hit::FingerUp(fue) if fue.is_over => {
+                    fue.mouse_button().is_some_and(|b| b.is_back())
+                    || !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                }
+                _ => false,
+            }
+        };
+        if close_pane {
+            self.hide(cx);
+        }
+
+        if let Event::Actions(actions) = event {
+            let threads_list = self.portal_list(cx, ids!(threads_list));
+            if threads_list.scrolled(actions)
+                && threads_list.first_id() == 0
+                && threads_list.scroll_position() >= -0.5
+            {
+                cx.widget_action(
+                    self.widget_uid(),
+                    ThreadsPaneAction::LoadMoreRequested,
+                );
+            }
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let Some(info) = self.info.as_ref() else {
+            self.visible = false;
+            return self.view.draw_walk(cx, scope, walk);
+        };
+
+        let container_width = self.view.area().rect(cx).size.x as f32;
+        let panel_width = if container_width > 1.0 && container_width < ROOM_INFO_PANE_MOBILE_BREAKPOINT {
+            container_width
+        } else {
+            ROOM_INFO_PANE_DESKTOP_WIDTH
+        };
+        let right_margin = -(self.slide * panel_width);
+        let mut main_content = self.view(cx, ids!(main_content));
+        script_apply_eval!(cx, main_content, {
+            width: #(panel_width)
+            margin.right: #(right_margin)
+        });
+        let bg_alpha = (1.0 - self.slide) * 0.733;
+        let bg_color = vec4(0.0, 0.0, 0.0, bg_alpha);
+        let mut bg_view = self.view(cx, ids!(bg_view));
+        script_apply_eval!(cx, bg_view, {
+            draw_bg +: { color: #(bg_color) }
+        });
+
+        self.label(cx, ids!(room_name)).set_text(cx, &info.room_name);
+        self.label(cx, ids!(loading_label)).set_text(cx, &info.loading_text);
+        self.view(cx, ids!(loading_indicator)).set_visible(cx, info.show_loading);
+        self.label(cx, ids!(empty_state)).set_text(cx, &info.status_text);
+        self.view(cx, ids!(empty_state)).set_visible(cx, !info.show_entries && !info.show_loading);
+        self.view(cx, ids!(threads_list)).set_visible(cx, info.show_entries);
+
+        while let Some(widget) = self.view.draw_walk(cx, scope, walk).step() {
+            let portal_list_ref = widget.as_portal_list();
+            let Some(mut list) = portal_list_ref.borrow_mut() else { continue };
+
+            list.set_item_range(cx, 0, info.entries.len());
+            while let Some(item_id) = list.next_visible_item(cx) {
+                let Some(entry) = info.entries.get(item_id) else { continue };
+                let item = list.item(cx, item_id, id!(ThreadEntry));
+                item.as_threads_pane_entry().set_entry(cx, entry);
+                item.draw_all(cx, &mut Scope::empty());
+            }
+        }
+        DrawStep::done()
+    }
+}
+
+impl ThreadsSlidingPane {
+    pub fn is_currently_shown(&self, _cx: &mut Cx) -> bool {
+        self.visible
+    }
+
+    fn set_info(&mut self, _cx: &mut Cx, info: ThreadsPaneInfo) {
+        self.info = Some(info);
+    }
+
+    pub fn show(&mut self, cx: &mut Cx) {
+        self.visible = true;
+        self.is_animating_out = false;
+        cx.set_key_focus(self.view.area());
+        self.animator_play(cx, ids!(panel.show));
+        self.view(cx, ids!(bg_view)).set_visible(cx, true);
+        self.view.button(cx, ids!(close_button)).reset_hover(cx);
+        self.redraw(cx);
+    }
+
+    pub fn hide(&mut self, cx: &mut Cx) {
+        if !self.visible {
+            return;
+        }
+        self.is_animating_out = true;
+        self.animator_play(cx, ids!(panel.hide));
+        self.redraw(cx);
+    }
+}
+
+impl ThreadsSlidingPaneRef {
+    pub fn is_currently_shown(&self, cx: &mut Cx) -> bool {
+        let Some(inner) = self.borrow() else { return false };
+        inner.is_currently_shown(cx)
+    }
+
+    fn set_info(&self, cx: &mut Cx, info: ThreadsPaneInfo) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_info(cx, info);
+    }
+
+    pub fn show(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show(cx);
+    }
+
+    pub fn hide(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.hide(cx);
+    }
+}
+
+#[derive(Script, ScriptHook, Widget, Animator)]
+pub struct RoomInfoSlidingPane {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+    #[apply_default] animator: Animator,
+    #[live] slide: f32,
+
+    #[rust] info: Option<RoomInfoPaneInfo>,
+    #[rust] is_animating_out: bool,
+    #[rust] show_people_page: bool,
+    #[rust] topic_expanded: bool,
+    #[rust] people_display_count: usize,
+}
+
+impl Widget for RoomInfoSlidingPane {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+
+        if !self.visible { return; }
+
+        let animator_action = self.animator_handle_event(cx, event);
+        if animator_action.must_redraw() {
+            self.redraw(cx);
+        }
+
+        if self.is_animating_out && !self.animator.is_track_animating(id!(panel)) {
+            self.visible = false;
+            self.is_animating_out = false;
+            cx.revert_key_focus();
+            self.view(cx, ids!(bg_view)).set_visible(cx, false);
+            self.redraw(cx);
+            return;
+        }
+
+        let area = self.view.area();
+        let close_pane = if is_invite_modal_open() || is_room_info_action_modal_open() {
+            matches!(
+                event,
+                Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
+            )
+        } else {
+            matches!(
+                event,
+                Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
+            )
+            || event.back_pressed()
+            || match event.hits_with_capture_overload(cx, area, true) {
+                Hit::KeyUp(key) => key.key_code == KeyCode::Escape,
+                Hit::FingerDown(_fde) => {
+                    cx.set_key_focus(area);
+                    false
+                }
+                Hit::FingerUp(fue) if fue.is_over => {
+                    fue.mouse_button().is_some_and(|b| b.is_back())
+                    || !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                }
+                _ => false,
+            }
+        };
+        if close_pane {
+            self.hide(cx);
+        }
+
+        if let Event::Actions(actions) = event {
+            for action in actions {
+                if action.as_widget_action().widget_uid_eq(self.widget_uid()).is_none()
+                    && let RoomInfoPaneAction::OpenPeopleProfile(user_id) = action.as_widget_action().cast()
+                {
+                    cx.widget_action(
+                        self.widget_uid(),
+                        RoomInfoPaneAction::OpenPeopleProfile(user_id.clone()),
+                    );
+                    break;
+                }
+            }
+
+            if self.button(cx, ids!(header.back_button)).clicked(actions) {
+                self.show_people_page = false;
+                self.redraw(cx);
+            }
+            if self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).clicked(actions) {
+                self.topic_expanded = !self.topic_expanded;
+                self.redraw(cx);
+            }
+            if self.button(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_id_row.copy_room_id_button)).clicked(actions)
+                && let Some(info) = self.info.as_ref()
+            {
+                cx.copy_to_clipboard(&info.room_id);
+                enqueue_popup_notification(
+                    "Room ID copied.",
+                    PopupKind::Success,
+                    Some(2.0),
+                );
+            }
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.invite_button)).clicked(actions) {
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::InviteUser,
+                );
+            }
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.people_button)).clicked(actions) {
+                self.show_people_page = true;
+                self.people_display_count = self.info.as_ref()
+                    .map(|info| info.people_entries.len().min(40))
+                    .unwrap_or(0);
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::ShowPeoplePage,
+                );
+                self.redraw(cx);
+            }
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.report_room_button)).clicked(actions) {
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::ReportRoom,
+                );
+            }
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.leave_room_button)).clicked(actions) {
+                cx.widget_action(
+                    self.widget_uid(),
+                    RoomInfoPaneAction::LeaveRoom,
+                );
+            }
+
+            if self.show_people_page
+                && let Some(info) = self.info.as_ref()
+                && self.people_display_count < info.people_entries.len()
+            {
+                let people_list = self.portal_list(cx, ids!(people_view.people_list));
+                if people_list.scrolled(actions) {
+                    let threshold = self.people_display_count.saturating_sub(5);
+                    if people_list.first_id() + people_list.visible_items() >= threshold {
+                        self.people_display_count = (self.people_display_count + 40).min(info.people_entries.len());
+                        self.redraw(cx);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let Some(info) = self.info.as_ref() else {
+            self.visible = false;
+            return self.view.draw_walk(cx, scope, walk);
+        };
+
+        let panel_width = 320.0;
+        let right_margin = -(self.slide * panel_width);
+        let mut main_content = self.view(cx, ids!(main_content));
+        script_apply_eval!(cx, main_content, {
+            margin.right: #(right_margin)
+        });
+        let bg_alpha = (1.0 - self.slide) * 0.733;
+        let bg_color = vec4(0.0, 0.0, 0.0, bg_alpha);
+        let mut bg_view = self.view(cx, ids!(bg_view));
+        script_apply_eval!(cx, bg_view, {
+            draw_bg +: { color: #(bg_color) }
+        });
+
+        self.button(cx, ids!(header.back_button)).set_visible(cx, self.show_people_page);
+        self.label(cx, ids!(header.title)).set_text(cx, if self.show_people_page { "People" } else { "Info" });
+        self.view(cx, ids!(content_scroll)).set_visible(cx, !self.show_people_page);
+        self.view(cx, ids!(content_scroll.info_view)).set_visible(cx, !self.show_people_page);
+        self.view(cx, ids!(people_view)).set_visible(cx, self.show_people_page);
+
+        self.label(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_name_value)).set_text(cx, &info.room_name);
+        self.label(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_id_row.room_id_value)).set_text(cx, &info.room_id);
+        self.label(cx, ids!(content_scroll.info_view.facts_card.visibility_row.visibility_value)).set_text(cx, &info.visibility);
+        self.label(cx, ids!(content_scroll.info_view.facts_card.encryption_row.encryption_value)).set_text(cx, &info.encryption);
+
+        let topic_chars_len = info.topic.chars().count();
+        let topic_has_more = topic_chars_len > TOPIC_PREVIEW_CHARS;
+        let topic_display_text = if topic_has_more && !self.topic_expanded {
+            let mut preview: String = info.topic.chars().take(TOPIC_PREVIEW_CHARS).collect();
+            preview.push_str("...");
+            preview
+        } else {
+            info.topic.clone()
+        };
+        self.label(cx, ids!(content_scroll.info_view.topic_card.topic_value)).set_text(cx, &topic_display_text);
+        self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).set_visible(cx, topic_has_more);
+        self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).set_text(
+            cx,
+            if self.topic_expanded { "Collapse" } else { "Expand" },
+        );
+
+        let room_avatar = self.avatar(cx, ids!(content_scroll.info_view.summary_card.room_avatar));
+        if let Some(uri) = info.room_avatar_uri.as_ref()
+            && let avatar_cache::AvatarCacheEntry::Loaded(image_data) = avatar_cache::get_or_fetch_avatar(cx, uri)
+        {
+            let res = room_avatar.show_image(
+                cx,
+                None,
+                |cx, img_ref| utils::load_png_or_jpg(&img_ref, cx, &image_data),
+            );
+            if res.is_err() {
+                room_avatar.show_text(cx, None, None, &info.room_avatar_fallback_text);
+            }
+        } else {
+            room_avatar.show_text(cx, None, None, &info.room_avatar_fallback_text);
+        }
+
+        if self.show_people_page && self.people_display_count == 0 {
+            self.people_display_count = info.people_entries.len().min(40);
+        }
+        let visible_people_count = self.people_display_count.min(info.people_entries.len());
+        self.label(cx, ids!(people_view.member_count)).set_text(cx, &info.people_count_text);
+        self.view(cx, ids!(people_view.loading_label)).set_visible(cx, info.show_people_loading);
+        self.view(cx, ids!(people_view.empty_label)).set_visible(cx, !info.show_people_loading && info.people_entries.is_empty());
+        self.view(cx, ids!(people_view.people_list)).set_visible(cx, visible_people_count > 0);
+
+        while let Some(widget) = self.view.draw_walk(cx, scope, walk).step() {
+            let portal_list_ref = widget.as_portal_list();
+            let Some(mut list) = portal_list_ref.borrow_mut() else { continue };
+
+            list.set_item_range(cx, 0, visible_people_count);
+            while let Some(item_id) = list.next_visible_item(cx) {
+                let Some(entry) = info.people_entries.get(item_id) else { continue };
+                let item = list.item(cx, item_id, id!(PersonEntry));
+                item.as_room_info_people_entry().set_entry(cx, entry);
+                item.draw_all(cx, &mut Scope::empty());
+            }
+        }
+        DrawStep::done()
+    }
+}
+
+impl RoomInfoSlidingPane {
+    pub fn is_currently_shown(&self, _cx: &mut Cx) -> bool {
+        self.visible
+    }
+
+    fn set_info(&mut self, cx: &mut Cx, info: RoomInfoPaneInfo) {
+        self.info = Some(info);
+        if self.show_people_page {
+            if let Some(info) = self.info.as_ref() {
+                self.people_display_count = self.people_display_count
+                    .max(40.min(info.people_entries.len()))
+                    .min(info.people_entries.len());
+            }
+        }
+        self.redraw(cx);
+    }
+
+    pub fn show(&mut self, cx: &mut Cx) {
+        self.visible = true;
+        self.is_animating_out = false;
+        self.show_people_page = false;
+        self.topic_expanded = false;
+        self.people_display_count = 0;
+        cx.set_key_focus(self.view.area());
+        self.animator_play(cx, ids!(panel.show));
+        self.view(cx, ids!(bg_view)).set_visible(cx, true);
+        self.view.button(cx, ids!(close_button)).reset_hover(cx);
+        self.redraw(cx);
+    }
+
+    pub fn hide(&mut self, cx: &mut Cx) {
+        if !self.visible {
+            return;
+        }
+        self.is_animating_out = true;
+        self.animator_play(cx, ids!(panel.hide));
+        self.redraw(cx);
+    }
+}
+
+impl RoomInfoSlidingPaneRef {
+    pub fn is_currently_shown(&self, cx: &mut Cx) -> bool {
+        let Some(inner) = self.borrow() else { return false };
+        inner.is_currently_shown(cx)
+    }
+
+    fn set_info(&self, cx: &mut Cx, info: RoomInfoPaneInfo) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_info(cx, info);
+    }
+
+    pub fn show(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show(cx);
+    }
+
+    pub fn hide(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.hide(cx);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ReportRoomModalAction {
+    Close,
+    Submit(String),
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct ReportRoomModal {
+    #[deref]
+    view: View,
+    #[rust]
+    is_showing_error: bool,
+}
+
+impl Widget for ReportRoomModal {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+        self.widget_match_event(cx, event, scope);
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl WidgetMatchEvent for ReportRoomModal {
+    fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        let cancel_button = self.view.button(cx, ids!(buttons.cancel_button));
+        let report_button = self.view.button(cx, ids!(buttons.report_button));
+        let reason_input = self.view.text_input(cx, ids!(reason_input));
+        let mut status_label = self.view.label(cx, ids!(status_label));
+
+        if cancel_button.clicked(actions)
+            || actions
+                .iter()
+                .any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed)))
+        {
+            cx.action(ReportRoomModalAction::Close);
+            return;
+        }
+
+        if self.is_showing_error && reason_input.changed(actions).is_some() {
+            self.is_showing_error = false;
+            status_label.set_text(cx, "");
+            self.view.redraw(cx);
+        }
+
+        if report_button.clicked(actions) || reason_input.returned(actions).is_some() {
+            let reason = reason_input.text().trim().to_string();
+            if reason.is_empty() {
+                self.is_showing_error = true;
+                script_apply_eval!(cx, status_label, {
+                    text: "Please enter a reason before reporting."
+                    draw_text +: {
+                        color: mod.widgets.COLOR_FG_DANGER_RED
+                    }
+                });
+                self.view.redraw(cx);
+                return;
+            }
+            cx.action(ReportRoomModalAction::Submit(reason));
+        }
+    }
+}
+
+impl ReportRoomModal {
+    pub fn show(&mut self, cx: &mut Cx, room_name_id: &RoomNameId) {
+        self.is_showing_error = false;
+        self.view
+            .label(cx, ids!(title))
+            .set_text(cx, "Report Room");
+        self.view.label(cx, ids!(body)).set_text(
+            cx,
+            &format!(
+                "Report {} to your homeserver administrators. Please provide a reason.",
+                room_name_id
+            ),
+        );
+        self.view
+            .text_input(cx, ids!(reason_input))
+            .set_text(cx, "");
+        self.view.label(cx, ids!(status_label)).set_text(cx, "");
+        self.view
+            .button(cx, ids!(buttons.report_button))
+            .set_enabled(cx, true);
+        self.view
+            .button(cx, ids!(buttons.cancel_button))
+            .set_enabled(cx, true);
+        self.view
+            .button(cx, ids!(buttons.report_button))
+            .reset_hover(cx);
+        self.view
+            .button(cx, ids!(buttons.cancel_button))
+            .reset_hover(cx);
+        self.view.redraw(cx);
+    }
+}
+
+impl ReportRoomModalRef {
+    pub fn show(&self, cx: &mut Cx, room_name_id: &RoomNameId) {
+        let Some(mut inner) = self.borrow_mut() else {
+            return;
+        };
+        inner.show(cx, room_name_id);
+    }
+}
+
 /// The main widget that displays a single Matrix room.
 #[derive(Script, Widget)]
 pub struct RoomScreen {
@@ -902,8 +4326,21 @@ pub struct RoomScreen {
     #[rust] is_loaded: bool,
     /// Whether or not all rooms have been loaded (received from the homeserver).
     #[rust] all_rooms_loaded: bool,
+    /// NextFrame subscription for driving streaming typewriter animation.
+    #[rust]
+    streaming_next_frame: NextFrame,
+    /// Timeout used to evict stalled streaming states without per-frame polling.
+    #[rust]
+    streaming_timeout_timer: Timer,
     /// Whether the in-room app service quick actions card is currently visible.
     #[rust] show_app_service_actions: bool,
+    #[rust] threads_pane_state: ThreadsPaneState,
+    #[rust] app_language: AppLanguage,
+    #[rust] app_language_initialized: bool,
+    #[rust] pending_invited_users: HashSet<OwnedUserId>,
+    #[rust] octos_action_button_contexts: HashMap<WidgetUid, OctosActionButtonContext>,
+    #[rust] disabled_octos_action_source_event_ids: HashSet<OwnedEventId>,
+    #[rust] selected_octos_action_by_source_event_id: HashMap<OwnedEventId, SelectedOctosActionState>,
 }
 
 impl Drop for RoomScreen {
@@ -933,10 +4370,123 @@ impl ScriptHook for RoomScreen {
 impl Widget for RoomScreen {
     // Handle events and actions for the RoomScreen widget and its inner Timeline view.
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if !self.app_language_initialized || self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
         let room_screen_widget_uid = self.widget_uid();
         let portal_list = self.portal_list(cx, ids!(timeline.list));
         let user_profile_sliding_pane = self.user_profile_sliding_pane(cx, ids!(user_profile_sliding_pane));
+        let threads_sliding_pane = self.threads_sliding_pane(cx, ids!(threads_sliding_pane));
+        let threads_sliding_pane_widget_uid = threads_sliding_pane.widget_uid();
+        let room_info_sliding_pane = self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane));
+        let room_info_sliding_pane_widget_uid = room_info_sliding_pane.widget_uid();
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
+        set_room_info_action_modal_open(
+            self.view.modal(cx, ids!(report_room_modal)).is_open()
+                || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open()
+        );
+
+        // Streaming animation frame handler
+        if let Some(_ne) = self.streaming_next_frame.is_event(event) {
+            #[cfg(debug_assertions)]
+            #[allow(unused_variables)]
+            let frame_start = std::time::Instant::now();
+
+            if let Some(tl) = self.tl_state.as_mut() {
+                let mut needs_another_frame = false;
+                let mut completed_ids = Vec::new();
+                let mut redraw_candidate_indices = Vec::new();
+
+                for (event_id, state) in tl.streaming_messages.iter_mut() {
+                    if state.needs_frame() {
+                        if state.tick() {
+                            // Invalidate draw cache so item gets re-populated
+                            if let Some(idx) = state.timeline_index {
+                                tl.content_drawn_since_last_update.remove(idx..idx + 1);
+                            }
+                            redraw_candidate_indices.push(state.timeline_index);
+                        }
+                        needs_another_frame |= state.needs_frame();
+                    }
+
+                    if state.is_complete() || state.is_timed_out() {
+                        completed_ids.push(event_id.clone());
+                        redraw_candidate_indices.push(state.timeline_index);
+                    }
+                }
+
+                for id in &completed_ids {
+                    tl.streaming_messages.remove(id);
+                }
+
+                // Safety cap: max 50 streaming entries
+                while tl.streaming_messages.len() > 50 {
+                    if let Some((oldest_id, oldest_idx)) = tl.streaming_messages.iter()
+                        .min_by_key(|(_, s)| s.animation_start_time)
+                        .map(|(id, state)| (id.clone(), state.timeline_index))
+                    {
+                        tl.streaming_messages.remove(&oldest_id);
+                        redraw_candidate_indices.push(oldest_idx);
+                    }
+                }
+
+                if needs_another_frame {
+                    self.streaming_next_frame = cx.new_next_frame();
+                }
+
+                if any_timeline_indices_visible(
+                    redraw_candidate_indices.iter().copied(),
+                    |idx| portal_list.get_item(idx).is_some(),
+                ) {
+                    self.redraw_timeline_list(cx);
+                }
+            }
+
+            #[cfg(debug_assertions)]
+            {
+                if let Some(tl) = self.tl_state.as_ref() {
+                    let elapsed = frame_start.elapsed();
+                    if elapsed.as_millis() > 2 {
+                        log!("Streaming animation frame took {}ms ({} active streams)",
+                            elapsed.as_millis(), tl.streaming_messages.len());
+                    }
+                }
+            }
+
+            self.schedule_stream_timeout(cx);
+        }
+
+        if self.streaming_timeout_timer.is_event(event).is_some() {
+            if let Some(tl) = self.tl_state.as_mut() {
+                let timed_out_entries: Vec<(OwnedEventId, Option<usize>)> = tl
+                    .streaming_messages
+                    .iter()
+                    .filter_map(|(event_id, state)| {
+                        if state.is_timed_out() || state.is_complete() {
+                            Some((event_id.clone(), state.timeline_index))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                for (event_id, _) in &timed_out_entries {
+                    tl.streaming_messages.remove(event_id);
+                }
+
+                if any_timeline_indices_visible(
+                    timed_out_entries.iter().map(|(_, idx)| *idx),
+                    |idx| portal_list.get_item(idx).is_some(),
+                ) {
+                    self.redraw_timeline_list(cx);
+                }
+            }
+
+            self.schedule_stream_timeout(cx);
+        }
 
         // Handle actions here before processing timeline updates.
         // Normally (in most other widgets), the order of event handling doesn't matter much.
@@ -967,7 +4517,9 @@ impl Widget for RoomScreen {
                         .collect();
 
                     let mut tooltip_text = utils::human_readable_list(&tooltip_text_arr, MAX_VISIBLE_AVATARS_IN_READ_RECEIPT);
-                    tooltip_text.push_str(&format!(" reacted with: {}", reaction_data.reaction));
+                    tooltip_text.push_str(&tr_fmt(self.app_language, "room_screen.tooltip.reacted_with_suffix", &[
+                        ("reaction", reaction_data.reaction.as_str()),
+                    ]));
                     cx.widget_action(
                         room_screen_widget_uid, 
                         TooltipAction::HoverIn {
@@ -1036,10 +4588,11 @@ impl Widget for RoomScreen {
                             user_id.as_str()
                         };
                         let room_id = tl.kind.room_id().clone();
+                        let app_language = self.app_language;
                         let content = ConfirmationModalContent {
-                            title_text: "Send Invitation".into(),
-                            body_text: format!("Are you sure you want to invite {username} to this room?").into(),
-                            accept_button_text: Some("Invite".into()),
+                            title_text: tr_key(app_language, "room_screen.modal.invite.title").into(),
+                            body_text: tr_fmt(app_language, "room_screen.modal.invite.body", &[("username", username)]).into(),
+                            accept_button_text: Some(tr_key(app_language, "room_screen.modal.invite.accept").into()),
                             on_accept_clicked: Some(Box::new(move |_cx| {
                                 submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
                             })),
@@ -1053,6 +4606,23 @@ impl Widget for RoomScreen {
             self.handle_message_actions(cx, actions, &portal_list, &loading_pane);
 
             for action in actions {
+                if let Some(RoomsListAction::Selected(selected_room)) = action.downcast_ref() {
+                    if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
+                        self.close_report_room_modal(cx);
+                        self.close_leave_room_confirm_modal(cx);
+                    }
+                }
+                if let Some(AppStateAction::RoomFocused(selected_room)) = action.downcast_ref() {
+                    if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
+                        self.close_report_room_modal(cx);
+                        self.close_leave_room_confirm_modal(cx);
+                    }
+                }
+                if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
+                    self.close_report_room_modal(cx);
+                    self.close_leave_room_confirm_modal(cx);
+                }
+
                 // Handle actions related to restoring the previously-saved state of rooms.
                 if let Some(AppStateAction::RoomLoadedSuccessfully { room_name_id, ..}) = action.downcast_ref() {
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_name_id.room_id()) {
@@ -1066,25 +4636,202 @@ impl Widget for RoomScreen {
                 }
 
                 // Handle InviteResultAction to show popup notifications.
-                if let Some(InviteResultAction::Sent { room_id, .. }) = action.downcast_ref() {
+                if let Some(InviteResultAction::Sent { room_id, user_id }) = action.downcast_ref() {
                     // Only handle if this is for the current room.
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pending_invited_users.insert(user_id.clone());
                         enqueue_popup_notification(
-                            "Sent invite successfully.",
+                            "Invite sent. Waiting for acceptance.",
+                            PopupKind::Info,
+                            Some(4.0),
+                        );
+                        if let Some(app_state) = scope.data.get::<AppState>()
+                            && app_state.bot_settings.enabled
+                        {
+                            if let Ok(bot_user_id) = app_state
+                                .bot_settings
+                                .resolved_bot_user_id_for_room(room_id, current_user_id().as_deref())
+                            {
+                                if &bot_user_id == user_id
+                                    && app_state
+                                        .bot_settings
+                                        .bound_bot_user_id(room_id.as_ref())
+                                        .is_none_or(|existing_bot_user_id| existing_bot_user_id.as_str() != user_id.as_str())
+                                {
+                                    cx.action(AppStateAction::BotRoomBindingUpdated {
+                                        room_id: room_id.clone(),
+                                        bound: true,
+                                        bot_user_id: Some(user_id.clone()),
+                                        warning: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(InviteResultAction::Failed { room_id, user_id, error }) = action.downcast_ref() {
+                    // Only handle if this is for the current room.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pending_invited_users.remove(user_id);
+                        let error_text = error.to_string();
+                        enqueue_popup_notification(
+                            tr_fmt(self.app_language, "room_screen.popup.invite.failed", &[
+                                ("error", error_text.as_str()),
+                            ]),
+                            PopupKind::Error,
+                            None,
+                        );
+                    }
+                }
+                if let Some(ReportRoomResultAction::Sent { room_id }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        enqueue_popup_notification(
+                            "Room reported successfully.",
                             PopupKind::Success,
                             Some(4.0),
                         );
                     }
                 }
-                if let Some(InviteResultAction::Failed { room_id, error, .. }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
+                if let Some(ReportRoomResultAction::Failed { room_id, error }) = action.downcast_ref() {
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
                         enqueue_popup_notification(
-                            format!("Failed to send invite.\n\nError: {error}"),
+                            format!("Failed to report room.\n\nError: {error}"),
                             PopupKind::Error,
-                            None,
+                            Some(5.0),
                         );
                     }
+                }
+                if let Some(ActionResponseResultAction::Failed { room_id, source_event_id, error }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        clear_action_buttons_disabled(
+                            &mut self.disabled_octos_action_source_event_ids,
+                            source_event_id.as_ref(),
+                        );
+                        clear_selected_octos_action(
+                            &mut self.selected_octos_action_by_source_event_id,
+                            source_event_id.as_ref(),
+                        );
+                        self.redraw_timeline_list(cx);
+                        enqueue_popup_notification(
+                            tr_fmt(
+                                self.app_language,
+                                "room_screen.popup.action_response.failed",
+                                &[("error", error.as_str())],
+                            ),
+                            PopupKind::Error,
+                            Some(5.0),
+                        );
+                    }
+                }
+
+                match action
+                    .as_widget_action()
+                    .widget_uid_eq(threads_sliding_pane_widget_uid)
+                    .cast_ref()
+                {
+                    ThreadsPaneAction::OpenThread(thread_root_event_id) => {
+                        let Some(room_name_id) = self.room_name_id.as_ref().cloned() else { continue };
+                        threads_sliding_pane.hide(cx);
+                        cx.widget_action(
+                            room_screen_widget_uid,
+                            RoomsListAction::Selected(SelectedRoom::Thread {
+                                room_name_id,
+                                thread_root_event_id: thread_root_event_id.clone(),
+                            }),
+                        );
+                    }
+                    ThreadsPaneAction::LoadMoreRequested => {
+                        self.request_more_threads(cx, true);
+                    }
+                    ThreadsPaneAction::None => {}
+                }
+
+                match action
+                    .as_widget_action()
+                    .widget_uid_eq(room_info_sliding_pane_widget_uid)
+                    .cast_ref()
+                {
+                    RoomInfoPaneAction::InviteUser => {
+                        if let Some(room_name_id) = self.room_name_id.as_ref().cloned() {
+                            cx.action(InviteModalAction::Open(room_name_id));
+                        }
+                    }
+                    RoomInfoPaneAction::ShowPeoplePage => {
+                        if let Some(tl) = self.tl_state.as_ref() {
+                            submit_async_request(MatrixRequest::GetRoomMembers {
+                                timeline_kind: tl.kind.clone(),
+                                memberships: matrix_sdk::RoomMemberships::JOIN,
+                                local_only: false,
+                            });
+                        }
+                    }
+                    RoomInfoPaneAction::OpenPeopleProfile(user_id) => {
+                        let Some(room_name_id) = self.room_name_id.as_ref().cloned() else { continue };
+                        let room_member = self.tl_state.as_ref()
+                            .and_then(|tl| tl.room_members.as_ref())
+                            .and_then(|members| members.iter().find(|member| member.user_id() == user_id).cloned());
+                        let username = room_member.as_ref()
+                            .and_then(|member| member.display_name().map(ToOwned::to_owned));
+                        let avatar_state = AvatarState::Known(
+                            room_member
+                                .as_ref()
+                                .and_then(|member| member.avatar_url().map(ToOwned::to_owned))
+                        );
+                        let can_change_room_power_levels = self.tl_state.as_ref()
+                            .is_some_and(|tl| tl.user_power.can_change_room_power_levels());
+                        self.show_user_profile(
+                            cx,
+                            &user_profile_sliding_pane,
+                            UserProfilePaneInfo {
+                                profile_and_room_id: UserProfileAndRoomId {
+                                    user_profile: UserProfile {
+                                        user_id: user_id.clone(),
+                                        username,
+                                        avatar_state,
+                                    },
+                                    room_id: room_name_id.room_id().clone(),
+                                },
+                                room_name: room_name_id.to_string(),
+                                room_member,
+                                can_change_room_power_levels,
+                            },
+                        );
+                    }
+                    RoomInfoPaneAction::ReportRoom => {
+                        self.open_report_room_modal(cx);
+                    }
+                    RoomInfoPaneAction::LeaveRoom => {
+                        self.open_leave_room_confirm_modal(cx);
+                    }
+                    RoomInfoPaneAction::None => {}
+                }
+
+                if let Some(RoomThreadsAction::Loaded { room_id, from, threads, prev_batch_token }) = action.downcast_ref() {
+                    if self.threads_pane_state.room_id.as_ref().is_some_and(|current| current == room_id) {
+                        self.on_threads_loaded(
+                            cx,
+                            from.as_ref(),
+                            threads,
+                            prev_batch_token.clone(),
+                        );
+                    }
+                }
+                if let Some(RoomThreadsAction::Failed { room_id, from: _, error }) = action.downcast_ref() {
+                    if self.threads_pane_state.room_id.as_ref().is_some_and(|current| current == room_id) {
+                        self.on_threads_failed(cx, error);
+                    }
+                }
+
+                // When transitioning from offline to online, clear stale `Requested`/`Failed`
+                // entries from per-room caches so they can be re-fetched.
+                if let Some(RoomsListHeaderAction::StateUpdate(new_state)) = action.downcast_ref() {
+                    if !matches!(new_state, State::Offline) {
+                        if let Some(tl) = self.tl_state.as_mut() {
+                            tl.media_cache.clear_all_pending_and_failed_requests();
+                            tl.link_preview_cache.clear_all_pending_and_failed_requests();
+                        }
+                    }
+                    continue;
                 }
 
                 // Handle the highlight animation for a message.
@@ -1151,6 +4898,12 @@ impl Widget for RoomScreen {
             }
 
             self.process_timeline_updates(cx, &portal_list, scope.data.get::<AppState>());
+            if threads_sliding_pane.is_currently_shown(cx) {
+                self.refresh_threads_pane(cx);
+            }
+            if room_info_sliding_pane.is_currently_shown(cx) {
+                self.refresh_room_info_pane(cx);
+            }
 
             // Ideally we would do this elsewhere on the main thread, because it's not room-specific,
             // but it doesn't hurt to do it here.
@@ -1166,18 +4919,36 @@ impl Widget for RoomScreen {
         // We check which overlay views are visible in the order of those views' z-ordering,
         // such that the top-most views get a chance to handle the event first.
         //
+        let room_info_action_modal_open =
+            self.view.modal(cx, ids!(report_room_modal)).is_open()
+            || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open();
         let is_interactive_hit = utils::is_interactive_hit_event(event);
         let is_pane_shown: bool;
-        if loading_pane.is_currently_shown(cx) {
+        if room_info_action_modal_open {
+            is_pane_shown = true;
+        }
+        else if loading_pane.is_currently_shown(cx) {
             is_pane_shown = true;
             if is_interactive_hit {
                 loading_pane.handle_event(cx, event, scope);
+            }
+        }
+        else if threads_sliding_pane.is_currently_shown(cx) {
+            is_pane_shown = true;
+            if is_interactive_hit {
+                threads_sliding_pane.handle_event(cx, event, scope);
             }
         }
         else if user_profile_sliding_pane.is_currently_shown(cx) {
             is_pane_shown = true;
             if is_interactive_hit {
                 user_profile_sliding_pane.handle_event(cx, event, scope);
+            }
+        }
+        else if room_info_sliding_pane.is_currently_shown(cx) {
+            is_pane_shown = true;
+            if is_interactive_hit {
+                room_info_sliding_pane.handle_event(cx, event, scope);
             }
         }
         else {
@@ -1189,63 +4960,22 @@ impl Widget for RoomScreen {
         //       Makepad already delivers most events to all views regardless of visibility,
         //       so the only thing we'd need here is the conditional below.
 
-        if !is_pane_shown || !is_interactive_hit {
-            // Create a Scope with RoomScreenProps containing the room members.
-            // This scope is needed by child widgets like MentionableTextInput during event handling.
-            let room_props = if let Some(tl) = self.tl_state.as_ref() {
-                let room_id = tl.kind.room_id().clone();
-                let room_members = tl.room_members.clone();
-                let (app_service_enabled, app_service_room_bound) = scope
-                    .data
-                    .get::<AppState>()
-                    .map(|app_state| {
-                        (
-                            app_state.bot_settings.enabled,
-                            self.is_app_service_room_bound(app_state, &room_id),
-                        )
-                    })
-                    .unwrap_or((false, false));
-
-                RoomScreenProps {
-                    room_screen_widget_uid,
-                    room_name_id: self.room_name_id.clone().unwrap_or_else(|| RoomNameId::empty(room_id)),
-                    timeline_kind: tl.kind.clone(),
-                    room_members,
-                    room_avatar_url: self.room_avatar_url.clone(),
-                    app_service_enabled,
-                    app_service_room_bound,
-                }
-            } else if let Some(room_name) = &self.room_name_id {
-                // Fallback case: we have a room_name but no tl_state yet
-                RoomScreenProps {
-                    room_screen_widget_uid,
-                    room_name_id: room_name.clone(),
-                    timeline_kind: self.timeline_kind.clone()
-                        .expect("BUG: room_name_id was set but timeline_kind was missing"),
-                    room_members: None,
-                    room_avatar_url: None,
-                    app_service_enabled: false,
-                    app_service_room_bound: false,
-                }
-            } else {
-                // No room selected yet, skip event handling that requires room context
+        if room_info_action_modal_open || !is_pane_shown || !is_interactive_hit {
+            let Some(room_props) = self.build_room_screen_props(cx, scope, room_screen_widget_uid) else {
                 if !is_pane_shown || !is_interactive_hit {
                     return;
                 }
                 log!("RoomScreen handling event with no room_name_id and no tl_state, skipping room-dependent event handling");
-                // Use a dummy room props for non-room-specific events
-                let room_id = owned_room_id!("!dummy:matrix.org");
-                RoomScreenProps {
-                    room_screen_widget_uid,
-                    room_name_id: RoomNameId::empty(room_id.clone()),
-                    timeline_kind: TimelineKind::MainRoom { room_id },
-                    room_members: None,
-                    room_avatar_url: None,
-                    app_service_enabled: false,
-                    app_service_room_bound: false,
-                }
+                return;
             };
-            let mut room_scope = Scope::with_props(&room_props);
+            let mut room_scope = if let Some(app_state) = scope.data.get_mut::<AppState>() {
+                Scope::with_data_props(app_state, &room_props)
+            } else {
+                Scope::with_props(&room_props)
+            };
+            let leave_room_confirm_modal_uid = self
+                .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
+                .widget_uid();
 
 
             // Forward the event to the inner timeline view, but capture any actions it produces
@@ -1273,27 +5003,21 @@ impl Widget for RoomScreen {
                     AppServicePanelAction::OpenCreateBotModal => {
                         if let Some(app_state) = scope.data.get::<AppState>() {
                             if !app_state.bot_settings.enabled {
-                                enqueue_popup_notification(
-                                    "Enable App Service before creating bots in a room.",
-                                    PopupKind::Warning,
-                                    Some(4.0),
+                                self.send_app_service_feedback_message(
+                                    tr_key(self.app_language, "room_screen.popup.app_service.enable_before_create"),
                                 );
                                 self.set_app_service_actions_visible(cx, false);
                             } else if !room_props.app_service_room_bound {
-                                enqueue_popup_notification(
-                                    "Bind BotFather to this room before creating a bot.",
-                                    PopupKind::Warning,
-                                    Some(4.0),
+                                self.send_app_service_feedback_message(
+                                    tr_key(self.app_language, "room_screen.popup.app_service.bind_before_create"),
                                 );
                                 self.set_app_service_actions_visible(cx, false);
                             } else {
                                 self.open_create_bot_modal(cx);
                             }
                         } else {
-                            enqueue_popup_notification(
-                                "App state is unavailable, so bot creation is temporarily unavailable.",
-                                PopupKind::Error,
-                                Some(4.0),
+                            self.send_app_service_feedback_message(
+                                tr_key(self.app_language, "room_screen.popup.app_service.state_unavailable_create"),
                             );
                             self.set_app_service_actions_visible(cx, false);
                         }
@@ -1302,27 +5026,21 @@ impl Widget for RoomScreen {
                     AppServicePanelAction::OpenDeleteBotModal => {
                         if let Some(app_state) = scope.data.get::<AppState>() {
                             if !app_state.bot_settings.enabled {
-                                enqueue_popup_notification(
-                                    "Enable App Service before deleting bots in a room.",
-                                    PopupKind::Warning,
-                                    Some(4.0),
+                                self.send_app_service_feedback_message(
+                                    tr_key(self.app_language, "room_screen.popup.app_service.enable_before_delete"),
                                 );
                                 self.set_app_service_actions_visible(cx, false);
                             } else if !room_props.app_service_room_bound {
-                                enqueue_popup_notification(
-                                    "Bind BotFather to this room before deleting a bot.",
-                                    PopupKind::Warning,
-                                    Some(4.0),
+                                self.send_app_service_feedback_message(
+                                    tr_key(self.app_language, "room_screen.popup.app_service.bind_before_delete"),
                                 );
                                 self.set_app_service_actions_visible(cx, false);
                             } else {
                                 self.open_delete_bot_modal(cx);
                             }
                         } else {
-                            enqueue_popup_notification(
-                                "App state is unavailable, so bot deletion is temporarily unavailable.",
-                                PopupKind::Error,
-                                Some(4.0),
+                            self.send_app_service_feedback_message(
+                                tr_key(self.app_language, "room_screen.popup.app_service.state_unavailable_delete"),
                             );
                             self.set_app_service_actions_visible(cx, false);
                         }
@@ -1334,7 +5052,7 @@ impl Widget for RoomScreen {
                                 cx,
                                 app_state,
                                 "/listbots",
-                                "Sent `/listbots` to BotFather.",
+                                tr_key(self.app_language, "room_screen.popup.bot.sent_listbots").to_string(),
                             );
                         }
                         return false;
@@ -1345,18 +5063,23 @@ impl Widget for RoomScreen {
                                 cx,
                                 app_state,
                                 "/bothelp",
-                                "Sent `/bothelp` to BotFather.",
+                                tr_key(self.app_language, "room_screen.popup.bot.sent_bothelp").to_string(),
                             );
                         }
+                        return false;
+                    }
+                    AppServicePanelAction::ShowBoundBots => {
+                        cx.action(BotBindingModalAction::Open(
+                            room_props.room_name_id.clone(),
+                        ));
+                        self.set_app_service_actions_visible(cx, false);
                         return false;
                     }
                     AppServicePanelAction::Unbind => {
                         if let Some(app_state) = scope.data.get::<AppState>() {
                             if !room_props.app_service_room_bound {
-                                enqueue_popup_notification(
-                                    "This room is not currently bound to BotFather.",
-                                    PopupKind::Warning,
-                                    Some(4.0),
+                                self.send_app_service_feedback_message(
+                                    tr_key(self.app_language, "room_screen.popup.app_service.room_not_bound"),
                                 );
                             } else {
                                 match app_state
@@ -1372,34 +5095,43 @@ impl Widget for RoomScreen {
                                             bound: false,
                                             bot_user_id: bot_user_id.clone(),
                                         });
-                                        enqueue_popup_notification(
-                                            format!(
-                                                "Removing BotFather {bot_user_id} from this room..."
-                                            ),
-                                            PopupKind::Info,
-                                            Some(4.0),
+                                        self.send_app_service_feedback_message(
+                                            tr_fmt(self.app_language, "room_screen.popup.app_service.removing_botfather", &[
+                                                ("bot_user_id", bot_user_id.as_str()),
+                                            ]),
                                         );
                                     }
                                     Err(error) => {
-                                        enqueue_popup_notification(
+                                        self.send_app_service_feedback_message(
                                             error,
-                                            PopupKind::Error,
-                                            Some(4.0),
                                         );
                                     }
                                 }
                             }
                         } else {
-                            enqueue_popup_notification(
-                                "App state is unavailable, so BotFather could not be removed from this room.",
-                                PopupKind::Error,
-                                Some(4.0),
+                            self.send_app_service_feedback_message(
+                                tr_key(self.app_language, "room_screen.popup.app_service.state_unavailable_unbind"),
                             );
                         }
                         self.set_app_service_actions_visible(cx, false);
                         return false;
                     }
                     _ => {}
+                }
+
+                // Handle precomputed member sort ready (from background thread).
+                // Validate by Arc::ptr_eq to reject stale results from a different
+                // member snapshot. The Arc is kept alive in the action to prevent ABA.
+                if let Some(sort_ready) = action.downcast_ref::<crate::cpu_worker::PrecomputedMemberSortReady>() {
+                    if let Some(tl) = self.tl_state.as_mut() {
+                        if tl.kind == sort_ready.timeline_kind {
+                            let is_same = tl.room_members.as_ref()
+                                .is_some_and(|m| Arc::ptr_eq(m, &sort_ready.members_arc));
+                            if is_same {
+                                tl.room_members_sort = Some(sort_ready.sort.clone());
+                            }
+                        }
+                    }
                 }
 
                 match action.downcast_ref::<CreateBotModalAction>() {
@@ -1409,10 +5141,8 @@ impl Widget for RoomScreen {
                     }
                     Some(CreateBotModalAction::Submit(request)) => {
                         let Some(app_state) = scope.data.get::<AppState>() else {
-                            enqueue_popup_notification(
-                                "App state is unavailable, so the create-bot command was not sent.",
-                                PopupKind::Error,
-                                Some(4.0),
+                            self.send_app_service_feedback_message(
+                                tr_key(self.app_language, "room_screen.popup.bot.state_unavailable_create_command"),
                             );
                             self.close_create_bot_modal(cx);
                             return false;
@@ -1436,10 +5166,8 @@ impl Widget for RoomScreen {
                     }
                     Some(DeleteBotModalAction::Submit(request)) => {
                         let Some(app_state) = scope.data.get::<AppState>() else {
-                            enqueue_popup_notification(
-                                "App state is unavailable, so the delete-bot command was not sent.",
-                                PopupKind::Error,
-                                Some(4.0),
+                            self.send_app_service_feedback_message(
+                                tr_key(self.app_language, "room_screen.popup.bot.state_unavailable_delete_command"),
                             );
                             self.close_delete_bot_modal(cx);
                             return false;
@@ -1450,28 +5178,54 @@ impl Widget for RoomScreen {
                     None => {}
                 }
 
+                match action.downcast_ref::<ReportRoomModalAction>() {
+                    Some(ReportRoomModalAction::Close) => {
+                        self.close_report_room_modal(cx);
+                        return false;
+                    }
+                    Some(ReportRoomModalAction::Submit(reason)) => {
+                        let Some(room_id) = self.room_id().cloned() else {
+                            self.close_report_room_modal(cx);
+                            return false;
+                        };
+                        submit_async_request(MatrixRequest::ReportRoom {
+                            room_id,
+                            reason: reason.clone(),
+                        });
+                        self.close_report_room_modal(cx);
+                        return false;
+                    }
+                    None => {}
+                }
+
+                if let ConfirmationModalAction::Close(accepted) = action
+                    .as_widget_action()
+                    .widget_uid_eq(leave_room_confirm_modal_uid)
+                    .cast()
+                {
+                    self.close_leave_room_confirm_modal(cx);
+                    if accepted {
+                        if let Some(room_id) = self.room_id().cloned() {
+                            submit_async_request(MatrixRequest::LeaveRoom {
+                                room_id,
+                            });
+                        }
+                    }
+                    return false;
+                }
+
                 if let MessageAction::ToggleAppServiceActions = action
                     .as_widget_action()
                     .widget_uid_eq(room_screen_widget_uid)
                     .cast()
                 {
                     if room_props.timeline_kind.thread_root_event_id().is_some() {
-                        enqueue_popup_notification(
-                            "Bot commands are only supported in the main room timeline.",
-                            PopupKind::Warning,
-                            Some(4.0),
+                        self.send_app_service_feedback_message(
+                            tr_key(self.app_language, "room_screen.popup.bot.main_timeline_only"),
                         );
                     } else if !room_props.app_service_enabled {
-                        enqueue_popup_notification(
-                            "Enable App Service in Settings before using /bot.",
-                            PopupKind::Warning,
-                            Some(4.0),
-                        );
-                    } else if !room_props.app_service_room_bound {
-                        enqueue_popup_notification(
-                            "Bind BotFather to this room before using /bot.",
-                            PopupKind::Warning,
-                            Some(4.0),
+                        self.send_app_service_feedback_message(
+                            tr_key(self.app_language, "room_screen.popup.bot.enable_in_settings_before_bot"),
                         );
                     } else {
                         self.toggle_app_service_actions(cx);
@@ -1481,16 +5235,33 @@ impl Widget for RoomScreen {
 
                 // Handle the action that requests to show the user profile sliding pane.
                 if let ShowUserProfileAction::ShowUserProfile(profile_and_room_id) = action.as_widget_action().cast() {
+                    let mut profile_and_room_id = profile_and_room_id;
+                    let room_member = self.tl_state.as_ref()
+                        .and_then(|tl| tl.room_members.as_ref())
+                        .and_then(|members| members.iter().find(|member| member.user_id() == profile_and_room_id.user_id).cloned());
+                    if let Some(room_member) = room_member.as_ref() {
+                        if profile_and_room_id.username.is_none() {
+                            profile_and_room_id.username = room_member.display_name().map(ToOwned::to_owned);
+                        }
+                        if !profile_and_room_id.avatar_state.has_avatar() {
+                            profile_and_room_id.avatar_state = AvatarState::Known(
+                                room_member.avatar_url().map(ToOwned::to_owned)
+                            );
+                        }
+                    }
+                    let can_change_room_power_levels = self.tl_state.as_ref()
+                        .is_some_and(|tl| tl.user_power.can_change_room_power_levels());
                     self.show_user_profile(
                         cx,
                         &user_profile_sliding_pane,
                         UserProfilePaneInfo {
                             profile_and_room_id,
                             room_name: self.room_name_id.as_ref().map_or_else(
-                                || UNNAMED_ROOM.to_string(),
+                                || tr_key(self.app_language, "room_screen.fallback.unnamed_room").to_string(),
                                 |r| r.to_string(),
                             ),
-                            room_member: None,
+                            room_member,
+                            can_change_room_power_levels,
                         },
                     );
                 }
@@ -1535,6 +5306,7 @@ impl Widget for RoomScreen {
                 // Keep all unhandled actions so we can add them back to the global action list below.
                 true
             });
+            self.handle_translation_lang_popup_actions(cx, &actions_generated_within_this_room_screen);
             // Add back any unhandled actions to the global action list.
             cx.extend_actions(actions_generated_within_this_room_screen);
         }
@@ -1542,6 +5314,12 @@ impl Widget for RoomScreen {
 
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if !self.app_language_initialized || self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
         // If the room isn't loaded yet, we show the restore status label only.
         if !self.is_loaded {
             let Some(room_name) = &self.room_name_id else {
@@ -1560,13 +5338,19 @@ impl Widget for RoomScreen {
 
 
         let room_screen_widget_uid = self.widget_uid();
-        while let Some(subview) = self.view.draw_walk(cx, scope, walk).step() {
+        let Some(room_props) = self.build_room_screen_props(cx, scope, room_screen_widget_uid) else {
+            return DrawStep::done();
+        };
+        let mut room_scope = if let Some(app_state) = scope.data.get_mut::<AppState>() {
+            Scope::with_data_props(app_state, &room_props)
+        } else {
+            Scope::with_props(&room_props)
+        };
+        self.octos_action_button_contexts.clear();
+        while let Some(subview) = self.view.draw_walk(cx, &mut room_scope, walk).step() {
             // Here, we only need to handle drawing the portal list.
             let portal_list_ref = subview.as_portal_list();
-            let Some(mut list_ref) = portal_list_ref.borrow_mut() else {
-                error!("!!! RoomScreen::draw_walk(): BUG: expected a PortalList widget, but got something else");
-                continue;
-            };
+            let Some(mut list_ref) = portal_list_ref.borrow_mut() else { continue };
             let Some(tl_state) = self.tl_state.as_mut() else {
                 return DrawStep::done();
             };
@@ -1577,6 +5361,16 @@ impl Widget for RoomScreen {
 
             let list = list_ref.deref_mut();
             list.set_item_range(cx, 0, last_item_id);
+
+            let (
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            ) = compute_timeline_bot_context(
+                room_scope.data.get::<AppState>(),
+                tl_state.kind.room_id(),
+                tl_state.room_members.as_ref(),
+            );
 
             while let Some(item_id) = list.next_visible_item(cx) {
                 let item = {
@@ -1617,6 +5411,7 @@ impl Widget for RoomScreen {
                                                 list,
                                                 item_id,
                                                 &tl_state.kind,
+                                                self.app_language,
                                                 event_tl_item,
                                                 msg_like_content,
                                                 prev_event,
@@ -1628,6 +5423,13 @@ impl Widget for RoomScreen {
                                                 &self.pinned_events,
                                                 item_drawn_status,
                                                 room_screen_widget_uid,
+                                                resolved_parent_bot_user_id.as_deref(),
+                                                &room_bot_user_ids,
+                                                &known_bot_user_ids,
+                                                &mut tl_state.streaming_messages,
+                                                &mut self.octos_action_button_contexts,
+                                                &self.disabled_octos_action_source_event_ids,
+                                                &self.selected_octos_action_by_source_event_id,
                                             )
                                         },
                                         // TODO: properly implement `Poll` as a regular Message-like timeline item.
@@ -1636,6 +5438,7 @@ impl Widget for RoomScreen {
                                             list,
                                             item_id,
                                             &tl_state.kind,
+                                            self.app_language,
                                             event_tl_item,
                                             poll_state,
                                             item_drawn_status,
@@ -1645,8 +5448,19 @@ impl Widget for RoomScreen {
                                             list,
                                             item_id,
                                             &tl_state.kind,
+                                            self.app_language,
                                             event_tl_item,
                                             utd,
+                                            item_drawn_status,
+                                        ),
+                                        MsgLikeKind::LiveLocation(live_loc) => populate_small_state_event(
+                                            cx,
+                                            list,
+                                            item_id,
+                                            &tl_state.kind,
+                                            app_language,
+                                            event_tl_item,
+                                            live_loc,
                                             item_drawn_status,
                                         ),
                                         MsgLikeKind::Other(other) => populate_small_state_event(
@@ -1654,6 +5468,7 @@ impl Widget for RoomScreen {
                                             list,
                                             item_id,
                                             &tl_state.kind,
+                                            self.app_language,
                                             event_tl_item,
                                             other,
                                             item_drawn_status,
@@ -1666,6 +5481,7 @@ impl Widget for RoomScreen {
                                 list,
                                 item_id,
                                 &tl_state.kind,
+                                self.app_language,
                                 event_tl_item,
                                 membership_change,
                                 item_drawn_status,
@@ -1675,6 +5491,7 @@ impl Widget for RoomScreen {
                                 list,
                                 item_id,
                                 &tl_state.kind,
+                                self.app_language,
                                 event_tl_item,
                                 profile_change,
                                 item_drawn_status,
@@ -1684,13 +5501,17 @@ impl Widget for RoomScreen {
                                 list,
                                 item_id,
                                 &tl_state.kind,
+                                self.app_language,
                                 event_tl_item,
                                 other,
                                 item_drawn_status,
                             ),
                             unhandled => {
                                 let item = list.item(cx, item_id, id!(SmallStateEvent));
-                                item.label(cx, ids!(content)).set_text(cx, &format!("[Unsupported] {:?}", unhandled));
+                                item.label(cx, ids!(content)).set_text(
+                                    cx,
+                                    &format!("{} {:?}", tr_key(self.app_language, "room_screen.unsupported.prefix"), unhandled),
+                                );
                                 (item, ItemDrawnStatus::both_drawn())
                             }
                         }
@@ -1705,6 +5526,10 @@ impl Widget for RoomScreen {
                         }
                         TimelineItemKind::Virtual(VirtualTimelineItem::ReadMarker) => {
                             let item = list.item(cx, item_id, id!(ReadMarker));
+                            item.label(cx, ids!(date)).set_text(
+                                cx,
+                                tr_key(self.app_language, "room_screen.read_marker.new_messages"),
+                            );
                             (item, ItemDrawnStatus::both_drawn())
                         }
                         TimelineItemKind::Virtual(VirtualTimelineItem::TimelineStart) => {
@@ -1723,16 +5548,21 @@ impl Widget for RoomScreen {
                     item
                     }
                 };
-                item.draw_all(cx, scope);
+                item.draw_all(cx, &mut room_scope);
             }
 
             // If the list is not filling the viewport, we need to back paginate the timeline
             // until we have enough events items to fill the viewport.
-            if !tl_state.fully_paginated && !list.is_filling_viewport() {
+            if tl_state.kind.thread_root_event_id().is_none()
+                && !tl_state.fully_paginated
+                && !tl_state.backwards_pagination_in_flight
+                && !list.is_filling_viewport()
+            {
+                tl_state.backwards_pagination_in_flight = true;
                 log!("Automatically paginating timeline to fill viewport for room {:?}", self.room_name_id);
                 submit_async_request(MatrixRequest::PaginateTimeline {
                     timeline_kind: tl_state.kind.clone(),
-                    num_events: 50,
+                    num_events: VIEWPORT_FILL_PAGINATION_SIZE,
                     direction: PaginationDirection::Backwards,
                 });
             }
@@ -1742,8 +5572,277 @@ impl Widget for RoomScreen {
 }
 
 impl RoomScreen {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.app_language_initialized = true;
+        self.sync_app_language(cx);
+    }
+
+    fn sync_app_language(&mut self, cx: &mut Cx) {
+        self.view
+            .label(cx, ids!(top_space.label))
+            .set_text(cx, tr_key(self.app_language, "room_screen.top_space.loading_earlier"));
+        self.view
+            .room_input_bar(cx, ids!(room_input_bar))
+            .set_app_language(cx, self.app_language);
+        self.sync_translation_lang_popup(cx);
+        self.view.redraw(cx);
+    }
+
+    fn redraw_timeline_list(&self, cx: &mut Cx) {
+        let portal_list = self.portal_list(cx, ids!(timeline.list));
+        if let Some(mut list) = portal_list.borrow_mut() {
+            list.redraw(cx);
+        }
+    }
+
+    fn sync_translation_lang_popup(&mut self, cx: &mut Cx) {
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_en))
+            .set_text(cx, &translation::language_popup_label("en"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_zh))
+            .set_text(cx, &translation::language_popup_label("zh"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_zh_tw))
+            .set_text(cx, &translation::language_popup_label("zh-TW"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_ja))
+            .set_text(cx, &translation::language_popup_label("ja"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_ko))
+            .set_text(cx, &translation::language_popup_label("ko"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_es))
+            .set_text(cx, &translation::language_popup_label("es"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_fr))
+            .set_text(cx, &translation::language_popup_label("fr"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_de))
+            .set_text(cx, &translation::language_popup_label("de"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_ru))
+            .set_text(cx, &translation::language_popup_label("ru"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_pt))
+            .set_text(cx, &translation::language_popup_label("pt"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_ar))
+            .set_text(cx, &translation::language_popup_label("ar"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_vi))
+            .set_text(cx, &translation::language_popup_label("vi"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_th))
+            .set_text(cx, &translation::language_popup_label("th"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_id))
+            .set_text(cx, &translation::language_popup_label("id"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_ms))
+            .set_text(cx, &translation::language_popup_label("ms"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_tr))
+            .set_text(cx, &translation::language_popup_label("tr"));
+        self.view
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_popup.translation_lang_scroll.lang_hi))
+            .set_text(cx, &translation::language_popup_label("hi"));
+    }
+
+    fn build_room_screen_props(
+        &self,
+        cx: &mut Cx,
+        scope: &mut Scope,
+        room_screen_widget_uid: WidgetUid,
+    ) -> Option<RoomScreenProps> {
+        if let Some(tl) = self.tl_state.as_ref() {
+            let room_id = tl.kind.room_id().clone();
+            let room_members = tl.room_members.clone();
+            let is_direct_room = cx.get_global::<RoomsListRef>()
+                .is_direct_room(&room_id)
+                .unwrap_or(false);
+            let (
+                app_service_enabled,
+                app_service_room_bound,
+                has_persisted_management_binding,
+                bound_bot_user_id,
+                resolved_parent_bot_user_id,
+                room_bot_user_ids,
+                known_bot_user_ids,
+            ) = scope
+                .data
+                .get::<AppState>()
+                .map(|app_state| {
+                    let app_service_enabled = app_state.bot_settings.enabled;
+                    let persisted_bound_bot_user_id =
+                        app_state.bot_settings.bound_bot_user_id(&room_id).map(ToOwned::to_owned);
+                    let persisted_room_bot_user_ids = if app_service_enabled {
+                        app_state.bot_settings.bound_bot_user_ids(&room_id)
+                    } else {
+                        Vec::new()
+                    };
+                    let resolved_parent_bot_user_id = if app_service_enabled {
+                        app_state
+                            .bot_settings
+                            .resolved_bot_user_id(current_user_id().as_deref())
+                            .ok()
+                    } else {
+                        None
+                    };
+                    let known_bot_user_ids = if app_service_enabled {
+                        app_state.bot_settings.known_bot_user_ids()
+                    } else {
+                        Vec::new()
+                    };
+                    let has_persisted_management_binding = resolved_parent_bot_user_id
+                        .as_ref()
+                        .is_some_and(|resolved_parent_bot_user_id|
+                            persisted_room_bot_user_ids
+                                .iter()
+                                .any(|bot_user_id| bot_user_id == resolved_parent_bot_user_id)
+                        );
+                    let room_bot_user_ids = room_members
+                        .as_ref()
+                        .map(|members|
+                            collect_room_bot_user_ids(
+                                members.as_ref(),
+                                resolved_parent_bot_user_id.as_deref(),
+                                &known_bot_user_ids,
+                                &persisted_room_bot_user_ids,
+                            )
+                        )
+                        .unwrap_or(persisted_room_bot_user_ids);
+                    let detected_bound_bot_user_id = room_members
+                        .as_ref()
+                        .and_then(|members|
+                            detected_bot_binding_for_members(
+                                app_state,
+                                &room_id,
+                                members.as_ref(),
+                            )
+                        );
+                    let bound_bot_user_id = if app_service_enabled {
+                        persisted_bound_bot_user_id.or(detected_bound_bot_user_id)
+                    } else {
+                        None
+                    };
+                    let app_service_room_bound = bound_bot_user_id.is_some();
+                    (
+                        app_service_enabled,
+                        app_service_room_bound,
+                        has_persisted_management_binding,
+                        bound_bot_user_id,
+                        resolved_parent_bot_user_id,
+                        room_bot_user_ids,
+                        known_bot_user_ids,
+                    )
+                })
+                .unwrap_or((false, false, false, None, None, Vec::new(), Vec::new()));
+
+            Some(RoomScreenProps {
+                room_screen_widget_uid,
+                room_name_id: self.room_name_id.clone().unwrap_or_else(|| RoomNameId::empty(room_id.clone())),
+                timeline_kind: tl.kind.clone(),
+                room_members,
+                is_direct_room,
+                room_bot_user_ids,
+                room_members_sync_pending: tl.room_members_sync_pending,
+                room_members_sort: tl.room_members_sort.clone(),
+                room_avatar_url: self.room_avatar_url.clone(),
+                app_service_enabled,
+                app_service_room_bound,
+                has_persisted_management_binding,
+                bound_bot_user_id,
+                resolved_parent_bot_user_id,
+                known_bot_user_ids,
+            })
+        } else {
+            self.room_name_id.as_ref().map(|room_name| RoomScreenProps {
+                room_screen_widget_uid,
+                room_name_id: room_name.clone(),
+                timeline_kind: self.timeline_kind.clone()
+                    .expect("BUG: room_name_id was set but timeline_kind was missing"),
+                room_members: None,
+                is_direct_room: false,
+                room_bot_user_ids: Vec::new(),
+                room_members_sort: None,
+                room_members_sync_pending: false,
+                room_avatar_url: None,
+                app_service_enabled: false,
+                app_service_room_bound: false,
+                has_persisted_management_binding: false,
+                bound_bot_user_id: None,
+                resolved_parent_bot_user_id: None,
+                known_bot_user_ids: Vec::new(),
+            })
+        }
+    }
+
     fn room_id(&self) -> Option<&OwnedRoomId> {
         self.room_name_id.as_ref().map(|r| r.room_id())
+    }
+
+    /// Extract the text body from a timeline item, if it's a text message.
+    fn extract_message_text(item: &Arc<TimelineItem>) -> Option<String> {
+        let TimelineItemKind::Event(event) = item.kind() else { return None };
+        let TimelineItemContent::MsgLike(_) = event.content() else { return None };
+        Some(plaintext_body_of_timeline_item(event))
+    }
+
+    fn discover_known_bot_user_ids_from_timeline_items(
+        app_state: &AppState,
+        timeline_items: &Vector<Arc<TimelineItem>>,
+    ) -> Vec<OwnedUserId> {
+        let Ok(parent_bot_user_id) = app_state
+            .bot_settings
+            .resolved_bot_user_id(current_user_id().as_deref())
+        else {
+            return Vec::new();
+        };
+
+        let default_server_name = current_user_id()
+            .map(|user_id| user_id.server_name().to_owned());
+        let mut discovered_bot_user_ids = Vec::<OwnedUserId>::new();
+        let mut push_bot_user_id = |bot_user_id: OwnedUserId| {
+            if bot_user_id.as_str() == parent_bot_user_id.as_str() {
+                return;
+            }
+            if !discovered_bot_user_ids
+                .iter()
+                .any(|existing_bot_user_id| existing_bot_user_id.as_str() == bot_user_id.as_str())
+            {
+                discovered_bot_user_ids.push(bot_user_id);
+            }
+        };
+
+        for item in timeline_items {
+            let TimelineItemKind::Event(event_tl_item) = item.kind() else { continue };
+            if event_tl_item.sender().as_str() != parent_bot_user_id.as_str() {
+                continue;
+            }
+            let Some(message_text) = Self::extract_message_text(item) else { continue };
+            for bot_user_id in extract_bot_user_ids_from_listbots_reply(
+                &message_text,
+                default_server_name.as_ref(),
+            ) {
+                push_bot_user_id(bot_user_id);
+            }
+        }
+
+        discovered_bot_user_ids
+    }
+
+    fn schedule_stream_timeout(&mut self, cx: &mut Cx) {
+        cx.stop_timer(self.streaming_timeout_timer);
+        self.streaming_timeout_timer = next_stream_timeout(
+            self.tl_state
+                .as_ref()
+                .into_iter()
+                .flat_map(|tl| tl.streaming_messages.values()),
+        )
+        .map(|duration| cx.start_timeout(duration.as_secs_f64()))
+        .unwrap_or_else(Timer::empty);
     }
 
     fn set_app_service_actions_visible(&mut self, cx: &mut Cx, visible: bool) {
@@ -1761,6 +5860,14 @@ impl RoomScreen {
 
     fn close_delete_bot_modal(&self, cx: &mut Cx) {
         self.view.modal(cx, ids!(delete_bot_modal)).close(cx);
+    }
+
+    fn close_report_room_modal(&self, cx: &mut Cx) {
+        self.view.modal(cx, ids!(report_room_modal)).close(cx);
+    }
+
+    fn close_leave_room_confirm_modal(&self, cx: &mut Cx) {
+        self.view.modal(cx, ids!(leave_room_confirm_modal)).close(cx);
     }
 
     fn open_create_bot_modal(&mut self, cx: &mut Cx) {
@@ -1785,14 +5892,80 @@ impl RoomScreen {
         self.view.modal(cx, ids!(delete_bot_modal)).open(cx);
     }
 
+    fn open_report_room_modal(&mut self, cx: &mut Cx) {
+        let Some(room_name_id) = self.room_name_id.as_ref() else {
+            return;
+        };
+        self.view
+            .report_room_modal(cx, ids!(report_room_modal_inner))
+            .show(cx, room_name_id);
+        self.view.modal(cx, ids!(report_room_modal)).open(cx);
+    }
+
+    fn open_leave_room_confirm_modal(&mut self, cx: &mut Cx) {
+        let Some(room_name_id) = self.room_name_id.as_ref() else {
+            return;
+        };
+        self.view
+            .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
+            .show(cx, ConfirmationModalContent {
+                title_text: String::from("Leave Room").into(),
+                body_text: format!("Are you sure you want to leave {}?", room_name_id).into(),
+                accept_button_text: Some(String::from("Leave").into()),
+                cancel_button_text: Some(String::from("Cancel").into()),
+                ..Default::default()
+            });
+        self.view.modal(cx, ids!(leave_room_confirm_modal)).open(cx);
+    }
+
     fn reset_app_service_ui(&mut self, cx: &mut Cx) {
         self.set_app_service_actions_visible(cx, false);
         self.close_create_bot_modal(cx);
         self.close_delete_bot_modal(cx);
+        self.close_report_room_modal(cx);
+        self.close_leave_room_confirm_modal(cx);
+    }
+
+    fn resolved_app_service_bot_user_id(
+        &self,
+        app_state: &AppState,
+        room_id: &OwnedRoomId,
+    ) -> Option<OwnedUserId> {
+        if let Some(bot_user_id) = app_state.bot_settings.bound_bot_user_id(room_id.as_ref()) {
+            return Some(bot_user_id.to_owned());
+        }
+
+        self.tl_state
+            .as_ref()
+            .filter(|tl| tl.kind.room_id() == room_id)
+            .and_then(|tl| tl.room_members.as_ref())
+            .and_then(|members|
+                detected_bot_binding_for_members(
+                    app_state,
+                    room_id,
+                    members.as_ref(),
+                )
+            )
     }
 
     fn is_app_service_room_bound(&self, app_state: &AppState, room_id: &OwnedRoomId) -> bool {
-        app_state.bot_settings.is_room_bound(room_id)
+        self.resolved_app_service_bot_user_id(app_state, room_id).is_some()
+    }
+
+    fn send_app_service_feedback_message(&self, message: impl Into<String>) {
+        let Some(room_id) = self.room_id().cloned() else {
+            return;
+        };
+        let message = format!("[App Service] {}", message.into());
+        submit_async_request(MatrixRequest::SendMessage {
+            timeline_kind: TimelineKind::MainRoom { room_id },
+            message: RoomMessageEventContent::notice_plain(message),
+            replied_to: None,
+            target_user_id: None,
+            explicit_room: false,
+            #[cfg(feature = "tsp")]
+            sign_with_tsp: false,
+        });
     }
 
     fn send_botfather_command(
@@ -1800,16 +5973,14 @@ impl RoomScreen {
         cx: &mut Cx,
         app_state: &AppState,
         command: &str,
-        success_message: &str,
+        success_message: String,
     ) -> bool {
         let Some(timeline_kind) = self.timeline_kind.clone() else {
             return false;
         };
         if timeline_kind.thread_root_event_id().is_some() {
-            enqueue_popup_notification(
-                "Bot commands are only supported in the main room timeline.",
-                PopupKind::Warning,
-                Some(4.0),
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.bot.main_timeline_only"),
             );
             return false;
         }
@@ -1818,18 +5989,15 @@ impl RoomScreen {
             return false;
         };
         if !app_state.bot_settings.enabled {
-            enqueue_popup_notification(
-                "Enable App Service before using BotFather commands in a room.",
-                PopupKind::Warning,
-                Some(4.0),
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.bot.enable_before_commands"),
             );
             return false;
         }
-        if !self.is_app_service_room_bound(app_state, &room_id) {
-            enqueue_popup_notification(
-                "Bind BotFather to this room before using BotFather commands.",
-                PopupKind::Warning,
-                Some(4.0),
+        let bound_bot_user_id = self.resolved_app_service_bot_user_id(app_state, &room_id);
+        if bound_bot_user_id.is_none() {
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.bot.bind_before_commands"),
             );
             return false;
         }
@@ -1838,11 +6006,13 @@ impl RoomScreen {
             timeline_kind,
             message: RoomMessageEventContent::text_plain(command),
             replied_to: None,
+            target_user_id: bound_bot_user_id,
+            explicit_room: false,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
 
-        enqueue_popup_notification(success_message.to_string(), PopupKind::Info, Some(4.0));
+        self.send_app_service_feedback_message(success_message);
         self.set_app_service_actions_visible(cx, false);
         true
     }
@@ -1859,10 +6029,8 @@ impl RoomScreen {
             return;
         };
         if timeline_kind.thread_root_event_id().is_some() {
-            enqueue_popup_notification(
-                "Bot creation commands are only supported in the main room timeline.",
-                PopupKind::Warning,
-                Some(4.0),
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.bot.creation_main_timeline_only"),
             );
             return;
         }
@@ -1871,18 +6039,14 @@ impl RoomScreen {
             return;
         };
         if !app_state.bot_settings.enabled {
-            enqueue_popup_notification(
-                "Enable App Service before creating bots in a room.",
-                PopupKind::Warning,
-                Some(4.0),
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.app_service.enable_before_create"),
             );
             return;
         }
         if !self.is_app_service_room_bound(app_state, &room_id) {
-            enqueue_popup_notification(
-                "Bind BotFather to this room before creating a bot.",
-                PopupKind::Warning,
-                Some(4.0),
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.app_service.bind_before_create"),
             );
             return;
         }
@@ -1892,7 +6056,7 @@ impl RoomScreen {
             cx,
             app_state,
             &command,
-            &format!("Sent `/createbot` for `{username}` to BotFather."),
+            tr_fmt(self.app_language, "room_screen.popup.bot.sent_createbot", &[("username", username)]),
         ) {
             self.close_create_bot_modal(cx);
         }
@@ -1905,10 +6069,10 @@ impl RoomScreen {
         user_id_or_localpart: &str,
     ) {
         let matrix_user_id =
-            match resolve_delete_bot_user_id(user_id_or_localpart, current_user_id().as_deref()) {
+            match resolve_delete_bot_user_id(user_id_or_localpart, current_user_id().as_deref(), self.app_language) {
                 Ok(user_id) => user_id,
                 Err(error) => {
-                    enqueue_popup_notification(error, PopupKind::Error, Some(4.0));
+                    self.send_app_service_feedback_message(error);
                     return;
                 }
             };
@@ -1918,7 +6082,7 @@ impl RoomScreen {
             cx,
             app_state,
             &command,
-            &format!("Sent `/deletebot` for {matrix_user_id} to BotFather."),
+            tr_fmt(self.app_language, "room_screen.popup.bot.sent_deletebot", &[("matrix_user_id", matrix_user_id.as_str())]),
         ) {
             self.close_delete_bot_modal(cx);
         }
@@ -1938,6 +6102,15 @@ impl RoomScreen {
         let curr_first_id = portal_list.first_id();
         let ui = self.widget_uid();
         let Some(tl) = self.tl_state.as_mut() else { return };
+        let (
+            resolved_parent_bot_user_id,
+            room_bot_user_ids,
+            known_bot_user_ids,
+        ) = compute_timeline_bot_context(
+            app_state,
+            tl.kind.room_id(),
+            tl.room_members.as_ref(),
+        );
 
         let mut done_loading = false;
         let mut should_continue_backwards_pagination = false;
@@ -1947,6 +6120,18 @@ impl RoomScreen {
             num_updates += 1;
             match update {
                 TimelineUpdate::FirstUpdate { initial_items } => {
+                    if let Some(app_state) = app_state {
+                        let discovered_bot_user_ids =
+                            Self::discover_known_bot_user_ids_from_timeline_items(
+                                app_state,
+                                &initial_items,
+                            );
+                        if !discovered_bot_user_ids.is_empty() {
+                            Cx::post_action(AppStateAction::KnownBotUserIdsDiscovered {
+                                bot_user_ids: discovered_bot_user_ids,
+                            });
+                        }
+                    }
                     tl.content_drawn_since_last_update.clear();
                     tl.profile_drawn_since_last_update.clear();
                     tl.fully_paginated = false;
@@ -1955,10 +6140,37 @@ impl RoomScreen {
                     portal_list.set_tail_range(true);
                     jump_to_bottom_button.update_visibility(cx, true);
 
+                    let previous_streaming_messages = std::mem::take(&mut tl.streaming_messages);
+                    let (rebuilt_streaming_messages, should_schedule_frame) =
+                        rebuild_streaming_messages_for_full_snapshot(
+                            streaming_candidates_from_items(&initial_items),
+                            Some(&previous_streaming_messages),
+                        );
+
                     tl.items = initial_items;
+                    tl.streaming_messages = rebuilt_streaming_messages;
+                    refresh_stream_indices(
+                        tl.items.iter().map(item_event_id),
+                        &mut tl.streaming_messages,
+                    );
+                    if should_schedule_frame {
+                        self.streaming_next_frame = cx.new_next_frame();
+                    }
                     done_loading = true;
                 }
                 TimelineUpdate::NewItems { new_items, changed_indices, is_append, clear_cache } => {
+                    if let Some(app_state) = app_state {
+                        let discovered_bot_user_ids =
+                            Self::discover_known_bot_user_ids_from_timeline_items(
+                                app_state,
+                                &new_items,
+                            );
+                        if !discovered_bot_user_ids.is_empty() {
+                            Cx::post_action(AppStateAction::KnownBotUserIdsDiscovered {
+                                bot_user_ids: discovered_bot_user_ids,
+                            });
+                        }
+                    }
                     if new_items.is_empty() {
                         if !tl.items.is_empty() {
                             log!("process_timeline_updates(): timeline (had {} items) was cleared for room {}", tl.items.len(), tl.kind.room_id());
@@ -2041,6 +6253,45 @@ impl RoomScreen {
                         }
                     }
 
+                    let start = changed_indices.start.min(new_items.len());
+                    let end = changed_indices.end.min(new_items.len());
+                    let mut accepted_users: Vec<OwnedUserId> = Vec::new();
+                    let mut room_members_changed = false;
+                    for idx in start..end {
+                        let Some(new_item) = new_items.get(idx) else { continue };
+                        let TimelineItemKind::Event(event_tl_item) = new_item.kind() else { continue };
+                        let TimelineItemContent::MembershipChange(membership_change) = event_tl_item.content() else { continue };
+                        if is_append {
+                            room_members_changed = true;
+                        }
+                        let accepted = matches!(
+                            membership_change.change(),
+                            Some(MembershipChange::InvitationAccepted)
+                            | Some(MembershipChange::Joined)
+                        );
+                        if accepted {
+                            let invited_user_id = event_tl_item.sender().to_owned();
+                            if self.pending_invited_users.contains(&invited_user_id) {
+                                accepted_users.push(invited_user_id);
+                            }
+                        }
+                    }
+                    if room_members_changed {
+                        submit_async_request(MatrixRequest::GetRoomMembers {
+                            timeline_kind: tl.kind.clone(),
+                            memberships: matrix_sdk::RoomMemberships::JOIN,
+                            local_only: false,
+                        });
+                    }
+                    for accepted_user in accepted_users {
+                        self.pending_invited_users.remove(&accepted_user);
+                        enqueue_popup_notification(
+                            format!("{accepted_user} accepted the invite and joined."),
+                            PopupKind::Success,
+                            Some(4.0),
+                        );
+                    }
+
                     if prior_items_changed {
                         // If this RoomScreen is showing the loading pane and has an ongoing backwards pagination request,
                         // then we should update the status message in that loading pane
@@ -2073,7 +6324,93 @@ impl RoomScreen {
                         tl.profile_drawn_since_last_update.remove(changed_indices.clone());
                         // log!("process_timeline_updates(): changed_indices: {changed_indices:?}, items len: {}\ncontent drawn: {:#?}\nprofile drawn: {:#?}", items.len(), tl.content_drawn_since_last_update, tl.profile_drawn_since_last_update);
                     }
+
+                    // --- MSC4357 streaming detection ---
+                    if clear_cache {
+                        let previous_streaming_messages = std::mem::take(&mut tl.streaming_messages);
+                        let (rebuilt_streaming_messages, should_schedule_frame) =
+                            rebuild_streaming_messages_for_full_snapshot(
+                                streaming_candidates_from_items(&new_items),
+                                Some(&previous_streaming_messages),
+                            );
+                        tl.streaming_messages = rebuilt_streaming_messages;
+                        if should_schedule_frame {
+                            self.streaming_next_frame = cx.new_next_frame();
+                        }
+                    } else if !new_items.is_empty() {
+                        let mut should_schedule_frame = false;
+                        let scan_range = streaming_scan_range(
+                            clear_cache,
+                            &changed_indices,
+                            tl.items.len(),
+                            new_items.len(),
+                        );
+
+                        let old_event_ids: HashSet<&EventId> = tl.items.iter()
+                            .filter_map(|item| item_event_id(item))
+                            .collect();
+
+                        for idx in scan_range {
+                            let Some(new_item) = new_items.get(idx) else { continue };
+                            let TimelineItemKind::Event(new_evt) = new_item.kind() else { continue };
+                            let Some(event_id) = new_evt.event_id().map(|id| id.to_owned()) else { continue };
+                            let live = is_msc4357_live(new_evt);
+                            let Some(new_text) = Self::extract_message_text(new_item) else { continue };
+                            let render_full_target = should_render_streaming_full_snapshot(
+                                &new_text,
+                                new_evt.content()
+                                    .as_message()
+                                    .and_then(|message| match message.msgtype() {
+                                        MessageType::Text(TextMessageEventContent { formatted, .. }) => formatted.as_ref(),
+                                        MessageType::Notice(NoticeMessageEventContent { formatted, .. }) => formatted.as_ref(),
+                                        _ => None,
+                                    }),
+                                is_timeline_sender_bot(
+                                    new_evt.sender(),
+                                    resolved_parent_bot_user_id.as_deref(),
+                                    &room_bot_user_ids,
+                                    &known_bot_user_ids,
+                                ),
+                            );
+
+                            if let Some(state) = tl.streaming_messages.get_mut(&event_id) {
+                                let should_invalidate_content = streaming_update_requires_content_invalidation(
+                                    state,
+                                    &new_text,
+                                    live,
+                                    render_full_target,
+                                );
+                                state.update_target(&new_text, live);
+                                state.set_render_full_target(render_full_target);
+                                if should_invalidate_content
+                                    && let Some(idx) = state.timeline_index
+                                {
+                                    tl.content_drawn_since_last_update.remove(idx .. idx + 1);
+                                }
+                                // Schedule frame for animation OR for cleanup of just-completed state
+                                should_schedule_frame |= state.needs_frame() || state.is_complete();
+                                continue;
+                            }
+
+                            if live && !old_event_ids.contains(&*event_id) {
+                                let mut state = StreamingAnimState::new(&new_text, true);
+                                state.set_render_full_target(render_full_target);
+                                should_schedule_frame |= state.needs_frame();
+                                tl.streaming_messages.insert(event_id, state);
+                            }
+                        }
+
+                        if should_schedule_frame {
+                            self.streaming_next_frame = cx.new_next_frame();
+                        }
+                    }
+                    // --- End streaming detection ---
+
                     tl.items = new_items;
+                    refresh_stream_indices(
+                        tl.items.iter().map(item_event_id),
+                        &mut tl.streaming_messages,
+                    );
                     done_loading = true;
                 }
                 TimelineUpdate::NewUnreadMessagesCount(unread_messages_count) => {
@@ -2103,17 +6440,13 @@ impl RoomScreen {
                     if is_valid {
                         // We successfully found the target event, so we can close the loading pane,
                         // reset the loading panestate to `None`, and stop issuing backwards pagination requests.
-                        loading_pane.set_status(cx, "Successfully found replied-to message!");
+                        loading_pane.set_status(cx, tr_key(self.app_language, "room_screen.loading.found_related_message"));
                         loading_pane.set_state(cx, LoadingPaneState::None);
 
                         // NOTE: this code was copied from the `MessageAction::JumpToRelated` handler;
                         //       we should deduplicate them at some point.
                         let speed = 50.0;
-                        // Scroll to the message right above the replied-to message.
-                        // FIXME: `smooth_scroll_to` should accept a scroll offset parameter too,
-                        //       so that we can scroll to the replied-to message and have it
-                        //       appear beneath the top of the viewport.
-                        portal_list.smooth_scroll_to(cx, index.saturating_sub(1), speed, None);
+                        portal_list.smooth_scroll_to(cx, index, speed, None, 10.0);
                         // start highlight animation.
                         tl.message_highlight_animation_state = MessageHighlightAnimationState::Pending {
                             item_id: index
@@ -2126,7 +6459,7 @@ impl RoomScreen {
                         error!("Target event index {index} of {} is out of bounds for room {}", tl.items.len(), tl.kind.room_id());
                         // Show this error in the loading pane, which should already be open.
                         loading_pane.set_state(cx, LoadingPaneState::Error(
-                            String::from("Unable to find related message; it may have been deleted.")
+                            tr_key(self.app_language, "room_screen.loading.related_message_not_found").to_string()
                         ));
                     }
 
@@ -2137,6 +6470,7 @@ impl RoomScreen {
                 }
                 TimelineUpdate::PaginationRunning(direction) => {
                     if direction == PaginationDirection::Backwards {
+                        tl.backwards_pagination_in_flight = true;
                         top_space.set_visible(cx, true);
                         done_loading = false;
                     } else {
@@ -2144,10 +6478,18 @@ impl RoomScreen {
                     }
                 }
                 TimelineUpdate::PaginationError { error, direction } => {
+                    if direction == PaginationDirection::Backwards {
+                        tl.backwards_pagination_in_flight = false;
+                    }
                     error!("Pagination error ({direction}) in {:?}: {error:?}", self.room_name_id);
                     let room_name = self.room_name_id.as_ref().map(|r| r.to_string());
                     enqueue_popup_notification(
-                        utils::stringify_pagination_error(&error, room_name.as_deref().unwrap_or(UNNAMED_ROOM)),
+                        utils::stringify_pagination_error(
+                            &error,
+                            room_name
+                                .as_deref()
+                                .unwrap_or(tr_key(self.app_language, "room_screen.fallback.unnamed_room")),
+                        ),
                         PopupKind::Error,
                         Some(10.0),
                     );
@@ -2155,6 +6497,7 @@ impl RoomScreen {
                 }
                 TimelineUpdate::PaginationIdle { fully_paginated, direction } => {
                     if direction == PaginationDirection::Backwards {
+                        tl.backwards_pagination_in_flight = false;
                         // Don't set `done_loading` to `true` here, because we want to keep the top space visible
                         // (with the "loading" message) until the corresponding `NewItems` update is received.
                         tl.fully_paginated = fully_paginated;
@@ -2199,26 +6542,30 @@ impl RoomScreen {
                     }
                 }
                 TimelineUpdate::RoomMembersSynced => {
-                    // log!("process_timeline_updates(): room members fetched for room {}", tl.kind.room_id());
-                    // Here, to be most efficient, we could redraw only the user avatars and names in the timeline,
-                    // but for now we just fall through and let the final `redraw()` call re-draw the whole timeline view.
+                    tl.awaiting_post_sync_member_refresh = true;
+                    submit_async_request(MatrixRequest::GetRoomMembers {
+                        timeline_kind: tl.kind.clone(),
+                        memberships: matrix_sdk::RoomMemberships::JOIN,
+                        local_only: true,
+                    });
                 }
                 TimelineUpdate::RoomMembersListFetched { members } => {
                     let members = Arc::new(members);
-                    if let Some(app_state) = app_state {
-                        let room_id = tl.kind.room_id().clone();
-                        if let Some(bot_user_id) = detected_bot_binding_for_members(
-                            app_state,
-                            &room_id,
-                            members.as_ref(),
-                        ) {
-                            Cx::post_action(AppStateAction::BotRoomBindingDetected {
-                                room_id,
-                                bot_user_id,
-                            });
-                        }
+                    if tl.awaiting_post_sync_member_refresh {
+                        tl.room_members_sync_pending = false;
+                        tl.awaiting_post_sync_member_refresh = false;
                     }
-                    tl.room_members = Some(members);
+                    // Invalidate old sort before replacing members to prevent
+                    // stale sort + new members mismatch (index out of bounds).
+                    tl.room_members_sort = None;
+                    tl.room_members = Some(Arc::clone(&members));
+                    // Compute new sort in background thread
+                    crate::cpu_worker::spawn_cpu_job(cx, crate::cpu_worker::CpuJob::PrecomputeMemberSort(
+                        crate::cpu_worker::PrecomputeMemberSortJob {
+                            timeline_kind: tl.kind.clone(),
+                            members,
+                        }
+                    ));
                 },
                 TimelineUpdate::MediaFetched(request) => {
                     log!("process_timeline_updates(): media fetched for room {}", tl.kind.room_id());
@@ -2236,17 +6583,29 @@ impl RoomScreen {
                 TimelineUpdate::PinResult { result, pin, .. } => {
                     let (message, auto_dismissal_duration, kind) = match &result {
                         Ok(true) => (
-                            format!("Successfully {} event.", if pin { "pinned" } else { "unpinned" }),
+                            if pin {
+                                tr_key(self.app_language, "room_screen.popup.pin.pinned_success").to_string()
+                            } else {
+                                tr_key(self.app_language, "room_screen.popup.pin.unpinned_success").to_string()
+                            },
                             Some(4.0),
                             PopupKind::Success
                         ),
                         Ok(false) => (
-                            format!("Message was already {}.", if pin { "pinned" } else { "unpinned" }),
+                            if pin {
+                                tr_key(self.app_language, "room_screen.popup.pin.already_pinned").to_string()
+                            } else {
+                                tr_key(self.app_language, "room_screen.popup.pin.already_unpinned").to_string()
+                            },
                             Some(4.0),
                             PopupKind::Info
                         ),
                         Err(e) => (
-                            format!("Failed to {} event. Error: {e}", if pin { "pin" } else { "unpin" }),
+                            tr_fmt(self.app_language, if pin {
+                                "room_screen.popup.pin.pin_failed"
+                            } else {
+                                "room_screen.popup.pin.unpin_failed"
+                            }, &[("error", &e.to_string())]),
                             None,
                             PopupKind::Error
                         ),
@@ -2259,6 +6618,7 @@ impl RoomScreen {
                     // Then, we "process" it later (by turning it into a string) after the
                     // update loop has completed, which avoids unnecessary expensive work
                     // if the list of typing users gets updated many times in a row.
+
                     typing_users = Some(users);
                 }
                 TimelineUpdate::PinnedEvents(pinned_events) => {
@@ -2293,13 +6653,42 @@ impl RoomScreen {
                     tl.tombstone_info = Some(successor_room_details);
                 }
                 TimelineUpdate::LinkPreviewFetched => {}
+                TimelineUpdate::FileUploadConfirmed(file_data) => {
+                    let room_input_bar = self.view.room_input_bar(cx, ids!(room_input_bar));
+                    if let Some(replied_to) = room_input_bar.handle_file_upload_confirmed(cx, &file_data.name) {
+                        submit_async_request(MatrixRequest::SendAttachment {
+                            timeline_kind: tl.kind.clone(),
+                            file_data,
+                            replied_to,
+                            #[cfg(feature = "tsp")]
+                            sign_with_tsp: room_input_bar.is_tsp_signing_enabled(cx),
+                        });
+                    }
+                }
+                TimelineUpdate::FileUploadUpdate { current, total } => {
+                    self.view.room_input_bar(cx, ids!(room_input_bar))
+                        .set_upload_progress(cx, current, total);
+                }
+                TimelineUpdate::FileUploadAbortHandle(handle) => {
+                    self.view.room_input_bar(cx, ids!(room_input_bar))
+                        .set_upload_abort_handle(handle);
+                }
+                TimelineUpdate::FileUploadError { error, file_data } => {
+                    self.view.room_input_bar(cx, ids!(room_input_bar))
+                        .show_upload_error(cx, &error, file_data);
+                }
+                TimelineUpdate::FileUploadComplete => {
+                    self.view.room_input_bar(cx, ids!(room_input_bar))
+                        .hide_upload_progress(cx);
+                }
             }
         }
 
         if should_continue_backwards_pagination {
+            tl.backwards_pagination_in_flight = true;
             submit_async_request(MatrixRequest::PaginateTimeline {
                 timeline_kind: tl.kind.clone(),
-                num_events: 50,
+                num_events: VIEWPORT_FILL_PAGINATION_SIZE,
                 direction: PaginationDirection::Backwards,
             });
         }
@@ -2315,6 +6704,7 @@ impl RoomScreen {
         }
 
         if num_updates > 0 {
+            self.schedule_stream_timeout(cx);
             // log!("Applied {} timeline updates for room {}, redrawing with {} items...", num_updates, tl.kind.room_id(), tl.items.len());
             self.redraw(cx);
         }
@@ -2338,6 +6728,16 @@ impl RoomScreen {
                     let Some(room_name_id) = self.room_name_id.as_ref() else {
                         return false;
                     };
+                    let room_member = self.tl_state.as_ref()
+                        .and_then(|tl| tl.room_members.as_ref())
+                        .and_then(|members| members.iter().find(|member| member.user_id() == user_id).cloned());
+                    let username = room_member.as_ref()
+                        .and_then(|member| member.display_name().map(ToOwned::to_owned));
+                    let avatar_state = room_member.as_ref()
+                        .and_then(|member| member.avatar_url().map(ToOwned::to_owned))
+                        .map_or(AvatarState::Unknown, |avatar_url| AvatarState::Known(Some(avatar_url)));
+                    let can_change_room_power_levels = self.tl_state.as_ref()
+                        .is_some_and(|tl| tl.user_power.can_change_room_power_levels());
                     // There is no synchronous way to get the user's full profile info
                     // including the details of their room membership,
                     // so we fill in with the details we *do* know currently,
@@ -2351,14 +6751,15 @@ impl RoomScreen {
                             profile_and_room_id: UserProfileAndRoomId {
                                 user_profile: UserProfile {
                                     user_id: user_id.to_owned(),
-                                    username: None,
-                                    avatar_state: AvatarState::Unknown,
+                                    username,
+                                    avatar_state,
                                 },
                                 room_id: room_name_id.room_id().clone(),
                             },
                             room_name: room_name_id.to_string(),
                             // TODO: use the extra `via` parameters
-                            room_member: None,
+                            room_member,
+                            can_change_room_power_levels,
                         },
                     );
                     true
@@ -2366,7 +6767,7 @@ impl RoomScreen {
                 MatrixId::Room(room_id) => {
                     if self.room_name_id.as_ref().is_some_and(|r| r.room_id() == room_id) {
                         enqueue_popup_notification(
-                            "You are already viewing that room.",
+                            tr_key(self.app_language, "room_screen.popup.already_viewing_room"),
                             PopupKind::Info,
                             Some(4.0),
                         );
@@ -2403,6 +6804,13 @@ impl RoomScreen {
         };
 
         if let HtmlLinkAction::Clicked { url, .. } = action.as_widget_action().cast() {
+            // Handle mxc:// links (file downloads from Matrix media server)
+            if url.starts_with("mxc://") {
+                let mxc_uri = OwnedMxcUri::from(url.clone());
+                self.handle_mxc_file_download(cx, mxc_uri);
+                return true;
+            }
+
             let mut link_was_handled = false;
             if let Ok(matrix_to_uri) = MatrixToUri::parse(&url) {
                 link_was_handled |= handle_matrix_link(matrix_to_uri.id(), matrix_to_uri.via());
@@ -2416,7 +6824,7 @@ impl RoomScreen {
                 if let Err(e) = robius_open::Uri::new(&url).open() {
                     error!("Failed to open URL {:?}. Error: {:?}", url, e);
                     enqueue_popup_notification(
-                        format!("Could not open URL: {url}"),
+                        tr_fmt(self.app_language, "room_screen.popup.open_url_failed", &[("url", url.as_str())]),
                         PopupKind::Error,
                         Some(10.0),
                     );
@@ -2431,7 +6839,7 @@ impl RoomScreen {
                 if let Err(e) = robius_open::Uri::new(&url).open() {
                     error!("Failed to open URL {:?}. Error: {:?}", url, e);
                     enqueue_popup_notification(
-                        format!("Could not open URL: {url}"),
+                        tr_fmt(self.app_language, "room_screen.popup.open_url_failed", &[("url", url.as_str())]),
                         PopupKind::Error,
                         Some(10.0),
                     );
@@ -2442,6 +6850,27 @@ impl RoomScreen {
         else {
             false
         }
+    }
+
+    /// Handles an mxc:// file download link click.
+    /// Fetches the file from the Matrix media server, saves it with a unique name,
+    /// and opens it with the system default application.
+    fn handle_mxc_file_download(&mut self, _cx: &mut Cx, mxc_uri: OwnedMxcUri) {
+        log!("handle_mxc_file_download: mxc_uri={mxc_uri}");
+
+        enqueue_popup_notification(
+            tr_key(self.app_language, "room_screen.file.downloading").to_string(),
+            PopupKind::Info,
+            Some(3.0),
+        );
+
+        // Download directly using the Matrix client (bypasses MediaCache to avoid
+        // header parsing issues with non-ASCII Content-Disposition headers).
+        let app_language = self.app_language;
+        submit_async_request(MatrixRequest::DownloadAndSaveFile {
+            mxc_uri,
+            app_language,
+        });
     }
 
     /// Handles image clicks in message content by opening the image viewer.
@@ -2511,6 +6940,59 @@ impl RoomScreen {
         portal_list: &PortalListRef,
         loading_pane: &LoadingPaneRef,
     ) {
+        if let Some(clicked_context) = self.octos_action_button_contexts
+            .iter()
+            .find_map(|(widget_uid, context)| {
+                actions.find_widget_action(*widget_uid)
+                    .and_then(|item| matches!(item.cast(), ButtonAction::Clicked(_)).then(|| context.clone()))
+            })
+        {
+            if !are_action_buttons_disabled(
+                &self.disabled_octos_action_source_event_ids,
+                clicked_context.source_event_id.as_ref(),
+            ) {
+                let Some(tl) = self.tl_state.as_ref() else { return };
+                let request = match &clicked_context.request {
+                    OctosActionButtonRequest::Generic { action_id, label, .. } => build_octos_action_response_request(
+                        &tl.kind,
+                        label,
+                        action_id,
+                        clicked_context.source_event_id.as_ref(),
+                        clicked_context.original_sender.as_ref(),
+                    ),
+                    OctosActionButtonRequest::Approval { request_id, title, decision, tool_args_digest, .. } => build_octos_approval_response_request(
+                        &tl.kind,
+                        title,
+                        request_id,
+                        decision,
+                        tool_args_digest,
+                        clicked_context.source_event_id.as_ref(),
+                        clicked_context.original_sender.as_ref(),
+                    ),
+                };
+                mark_action_buttons_disabled(
+                    &mut self.disabled_octos_action_source_event_ids,
+                    &clicked_context.source_event_id,
+                );
+                mark_selected_octos_action(
+                    &mut self.selected_octos_action_by_source_event_id,
+                    &clicked_context.source_event_id,
+                    clicked_context.request.action_id(),
+                    clicked_context.request.label(),
+                    clicked_context.request.style(),
+                );
+                self.redraw_timeline_list(cx);
+                submit_async_request(MatrixRequest::SendActionResponse {
+                    timeline_kind: request.timeline_kind,
+                    content: request.content,
+                    target_user_id: request.target_user_id,
+                    explicit_room: request.explicit_room,
+                    source_event_id: request.source_event_id,
+                });
+            }
+            return;
+        }
+
         let room_screen_widget_uid = self.widget_uid();
         for action in actions {
             match action.as_widget_action().widget_uid_eq(room_screen_widget_uid).cast_ref() {
@@ -2531,7 +7013,7 @@ impl RoomScreen {
                     }
                     else {
                         enqueue_popup_notification(
-                            "Could not find message in timeline to reply to. Please try again.",
+                            tr_key(self.app_language, "room_screen.popup.message.reply_not_found"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2554,7 +7036,7 @@ impl RoomScreen {
                     }
                     else {
                         enqueue_popup_notification(
-                            "Could not find message in timeline to edit. Please try again.",
+                            tr_key(self.app_language, "room_screen.popup.message.edit_not_found"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2582,11 +7064,20 @@ impl RoomScreen {
                     }
                     else {
                         enqueue_popup_notification(
-                            "No recent message available to edit. Please manually select a message to edit.",
+                            tr_key(self.app_language, "room_screen.popup.message.no_recent_editable"),
                             PopupKind::Warning,
                             Some(5.0),
                         );
                     }
+                }
+                MessageAction::MessageSubmittedLocally => {
+                    let Some(tl) = self.tl_state.as_ref() else { continue };
+                    let last_item_idx = tl.items.len().saturating_sub(1);
+                    portal_list.set_first_id_and_scroll(last_item_idx, 0.0);
+                    portal_list.set_tail_range(true);
+                    self.jump_to_bottom_button(cx, ids!(jump_to_bottom_button))
+                        .update_visibility(cx, true);
+                    self.redraw(cx);
                 }
                 MessageAction::Pin(details) => {
                     let Some(tl) = self.tl_state.as_ref() else { return };
@@ -2598,7 +7089,7 @@ impl RoomScreen {
                         });
                     } else {
                         enqueue_popup_notification(
-                            "This event cannot be pinned.",
+                            tr_key(self.app_language, "room_screen.popup.message.cannot_pin"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2614,7 +7105,7 @@ impl RoomScreen {
                         });
                     } else {
                         enqueue_popup_notification(
-                            "This event cannot be unpinned.",
+                            tr_key(self.app_language, "room_screen.popup.message.cannot_unpin"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2627,7 +7118,7 @@ impl RoomScreen {
                     }
                     else {
                         enqueue_popup_notification(
-                            "Could not find message in timeline to copy text from. Please try again.",
+                            tr_key(self.app_language, "room_screen.popup.message.copy_text_not_found"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2664,7 +7155,7 @@ impl RoomScreen {
                     }
                     if !success {
                         enqueue_popup_notification(
-                            "Could not find message in timeline to copy HTML from. Please try again.",
+                            tr_key(self.app_language, "room_screen.popup.message.copy_html_not_found"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2682,7 +7173,7 @@ impl RoomScreen {
                         cx.copy_to_clipboard(&matrix_to_uri.to_string());
                     } else {
                         enqueue_popup_notification(
-                            "Couldn't create permalink to message. Please try again.",
+                            tr_key(self.app_language, "room_screen.popup.message.copy_link_failed"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2697,7 +7188,7 @@ impl RoomScreen {
                     let Some(tl) = self.tl_state.as_ref() else { continue };
                     let Some(event_tl_item) = Self::find_event_in_timeline(&tl.items, details) else {
                         enqueue_popup_notification(
-                            "Could not find message in timeline to view source.",
+                            tr_key(self.app_language, "room_screen.popup.message.view_source_not_found"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2721,7 +7212,7 @@ impl RoomScreen {
                     let Some(related_event_id) = details.related_event_id.as_ref() else {
                         error!("BUG: MessageAction::JumpToRelated had no related event ID.\n{details:#?}");
                         enqueue_popup_notification(
-                            "Could not find related message or event in timeline.",
+                            tr_key(self.app_language, "room_screen.popup.message.related_not_found"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -2757,15 +7248,25 @@ impl RoomScreen {
                         }),
                     );
                 }
+                MessageAction::ShowThreadsPane => {
+                    self.show_threads_pane(cx);
+                }
+                MessageAction::ShowRoomInfoPane => {
+                    self.show_room_info_pane(cx);
+                }
+                MessageAction::ToggleTranslationLangPopup { button_rect } => {
+                    self.toggle_translation_lang_popup(cx, *button_rect);
+                }
                 MessageAction::Redact { details, reason } => {
                     let Some(tl) = self.tl_state.as_ref() else { return };
                     let timeline_event_id = details.timeline_event_id.clone();
                     let timeline_kind = tl.kind.clone();
                     let reason = reason.clone();
+                    let app_language = self.app_language;
                     let content = ConfirmationModalContent {
-                        title_text: "Delete Message".into(),
-                        body_text: "Are you sure you want to delete this message? This cannot be undone.".into(),
-                        accept_button_text: Some("Delete".into()),
+                        title_text: tr_key(app_language, "room_screen.modal.delete_message.title").into(),
+                        body_text: tr_key(app_language, "room_screen.modal.delete_message.body").into(),
+                        accept_button_text: Some(tr_key(app_language, "room_screen.modal.delete_message.accept").into()),
                         on_accept_clicked: Some(Box::new(move |_cx| {
                             submit_async_request(MatrixRequest::RedactMessage {
                                 timeline_kind,
@@ -2791,6 +7292,67 @@ impl RoomScreen {
                 MessageAction::ActionBarClose => { }
                 MessageAction::ToggleAppServiceActions => { }
                 MessageAction::None => { }
+            }
+        }
+    }
+
+    fn toggle_translation_lang_popup(&mut self, cx: &mut Cx, button_rect: Rect) {
+        let translation_lang_modal = self.view.modal(cx, ids!(translation_lang_modal));
+        if translation_lang_modal.is_open() {
+            translation_lang_modal.close(cx);
+            return;
+        }
+
+        let room_screen_rect = self.view.area().clipped_rect(cx);
+        let popup_abs_pos = compute_translation_lang_popup_abs_pos(button_rect, room_screen_rect);
+        self.sync_translation_lang_popup(cx);
+        log!(
+            "Translation popup: button_rect={button_rect:?}, room_screen_rect={room_screen_rect:?}, popup_abs_pos={popup_abs_pos:?}"
+        );
+        if let Some(mut translation_lang_popup) = self
+            .view
+            .view(cx, ids!(translation_lang_modal.content.translation_lang_popup))
+            .borrow_mut()
+        {
+            translation_lang_popup.walk.abs_pos = Some(popup_abs_pos);
+            translation_lang_popup.walk.margin.left = 0.0;
+            translation_lang_popup.walk.margin.top = 0.0;
+            translation_lang_popup.walk.margin.right = 0.0;
+            translation_lang_popup.walk.margin.bottom = 0.0;
+        }
+        translation_lang_modal.open(cx);
+    }
+
+    fn handle_translation_lang_popup_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        let translation_lang_modal = self.view.modal(cx, ids!(translation_lang_modal));
+        if !translation_lang_modal.is_open() {
+            return;
+        }
+
+        let lang_ids: &[(&str, &[LiveId])] = &[
+            ("en", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_en)]),
+            ("zh", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_zh)]),
+            ("zh-TW", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_zh_tw)]),
+            ("ja", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_ja)]),
+            ("ko", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_ko)]),
+            ("es", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_es)]),
+            ("fr", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_fr)]),
+            ("de", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_de)]),
+            ("ru", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_ru)]),
+            ("pt", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_pt)]),
+            ("ar", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_ar)]),
+            ("vi", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_vi)]),
+            ("th", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_th)]),
+            ("id", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_id)]),
+            ("ms", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_ms)]),
+            ("tr", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_tr)]),
+            ("hi", &[live_id!(translation_lang_modal), live_id!(content), live_id!(translation_lang_popup), live_id!(translation_lang_scroll), live_id!(lang_hi)]),
+        ];
+        for &(code, id_path) in lang_ids {
+            if self.button(cx, id_path).clicked(actions) {
+                self.view.room_input_bar(cx, ids!(room_input_bar)).activate_translation_language(cx, code);
+                translation_lang_modal.close(cx);
+                break;
             }
         }
     }
@@ -2832,11 +7394,7 @@ impl RoomScreen {
         if let Some(index) = related_msg_tl_index {
             // log!("The related message {replied_to_event} was immediately found in room {}, scrolling to from index {reply_message_item_id} --> {index} (first ID {}).", tl.kind.room_id(), portal_list.first_id());
             let speed = 50.0;
-            // Scroll to the message right *before* the replied-to message.
-            // FIXME: `smooth_scroll_to` should accept a "scroll offset" (first scroll) parameter too,
-            //       so that we can scroll to the replied-to message and have it
-            //       appear beneath the top of the viewport.
-            portal_list.smooth_scroll_to(cx, index.saturating_sub(1), speed, None);
+            portal_list.smooth_scroll_to(cx, index, speed, None, 10.0);
             // start highlight animation.
             tl.message_highlight_animation_state = MessageHighlightAnimationState::Pending {
                 item_id: index
@@ -2892,6 +7450,249 @@ impl RoomScreen {
         self.redraw(cx);
     }
 
+    fn show_threads_pane(&mut self, cx: &mut Cx) {
+        self.hide_room_info_pane(cx);
+        self.ensure_threads_state_for_current_room();
+        if !self.threads_pane_state.initialized && !self.threads_pane_state.is_loading {
+            self.request_more_threads(cx, false);
+        }
+        self.refresh_threads_pane(cx);
+        self.threads_sliding_pane(cx, ids!(threads_sliding_pane)).show(cx);
+        self.redraw(cx);
+    }
+
+    fn refresh_threads_pane(&mut self, cx: &mut Cx) {
+        let Some(room_name_id) = self.room_name_id.as_ref() else { return };
+        self.threads_sliding_pane(cx, ids!(threads_sliding_pane)).set_info(
+            cx,
+            ThreadsPaneInfo {
+                room_name: room_name_id.to_string(),
+                entries: self.threads_pane_state.entries.iter()
+                    .map(|entry| ThreadsPaneEntryInfo {
+                        thread_root_event_id: entry.thread_root_event_id.clone(),
+                        title: entry.title.clone(),
+                        subtitle: match entry.reply_count {
+                            1 => String::from("1 reply"),
+                            n => format!("{n} replies"),
+                        },
+                        time: utils::relative_format(entry.timestamp)
+                            .unwrap_or_else(|| String::from("")),
+                        preview: entry.latest_reply_preview.clone().unwrap_or_else(|| String::from("Tap to open thread")),
+                    })
+                    .collect(),
+                status_text: self.threads_pane_state.status_text.clone(),
+                show_entries: !self.threads_pane_state.entries.is_empty(),
+                loading_text: if self.threads_pane_state.entries.is_empty() {
+                    String::from("Loading threads...")
+                } else {
+                    String::from("Loading more threads...")
+                },
+                show_loading: self.threads_pane_state.is_loading,
+            },
+        );
+    }
+
+    fn hide_threads_pane(&mut self, cx: &mut Cx) {
+        self.threads_sliding_pane(cx, ids!(threads_sliding_pane)).hide(cx);
+    }
+
+    fn refresh_room_info_pane(&mut self, cx: &mut Cx) {
+        let Some(room_id) = self.room_id().cloned() else { return };
+        let room_name = self.room_name_id.as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| room_id.to_string());
+        let room_avatar_fallback_text = self.room_name_id.as_ref()
+            .and_then(|room_name_id| room_name_id.name_for_avatar().map(ToOwned::to_owned))
+            .unwrap_or_else(|| String::from("?"));
+        let room_avatar_uri = self.room_avatar_url.clone();
+        let (topic, visibility, encryption) = get_client()
+            .and_then(|client| client.get_room(&room_id))
+            .map(|room| {
+                let topic = room.topic()
+                    .unwrap_or_else(|| String::from("No topic"));
+                let visibility = match room.is_public() {
+                    Some(true) => String::from("Public room"),
+                    Some(false) => String::from("Private room"),
+                    None => String::from("Unknown"),
+                };
+                let encryption_state = room.encryption_state();
+                let encryption = if encryption_state.is_unknown() {
+                    String::from("Unknown")
+                } else if encryption_state.is_encrypted() {
+                    String::from("Encrypted")
+                } else {
+                    String::from("Unencrypted")
+                };
+                (topic, visibility, encryption)
+            })
+            .unwrap_or_else(|| (
+                String::from("No topic"),
+                String::from("Unknown"),
+                String::from("Unknown"),
+            ));
+
+        let (people_entries, people_count_text, show_people_loading) = self.tl_state.as_ref()
+            .map(|tl| {
+                let Some(room_members) = tl.room_members.as_ref() else {
+                    return (
+                        Vec::new(),
+                        String::from("People"),
+                        true,
+                    );
+                };
+
+                let mut people_entries: Vec<RoomInfoPeopleEntryInfo> = room_members.iter()
+                    .map(|member| {
+                        let display_name = member.display_name()
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| member.user_id().to_string());
+                        let is_bot = is_likely_bot_member(member, None);
+                        let level = match member.suggested_role_for_power_level() {
+                            RoomMemberRole::Creator => String::from("Creator"),
+                            RoomMemberRole::Administrator => String::from("Admin"),
+                            RoomMemberRole::Moderator => String::from("Moderator"),
+                            RoomMemberRole::User => String::new(),
+                        };
+                        let avatar_fallback_text = utils::user_name_first_letter(&display_name)
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| String::from("?"));
+                        RoomInfoPeopleEntryInfo {
+                            user_id: member.user_id().to_owned(),
+                            display_name,
+                            level,
+                            is_bot,
+                            avatar_uri: member.avatar_url().map(ToOwned::to_owned),
+                            avatar_fallback_text,
+                        }
+                    })
+                    .collect();
+
+                let level_weight = |level: &str| -> u8 {
+                    match level {
+                        "Creator" => 0,
+                        "Admin" => 1,
+                        "Moderator" => 2,
+                        _ => 3,
+                    }
+                };
+                people_entries.sort_by(|a, b| {
+                    level_weight(&a.level)
+                        .cmp(&level_weight(&b.level))
+                        .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+                });
+
+                (
+                    people_entries,
+                    format!("{} Members", room_members.len()),
+                    false,
+                )
+            })
+            .unwrap_or_else(|| (
+                Vec::new(),
+                String::from("People"),
+                true,
+            ));
+
+        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).set_info(
+            cx,
+            RoomInfoPaneInfo {
+                room_name,
+                room_id: room_id.to_string(),
+                topic,
+                visibility,
+                encryption,
+                room_avatar_uri,
+                room_avatar_fallback_text,
+                people_entries,
+                people_count_text,
+                show_people_loading,
+            },
+        );
+    }
+
+    fn show_room_info_pane(&mut self, cx: &mut Cx) {
+        self.hide_threads_pane(cx);
+        self.refresh_room_info_pane(cx);
+        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).show(cx);
+        self.redraw(cx);
+    }
+
+    fn hide_room_info_pane(&mut self, cx: &mut Cx) {
+        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).hide(cx);
+    }
+
+    fn ensure_threads_state_for_current_room(&mut self) {
+        let Some(room_id) = self.room_id().cloned() else { return };
+        if self.threads_pane_state.room_id.as_ref().is_some_and(|current| current == &room_id) {
+            return;
+        }
+        self.threads_pane_state = ThreadsPaneState {
+            room_id: Some(room_id),
+            status_text: String::from("Loading threads..."),
+            ..Default::default()
+        };
+    }
+
+    fn request_more_threads(&mut self, _cx: &mut Cx, load_more: bool) {
+        self.ensure_threads_state_for_current_room();
+        let Some(room_id) = self.threads_pane_state.room_id.clone() else { return };
+        if self.threads_pane_state.is_loading {
+            return;
+        }
+        let from = if load_more {
+            let Some(from) = self.threads_pane_state.prev_batch_token.clone() else { return };
+            Some(from)
+        } else {
+            None
+        };
+        self.threads_pane_state.is_loading = true;
+        if !self.threads_pane_state.initialized {
+            self.threads_pane_state.status_text = String::from("Loading threads...");
+        }
+        submit_async_request(MatrixRequest::ListRoomThreads {
+            room_id,
+            from,
+        });
+    }
+
+    fn on_threads_loaded(
+        &mut self,
+        cx: &mut Cx,
+        _from: Option<&String>,
+        threads: &[FetchedRoomThread],
+        prev_batch_token: Option<String>,
+    ) {
+        self.threads_pane_state.is_loading = false;
+        self.threads_pane_state.initialized = true;
+        self.threads_pane_state.prev_batch_token = prev_batch_token;
+        self.threads_pane_state.entries.extend_from_slice(threads);
+        self.threads_pane_state.entries.sort_by_key(|entry| u64::from(entry.timestamp.0));
+        self.threads_pane_state.entries.dedup_by(|a, b| a.thread_root_event_id == b.thread_root_event_id);
+        self.threads_pane_state.status_text = if self.threads_pane_state.entries.is_empty() {
+            String::from("No threads yet.")
+        } else {
+            String::new()
+        };
+        self.refresh_threads_pane(cx);
+        self.redraw(cx);
+    }
+
+    fn on_threads_failed(&mut self, cx: &mut Cx, error: &str) {
+        self.threads_pane_state.is_loading = false;
+        self.threads_pane_state.initialized = true;
+        if self.threads_pane_state.entries.is_empty() {
+            self.threads_pane_state.status_text = format!("Failed to load threads.\n\nError: {error}");
+        } else {
+            enqueue_popup_notification(
+                format!("Failed to load more threads.\n\nError: {error}"),
+                PopupKind::Error,
+                Some(5.0),
+            );
+        }
+        self.refresh_threads_pane(cx);
+        self.redraw(cx);
+    }
+
     /// Invoke this when this timeline is being shown,
     /// e.g., when the user navigates to this timeline.
     fn show_timeline(&mut self, cx: &mut Cx) {
@@ -2944,8 +7745,12 @@ impl RoomScreen {
                 user_power: UserPowerLevels::all(),
                 // Room members start as None and get populated when fetched from the server
                 room_members: None,
+                room_members_sort: None,
+                    room_members_sync_pending: false,
+                awaiting_post_sync_member_refresh: false,
                 // We assume timelines being viewed for the first time haven't been fully paginated.
                 fully_paginated: false,
+                backwards_pagination_in_flight: false,
                 items: Vector::new(),
                 content_drawn_since_last_update: RangeSet::new(),
                 profile_drawn_since_last_update: RangeSet::new(),
@@ -2957,6 +7762,7 @@ impl RoomScreen {
                 pending_thread_summary_fetches: HashSet::new(),
                 saved_state: SavedState::default(),
                 message_highlight_animation_state: MessageHighlightAnimationState::default(),
+                streaming_messages: HashMap::new(),
                 last_scrolled_index: usize::MAX,
                 prev_first_index: None,
                 scrolled_past_read_marker: false,
@@ -2993,10 +7799,11 @@ impl RoomScreen {
         // when they first open the room, and there might not be any messages yet.
         if is_first_time_being_loaded {
             if !tl_state.fully_paginated {
+                tl_state.backwards_pagination_in_flight = true;
                 log!("Sending a first-time backwards pagination request for {}", tl_state.kind);
                 submit_async_request(MatrixRequest::PaginateTimeline {
                     timeline_kind: tl_state.kind.clone(),
-                    num_events: 50,
+                    num_events: VIEWPORT_FILL_PAGINATION_SIZE,
                     direction: PaginationDirection::Backwards,
                 });
             }
@@ -3004,6 +7811,8 @@ impl RoomScreen {
             // Even though we specify that room member profiles should be lazy-loaded,
             // the matrix server still doesn't consistently send them to our client properly.
             // So we kick off a request to fetch the room members here upon first viewing the room.
+            tl_state.room_members_sync_pending = true;
+            tl_state.awaiting_post_sync_member_refresh = false;
             submit_async_request(MatrixRequest::SyncRoomMemberList {
                 timeline_kind: tl_state.kind.clone(),
             });
@@ -3052,6 +7861,7 @@ impl RoomScreen {
         // Store the tl_state for this room into this RoomScreen widget,
         // such that it can be accessed in future functions like event/draw handlers.
         self.tl_state = Some(tl_state);
+        self.schedule_stream_timeout(cx);
 
         // Now that we have restored the TimelineUiState into this RoomScreen widget,
         // we can proceed to processing pending background updates.
@@ -3063,6 +7873,7 @@ impl RoomScreen {
     /// Invoke this when this RoomScreen/timeline is being hidden or no longer being shown.
     fn hide_timeline(&mut self) {
         let Some(timeline_kind) = self.timeline_kind.clone() else { return };
+        self.streaming_timeout_timer = Timer::empty();
 
         self.save_state();
 
@@ -3087,6 +7898,7 @@ impl RoomScreen {
             subscribe: false,
         });
         self.room_avatar_url = None;
+        self.pending_invited_users.clear();
     }
 
     /// Removes the current room's visual UI state from this widget
@@ -3107,8 +7919,10 @@ impl RoomScreen {
             room_input_bar_state: room_input_bar.save_state(),
         };
         tl.saved_state = state;
-        // Clear room_members to avoid wasting memory (in case this room is never re-opened).
+        // Clear room_members and precomputed sort to avoid wasting memory
+        // (in case this room is never re-opened).
         tl.room_members = None;
+        tl.room_members_sort = None;
         // Store this Timeline's `TimelineUiState` in the global map of states.
         TIMELINE_STATES.with_borrow_mut(|ts| ts.insert(tl.kind.clone(), tl));
     }
@@ -3150,6 +7964,17 @@ impl RoomScreen {
             tl_state.user_power,
             tl_state.tombstone_info.as_ref(),
         );
+
+        refresh_stream_indices(
+            tl_state.items.iter().map(item_event_id),
+            &mut tl_state.streaming_messages,
+        );
+
+        // 3. If there are active streaming animations that can still reveal text,
+        //    re-request the NextFrame event so the animation loop resumes.
+        if tl_state.streaming_messages.values().any(|state| state.needs_frame()) {
+            self.streaming_next_frame = cx.new_next_frame();
+        }
     }
 
     /// Sets this `RoomScreen` widget to display the timeline for the given room.
@@ -3182,6 +8007,9 @@ impl RoomScreen {
 
         self.hide_timeline();
         self.reset_app_service_ui(cx);
+        self.hide_threads_pane(cx);
+        self.hide_room_info_pane(cx);
+        self.threads_pane_state = Default::default();
         // Reset the the state of the inner loading pane.
         self.loading_pane(cx, ids!(loading_pane)).take_state();
 
@@ -3290,7 +8118,8 @@ impl RoomScreen {
         if !portal_list.scrolled(actions) { return };
 
         let first_index = portal_list.first_id();
-        if first_index == 0 && tl.last_scrolled_index > 0 {
+        if first_index == 0 && tl.last_scrolled_index > 0 && !tl.backwards_pagination_in_flight {
+            tl.backwards_pagination_in_flight = true;
             log!("Scrolled up from item {} --> 0, sending back pagination request for room {}",
                 tl.last_scrolled_index, tl.kind,
             );
@@ -3324,9 +8153,18 @@ pub struct RoomScreenProps {
     pub room_name_id: RoomNameId,
     pub timeline_kind: TimelineKind,
     pub room_members: Option<Arc<Vec<RoomMember>>>,
+    pub is_direct_room: bool,
+    pub room_bot_user_ids: Vec<OwnedUserId>,
+    pub room_members_sync_pending: bool,
+    /// Pre-computed sort order for room members (for mention search optimization).
+    pub room_members_sort: Option<Arc<crate::room::member_search::PrecomputedMemberSort>>,
     pub room_avatar_url: Option<OwnedMxcUri>,
     pub app_service_enabled: bool,
     pub app_service_room_bound: bool,
+    pub has_persisted_management_binding: bool,
+    pub bound_bot_user_id: Option<OwnedUserId>,
+    pub resolved_parent_bot_user_id: Option<OwnedUserId>,
+    pub known_bot_user_ids: Vec<OwnedUserId>,
 }
 
 
@@ -3436,7 +8274,7 @@ pub enum TimelineUpdate {
     MediaFetched(MediaRequestParameters),
     /// A notice that one or more members of a this room are currently typing.
     TypingUsers {
-        /// The list of users (their displayable name) who are currently typing in this room.
+        /// The list of display names of users who are currently typing in this room.
         users: Vec<String>,
     },
     /// The result of a pin/unpin request ([`MatrixRequest::PinEvent`]).
@@ -3456,6 +8294,22 @@ pub enum TimelineUpdate {
     Tombstoned(SuccessorRoomDetails),
     /// A notice that link preview data for a URL has been fetched and is now available.
     LinkPreviewFetched,
+    /// User confirmed a file upload via the file upload modal.
+    FileUploadConfirmed(crate::shared::file_upload_modal::FileData),
+    /// Progress update for an ongoing file upload.
+    FileUploadUpdate {
+        current: u64,
+        total: u64,
+    },
+    /// The abort handle for an in-progress file upload.
+    FileUploadAbortHandle(tokio::task::AbortHandle),
+    /// An error occurred during file upload.
+    FileUploadError {
+        error: String,
+        file_data: crate::shared::file_upload_modal::FileData,
+    },
+    /// File upload completed successfully.
+    FileUploadComplete,
 }
 
 thread_local! {
@@ -3482,12 +8336,25 @@ struct TimelineUiState {
     /// The list of room members for this room.
     room_members: Option<Arc<Vec<RoomMember>>>,
 
+    /// Pre-computed sort order for room members (for efficient mention search).
+    room_members_sort: Option<Arc<crate::room::member_search::PrecomputedMemberSort>>,
+
+    /// Whether the initial room-member sync is still in progress for this room.
+    room_members_sync_pending: bool,
+
+    /// Whether we're waiting for a refreshed local member snapshot after sync completion.
+    awaiting_post_sync_member_refresh: bool,
+
     /// Whether this room's timeline has been fully paginated, which means
     /// that the oldest (first) event in the timeline is locally synced and available.
     /// When `true`, further backwards pagination requests will not be sent.
     ///
     /// This must be reset to `false` whenever the timeline is fully cleared.
     fully_paginated: bool,
+
+    /// Whether a backwards pagination request has already been submitted
+    /// and is still in flight.
+    backwards_pagination_in_flight: bool,
 
     /// The list of items (events) in this room's timeline that our client currently knows about.
     items: Vector<Arc<TimelineItem>>,
@@ -3545,6 +8412,10 @@ struct TimelineUiState {
     /// Once the scrolling is started, the state becomes Pending.
     /// If the animation was triggered, the state goes back to Off.
     message_highlight_animation_state: MessageHighlightAnimationState,
+
+    /// Active streaming animations, keyed by event ID.
+    /// Stores the typewriter animation state for messages being streamed by bots.
+    streaming_messages: HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>,
 
     /// The index of the timeline item that was most recently scrolled up past it.
     /// This is used to detect when the user has scrolled up past the second visible item (index 1)
@@ -3668,6 +8539,7 @@ struct FetchedThreadSummary {
     num_replies: u32,
     latest_reply_preview_text: Option<String>,
 }
+
 impl ItemDrawnStatus {
     /// Returns a new `ItemDrawnStatus` with both `profile_drawn` and `content_drawn` set to `false`.
     const fn new() -> Self {
@@ -3695,6 +8567,7 @@ fn populate_message_view(
     list: &mut PortalList,
     item_id: usize,
     timeline_kind: &TimelineKind,
+    app_language: AppLanguage,
     event_tl_item: &EventTimelineItem,
     msg_like_content: &MsgLikeContent,
     prev_event: Option<&Arc<TimelineItem>>,
@@ -3706,9 +8579,22 @@ fn populate_message_view(
     pinned_events: &[OwnedEventId],
     item_drawn_status: ItemDrawnStatus,
     room_screen_widget_uid: WidgetUid,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+    streaming_messages: &mut HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>,
+    action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
+    disabled_action_source_event_ids: &HashSet<OwnedEventId>,
+    selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
 ) -> (WidgetRef, ItemDrawnStatus) {
     let mut new_drawn_status = item_drawn_status;
     let ts_millis = event_tl_item.timestamp();
+    let sender_is_bot = is_timeline_sender_bot(
+        event_tl_item.sender(),
+        resolved_parent_bot_user_id,
+        room_bot_user_ids,
+        known_bot_user_ids,
+    );
 
     let mut is_notice = false; // whether this message is a Notice (automated bot message)
     let mut is_server_notice = false; // whether this message is a Server Notice
@@ -3748,19 +8634,74 @@ fn populate_message_view(
                     if existed && item_drawn_status.content_drawn {
                         (item, true)
                     } else {
-                        let html_or_plaintext_ref =
-                            item.html_or_plaintext(cx, ids!(content.message));
-                        let mut link_preview_ref =
-                            item.link_preview(cx, ids!(content.link_preview_view));
-                        new_drawn_status.content_drawn = populate_text_message_content(
-                            cx,
-                            &html_or_plaintext_ref,
-                            body,
-                            formatted.as_ref(),
-                            Some(&mut link_preview_ref),
-                            Some(media_cache),
-                            Some(link_preview_cache),
-                        );
+                        // Check if this message is being streamed
+                        let is_streaming = event_tl_item.event_id()
+                            .and_then(|eid| streaming_messages.get_mut(&eid.to_owned()));
+
+                        if let Some(state) = is_streaming {
+                            let render_full_snapshot = should_render_streaming_full_snapshot(
+                                body,
+                                formatted.as_ref(),
+                                sender_is_bot,
+                            );
+                            state.set_render_full_target(render_full_snapshot);
+
+                            // STREAMING MODE:
+                            // - markdown-rich bot replies render the latest full snapshot directly
+                            // - plain text keeps the local typewriter prefix with cursor
+                            let mut link_preview_ref =
+                                item.link_preview(cx, ids!(content.link_preview_view));
+                            let (stream_body, stream_formatted) = if render_full_snapshot {
+                                (body.as_str(), formatted.as_ref())
+                            } else {
+                                state.fill_display_buffer();
+                                (state.display_buffer.as_str(), None)
+                            };
+                            let _ = populate_bot_text_message_content(
+                                cx,
+                                &item,
+                                app_language,
+                                stream_body,
+                                stream_formatted,
+                                Some(&mut link_preview_ref),
+                                Some(media_cache),
+                                Some(link_preview_cache),
+                                sender_is_bot,
+                            );
+                            new_drawn_status.content_drawn = false; // force re-render
+                        } else {
+                            // Check for Splash card in custom event field
+                            let splash_code = latest_effective_event_content_json(event_tl_item)
+                                .and_then(|content|
+                                    content
+                                        .get("org.octos.splash_card")
+                                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                                );
+
+                            if let Some(ref splash) = splash_code {
+                                // SPLASH CARD MODE: render native Makepad card
+                                item.view(cx, ids!(content.message)).set_visible(cx, false);
+                                let splash_widget = item.splash(cx, ids!(content.splash_card));
+                                splash_widget.set_visible(cx, true);
+                                splash_widget.set_text(cx, splash);
+                                new_drawn_status.content_drawn = true;
+                            } else {
+                                // NORMAL MODE: existing logic
+                                let mut link_preview_ref =
+                                    item.link_preview(cx, ids!(content.link_preview_view));
+                                new_drawn_status.content_drawn = populate_bot_text_message_content(
+                                    cx,
+                                    &item,
+                                    app_language,
+                                    body,
+                                    formatted.as_ref(),
+                                    Some(&mut link_preview_ref),
+                                    Some(media_cache),
+                                    Some(link_preview_cache),
+                                    sender_is_bot,
+                                );
+                            }
+                        }
                         (item, false)
                     }
                 }
@@ -3778,25 +8719,29 @@ fn populate_message_view(
                     if existed && item_drawn_status.content_drawn {
                         (item, true)
                     } else {
-                        let html_or_plaintext_ref = item.html_or_plaintext(cx, ids!(content.message));
-                        // Apply gray color to all text styles for notice messages.
-                        let mut html_widget = html_or_plaintext_ref.html(cx, ids!(html_view.html));
-                        script_apply_eval!(cx, html_widget, {
-                            font_color: mod.widgets.COLOR_MESSAGE_NOTICE_TEXT,
-                            draw_block +: {
-                                quote_fg_color: mod.widgets.COLOR_MESSAGE_NOTICE_TEXT,
-                            }
-                        });
+                        if !sender_is_bot {
+                            let html_or_plaintext_ref = item.html_or_plaintext(cx, ids!(content.message));
+                            // Apply gray color to all text styles for notice messages.
+                            let mut html_widget = html_or_plaintext_ref.html(cx, ids!(html_view.html));
+                            script_apply_eval!(cx, html_widget, {
+                                font_color: mod.widgets.COLOR_MESSAGE_NOTICE_TEXT,
+                                draw_block +: {
+                                    quote_fg_color: mod.widgets.COLOR_MESSAGE_NOTICE_TEXT,
+                                }
+                            });
+                        }
                         let mut link_preview_ref =
                             item.link_preview(cx, ids!(content.link_preview_view));
-                        new_drawn_status.content_drawn = populate_text_message_content(
+                        new_drawn_status.content_drawn = populate_bot_text_message_content(
                             cx,
-                            &html_or_plaintext_ref,
+                            &item,
+                            app_language,
                             body,
                             formatted.as_ref(),
                             Some(&mut link_preview_ref),
                             Some(media_cache),
                             Some(link_preview_cache),
+                            sender_is_bot,
                         );
                         (item, false)
                     }
@@ -3820,14 +8765,16 @@ fn populate_message_view(
                             }
                         });
                         let formatted = format!(
-                            "<b>Server notice:</b> {}\n\n<i>Notice type:</i>: {}{}{}",
+                            "<b>{}</b> {}\n\n<i>{}</i>: {}{}{}",
+                            tr_key(app_language, "room_screen.server_notice.title"),
                             sn.body,
+                            tr_key(app_language, "room_screen.server_notice.notice_type"),
                             sn.server_notice_type.as_str(),
                             sn.limit_type.as_ref()
-                                .map(|l| format!("\n<i>Limit type:</i> {}", l.as_str()))
+                                .map(|l| format!("\n<i>{}</i> {}", tr_key(app_language, "room_screen.server_notice.limit_type"), l.as_str()))
                                 .unwrap_or_default(),
                             sn.admin_contact.as_ref()
-                                .map(|c| format!("\n<i>Admin contact:</i> {}", c))
+                                .map(|c| format!("\n<i>{}</i> {}", tr_key(app_language, "room_screen.server_notice.admin_contact"), c))
                                 .unwrap_or_default(),
                         );
                         let mut link_preview_ref =
@@ -3835,6 +8782,7 @@ fn populate_message_view(
                         new_drawn_status.content_drawn = populate_text_message_content(
                             cx,
                             &html_or_plaintext_ref,
+                            app_language,
                             &sn.body,
                             Some(&FormattedBody {
                                 format: MessageFormat::Html,
@@ -3889,6 +8837,7 @@ fn populate_message_view(
                         let link_previews_drawn = populate_text_message_content(
                             cx,
                             &html_or_plaintext_ref,
+                            app_language,
                             &body,
                             formatted.as_ref(),
                             Some(&mut link_preview_ref),
@@ -3917,6 +8866,7 @@ fn populate_message_view(
                         let is_image_fully_drawn = populate_image_message_content(
                             cx,
                             &text_or_image_ref,
+                            app_language,
                             image_info,
                             image.source.clone(),
                             msg.body(),
@@ -3942,6 +8892,7 @@ fn populate_message_view(
                         let is_location_fully_drawn = populate_location_message_content(
                             cx,
                             &html_or_plaintext_ref,
+                            app_language,
                             location,
                         );
                         new_drawn_status.content_drawn = is_location_fully_drawn;
@@ -3964,7 +8915,9 @@ fn populate_message_view(
                         new_drawn_status.content_drawn = populate_file_message_content(
                             cx,
                             &html_or_plaintext_ref,
+                            app_language,
                             file_content,
+                            media_cache,
                         );
                         (item, false)
                     }
@@ -3985,6 +8938,7 @@ fn populate_message_view(
                         new_drawn_status.content_drawn = populate_audio_message_content(
                             cx,
                             &html_or_plaintext_ref,
+                            app_language,
                             audio,
                         );
                         (item, false)
@@ -4006,6 +8960,7 @@ fn populate_message_view(
                         new_drawn_status.content_drawn = populate_video_message_content(
                             cx,
                             &html_or_plaintext_ref,
+                            app_language,
                             video,
                         );
                         (item, false)
@@ -4022,8 +8977,11 @@ fn populate_message_view(
                         let formatted = FormattedBody {
                             format: MessageFormat::Html,
                             body: format!(
-                                "<i>Sent a <b>verification request</b> to {}.<br>(Supported methods: {})</i>",
-                                verification.to,
+                                "<i>{}<b>{}</b>{}<br>({}: {})</i>",
+                                tr_key(app_language, "room_screen.verification.sent_prefix"),
+                                tr_key(app_language, "room_screen.verification.request"),
+                                tr_fmt(app_language, "room_screen.verification.sent_to_suffix", &[("user_id", verification.to.as_str())]),
+                                tr_key(app_language, "room_screen.verification.supported_methods"),
                                 verification.methods
                                     .iter()
                                     .map(|m| m.as_str())
@@ -4039,6 +8997,7 @@ fn populate_message_view(
                         new_drawn_status.content_drawn = populate_text_message_content(
                             cx,
                             &html_or_plaintext_ref,
+                            app_language,
                             &verification.body,
                             Some(&formatted),
                             Some(&mut link_preview_ref),
@@ -4056,7 +9015,7 @@ fn populate_message_view(
                     } else {
                         item.label(cx, ids!(content.message)).set_text(
                             cx,
-                            &format!("[Unsupported {:?}]", msg_like_content.kind),
+                            &format!("{} {:?}", tr_key(app_language, "room_screen.unsupported.prefix"), msg_like_content.kind),
                         );
                         new_drawn_status.content_drawn = true;
                         (item, false)
@@ -4085,6 +9044,7 @@ fn populate_message_view(
                     let is_image_fully_drawn = populate_image_message_content(
                         cx,
                         &text_or_image_ref,
+                        app_language,
                         Some(Box::new(image_info.clone())),
                         MediaSource::Plain(owned_mxc_url.clone()),
                         body,
@@ -4123,6 +9083,7 @@ fn populate_message_view(
                 new_drawn_status.content_drawn = populate_redacted_message_content(
                     cx,
                     &html_or_plaintext_ref,
+                    app_language,
                     event_tl_item,
                     timeline_kind.room_id(),
                 );
@@ -4137,7 +9098,7 @@ fn populate_message_view(
             } else {
                 item.label(cx, ids!(content.message)).set_text(
                     cx,
-                    &format!("[Unsupported {:?}] ", other),
+                    &format!("{} {:?} ", tr_key(app_language, "room_screen.unsupported.prefix"), other),
                 );
                 new_drawn_status.content_drawn = true;
                 (item, false)
@@ -4162,6 +9123,7 @@ fn populate_message_view(
             cx,
             &item.view(cx, ids!(replied_to_message)),
             timeline_kind,
+            app_language,
             msg_like_content.in_reply_to.as_ref(),
             event_tl_item.event_id(),
         );
@@ -4170,6 +9132,7 @@ fn populate_message_view(
             &item,
             item_id,
             timeline_kind,
+            app_language,
             msg_like_content,
             event_tl_item,
             fetched_thread_summaries,
@@ -4238,20 +9201,39 @@ fn populate_message_view(
             }
             username_label.set_text(cx, &username);
             new_drawn_status.profile_drawn = profile_drawn;
+
+            // Show/hide the bot badge based on sender's user ID
+            item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, sender_is_bot);
         }
         else {
             // Server notices are drawn with a red color avatar background and username.
             let avatar = item.avatar(cx, ids!(profile.avatar));
             avatar.show_text(cx, Some(COLOR_FG_DANGER_RED), None, "⚠");
-            username_label.set_text(cx, "Server notice");
+            username_label.set_text(cx, tr_key(app_language, "room_screen.server_notice.username"));
             script_apply_eval!(cx, username_label, {
                 draw_text +: {
                     color: (mod.widgets.COLOR_FG_DANGER_RED)
                 }
             });
+            item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, false);
             new_drawn_status.profile_drawn = true;
         }
     }
+
+    let action_button_content = latest_effective_event_content_json(event_tl_item);
+    let original_action_button_content = original_event_content_json(event_tl_item);
+    let source_event_id = event_tl_item.event_id().map(|event_id| event_id.to_owned());
+    populate_octos_action_buttons(
+        cx,
+        &item,
+        action_button_content.as_ref(),
+        original_action_button_content.as_ref(),
+        source_event_id.as_ref(),
+        event_tl_item.sender(),
+        action_button_contexts,
+        disabled_action_source_event_ids,
+        selected_actions,
+    );
 
     // If we've previously drawn the item content, skip all other steps.
     if used_cached_item && item_drawn_status.content_drawn && item_drawn_status.profile_drawn {
@@ -4263,12 +9245,12 @@ fn populate_message_view(
         item.timestamp(cx, ids!(profile.timestamp)).set_date_time(cx, dt);
     }
 
-    // Set the "edited" indicator if this message was edited.
-    if msg_like_content.as_message().is_some_and(|m| m.is_edited()) {
-        item.edited_indicator(cx, ids!(profile.edited_indicator)).set_latest_edit(
-            cx,
-            event_tl_item,
-        );
+    // Suppress "edited" indicator for actively streaming messages.
+    let is_streaming = event_tl_item.event_id()
+        .is_some_and(|eid| streaming_messages.contains_key(&eid.to_owned()));
+    if msg_like_content.as_message().is_some_and(|m| m.is_edited()) && !is_streaming {
+        item.edited_indicator(cx, ids!(profile.edited_indicator))
+            .set_latest_edit(cx, event_tl_item);
     }
 
     #[cfg(feature = "tsp")] {
@@ -4313,6 +9295,7 @@ fn populate_message_view(
 fn populate_text_message_content(
     cx: &mut Cx,
     message_content_widget: &HtmlOrPlaintextRef,
+    app_language: AppLanguage,
     body: &str,
     formatted_body: Option<&FormattedBody>,
     link_preview_ref: Option<&mut LinkPreviewRef>,
@@ -4349,10 +9332,241 @@ fn populate_text_message_content(
             &links,
             media_cache,
             link_preview_cache,
-            &populate_image_message_content,
+            &|cx, text_or_image_ref, image_info_source, original_source, body, media_cache| {
+                populate_image_message_content(
+                    cx,
+                    text_or_image_ref,
+                    app_language,
+                    image_info_source,
+                    original_source,
+                    body,
+                    media_cache,
+                )
+            },
         )
     } else {
         true
+    }
+}
+
+fn populate_bot_text_message_content(
+    cx: &mut Cx,
+    item: &WidgetRef,
+    app_language: AppLanguage,
+    body: &str,
+    formatted_body: Option<&FormattedBody>,
+    link_preview_ref: Option<&mut LinkPreviewRef>,
+    media_cache: Option<&mut MediaCache>,
+    link_preview_cache: Option<&mut LinkPreviewCache>,
+    is_bot_sender: bool,
+) -> bool {
+    let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
+    let bot_card_view = item.view(cx, ids!(content.bot_message_card));
+    let message_view = item.html_or_plaintext(cx, ids!(content.message));
+
+    bot_card_view.set_visible(cx, render_state.show_card);
+    message_view.set_visible(cx, !render_state.show_card);
+
+    if !render_state.show_card {
+        return populate_text_message_content(
+            cx,
+            &message_view,
+            app_language,
+            body,
+            formatted_body,
+            link_preview_ref,
+            media_cache,
+            link_preview_cache,
+        );
+    }
+
+    let status_strip = item.view(cx, ids!(content.bot_message_card.bot_status_strip));
+    status_strip.set_visible(cx, render_state.show_status_strip);
+    if let Some(status) = render_state.status.as_ref() {
+        item.label(cx, ids!(content.bot_message_card.bot_status_strip.bot_status_label))
+            .set_text(cx, status);
+    }
+
+    let provider_label = item.label(cx, ids!(content.bot_message_card.bot_metadata_footer.bot_provider_label));
+    if let Some(provider) = render_state.provider.as_ref() {
+        provider_label.set_text(cx, provider);
+        provider_label.set_visible(cx, true);
+    } else {
+        provider_label.set_visible(cx, false);
+    }
+
+    let footer_label = item.label(cx, ids!(content.bot_message_card.bot_metadata_footer.bot_footer_label));
+    if let Some(footer) = render_state.footer.as_ref() {
+        footer_label.set_text(cx, display_bot_footer_text(footer));
+        footer_label.set_visible(cx, true);
+    } else {
+        footer_label.set_visible(cx, false);
+    }
+    item.view(cx, ids!(content.bot_message_card.bot_metadata_footer))
+        .set_visible(cx, render_state.show_metadata_footer);
+
+    let body_card = item.view(cx, ids!(content.bot_message_card.bot_body_card));
+    body_card.set_visible(cx, render_state.show_body_card);
+    let body_widget = item.html_or_plaintext(cx, ids!(content.bot_message_card.bot_body_card.bot_card_body));
+    let mut markdown_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown));
+    let mut markdown_plain_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown_plain));
+    let code_block_mode = bot_timeline_code_block_mode(&render_state);
+    body_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::None);
+    markdown_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Highlighted);
+    markdown_plain_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Plain);
+
+    if render_state.show_body_card {
+        if code_block_mode != BotTimelineCodeBlockMode::None {
+            match code_block_mode {
+                BotTimelineCodeBlockMode::Highlighted => markdown_widget.set_text(cx, &render_state.body),
+                BotTimelineCodeBlockMode::Plain => markdown_plain_widget.set_text(cx, &render_state.body),
+                BotTimelineCodeBlockMode::None => { }
+            }
+
+            if let (Some(link_preview_ref), Some(media_cache), Some(link_preview_cache)) =
+                (link_preview_ref, media_cache, link_preview_cache)
+            {
+                let mut links = Vec::new();
+                let _ = utils::linkify_get_urls(&render_state.body, false, Some(&mut links));
+                link_preview_ref.populate_below_message(
+                    cx,
+                    &links,
+                    media_cache,
+                    link_preview_cache,
+                    &|cx, text_or_image_ref, image_info_source, original_source, body, media_cache| {
+                        populate_image_message_content(
+                            cx,
+                            text_or_image_ref,
+                            app_language,
+                            image_info_source,
+                            original_source,
+                            body,
+                            media_cache,
+                        )
+                    },
+                )
+            } else {
+                true
+            }
+        } else {
+            let formatted_body_for_card =
+                select_bot_timeline_body_formatted_body(&render_state, formatted_body);
+            populate_text_message_content(
+                cx,
+                &body_widget,
+                app_language,
+                &render_state.body,
+                formatted_body_for_card.as_ref(),
+                link_preview_ref,
+                media_cache,
+                link_preview_cache,
+            )
+        }
+    } else {
+        true
+    }
+}
+
+fn populate_octos_action_buttons(
+    cx: &mut Cx,
+    item: &WidgetRef,
+    content: Option<&serde_json::Value>,
+    original_content: Option<&serde_json::Value>,
+    source_event_id: Option<&OwnedEventId>,
+    original_sender: &UserId,
+    action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
+    disabled_source_event_ids: &HashSet<OwnedEventId>,
+    selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
+) {
+    let container = item.view(cx, ids!(content.action_buttons));
+    let approval_request_view = item.view(cx, ids!(content.action_buttons.approval_request_view));
+    let button_row = item.view(cx, ids!(content.action_buttons.action_button_row));
+    let Some(source_event_id) = source_event_id else {
+        container.set_visible(cx, false);
+        return;
+    };
+
+    let parsed_payload = parse_octos_action_payload_for_render(content, original_content);
+
+    if parsed_payload.malformed_approval_request {
+        warning!("org.octos.approval_request: skipping malformed approval request");
+    }
+
+    let render_state = compute_action_button_render_state(
+        &parsed_payload.actions,
+        parsed_payload.approval_request.as_ref(),
+        current_user_id().as_deref(),
+    );
+    let is_disabled = are_action_buttons_disabled(disabled_source_event_ids, source_event_id.as_ref())
+        || !render_state.buttons_enabled;
+    let selected_action = selected_actions.get(source_event_id);
+    let visible_slots = action_button_render_slots_for_display(&render_state, selected_action);
+
+    container.set_visible(cx, render_state.show_container);
+    button_row.set_visible(cx, render_state.show_button_row && !visible_slots.is_empty());
+    approval_request_view.set_visible(cx, render_state.approval_card.is_some());
+    if let Some(approval_card) = render_state.approval_card.as_ref() {
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_title_label))
+            .set_text(cx, &approval_card.title);
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_summary_label))
+            .set_text(cx, &approval_card.summary);
+    }
+
+    for index in 0..MAX_OCTOS_ACTION_BUTTONS {
+        let (slot_path, primary_path, secondary_path, danger_path) = octos_action_button_paths(index);
+        item.view(cx, slot_path).set_visible(cx, false);
+
+        let primary_button = item.button(cx, primary_path);
+        action_button_contexts.remove(&primary_button.widget_uid());
+        primary_button.set_visible(cx, false);
+        primary_button.set_enabled(cx, !is_disabled);
+
+        let secondary_button = item.button(cx, secondary_path);
+        action_button_contexts.remove(&secondary_button.widget_uid());
+        secondary_button.set_visible(cx, false);
+        secondary_button.set_enabled(cx, !is_disabled);
+
+        let danger_button = item.button(cx, danger_path);
+        action_button_contexts.remove(&danger_button.widget_uid());
+        danger_button.set_visible(cx, false);
+        danger_button.set_enabled(cx, !is_disabled);
+
+        let Some(render_slot) = visible_slots.get(index) else { continue };
+        item.view(cx, slot_path).set_visible(cx, true);
+
+        let active_button = match render_slot.style {
+            OctosActionStyle::Primary => primary_button,
+            OctosActionStyle::Secondary => secondary_button,
+            OctosActionStyle::Danger => danger_button,
+        };
+        active_button.set_visible(cx, true);
+        active_button.set_enabled(cx, !is_disabled);
+        active_button.set_text(cx, &render_slot.label);
+
+        if !is_disabled {
+            let request = if let Some(approval_request) = parsed_payload.approval_request.as_ref() {
+                OctosActionButtonRequest::Approval {
+                    request_id: approval_request.request_id.clone(),
+                    title: approval_request.title.clone(),
+                    decision: render_slot.id.clone(),
+                    label: render_slot.label.clone(),
+                    tool_args_digest: approval_request.tool_args_digest.clone(),
+                    style: render_slot.style,
+                }
+            } else {
+                OctosActionButtonRequest::Generic {
+                    action_id: render_slot.id.clone(),
+                    label: render_slot.label.clone(),
+                    style: render_slot.style,
+                }
+            };
+
+            action_button_contexts.insert(active_button.widget_uid(), OctosActionButtonContext {
+                source_event_id: source_event_id.clone(),
+                original_sender: original_sender.to_owned(),
+                request,
+            });
+        }
     }
 }
 
@@ -4362,6 +9576,7 @@ fn populate_text_message_content(
 fn populate_image_message_content(
     cx: &mut Cx,
     text_or_image_ref: &TextOrImageRef,
+    app_language: AppLanguage,
     image_info_source: Option<Box<ImageInfo>>,
     original_source: MediaSource,
     body: &str,
@@ -4379,7 +9594,7 @@ fn populate_image_message_content(
         if ImageFormat::from_mimetype(mime).is_none() {
             text_or_image_ref.show_text(
                 cx,
-                format!("{body}\n\nUnsupported type {mime:?}"),
+                tr_fmt(app_language, "room_screen.image.unsupported_type", &[("body", body), ("mime", mime)]),
             );
             return true; // consider this as fully drawn
         }
@@ -4397,7 +9612,7 @@ fn populate_image_message_content(
                         .map(|()| img.size_in_pixels(cx).unwrap_or_default())
                 });
                 if let Err(e) = show_image_result {
-                    let err_str = format!("{body}\n\nFailed to display image: {e:?}");
+                    let err_str = tr_fmt(app_language, "room_screen.image.failed_to_display", &[("body", body), ("error", &format!("{e:?}"))]);
                     error!("{err_str}");
                     text_or_image_ref.show_text(cx, &err_str);
                 }
@@ -4445,7 +9660,7 @@ fn populate_image_message_content(
                         }
                     });
                     if let Err(e) = show_image_result {
-                        let err_str = format!("{body}\n\nFailed to display image: {e:?}");
+                        let err_str = tr_fmt(app_language, "room_screen.image.failed_to_display", &[("body", body), ("error", &format!("{e:?}"))]);
                         error!("{err_str}");
                         text_or_image_ref.show_text(cx, &err_str);
                     }
@@ -4458,7 +9673,7 @@ fn populate_image_message_content(
                     return;
                 }
                 text_or_image_ref
-                    .show_text(cx, format!("{body}\n\nFailed to fetch image from {:?}", mxc_uri));
+                    .show_text(cx, tr_fmt(app_language, "room_screen.image.failed_to_fetch", &[("body", body), ("mxc_uri", &format!("{mxc_uri:?}"))]));
                 // For now, we consider this as being "complete". In the future, we could support
                 // retrying to fetch thumbnail of the image on a user click/tap.
                 fully_drawn = true;
@@ -4472,7 +9687,7 @@ fn populate_image_message_content(
                 // We consider this as "fully drawn" since we don't yet support encryption.
                 text_or_image_ref.show_text(
                     cx,
-                    format!("{body}\n\n[TODO] fetch encrypted image at {:?}", encrypted.url)
+                    tr_fmt(app_language, "room_screen.image.encrypted_todo", &[("body", body), ("url", &format!("{:?}", encrypted.url))])
                 );
             },
             MediaSource::Plain(mxc_uri) => {
@@ -4489,7 +9704,7 @@ fn populate_image_message_content(
             fetch_and_show_media_source(cx, media_source, image_info);
         }
         None => {
-            text_or_image_ref.show_text(cx, "{body}\n\nImage message had no source URL.");
+            text_or_image_ref.show_text(cx, tr_fmt(app_language, "room_screen.image.no_source_url", &[("body", body)]));
             fully_drawn = true;
         }
     }
@@ -4501,12 +9716,17 @@ fn populate_image_message_content(
 /// Draws a file message's content into the given `message_content_widget`.
 ///
 /// Returns whether the file message content was fully drawn.
+///
+/// File download is NOT triggered automatically during rendering.
+/// The user must click the `mxc://` link in the rendered HTML to initiate
+/// the download via the existing `RobrixHtmlLinkAction` handler.
 fn populate_file_message_content(
     cx: &mut Cx,
     message_content_widget: &HtmlOrPlaintextRef,
+    app_language: AppLanguage,
     file_content: &FileMessageEventContent,
+    _media_cache: &mut MediaCache,
 ) -> bool {
-    // Display the file name, human-readable size, caption, and a button to download it.
     let filename = htmlize::escape_text(file_content.filename());
     let size = file_content
         .info
@@ -4514,16 +9734,30 @@ fn populate_file_message_content(
         .and_then(|info| info.size)
         .map(|bytes| format!("  ({})", ByteSize::b(bytes.into())))
         .unwrap_or_default();
+    // Escape caption to prevent HTML injection from untrusted message content
     let caption = file_content.formatted_caption()
-        .map(|fb| format!("<br><i>{}</i>", fb.body))
-        .or_else(|| file_content.caption().map(|c| format!("<br><i>{c}</i>")))
+        .map(|fb| format!("<br><i>{}</i>", htmlize::escape_text(&fb.body)))
+        .or_else(|| file_content.caption().map(|c| format!("<br><i>{}</i>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
-    // TODO: add a button to download the file
+    // Build a clickable mxc:// link so the user can explicitly trigger download.
+    // The link is handled by `RobrixHtmlLinkAction` / `robius_open` in the room screen.
+    let download_link = match &file_content.source {
+        MediaSource::Plain(mxc_uri) => {
+            format!(
+                "<br>→ <a href=\"{}\">{}</a>",
+                htmlize::escape_text(mxc_uri.as_str()),
+                tr_key(app_language, "room_screen.file.download"),
+            )
+        }
+        MediaSource::Encrypted(_) => {
+            format!("<br>→ <i>{}</i>", tr_key(app_language, "room_screen.file.encrypted_not_supported"))
+        }
+    };
 
     message_content_widget.show_html(
         cx,
-        format!("<b>{filename}</b>{size}{caption}<br> → <i>File download not yet supported.</i>"),
+        format!("<b>{filename}</b>{size}{caption}{download_link}"),
     );
     true
 }
@@ -4534,6 +9768,7 @@ fn populate_file_message_content(
 fn populate_audio_message_content(
     cx: &mut Cx,
     message_content_widget: &HtmlOrPlaintextRef,
+    app_language: AppLanguage,
     audio: &AudioMessageEventContent,
 ) -> bool {
     // Display the file name, human-readable size, caption, and a button to download it.
@@ -4563,7 +9798,13 @@ fn populate_audio_message_content(
 
     message_content_widget.show_html(
         cx,
-        format!("Audio: <b>{filename}</b>{mime}{duration}{size}{caption}<br> → <i>Audio playback not yet supported.</i>"),
+        tr_fmt(app_language, "room_screen.audio.preview_html", &[
+            ("filename", &filename),
+            ("mime", mime.as_str()),
+            ("duration", duration.as_str()),
+            ("size", size.as_str()),
+            ("caption", caption.as_str()),
+        ]),
     );
     true
 }
@@ -4575,6 +9816,7 @@ fn populate_audio_message_content(
 fn populate_video_message_content(
     cx: &mut Cx,
     message_content_widget: &HtmlOrPlaintextRef,
+    app_language: AppLanguage,
     video: &VideoMessageEventContent,
 ) -> bool {
     // Display the file name, human-readable size, caption, and a button to download it.
@@ -4607,7 +9849,14 @@ fn populate_video_message_content(
 
     message_content_widget.show_html(
         cx,
-        format!("Video: <b>{filename}</b>{mime}{duration}{size}{dimensions}{caption}<br> → <i>Video playback not yet supported.</i>"),
+        tr_fmt(app_language, "room_screen.video.preview_html", &[
+            ("filename", &filename),
+            ("mime", mime.as_str()),
+            ("duration", duration.as_str()),
+            ("size", size.as_str()),
+            ("dimensions", dimensions.as_str()),
+            ("caption", caption.as_str()),
+        ]),
     );
     true
 }
@@ -4620,6 +9869,7 @@ fn populate_video_message_content(
 fn populate_location_message_content(
     cx: &mut Cx,
     message_content_widget: &HtmlOrPlaintextRef,
+    app_language: AppLanguage,
     location: &LocationMessageEventContent,
 ) -> bool {
     let coords = location.geo_uri
@@ -4641,19 +9891,26 @@ fn populate_location_message_content(
         let safe_short_lat = htmlize::escape_text(short_lat);
         let safe_short_long = htmlize::escape_text(short_long);
         let html_body = format!(
-            "Location: <a href=\"{}\">{safe_short_lat},{safe_short_long}</a><br>\
+            "{} <a href=\"{}\">{safe_short_lat},{safe_short_long}</a><br>\
             <ul>\
-            <li><a href=\"https://www.openstreetmap.org/?mlat={safe_lat}&amp;mlon={safe_long}#map=15/{safe_lat}/{safe_long}\">Open in OpenStreetMap</a></li>\
-            <li><a href=\"https://www.google.com/maps/search/?api=1&amp;query={safe_lat},{safe_long}\">Open in Google Maps</a></li>\
-            <li><a href=\"https://maps.apple.com/?ll={safe_lat},{safe_long}&amp;q={safe_lat},{safe_long}\">Open in Apple Maps</a></li>\
+            <li><a href=\"https://www.openstreetmap.org/?mlat={safe_lat}&amp;mlon={safe_long}#map=15/{safe_lat}/{safe_long}\">{}</a></li>\
+            <li><a href=\"https://www.google.com/maps/search/?api=1&amp;query={safe_lat},{safe_long}\">{}</a></li>\
+            <li><a href=\"https://maps.apple.com/?ll={safe_lat},{safe_long}&amp;q={safe_lat},{safe_long}\">{}</a></li>\
             </ul>",
+            tr_key(app_language, "room_screen.location.label"),
             safe_geo_uri,
+            tr_key(app_language, "room_screen.location.open_osm"),
+            tr_key(app_language, "room_screen.location.open_google_maps"),
+            tr_key(app_language, "room_screen.location.open_apple_maps"),
         );
         message_content_widget.show_html(cx, html_body);
     } else {
+        let escaped_body = htmlize::escape_text(&location.body);
         message_content_widget.show_html(
             cx,
-            format!("<i>[Location invalid]</i> {}", htmlize::escape_text(&location.body))
+            tr_fmt(app_language, "room_screen.location.invalid_html", &[
+                ("body", &escaped_body),
+            ])
         );
     }
 
@@ -4670,6 +9927,7 @@ fn populate_location_message_content(
 fn populate_redacted_message_content(
     cx: &mut Cx,
     message_content_widget: &HtmlOrPlaintextRef,
+    app_language: AppLanguage,
     event_tl_item: &EventTimelineItem,
     room_id: &OwnedRoomId,
 ) -> bool {
@@ -4694,8 +9952,13 @@ fn populate_redacted_message_content(
         if redactor == event_tl_item.sender() {
             fully_drawn = true;
             match reason {
-                Some(r) => format!("⛔ <i>Deleted their own message. Reason: \"{}\".</i>", htmlize::escape_text(r)),
-                None => String::from("⛔ <i>Deleted their own message.</i>"),
+                Some(r) => {
+                    let escaped_reason = htmlize::escape_text(r);
+                    tr_fmt(app_language, "room_screen.redacted.self_with_reason", &[
+                        ("reason", &escaped_reason),
+                    ])
+                }
+                None => tr_key(app_language, "room_screen.redacted.self").to_string(),
             }
         } else {
             // Try to get the displayable name of the user who redacted this message.
@@ -4708,16 +9971,21 @@ fn populate_redacted_message_content(
             fully_drawn = redactor_name.was_found();
             let redactor_name_esc = htmlize::escape_text(redactor_name.as_deref().unwrap_or(redactor.as_str()));
             match reason {
-                Some(r) => format!("⛔ <i>{} deleted this message. Reason: \"{}\".</i>",
-                    redactor_name_esc,
-                    htmlize::escape_text(r),
-                ),
-                None => format!("⛔ <i>{} deleted this message.</i>", redactor_name_esc),
+                Some(r) => {
+                    let escaped_reason = htmlize::escape_text(r);
+                    tr_fmt(app_language, "room_screen.redacted.other_with_reason", &[
+                        ("redactor", &redactor_name_esc),
+                        ("reason", &escaped_reason),
+                    ])
+                }
+                None => tr_fmt(app_language, "room_screen.redacted.other", &[
+                    ("redactor", &redactor_name_esc),
+                ]),
             }
         }
     } else {
         fully_drawn = true;
-        String::from("⛔ <i>Message deleted.</i>")
+        tr_key(app_language, "room_screen.redacted.generic").to_string()
     };
     message_content_widget.show_html(cx, html);
     fully_drawn
@@ -4740,6 +10008,7 @@ fn draw_replied_to_message(
     cx: &mut Cx2d,
     replied_to_message_view: &ViewRef,
     timeline_kind: &TimelineKind,
+    app_language: AppLanguage,
     in_reply_to: Option<&InReplyToDetails>,
     message_event_id: Option<&EventId>,
 ) -> bool {
@@ -4771,6 +10040,7 @@ fn draw_replied_to_message(
                 populate_preview_of_timeline_item(
                     cx,
                     &msg_body,
+                    app_language,
                     &replied_to_event.content,
                     &replied_to_event.sender,
                     &in_reply_to_username,
@@ -4780,26 +10050,26 @@ fn draw_replied_to_message(
                 fully_drawn = true;
                 replied_to_message_view
                     .label(cx, ids!(replied_to_message_content.reply_preview_username))
-                    .set_text(cx, "[Error fetching username]");
+                    .set_text(cx, tr_key(app_language, "room_screen.reply_preview.error_username"));
                 replied_to_message_view
                     .avatar(cx, ids!(replied_to_message_content.reply_preview_avatar))
                     .show_text(cx, None, None, "?");
                 replied_to_message_view
                     .html_or_plaintext(cx, ids!(replied_to_message_content.reply_preview_body))
-                    .show_plaintext(cx, "[Error fetching replied-to event]");
+                    .show_plaintext(cx, tr_key(app_language, "room_screen.reply_preview.error_event"));
             }
             td @ TimelineDetails::Pending | td @ TimelineDetails::Unavailable => {
                 // We don't have the replied-to message yet, so we can't fully draw the preview.
                 fully_drawn = false;
                 replied_to_message_view
                     .label(cx, ids!(replied_to_message_content.reply_preview_username))
-                    .set_text(cx, "[Loading username...]");
+                    .set_text(cx, tr_key(app_language, "room_screen.reply_preview.loading_username"));
                 replied_to_message_view
                     .avatar(cx, ids!(replied_to_message_content.reply_preview_avatar))
                     .show_text(cx, None, None, "?");
                 replied_to_message_view
                     .html_or_plaintext(cx, ids!(replied_to_message_content.reply_preview_body))
-                    .show_plaintext(cx, "[Loading replied-to message...]");
+                    .show_plaintext(cx, tr_key(app_language, "room_screen.reply_preview.loading_event"));
 
                 // Confusingly, we need to fetch the details of the `message` (the event that is the reply),
                 // not the details of the original event that this `message` is replying to.
@@ -4832,6 +10102,7 @@ fn populate_thread_root_summary(
     item: &WidgetRef,
     timeline_item_index: usize,
     timeline_kind: &TimelineKind,
+    app_language: AppLanguage,
     msg_like_content: &MsgLikeContent,
     event_tl_item: &EventTimelineItem,
     fetched_thread_summaries: &HashMap<OwnedEventId, FetchedThreadSummary>,
@@ -4901,18 +10172,18 @@ fn populate_thread_root_summary(
                 }
             }
             fetched_summary.and_then(|fs| fs.latest_reply_preview_text.as_deref())
-                .unwrap_or("<i>Loading latest reply...</i>")
+                .unwrap_or(tr_key(app_language, "room_screen.thread_summary.loading_latest_reply"))
                 .into()
         }
         TimelineDetails::Error(_) => {
             fully_drawn = true; // consider this fully drawn since there's no point retrying.
-            "<i>Unable to load latest reply</i>".into()
+            tr_key(app_language, "room_screen.thread_summary.error_latest_reply").into()
         }
     };
 
     let replies_count_text = match replies_count {
-        1 => Cow::Borrowed("1 reply"),
-        n => Cow::Owned(format!("{n} replies"))
+        1 => Cow::Borrowed(tr_key(app_language, "room_screen.thread_summary.one_reply")),
+        n => Cow::Owned(tr_fmt(app_language, "room_screen.thread_summary.n_replies", &[("n", &n.to_string())]))
     };
     item.label(cx, ids!(thread_summary_count))
         .set_text(cx, &replies_count_text);
@@ -4926,6 +10197,7 @@ fn populate_thread_root_summary(
 pub fn populate_preview_of_timeline_item(
     cx: &mut Cx,
     widget_out: &HtmlOrPlaintextRef,
+    app_language: AppLanguage,
     timeline_item_content: &TimelineItemContent,
     sender_user_id: &UserId,
     sender_username: &str,
@@ -4934,7 +10206,7 @@ pub fn populate_preview_of_timeline_item(
         match m.msgtype() {
             MessageType::Text(TextMessageEventContent { body, formatted, .. })
             | MessageType::Notice(NoticeMessageEventContent { body, formatted, .. }) => {
-                let _ = populate_text_message_content(cx, widget_out, body, formatted.as_ref(), None, None, None);
+                let _ = populate_text_message_content(cx, widget_out, app_language, body, formatted.as_ref(), None, None, None);
                 return;
             }
             _ => { } // fall through to the general case for all timeline items below.
@@ -5002,6 +10274,27 @@ impl SmallStateEventContent for EncryptedMessage {
 }
 
 // For other message-like content (custom message-like events).
+impl SmallStateEventContent for LiveLocationState {
+    fn populate_item_content(
+        &self,
+        cx: &mut Cx,
+        _list: &mut PortalList,
+        _item_id: usize,
+        item: WidgetRef,
+        _event_tl_item: &EventTimelineItem,
+        username: &str,
+        _item_drawn_status: ItemDrawnStatus,
+        mut new_drawn_status: ItemDrawnStatus,
+    ) -> (WidgetRef, ItemDrawnStatus) {
+        item.label(cx, ids!(content)).set_text(
+            cx,
+            &format!("{username} shared a live location."),
+        );
+        new_drawn_status.content_drawn = true;
+        (item, new_drawn_status)
+    }
+}
+
 impl SmallStateEventContent for OtherMessageLike {
     fn populate_item_content(
         &self,
@@ -5138,6 +10431,7 @@ fn populate_small_state_event(
     list: &mut PortalList,
     item_id: usize,
     timeline_kind: &TimelineKind,
+    app_language: AppLanguage,
     event_tl_item: &EventTimelineItem,
     event_content: &impl SmallStateEventContent,
     item_drawn_status: ItemDrawnStatus,
@@ -5180,7 +10474,7 @@ fn populate_small_state_event(
     });
 
     // Proceed to draw the actual event content.
-    event_content.populate_item_content(
+    let (item, new_drawn_status) = event_content.populate_item_content(
         cx,
         list,
         item_id,
@@ -5189,7 +10483,12 @@ fn populate_small_state_event(
         &username,
         item_drawn_status,
         new_drawn_status,
-    )
+    );
+
+    item.button(cx, ids!(invite_user_button))
+        .set_text(cx, tr_key(app_language, "room_screen.small_state.invite_to_room"));
+
+    (item, new_drawn_status)
 }
 
 
@@ -5237,8 +10536,31 @@ pub enum InviteResultAction {
     },
 }
 
+/// The result of reporting a room.
+#[derive(Debug)]
+pub enum ReportRoomResultAction {
+    Sent {
+        room_id: OwnedRoomId,
+    },
+    Failed {
+        room_id: OwnedRoomId,
+        error: matrix_sdk::Error,
+    },
+}
 
-/// Actions related to a specific message within a room timeline.
+#[derive(Debug)]
+pub enum ActionResponseResultAction {
+    Sent {
+        room_id: OwnedRoomId,
+        source_event_id: OwnedEventId,
+    },
+    Failed {
+        room_id: OwnedRoomId,
+        source_event_id: OwnedEventId,
+        error: String,
+    },
+}
+
 #[derive(Clone, Default, Debug)]
 pub enum MessageAction {
     /// The user clicked the "react" button on a message
@@ -5253,6 +10575,8 @@ pub enum MessageAction {
     Edit(MessageDetails),
     /// The user requested to edit their latest message in this room.
     EditLatest,
+    /// The user submitted a new local message and the timeline should follow the live tail.
+    MessageSubmittedLocally,
     /// The user clicked the "pin" button on a message.
     Pin(MessageDetails),
     /// The user clicked the "unpin" button on a message.
@@ -5292,6 +10616,10 @@ pub enum MessageAction {
         /// The absolute position where we should show the context menu,
         /// in which the (0,0) origin coordinate is the top left corner of the app window.
         abs_pos: DVec2,
+        opening_gesture: ContextMenuOpenGesture,
+    },
+    ToggleTranslationLangPopup {
+        button_rect: Rect,
     },
     /// The user requested opening the message action bar
     ActionBarOpen {
@@ -5304,6 +10632,8 @@ pub enum MessageAction {
     ActionBarClose,
     /// The user requested toggling the in-room app service quick actions card.
     ToggleAppServiceActions,
+    ShowThreadsPane,
+    ShowRoomInfoPane,
     #[default]
     None,
 }
@@ -5322,6 +10652,7 @@ pub enum AppServicePanelAction {
     OpenDeleteBotModal,
     SendListBots,
     SendBotHelp,
+    ShowBoundBots,
     Unbind,
     #[default]
     None,
@@ -5337,16 +10668,30 @@ impl ActionDefaultRef for AppServicePanelAction {
 #[derive(Script, ScriptHook, Widget)]
 pub struct AppServicePanel {
     #[deref] view: View,
+    #[rust] app_language: AppLanguage,
+    #[rust] app_language_initialized: bool,
 }
 
 impl Widget for AppServicePanel {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if !self.app_language_initialized || self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
         self.view.handle_event(cx, event, scope);
 
         let room_screen_props = scope
             .props
             .get::<RoomScreenProps>()
             .expect("BUG: RoomScreenProps should be available in Scope::props for AppServicePanel");
+        self.view
+            .button(cx, ids!(keyboard.third_row.view_bound_button))
+            .set_visible(cx, room_screen_props.app_service_enabled);
+        self.view
+            .button(cx, ids!(keyboard.third_row.unbind_button))
+            .set_visible(cx, room_screen_props.app_service_room_bound);
 
         if let Event::Actions(actions) = event {
             if self
@@ -5406,6 +10751,17 @@ impl Widget for AppServicePanel {
 
             if self
                 .view
+                .button(cx, ids!(keyboard.third_row.view_bound_button))
+                .clicked(actions)
+            {
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    AppServicePanelAction::ShowBoundBots,
+                );
+            }
+
+            if self
+                .view
                 .button(cx, ids!(keyboard.third_row.unbind_button))
                 .clicked(actions)
             {
@@ -5418,7 +10774,54 @@ impl Widget for AppServicePanel {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if !self.app_language_initialized || self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
         self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl AppServicePanel {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.app_language_initialized = true;
+        self.view
+            .label(cx, ids!(sender_row.sender_name))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.sender_name"));
+        self.view
+            .label(cx, ids!(sender_row.sender_tag))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.sender_tag"));
+        self.view
+            .label(cx, ids!(bubble.header.title))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.title"));
+        self.view
+            .label(cx, ids!(bubble.subtitle))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.subtitle"));
+        self.view
+            .label(cx, ids!(bubble.footer.timestamp))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.timestamp_now"));
+        self.view
+            .button(cx, ids!(keyboard.first_row.create_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.create_bot"));
+        self.view
+            .button(cx, ids!(keyboard.first_row.list_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.list_bots"));
+        self.view
+            .button(cx, ids!(keyboard.second_row.delete_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.delete_bot"));
+        self.view
+            .button(cx, ids!(keyboard.second_row.help_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.bot_help"));
+        self.view
+            .button(cx, ids!(keyboard.third_row.view_bound_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.bots"));
+        self.view
+            .button(cx, ids!(keyboard.third_row.unbind_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.unbind"));
+        self.view.redraw(cx);
     }
 }
 
@@ -5450,23 +10853,24 @@ impl Widget for Message {
         // because we don't want any widgets within the replied-to message to be
         // clickable or otherwise interactive.
         match event.hits(cx, self.view(cx, ids!(replied_to_message)).area()) {
-            Hit::FingerDown(fe) => {
-                if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) {
-                    cx.widget_action(
-                        details.room_screen_widget_uid, 
-                        MessageAction::OpenMessageContextMenu {
-                            details: details.clone(),
-                            abs_pos: fe.abs,
-                        }
-                    );
-                }
+            Hit::FingerDown(fe) if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) => {
+                cx.widget_action(
+                    details.room_screen_widget_uid,
+                    MessageAction::OpenMessageContextMenu {
+                        details: details.clone(),
+                        abs_pos: fe.abs,
+                        opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
+                    }
+                );
             }
+            Hit::FingerDown(_) => {}
             Hit::FingerLongPress(lp) => {
                 cx.widget_action(
                     details.room_screen_widget_uid, 
                     MessageAction::OpenMessageContextMenu {
                         details: details.clone(),
                         abs_pos: lp.abs,
+                        opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
                     }
                 );
             }
@@ -5498,6 +10902,7 @@ impl Widget for Message {
                             MessageAction::OpenMessageContextMenu {
                                 details: details.clone(),
                                 abs_pos: fe.abs,
+                                opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
                             }
                         );
                     }
@@ -5514,6 +10919,7 @@ impl Widget for Message {
                         MessageAction::OpenMessageContextMenu {
                             details: details.clone(),
                             abs_pos: lp.abs,
+                            opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
                         }
                     );
                 }
@@ -5549,6 +10955,7 @@ impl Widget for Message {
                         MessageAction::OpenMessageContextMenu {
                             details: details.clone(),
                             abs_pos: fe.abs,
+                            opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
                         }
                     );
                 }
@@ -5559,6 +10966,7 @@ impl Widget for Message {
                     MessageAction::OpenMessageContextMenu {
                         details: details.clone(),
                         abs_pos: lp.abs,
+                        opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
                     }
                 );
             }
@@ -5623,4 +11031,986 @@ pub fn clear_timeline_states(_cx: &mut Cx) {
     TIMELINE_STATES.with_borrow_mut(|states| {
         states.clear();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::home::streaming_animation::StreamingAnimState;
+    use std::time::{Duration, Instant};
+
+    fn make_state(text: &str) -> StreamingAnimState {
+        StreamingAnimState::new(text, true)
+    }
+
+    #[test]
+    fn test_streaming_scan_range() {
+        // Incremental: clamp sentinel to new_len
+        assert_eq!(streaming_scan_range(false, &(5..usize::MAX), 8, 9), 5..9);
+        // Append: new item at end is scanned
+        assert_eq!(streaming_scan_range(false, &(8..9), 8, 9), 8..9);
+        // No changes: empty range
+        assert_eq!(streaming_scan_range(false, &(8..8), 8, 8), 8..8);
+        // Clear cache: full scan
+        assert_eq!(streaming_scan_range(true, &(5..usize::MAX), 8, 9), 0..9);
+    }
+
+    #[test]
+    fn test_refresh_stream_indices() {
+        let event_id_a: OwnedEventId = "$event-a:example.com".try_into().unwrap();
+        let event_id_b: OwnedEventId = "$event-b:example.com".try_into().unwrap();
+        let missing_event_id: OwnedEventId = "$missing:example.com".try_into().unwrap();
+
+        let mut streaming_messages = HashMap::new();
+        streaming_messages.insert(event_id_a.clone(), make_state("alpha"));
+        streaming_messages.insert(missing_event_id.clone(), make_state("missing"));
+
+        let event_ids = vec![None, Some(event_id_a.as_ref()), Some(event_id_b.as_ref())];
+        refresh_stream_indices(event_ids, &mut streaming_messages);
+
+        assert_eq!(streaming_messages[&event_id_a].timeline_index, Some(1));
+        assert_eq!(streaming_messages[&missing_event_id].timeline_index, None);
+    }
+
+    #[test]
+    fn test_timeout_picks_earliest() {
+        let mut live = make_state("alpha");
+        live.last_update_time = Instant::now() - Duration::from_secs(40);
+        let mut finished = make_state("beta");
+        finished.is_live = false;
+        finished.last_update_time = Instant::now() - Duration::from_secs(29);
+
+        let timeout = next_stream_timeout([&live, &finished]).unwrap();
+
+        assert!(timeout <= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_full_snapshot_rebuild_drops_finished_cached_streams() {
+        let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
+        let mut previous = HashMap::new();
+        let mut previous_state = make_state("hello live");
+        previous_state.advance_displayed(4);
+        previous.insert(event_id.clone(), previous_state);
+
+        let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_full_snapshot(
+            [(event_id, String::from("hello final"), false)],
+            Some(&previous),
+        );
+
+        assert!(rebuilt.is_empty());
+        assert!(!should_schedule_frame);
+    }
+
+    #[test]
+    fn test_full_snapshot_rebuild_restores_live_cached_streams() {
+        let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
+        let mut previous = HashMap::new();
+        let mut previous_state = make_state("hello");
+        previous_state.advance_displayed(3);
+        previous.insert(event_id.clone(), previous_state);
+
+        let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_full_snapshot(
+            [(event_id.clone(), String::from("hello world"), true)],
+            Some(&previous),
+        );
+
+        let restored = rebuilt.get(&event_id).unwrap();
+        assert_eq!(restored.displayed_char_count, 3);
+        assert!(restored.is_live);
+        assert!(should_schedule_frame);
+    }
+
+    #[test]
+    fn test_full_snapshot_rebuild_skips_live_without_cached_state() {
+        // Without previous state, full-snapshot rebuild must NOT create new
+        // animations — the SDK may not have aggregated edits yet, so
+        // completed messages can still appear as `live`.
+        let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
+
+        let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_full_snapshot(
+            [(event_id.clone(), String::from("hello world"), true)],
+            None,
+        );
+
+        assert!(rebuilt.is_empty());
+        assert!(!should_schedule_frame);
+    }
+
+    #[test]
+    fn translation_lang_popup_abs_pos_prefers_above_button() {
+        let button_rect = Rect {
+            pos: dvec2(48.0, 680.0),
+            size: dvec2(32.0, 32.0),
+        };
+        let container_rect = Rect {
+            pos: dvec2(0.0, 0.0),
+            size: dvec2(1280.0, 760.0),
+        };
+
+        let popup_pos = compute_translation_lang_popup_abs_pos(button_rect, container_rect);
+
+        assert!(popup_pos.y < button_rect.pos.y);
+        assert!(popup_pos.y >= TRANSLATION_LANG_POPUP_MARGIN);
+        assert!(popup_pos.x >= TRANSLATION_LANG_POPUP_MARGIN);
+    }
+
+    #[test]
+    fn translation_lang_popup_abs_pos_falls_below_when_top_space_is_insufficient() {
+        let button_rect = Rect {
+            pos: dvec2(48.0, 20.0),
+            size: dvec2(32.0, 32.0),
+        };
+        let container_rect = Rect {
+            pos: dvec2(0.0, 0.0),
+            size: dvec2(1280.0, 760.0),
+        };
+
+        let popup_pos = compute_translation_lang_popup_abs_pos(button_rect, container_rect);
+
+        assert!(popup_pos.y > button_rect.pos.y);
+        assert!(popup_pos.y >= TRANSLATION_LANG_POPUP_MARGIN);
+    }
+
+    #[test]
+    fn translation_lang_popup_abs_pos_clamps_to_room_screen_right_edge() {
+        let button_rect = Rect {
+            pos: dvec2(1240.0, 680.0),
+            size: dvec2(32.0, 32.0),
+        };
+        let container_rect = Rect {
+            pos: dvec2(0.0, 0.0),
+            size: dvec2(1280.0, 760.0),
+        };
+
+        let popup_pos = compute_translation_lang_popup_abs_pos(button_rect, container_rect);
+
+        assert_eq!(
+            popup_pos.x + TRANSLATION_LANG_POPUP_WIDTH,
+            container_rect.size.x - TRANSLATION_LANG_POPUP_MARGIN
+        );
+    }
+
+    #[test]
+    fn center_username_row_aligns_with_avatar_center() {
+        assert_eq!(
+            message_profile_avatar_center_y(),
+            message_username_row_center_y(),
+        );
+    }
+
+    #[test]
+    fn center_bot_badge_aligns_with_username_row_center() {
+        assert_eq!(
+            message_username_row_center_y(),
+            bot_badge_center_y_within_username_row(),
+        );
+    }
+
+    #[test]
+    fn bot_badge_text_is_centered_within_badge() {
+        assert!(bot_badge_label_center_y() < (BOT_BADGE_HEIGHT * 0.5));
+    }
+
+    #[test]
+    fn test_bot_detection_configured_parent() {
+        let user_id: OwnedUserId = "@octosbot:127.0.0.1:8128".try_into().unwrap();
+        let resolved_parent_bot_user_id = Some(user_id.clone());
+        let known_bot_user_ids = Vec::new();
+
+        assert!(is_known_or_likely_bot(
+            user_id.as_ref(),
+            resolved_parent_bot_user_id.as_deref(),
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_bot_detection_heuristic_fallback() {
+        let user_id: OwnedUserId = "@myservice_bot:other.server".try_into().unwrap();
+        let known_bot_user_ids = Vec::new();
+
+        assert!(is_known_or_likely_bot(
+            user_id.as_ref(),
+            None,
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_bot_detection_child_bot() {
+        let user_id: OwnedUserId = "@octosbot_weather:127.0.0.1:8128".try_into().unwrap();
+        let known_bot_user_ids = vec![user_id.clone()];
+
+        assert!(is_known_or_likely_bot(
+            user_id.as_ref(),
+            None,
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_bot_detection_rejects_normal_user() {
+        let user_id: OwnedUserId = "@alice:127.0.0.1:8128".try_into().unwrap();
+        let known_bot_user_ids = Vec::new();
+
+        assert!(!is_known_or_likely_bot(
+            user_id.as_ref(),
+            None,
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_timeline_bot_detection_uses_room_bot_user_ids() {
+        let user_id: OwnedUserId = "@octosbot_bob:127.0.0.1:8128".try_into().unwrap();
+        let room_bot_user_ids = vec![user_id.clone()];
+        let known_bot_user_ids = Vec::new();
+
+        assert!(is_timeline_sender_bot(
+            user_id.as_ref(),
+            None,
+            &room_bot_user_ids,
+            &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_extracts_status_provider_body_and_footer() {
+        let body = "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 **Alex**\n\n_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers.status.as_deref(), Some("施法中"));
+        assert_eq!(layers.provider.as_deref(), Some("via moonshot@api (kimi-k2.5)"));
+        assert_eq!(layers.body, "你好！我是 **Alex**");
+        assert_eq!(
+            layers.footer.as_deref(),
+            Some("_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_"),
+        );
+    }
+
+    #[test]
+    fn test_parse_octos_actions_skips_malformed_entries() {
+        let actions = parse_octos_actions_from_content(&serde_json::json!({
+            "org.octos.actions": [
+                { "id": "retry_pptx", "label": "Regenerate PPT", "style": "primary" },
+                { "label": "Missing id" },
+                { "id": "cancel", "label": "Cancel", "style": "secondary" }
+            ]
+        }));
+
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].id, "retry_pptx");
+        assert_eq!(actions[1].id, "cancel");
+    }
+
+    #[test]
+    fn test_parse_octos_actions_truncates_after_six() {
+        let actions = parse_octos_actions_from_content(&serde_json::json!({
+            "org.octos.actions": [
+                { "id": "a1", "label": "A1" },
+                { "id": "a2", "label": "A2" },
+                { "id": "a3", "label": "A3" },
+                { "id": "a4", "label": "A4" },
+                { "id": "a5", "label": "A5" },
+                { "id": "a6", "label": "A6" },
+                { "id": "a7", "label": "A7" }
+            ]
+        }));
+
+        assert_eq!(actions.len(), 6);
+        assert_eq!(actions.last().map(|action| action.id.as_str()), Some("a6"));
+    }
+
+    #[test]
+    fn test_parse_octos_actions_reads_m_new_content_wrapper() {
+        let actions = parse_octos_actions_from_content(&serde_json::json!({
+            "m.new_content": {
+                "org.octos.actions": [
+                    { "id": "confirm", "label": "确认", "style": "primary" },
+                    { "id": "cancel", "label": "取消", "style": "secondary" }
+                ]
+            },
+            "org.octos.actions": [
+                { "id": "stale", "label": "旧按钮" }
+            ]
+        }));
+
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].id, "confirm");
+        assert_eq!(actions[1].id, "cancel");
+    }
+
+    #[test]
+    fn test_parse_octos_approval_request_from_content() {
+        let approval = parse_octos_approval_request_from_content(&serde_json::json!({
+            "org.octos.approval_request": {
+                "request_id": "req_abc123",
+                "tool_name": "shell",
+                "tool_args_digest": "sha256:4bf5",
+                "title": "Execute shell command",
+                "summary": "rm -rf ~/tmp/cache",
+                "risk_level": "critical",
+                "authorized_approvers": ["@alice:example.org"],
+                "expires_at": "2026-04-14T14:30:00Z",
+                "on_timeout": "notify"
+            }
+        })).expect("approval request should parse");
+
+        assert_eq!(approval.request_id, "req_abc123");
+        assert_eq!(approval.tool_name, "shell");
+        assert_eq!(approval.tool_args_digest, "sha256:4bf5");
+        assert_eq!(approval.title, "Execute shell command");
+        assert_eq!(approval.summary, "rm -rf ~/tmp/cache");
+        assert_eq!(approval.risk_level, OctosApprovalRiskLevel::Critical);
+        assert_eq!(approval.authorized_approvers, vec!["@alice:example.org"]);
+        assert_eq!(approval.on_timeout, OctosApprovalTimeoutBehavior::Notify);
+    }
+
+    #[test]
+    fn test_parse_octos_approval_request_ignores_m_new_content_wrapper() {
+        let approval = parse_octos_approval_request_from_content(&serde_json::json!({
+            "org.octos.approval_request": {
+                "request_id": "req_original",
+                "tool_name": "shell",
+                "tool_args_digest": "sha256:4bf5",
+                "title": "Original request",
+                "summary": "rm -rf ~/tmp/cache",
+                "risk_level": "critical",
+                "authorized_approvers": ["@alice:example.org"],
+                "expires_at": "2026-04-14T14:30:00Z",
+                "on_timeout": "notify"
+            },
+            "m.new_content": {
+                "org.octos.approval_request": {
+                    "request_id": "req_edited",
+                    "tool_name": "shell",
+                    "tool_args_digest": "sha256:mallory",
+                    "title": "Edited request",
+                    "summary": "whoami",
+                    "risk_level": "normal",
+                    "authorized_approvers": ["@mallory:example.org"],
+                    "expires_at": "2026-04-14T14:30:00Z",
+                    "on_timeout": "notify"
+                }
+            }
+        })).expect("approval request should parse from original content");
+
+        assert_eq!(approval.request_id, "req_original");
+        assert_eq!(approval.authorized_approvers, vec!["@alice:example.org"]);
+        assert_eq!(approval.risk_level, OctosApprovalRiskLevel::Critical);
+    }
+
+    #[test]
+    fn test_parse_octos_approval_request_rejects_empty_authorized_approvers() {
+        assert!(parse_octos_approval_request_from_content(&serde_json::json!({
+            "org.octos.approval_request": {
+                "request_id": "req_abc123",
+                "tool_name": "shell",
+                "tool_args_digest": "sha256:4bf5",
+                "title": "Execute shell command",
+                "summary": "rm -rf ~/tmp/cache",
+                "risk_level": "critical",
+                "authorized_approvers": [],
+                "expires_at": "2026-04-14T14:30:00Z",
+                "on_timeout": "notify"
+            }
+        })).is_none());
+    }
+
+    #[test]
+    fn test_build_approval_response_request_targets_original_sender() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let original_sender: OwnedUserId = "@octosbot:127.0.0.1:8128".try_into().unwrap();
+
+        let request = build_octos_approval_response_request(
+            &timeline_kind,
+            "Execute shell command",
+            "req_abc123",
+            "approve",
+            "sha256:4bf5",
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+        );
+
+        assert_eq!(request.timeline_kind, timeline_kind);
+        assert_eq!(request.target_user_id, original_sender);
+        assert!(!request.explicit_room);
+        assert_eq!(request.content["org.octos.approval_response"]["request_id"], "req_abc123");
+        assert_eq!(request.content["org.octos.approval_response"]["decision"], "approve");
+        assert_eq!(request.content["org.octos.approval_response"]["tool_args_digest"], "sha256:4bf5");
+    }
+
+    #[test]
+    fn test_action_buttons_render_state_hidden_without_actions() {
+        let state = compute_action_button_render_state(&[], None, None);
+
+        assert!(!state.show_container);
+        assert!(state.visible_slots.is_empty());
+    }
+
+    #[test]
+    fn test_action_buttons_render_state_with_primary_secondary_danger() {
+        let state = compute_action_button_render_state(&[
+            OctosActionButton {
+                id: "retry".into(),
+                label: "Regenerate PPT".into(),
+                style: OctosActionStyle::Primary,
+            },
+            OctosActionButton {
+                id: "cancel".into(),
+                label: "Cancel".into(),
+                style: OctosActionStyle::Secondary,
+            },
+            OctosActionButton {
+                id: "delete".into(),
+                label: "Delete".into(),
+                style: OctosActionStyle::Danger,
+            },
+        ], None, None);
+
+        assert!(state.show_container);
+        assert!(state.show_button_row);
+        assert!(state.buttons_enabled);
+        assert!(state.approval_card.is_none());
+        assert_eq!(state.visible_slots.len(), 3);
+        assert_eq!(state.visible_slots[0].style, OctosActionStyle::Primary);
+        assert_eq!(state.visible_slots[1].style, OctosActionStyle::Secondary);
+        assert_eq!(state.visible_slots[2].style, OctosActionStyle::Danger);
+    }
+
+    #[test]
+    fn test_approval_buttons_disabled_for_unauthorized_user() {
+        let approval_request = OctosApprovalRequest {
+            request_id: "req_abc123".into(),
+            tool_name: "shell".into(),
+            tool_args_digest: "sha256:4bf5".into(),
+            title: "Execute shell command".into(),
+            summary: "rm -rf ~/tmp/cache".into(),
+            risk_level: OctosApprovalRiskLevel::Critical,
+            authorized_approvers: vec!["@alice:example.org".into()],
+            expires_at: "2026-04-14T14:30:00Z".into(),
+            on_timeout: OctosApprovalTimeoutBehavior::Notify,
+        };
+        let current_user_id = UserId::parse("@mallory:example.org").unwrap();
+        let state = compute_action_button_render_state(&[
+            OctosActionButton {
+                id: "approve".into(),
+                label: "Approve".into(),
+                style: OctosActionStyle::Primary,
+            },
+            OctosActionButton {
+                id: "deny".into(),
+                label: "Deny".into(),
+                style: OctosActionStyle::Danger,
+            },
+        ], Some(&approval_request), Some(current_user_id.as_ref()));
+
+        assert!(state.show_container);
+        assert!(state.show_button_row);
+        assert!(!state.buttons_enabled);
+        assert_eq!(
+            state.approval_card.as_ref().map(|card| card.title.as_str()),
+            Some("Execute shell command"),
+        );
+        assert_eq!(
+            state.approval_card.as_ref().map(|card| card.summary.as_str()),
+            Some("rm -rf ~/tmp/cache"),
+        );
+    }
+
+    #[test]
+    fn test_selected_action_reduces_visible_slots_to_clicked_button() {
+        let render_state = compute_action_button_render_state(&[
+            OctosActionButton {
+                id: "approve".into(),
+                label: "Approve".into(),
+                style: OctosActionStyle::Primary,
+            },
+            OctosActionButton {
+                id: "deny".into(),
+                label: "Deny".into(),
+                style: OctosActionStyle::Danger,
+            },
+        ], None, None);
+
+        let visible_slots = action_button_render_slots_for_display(&render_state, Some(&SelectedOctosActionState {
+            id: "deny".into(),
+            label: "Deny".into(),
+            style: OctosActionStyle::Danger,
+        }));
+
+        assert_eq!(visible_slots.len(), 1);
+        assert_eq!(visible_slots[0].id, "deny");
+        assert_eq!(visible_slots[0].label, "✓ Deny");
+        assert_eq!(visible_slots[0].style, OctosActionStyle::Danger);
+    }
+
+    #[test]
+    fn test_generic_actions_without_approval_request_remain_supported() {
+        let payload = parse_octos_action_payload_for_render(
+            Some(&serde_json::json!({
+                "org.octos.actions": [
+                    { "id": "retry_pptx", "label": "Regenerate PPT", "style": "primary" }
+                ]
+            })),
+            None,
+        );
+
+        assert!(payload.approval_request.is_none());
+        assert!(!payload.malformed_approval_request);
+        assert_eq!(payload.actions.len(), 1);
+        assert_eq!(payload.actions[0].id, "retry_pptx");
+    }
+
+    #[test]
+    fn test_malformed_approval_request_hides_buttons() {
+        let payload = parse_octos_action_payload_for_render(
+            Some(&serde_json::json!({
+                "org.octos.actions": [
+                    { "id": "approve", "label": "Approve", "style": "primary" },
+                    { "id": "deny", "label": "Deny", "style": "danger" }
+                ]
+            })),
+            Some(&serde_json::json!({
+                "org.octos.approval_request": {
+                    "request_id": "req_abc123"
+                },
+                "org.octos.actions": [
+                    { "id": "approve", "label": "Approve", "style": "primary" },
+                    { "id": "deny", "label": "Deny", "style": "danger" }
+                ]
+            })),
+        );
+        let state = compute_action_button_render_state(
+            &payload.actions,
+            payload.approval_request.as_ref(),
+            None,
+        );
+
+        assert!(payload.malformed_approval_request);
+        assert!(!state.show_container);
+        assert!(state.visible_slots.is_empty());
+    }
+
+    #[test]
+    fn test_approval_request_ignores_m_replace_edits() {
+        let payload = parse_octos_action_payload_for_render(
+            Some(&serde_json::json!({
+                "m.new_content": {
+                    "org.octos.approval_request": {
+                        "request_id": "req_replaced",
+                        "tool_name": "shell",
+                        "tool_args_digest": "sha256:replaced",
+                        "title": "Replaced request",
+                        "summary": "echo hacked",
+                        "risk_level": "normal",
+                        "authorized_approvers": ["@mallory:example.org"],
+                        "expires_at": "2026-04-14T14:35:00Z",
+                        "on_timeout": "notify"
+                    },
+                    "org.octos.actions": [
+                        { "id": "approve", "label": "Approve", "style": "primary" },
+                        { "id": "deny", "label": "Deny", "style": "danger" }
+                    ]
+                }
+            })),
+            Some(&serde_json::json!({
+                "org.octos.approval_request": {
+                    "request_id": "req_original",
+                    "tool_name": "shell",
+                    "tool_args_digest": "sha256:original",
+                    "title": "Original request",
+                    "summary": "rm -rf ~/tmp/cache",
+                    "risk_level": "critical",
+                    "authorized_approvers": ["@alice:example.org"],
+                    "expires_at": "2026-04-14T14:30:00Z",
+                    "on_timeout": "notify"
+                },
+                "org.octos.actions": [
+                    { "id": "approve", "label": "Approve", "style": "primary" },
+                    { "id": "deny", "label": "Deny", "style": "danger" }
+                ]
+            })),
+        );
+        let current_user_id = UserId::parse("@alice:example.org").unwrap();
+        let state = compute_action_button_render_state(
+            &payload.actions,
+            payload.approval_request.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert_eq!(
+            payload.approval_request.as_ref().map(|approval| approval.request_id.as_str()),
+            Some("req_original"),
+        );
+        assert!(state.buttons_enabled);
+        assert_eq!(
+            state.approval_card.as_ref().map(|card| card.title.as_str()),
+            Some("Original request"),
+        );
+    }
+
+    #[test]
+    fn test_build_action_response_request_targets_original_sender() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let original_sender: OwnedUserId = "@octosbot_weather:127.0.0.1:8128".try_into().unwrap();
+
+        let request = build_octos_action_response_request(
+            &timeline_kind,
+            "Regenerate PPT",
+            "retry_pptx",
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+        );
+
+        assert_eq!(request.timeline_kind, timeline_kind);
+        assert_eq!(request.target_user_id, original_sender);
+        assert!(!request.explicit_room);
+    }
+
+    #[test]
+    fn test_build_action_response_request_preserves_reply_relation() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let original_sender: OwnedUserId = "@octosbot_weather:127.0.0.1:8128".try_into().unwrap();
+
+        let request = build_octos_action_response_request(
+            &timeline_kind,
+            "Regenerate PPT",
+            "retry_pptx",
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+        );
+
+        let action_response = &request.content["org.octos.action_response"];
+        assert_eq!(request.content["body"], "[Action: Regenerate PPT]");
+        assert_eq!(action_response["action_id"], "retry_pptx");
+        assert_eq!(action_response["source_event_id"], "$orig123");
+        assert_eq!(request.content["m.relates_to"]["m.in_reply_to"]["event_id"], "$orig123");
+    }
+
+    #[test]
+    fn test_disable_action_buttons_marks_source_event_disabled() {
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let mut disabled = HashSet::new();
+
+        mark_action_buttons_disabled(&mut disabled, &source_event_id);
+
+        assert!(are_action_buttons_disabled(&disabled, source_event_id.as_ref()));
+    }
+
+    #[test]
+    fn test_reenable_action_buttons_clears_disabled_state() {
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let mut disabled = HashSet::new();
+        mark_action_buttons_disabled(&mut disabled, &source_event_id);
+
+        clear_action_buttons_disabled(&mut disabled, source_event_id.as_ref());
+
+        assert!(!are_action_buttons_disabled(&disabled, source_event_id.as_ref()));
+    }
+
+    #[test]
+    fn test_selected_action_state_marks_and_clears_by_source_event_id() {
+        let source_event_id: OwnedEventId = "$orig123".try_into().unwrap();
+        let mut selected_actions = HashMap::new();
+
+        mark_selected_octos_action(
+            &mut selected_actions,
+            &source_event_id,
+            "approve",
+            "Approve",
+            OctosActionStyle::Primary,
+        );
+        assert_eq!(
+            selected_actions.get(&source_event_id).map(|state| state.label.as_str()),
+            Some("Approve"),
+        );
+
+        clear_selected_octos_action(&mut selected_actions, source_event_id.as_ref());
+        assert!(!selected_actions.contains_key(&source_event_id));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_extracts_footer_without_provider_prefix() {
+        let body = "PPT 已经生成并发送了！\n\n你应该已经收到了文件。\n\n_moonshot@api/kimi-k2.5 · 11.0K in · 279 out · 9s_";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers.status, None);
+        assert_eq!(layers.provider, None);
+        assert_eq!(layers.body, "PPT 已经生成并发送了！\n\n你应该已经收到了文件。");
+        assert_eq!(
+            layers.footer.as_deref(),
+            Some("_moonshot@api/kimi-k2.5 · 11.0K in · 279 out · 9s_"),
+        );
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_falls_back_for_unmatched_bot_text() {
+        let body = "你好！我是 Alex。\n今天可以帮你查天气。";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers, BotTimelineLayers::plain(body));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_ignores_regular_user_messages() {
+        let body = "via moonshot@api (kimi-k2.5)\n\n这不是 bot 消息。";
+
+        let layers = parse_bot_timeline_layers(body, false);
+
+        assert_eq!(layers, BotTimelineLayers::plain(body));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_prefers_safe_fallback_for_malformed_metadata() {
+        let body = "施法中\n这个不是 provider 行\n\n你好，我还在。";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers, BotTimelineLayers::plain(body));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_invalid_metadata_does_not_panic() {
+        let body = "施法中\nvia moonshot@api (kimi-k2.5)\n\n_\n";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers, BotTimelineLayers::plain(body));
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_tolerates_streaming_cursor_in_footer() {
+        let body = "via moonshot@api (kimi-k2.5)\n\n你好！我是 **Alex**\n\n_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_ ●";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers.body, "你好！我是 **Alex**");
+        assert_eq!(
+            layers.footer.as_deref(),
+            Some("_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_"),
+        );
+    }
+
+    #[test]
+    fn test_parse_bot_timeline_layers_promotes_metrics_only_body_to_footer() {
+        let body = "疯狂输出中\nvia moonshot@api (kimi-k2.5)\n4s";
+
+        let layers = parse_bot_timeline_layers(body, true);
+
+        assert_eq!(layers.status.as_deref(), Some("疯狂输出中"));
+        assert_eq!(layers.provider.as_deref(), Some("via moonshot@api (kimi-k2.5)"));
+        assert!(layers.body.is_empty());
+        assert_eq!(layers.footer.as_deref(), Some("4s"));
+    }
+
+    #[test]
+    fn test_rich_markdown_streaming_prefers_full_snapshot_rendering() {
+        let formatted = FormattedBody::html("<p><strong>OpenClaw</strong></p>");
+        assert!(should_render_streaming_full_snapshot(
+            "根据搜索结果， **OpenClaw** 有两个不同的项目。",
+            Some(&formatted),
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_plain_text_streaming_keeps_typewriter_path() {
+        assert!(!should_render_streaming_full_snapshot(
+            "你好，我是 Octos。",
+            None,
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_bot_timeline_card_visible_for_bot_text_message() {
+        let state = compute_bot_timeline_render_state(
+            "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。\n\n_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_",
+            true,
+        );
+
+        assert!(state.show_card);
+        assert_eq!(state.body, "你好！我是 Alex。");
+    }
+
+    #[test]
+    fn test_bot_timeline_card_hidden_for_regular_user_message() {
+        let state = compute_bot_timeline_render_state("你好", false);
+
+        assert!(!state.show_card);
+    }
+
+    #[test]
+    fn test_bot_status_strip_renders_above_body_and_not_inside_body() {
+        let state = compute_bot_timeline_render_state(
+            "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。",
+            true,
+        );
+
+        assert_eq!(state.status.as_deref(), Some("施法中"));
+        assert!(state.show_status_strip);
+        assert!(!state.body.starts_with("施法中"));
+    }
+
+    #[test]
+    fn test_bot_metadata_footer_renders_below_body() {
+        let state = compute_bot_timeline_render_state(
+            "via moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。\n\n_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_",
+            true,
+        );
+
+        assert!(state.show_metadata_footer);
+        assert_eq!(state.provider.as_deref(), Some("via moonshot@api (kimi-k2.5)"));
+        assert_eq!(
+            state.footer.as_deref(),
+            Some("_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_"),
+        );
+    }
+
+    #[test]
+    fn test_bot_progress_message_hides_body_card_when_only_metrics_remain() {
+        let state = compute_bot_timeline_render_state(
+            "疯狂输出中\nvia moonshot@api (kimi-k2.5)\n4s",
+            true,
+        );
+
+        assert!(state.show_card);
+        assert!(!state.show_body_card);
+        assert!(state.show_status_strip);
+        assert!(state.show_metadata_footer);
+        assert_eq!(state.footer.as_deref(), Some("4s"));
+    }
+
+    #[test]
+    fn test_bot_timeline_card_body_uses_html_or_plaintext_rendering() {
+        let state = compute_bot_timeline_render_state(
+            "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 **Alex**",
+            true,
+        );
+
+        let formatted = select_bot_timeline_body_formatted_body(&state, None)
+            .expect("structured bot body should still produce formatted content");
+
+        assert_eq!(formatted.format, MessageFormat::Html);
+        assert!(formatted.body.contains("<strong>Alex</strong>"));
+    }
+
+    #[test]
+    fn test_bot_plain_markdown_body_without_formatted_html_still_renders_as_markdown() {
+        let state = compute_bot_timeline_render_state(
+            "## 标题\n\n```rust\n// 中文注释\nlet answer = 42;\n```",
+            true,
+        );
+
+        let formatted = select_bot_timeline_body_formatted_body(&state, None)
+            .expect("rich markdown bot body should synthesize HTML during streaming");
+
+        assert_eq!(formatted.format, MessageFormat::Html);
+        assert!(formatted.body.contains("<h2>标题</h2>"));
+        assert!(formatted.body.contains("中文注释"));
+    }
+
+    #[test]
+    fn test_bot_timeline_body_prefers_markdown_widget_for_fenced_code_blocks() {
+        let state = compute_bot_timeline_render_state(
+            "## 标题\n\n```rust\nlet answer = 42;\n```\n\n这里是中文说明。",
+            true,
+        );
+
+        assert!(should_render_bot_timeline_body_with_markdown_widget(&state));
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::Highlighted,
+        );
+    }
+
+    #[test]
+    fn test_bot_timeline_body_keeps_html_widget_for_non_code_markdown() {
+        let state = compute_bot_timeline_render_state(
+            "## 标题\n\n这里有 **加粗**，但没有代码块。",
+            true,
+        );
+
+        assert!(!should_render_bot_timeline_body_with_markdown_widget(&state));
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::None,
+        );
+    }
+
+    #[test]
+    fn test_bot_timeline_body_uses_plain_markdown_code_block_for_cjk_code() {
+        let state = compute_bot_timeline_render_state(
+            "```rust\n// 中文注释\nprintln!(\"你好\");\n```",
+            true,
+        );
+
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::Plain,
+        );
+    }
+
+    #[test]
+    fn test_fenced_code_blocks_ignore_cjk_outside_code_block() {
+        let body = "## 标题\n\n```rust\nlet answer = 42;\n```\n\n这里是中文总结。";
+
+        assert!(!fenced_code_blocks_contain_cjk(body));
+    }
+
+    #[test]
+    fn test_streaming_update_requires_content_invalidation_for_new_full_snapshot_text() {
+        let state = StreamingAnimState::new("你好", true);
+
+        assert!(streaming_update_requires_content_invalidation(
+            &state,
+            "## 标题\n\n内容",
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_streaming_update_skips_invalidation_when_target_and_mode_are_unchanged() {
+        let mut state = StreamingAnimState::new("## 标题\n\n内容", true);
+        state.set_render_full_target(true);
+
+        assert!(!streaming_update_requires_content_invalidation(
+            &state,
+            "## 标题\n\n内容",
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_bot_timeline_card_preserves_reply_preview_and_condensed_layout() {
+        let reply_state = compute_bot_timeline_render_state(
+            "via moonshot@api (kimi-k2.5)\n\n第一条回复",
+            true,
+        );
+        let condensed_state = compute_bot_timeline_render_state(
+            "via moonshot@api (kimi-k2.5)\n\n第二条回复",
+            true,
+        );
+
+        assert!(reply_state.show_card);
+        assert!(condensed_state.show_card);
+        assert!(reply_state.show_metadata_footer);
+        assert!(condensed_state.show_metadata_footer);
+    }
 }
