@@ -94,6 +94,8 @@ Edit `.env` and replace `your-api-key-here` with your actual API key:
 DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+> **Using DeepSeek? One extra config step is required.** DeepSeek caps per-response tokens at **8192**, but Octos's built-in default is **16384** — your first message will fail with `400 Bad Request: Invalid max_tokens value`. **Before** running `docker compose up`, open `config/botfather.json` and add `"max_output_tokens": 8000` inside the `config.gateway` block (full example in [3.5](#35-octos-bot-profile-configbotfatherjson)). Other providers (Moonshot, OpenAI, Anthropic) have higher caps and do not need this line. Background: [5.3 Bot Issues](#53-bot-issues).
+
 ### Step 4: Start the Services
 
 ```bash
@@ -270,6 +272,7 @@ This file defines the bot's identity, LLM provider, and Matrix channel configura
     "provider": "deepseek",
     "model": "deepseek-chat",
     "api_key_env": "DEEPSEEK_API_KEY",
+    "admin_mode": true,
     "channels": [
       {
         "type": "matrix",
@@ -285,7 +288,8 @@ This file defines the bot's identity, LLM provider, and Matrix channel configura
     ],
     "gateway": {
       "max_history": 50,
-      "queue_mode": "followup"
+      "queue_mode": "followup",
+      "max_output_tokens": 8000
     }
   },
   "created_at": "2025-01-01T00:00:00Z",
@@ -302,6 +306,7 @@ This file defines the bot's identity, LLM provider, and Matrix channel configura
 | `provider` | LLM provider name. Octos supports `deepseek`, `openai`, `anthropic`, and [more](https://octos-org.github.io/octos/). |
 | `model` | Model identifier (e.g., `deepseek-chat`, `gpt-4o`, `claude-sonnet-4-20250514`). |
 | `api_key_env` | Name of the environment variable holding your API key. |
+| `admin_mode` | Enables BotFather management commands (`/createbot`, `/deletebot`, `/listbots`). Required for creating and managing child bots from Robrix or chat. |
 
 **Matrix channel settings:**
 
@@ -361,6 +366,7 @@ If you also run `octos serve --port 8080` on the host for the Robrix health chec
 |-------|-------------|
 | `max_history` | Maximum number of messages to include as context for the LLM. |
 | `queue_mode` | How Octos handles incoming messages. `followup` queues new messages and processes them sequentially. |
+| `max_output_tokens` | Optional. Overrides Octos's built-in chat `max_tokens` default (16384). **Required when using DeepSeek** (per-response cap is 8192) — see [5.3 Bot Issues](#53-bot-issues). |
 
 **Switching LLM Provider (example: OpenAI instead of DeepSeek):**
 
@@ -521,6 +527,7 @@ docker compose logs octos --since 1m | grep -i -E "deepseek|llm|provider"
 | `Connection refused` in Palpo logs | Octos not running, or wrong `url` in registration YAML | Ensure Octos is running. The `url` must use Docker service name (`http://octos:8009`), not `localhost`. |
 | `User ID not in namespace` | `sender_localpart` doesn't match `namespaces.users` regex | Update the regex in `octos-registration.yaml` to include the bot's full user ID pattern. |
 | Bot joins room but gives empty replies | LLM API key invalid or quota exceeded | Check `docker compose logs octos` for API errors. Verify your API key and account balance. |
+| Octos logs show `400 Bad Request: "Invalid max_tokens value, the valid range of max_tokens is [1, 8192]"` (DeepSeek) | Octos's default chat `max_tokens` is 16384, which exceeds DeepSeek's per-response cap (8192). | In `config/botfather.json`, add `"max_output_tokens": 8000` inside `config.gateway` (see [3.5](#35-octos-bot-profile-configbotfatherjson)), then `docker compose restart octos`. No rebuild needed. |
 | Messages from some users are ignored | `allowed_senders` filtering in `botfather.json` | Set `allowed_senders` to `[]` to allow everyone, or add the user's Matrix ID. |
 | Bot profile not loading | Missing `created_at` / `updated_at` in `botfather.json` | These fields are required. Add them as shown in section [3.5](#35-octos-bot-profile-configbotfatherjson). |
 

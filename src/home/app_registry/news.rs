@@ -10,8 +10,6 @@ use crate::i18n::AppLanguage;
 use super::{AppFactory, RenderFailure, RenderedApp, ValidationError};
 use super::capability_descriptors;
 use super::splash_host::{CapabilitySchema, HostError};
-#[cfg(test)]
-use super::weather::splash_escape;
 
 pub const TYPE_KEY: &str = "news";
 
@@ -292,45 +290,6 @@ fn news_host_error_to_render_failure(err: HostError) -> RenderFailure {
             reason: err.to_string(),
         },
     }
-}
-
-/// **Test-only helper** — production MUST NOT call this. See weather.rs
-/// `bind_guidance_template` docstring: this would bypass the SplashHost
-/// W5 / W7 / attribution guards. Gated behind `#[cfg(test)]` so the
-/// bypass cannot accidentally land on a hot path.
-///
-/// Sources the template through `templates::NEWS_HEADLINES_CARD` so
-/// test-only bypass output cannot drift away from production's
-/// SplashHost view (P1a single-source invariant).
-#[cfg(test)]
-fn news_template_source() -> &'static str {
-    super::templates::NEWS_HEADLINES_CARD
-}
-
-#[cfg(test)]
-fn bind_news_template(view_model: &NewsTemplateViewModel) -> String {
-    let mut rendered = news_template_source().to_string();
-    let bindings = [
-        ("$state.hero.bg_color", view_model.bg_color.clone()),
-        ("$state.topic_label", splash_escape(&view_model.topic_label)),
-        ("$state.headline", splash_escape(&view_model.headline)),
-        ("$state.summary", splash_escape(&view_model.summary)),
-        ("$state.updated.visible", view_model.updated.visible.to_string()),
-        ("$state.updated.text", splash_escape(&view_model.updated.text)),
-        ("$state.item_1.visible", view_model.item_1.visible.to_string()),
-        ("$state.item_1.title", splash_escape(&view_model.item_1.title)),
-        ("$state.item_1.source", splash_escape(&view_model.item_1.source)),
-        ("$state.item_2.visible", view_model.item_2.visible.to_string()),
-        ("$state.item_2.title", splash_escape(&view_model.item_2.title)),
-        ("$state.item_2.source", splash_escape(&view_model.item_2.source)),
-        ("$state.item_3.visible", view_model.item_3.visible.to_string()),
-        ("$state.item_3.title", splash_escape(&view_model.item_3.title)),
-        ("$state.item_3.source", splash_escape(&view_model.item_3.source)),
-    ];
-    for (token, value) in bindings {
-        rendered = rendered.replace(token, &value);
-    }
-    rendered
 }
 
 fn item_slot(item: Option<&NewsItem>) -> NewsItemSlot {

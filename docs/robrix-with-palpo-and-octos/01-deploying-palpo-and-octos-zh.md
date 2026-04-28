@@ -94,6 +94,8 @@ cd robrix2/palpo-and-octos-deploy
 DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+> **使用 DeepSeek？多一步配置。** DeepSeek 单次响应的 token 上限是 **8192**，而 Octos 内置默认值是 **16384**——首次发消息就会报 `400 Bad Request: Invalid max_tokens value`。**在运行 `docker compose up` 之前**，打开 `config/botfather.json`，在 `config.gateway` 块内添加 `"max_output_tokens": 8000`（完整示例见 [3.5 节](#35-octos-机器人配置configbotfatherjson)）。其他提供商（Moonshot、OpenAI、Anthropic）的上限更高，不需要这行。背景说明：[5.3 机器人问题](#53-机器人问题)。
+
 ### 步骤 4：启动服务
 
 ```bash
@@ -270,6 +272,7 @@ client = "http://127.0.0.1:8128"
     "provider": "deepseek",
     "model": "deepseek-chat",
     "api_key_env": "DEEPSEEK_API_KEY",
+    "admin_mode": true,
     "channels": [
       {
         "type": "matrix",
@@ -285,7 +288,8 @@ client = "http://127.0.0.1:8128"
     ],
     "gateway": {
       "max_history": 50,
-      "queue_mode": "followup"
+      "queue_mode": "followup",
+      "max_output_tokens": 8000
     }
   },
   "created_at": "2025-01-01T00:00:00Z",
@@ -302,6 +306,7 @@ client = "http://127.0.0.1:8128"
 | `provider` | LLM 提供商名称。Octos 支持 `deepseek`、`openai`、`anthropic` 等[多种提供商](https://octos-org.github.io/octos/)。 |
 | `model` | 模型标识符（如 `deepseek-chat`、`gpt-4o`、`claude-sonnet-4-20250514`）。 |
 | `api_key_env` | 存放 API Key 的环境变量名称。 |
+| `admin_mode` | 启用 BotFather 管理命令（`/createbot`、`/deletebot`、`/listbots`）。从 Robrix 或聊天中创建和管理子机器人时必须开启。 |
 
 **Matrix 通道设置：**
 
@@ -360,6 +365,7 @@ target/release/octos gateway \
 |------|------|
 | `max_history` | 作为 LLM 上下文发送的最大历史消息数量。 |
 | `queue_mode` | Octos 处理传入消息的方式。`followup` 将新消息排队并顺序处理。 |
+| `max_output_tokens` | 可选。覆盖 Octos 内置的 chat `max_tokens` 默认值（16384）。**使用 DeepSeek 时必填**（单次响应上限 8192）——详见 [5.3 机器人问题](#53-机器人问题)。 |
 
 **切换 LLM 提供商（以 OpenAI 替代 DeepSeek 为例）：**
 
@@ -520,6 +526,7 @@ docker compose logs octos --since 1m | grep -i -E "deepseek|llm|provider"
 | Palpo 日志中出现 `Connection refused` | Octos 未运行，或注册 YAML 中 `url` 错误 | 确保 Octos 正在运行。`url` 必须使用 Docker 服务名（`http://octos:8009`），不能用 `localhost`。 |
 | `User ID not in namespace` | `sender_localpart` 与 `namespaces.users` 正则不匹配 | 更新 `octos-registration.yaml` 中的正则表达式，包含机器人的完整用户 ID 模式。 |
 | 机器人加入房间但回复空消息 | LLM API Key 无效或额度不足 | 检查 `docker compose logs octos` 中的 API 错误。验证 API Key 和账户余额。 |
+| Octos 日志出现 `400 Bad Request: "Invalid max_tokens value, the valid range of max_tokens is [1, 8192]"`（DeepSeek） | Octos 默认的 chat `max_tokens` 是 16384，超出 DeepSeek 单次响应上限（8192）。 | 在 `config/botfather.json` 的 `config.gateway` 内添加 `"max_output_tokens": 8000`（参考 [3.5 节](#35-octos-机器人配置configbotfatherjson)），然后 `docker compose restart octos`。无需重新构建镜像。 |
 | 部分用户的消息被忽略 | `botfather.json` 中的 `allowed_senders` 过滤 | 设 `allowed_senders` 为 `[]` 允许所有人，或添加用户的 Matrix ID。 |
 | 机器人配置未加载 | `botfather.json` 缺少 `created_at` / `updated_at` | 这两个字段是必需的。按 [3.5 节](#35-octos-机器人配置configbotfatherjson) 示例添加。 |
 

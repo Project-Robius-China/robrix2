@@ -1221,6 +1221,8 @@ impl WidgetMatchEvent for LoginScreen {
 /// Actions sent to or from the login screen.
 #[derive(Clone, Default, Debug)]
 pub enum LoginAction {
+    /// Request to show the login screen because no reusable session is available.
+    ShowLoginScreen,
     /// A positive response from the backend Matrix task to the login screen.
     LoginSuccess,
     /// A positive response when adding an additional account (multi-account mode).

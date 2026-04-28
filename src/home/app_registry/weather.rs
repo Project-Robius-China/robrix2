@@ -7,9 +7,6 @@
 //! `render` produces a Canvas eval-path Splash DSL string that
 //! the caller injects into the message's `splash_card` slot.
 
-#[cfg(test)]
-use std::cmp::Reverse;
-
 use serde_json::Value as JsonValue;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -986,54 +983,6 @@ impl GuidanceTemplateViewModel {
         }
     }
 
-    #[cfg(test)]
-    fn bindings(&self) -> Vec<(&'static str, String)> {
-        let mut bindings = vec![
-            ("$state.hero.bg_color", self.bg_color.clone()),
-            ("$state.location", splash_escape(&self.location)),
-            ("$state.hero.symbol", splash_escape(&self.symbol)),
-            ("$state.hero.temp_text", splash_escape(&self.temp_text)),
-            ("$state.range.visible", self.range.visible.to_string()),
-            ("$state.range.text", splash_escape(&self.range.text)),
-            ("$state.condition_summary", splash_escape(&self.condition_summary)),
-            ("$state.updated.visible", self.updated.visible.to_string()),
-            ("$state.updated.text", splash_escape(&self.updated.text)),
-            ("$state.feels_like.visible", self.feels_like.visible.to_string()),
-            ("$state.feels_like.text", splash_escape(&self.feels_like.text)),
-            ("$state.humidity.visible", self.humidity.visible.to_string()),
-            ("$state.humidity.text", splash_escape(&self.humidity.text)),
-            ("$state.wind.visible", self.wind.visible.to_string()),
-            ("$state.wind.text", splash_escape(&self.wind.text)),
-            ("$state.guidance_header", splash_escape(&self.guidance_header)),
-            ("$state.headline", splash_escape(&self.headline)),
-            ("$state.summary", splash_escape(&self.summary)),
-            ("$state.periods_section.visible", self.periods_section_visible.to_string()),
-            ("$state.period_1.visible", self.period_1.visible.to_string()),
-            ("$state.period_1.label", splash_escape(&self.period_1.label)),
-            ("$state.period_1.advice", splash_escape(&self.period_1.advice)),
-            ("$state.period_1.temp_text", splash_escape(&self.period_1.temp_text)),
-            ("$state.period_2.visible", self.period_2.visible.to_string()),
-            ("$state.period_2.label", splash_escape(&self.period_2.label)),
-            ("$state.period_2.advice", splash_escape(&self.period_2.advice)),
-            ("$state.period_2.temp_text", splash_escape(&self.period_2.temp_text)),
-            ("$state.period_3.visible", self.period_3.visible.to_string()),
-            ("$state.period_3.label", splash_escape(&self.period_3.label)),
-            ("$state.period_3.advice", splash_escape(&self.period_3.advice)),
-            ("$state.period_3.temp_text", splash_escape(&self.period_3.temp_text)),
-            ("$state.chips_section.visible", self.chips_section_visible.to_string()),
-            ("$state.chip_1.visible", self.chip_1.visible.to_string()),
-            ("$state.chip_1.text", splash_escape(&self.chip_1.text)),
-            ("$state.chip_2.visible", self.chip_2.visible.to_string()),
-            ("$state.chip_2.text", splash_escape(&self.chip_2.text)),
-            ("$state.chip_3.visible", self.chip_3.visible.to_string()),
-            ("$state.chip_3.text", splash_escape(&self.chip_3.text)),
-            ("$state.chip_4.visible", self.chip_4.visible.to_string()),
-            ("$state.chip_4.text", splash_escape(&self.chip_4.text)),
-        ];
-        bindings.sort_by_key(|(token, _)| Reverse(token.len()));
-        bindings
-    }
-
     fn template_state(&self) -> JsonValue {
         serde_json::json!({
             "hero": {
@@ -1108,33 +1057,6 @@ impl GuidanceTemplateViewModel {
             },
         })
     }
-}
-
-/// **Test-only helper**. Production code MUST NOT call this — it performs
-/// a direct `str::replace` binding against the raw template source,
-/// bypassing the SplashHost W5 / W7 / attribution guards. Exposing this
-/// as a production fallback would let the system emit Splash that a
-/// guard had already rejected, defeating the core safety boundary.
-///
-/// Gated behind `#[cfg(test)]` so the bypass cannot accidentally land
-/// on a hot path; existing tests that want to compare bypass output
-/// against host output (to detect drift between the two binders) can
-/// still call it.
-#[cfg(test)]
-fn guidance_template_source() -> &'static str {
-    // Use the single source of truth from `templates::` so test-only
-    // bypass output cannot drift away from what the SplashHost sees in
-    // production (P1a single-source invariant).
-    super::templates::WEATHER_CARD_STANDARD
-}
-
-#[cfg(test)]
-fn bind_guidance_template(view_model: &GuidanceTemplateViewModel) -> String {
-    let mut rendered = guidance_template_source().to_string();
-    for (token, value) in view_model.bindings() {
-        rendered = rendered.replace(token, &value);
-    }
-    rendered
 }
 
 fn render_legacy_weather(state: &RenderedWeather, app_language: AppLanguage) -> String {

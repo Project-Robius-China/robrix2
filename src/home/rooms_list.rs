@@ -217,6 +217,16 @@ pub enum RoomsListUpdate {
     HideRoom {
         room_id: OwnedRoomId,
     },
+    /// Clear the hidden flag for the given room and restore it into the
+    /// appropriate displayed list if it is now eligible.
+    ///
+    /// Semantic dual of [`RoomsListUpdate::HideRoom`]. Used by sliding-sync
+    /// `update_room` when a still-Joined room's display eligibility flips
+    /// from hidden back to displayable (e.g., a freshly-created DM whose
+    /// `display_name` finally transitions from `Empty` to `Calculated`).
+    UnhideRoom {
+        room_id: OwnedRoomId,
+    },
     /// Scroll to the given room.
     ScrollToRoom(OwnedRoomId),
     /// The background space service is now listening for requests,
@@ -523,6 +533,21 @@ macro_rules! should_display_room {
             && $self.selected_space.as_ref()
                 .is_none_or(|space| $self.is_room_indirectly_in_space(space.room_id(), $room_id))
     };
+}
+
+fn for_each_room_id_in_display_order<'a, I, F>(room_ids: I, mut f: F)
+where
+    I: IntoIterator<Item = &'a OwnedRoomId>,
+    F: FnMut(&'a OwnedRoomId),
+{
+    let mut seen_room_ids = HashSet::new();
+    for room_id in room_ids {
+        if !seen_room_ids.insert(room_id.clone()) {
+            warning!("Ignoring duplicate room ID {room_id} in all_known_rooms_order");
+            continue;
+        }
+        f(room_id);
+    }
 }
 
 
@@ -882,6 +907,26 @@ impl RoomsList {
                         self.displayed_invited_rooms.remove(i);
                     }
                 }
+                RoomsListUpdate::UnhideRoom { room_id } => {
+                    let was_hidden = self.hidden_rooms.remove(&room_id);
+                    if !was_hidden {
+                        continue;
+                    }
+                    if let Some(room) = self.all_joined_rooms.get(&room_id) {
+                        let is_direct = room.is_direct;
+                        let should_display = should_display_room!(self, &room_id, room);
+                        if should_display {
+                            let displayed_list = if is_direct {
+                                &mut self.displayed_direct_rooms
+                            } else {
+                                &mut self.displayed_regular_rooms
+                            };
+                            if !displayed_list.contains(&room_id) {
+                                displayed_list.push(room_id);
+                            }
+                        }
+                    }
+                }
                 RoomsListUpdate::ScrollToRoom(room_id) => {
                     // Ensure indexes are fresh in case rooms were added/removed in this batch of updates.
                     if self.indexes_dirty {
@@ -1093,7 +1138,7 @@ impl RoomsList {
         else {
             let mut seen_joined = HashSet::new();
             let mut seen_invited = HashSet::new();
-            for room_id in &self.all_known_rooms_order {
+            for_each_room_id_in_display_order(self.all_known_rooms_order.iter(), |room_id| {
                 if let Some(jr) = self.all_joined_rooms.get(room_id) {
                     if should_display_room!(self, room_id, jr) {
                         seen_joined.insert(room_id.clone());
@@ -1105,7 +1150,7 @@ impl RoomsList {
                         new_displayed_invited_rooms.push(room_id.clone());
                     }
                 }
-            }
+            });
 
             for (room_id, jr) in &self.all_joined_rooms {
                 if !seen_joined.contains(room_id) && should_display_room!(self, room_id, jr) {
@@ -1341,6 +1386,10 @@ impl Widget for RoomsList {
                     continue;
                 };
 
+                if self.current_active_room.as_ref().is_some_and(|current| current == &new_selected_room) {
+                    continue;
+                }
+
                 self.current_active_room = Some(new_selected_room.clone());
                 cx.widget_action(
                     self.widget_uid(), 
@@ -1373,6 +1422,9 @@ impl Widget for RoomsList {
             else if let Some(SpaceLobbyAction::SpaceLobbyEntryClicked) = action.downcast_ref() {
                 let Some(space_name_id) = self.selected_space.clone() else { continue };
                 let new_selected_space = SelectedRoom::Space { space_name_id };
+                if self.current_active_room.as_ref().is_some_and(|current| current == &new_selected_space) {
+                    continue;
+                }
                 self.current_active_room = Some(new_selected_space.clone());
                 cx.widget_action(
                     self.widget_uid(), 
@@ -1823,4 +1875,31 @@ struct RoomCategoryIndexes {
     first_room_index: usize,
     /// The index after the last room in this category, which is where the next category should start.
     after_rooms_index: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matrix_sdk::ruma::owned_room_id;
+
+    #[test]
+    fn room_order_iteration_ignores_duplicate_room_ids() {
+        let first_room_id = owned_room_id!("!first:example.com");
+        let second_room_id = owned_room_id!("!second:example.com");
+        let ordered_room_ids = [
+            first_room_id.clone(),
+            first_room_id.clone(),
+            second_room_id.clone(),
+        ];
+
+        let mut iterated_room_ids = Vec::new();
+        for_each_room_id_in_display_order(ordered_room_ids.iter(), |room_id| {
+            iterated_room_ids.push(room_id.clone());
+        });
+
+        assert_eq!(
+            iterated_room_ids,
+            vec![first_room_id, second_room_id],
+        );
+    }
 }
