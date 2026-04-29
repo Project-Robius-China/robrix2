@@ -7,7 +7,7 @@ estimate: 0.5d
 
 ## 意图
 
-修复 issue #94（https://github.com/Project-Robius-China/robrix2/issues/94）：在 Android（以及其他移动平台）上，用户在 Settings → Labs → App Service 里填写的 BotFather User ID 和 Octos Service URL，在 force-quit + 重启之后全部丢失，必须每次重新录入。保存路径本身已经正确持久化；真正的 bug 在加载路径——`src/sliding_sync.rs::handle_load_app_state` 用一个"dock 非空"的 if-守卫把整个 `RestoreAppStateFromPersistentState` 派发动作全部挡在外面。移动端没有 dock，结果每次重启都会把加载回来的非 dock 字段（`bot_settings`、`app_language`、`translation`）静默丢弃。修复方式是去掉这个加载侧守卫，让 `load_app_state` 成功时总是派发恢复动作；`src/app.rs` 里现有的恢复匹配分支在空 dock 下本身就已正确（整条 `AppState` 替换 + 无条件派发 `LoadDockFromAppState`），不需要改动。
+修复 issue #94（https://github.com/Project-Robius-China/robrix2/issues/94）：在 Android（以及其他移动平台）上，用户在 Settings → Labs → App Service 里填写的 BotFather User ID 和 Octos Service URL，在 force-quit + 重启之后全部丢失，必须每次重新录入。保存路径本身已经正确持久化；真正的 bug 在加载路径——`src/sliding_sync.rs::handle_load_app_state` 用一个"dock 非空"的 if-守卫把整个 `RestoreAppStateFromPersistentState` 派发动作全部挡在外面。移动端没有 dock，结果每次重启都会把加载回来的非 dock 字段（`selected_room`、`bot_settings`、`app_language`、`translation`）静默丢弃。修复方式是把加载侧守卫改为 content-aware gate：`load_app_state` 成功且返回的 `AppState` 含有有意义的非默认持久化内容时才派发恢复动作；全新安装 / 无持久化文件返回的纯默认 `AppState` 保持 no-op。
 
 ## 约束
 
@@ -15,29 +15,32 @@ estimate: 0.5d
 - 保留 `src/app.rs` 里 `AppStateAction::RestoreAppStateFromPersistentState` 匹配分支的既有语义：保留 `logged_in_actual`、通过 `remove_room_bindings_where` 剔除陈旧的房间绑定、剔除后重新持久化、派发 `MainDesktopUiAction::LoadDockFromAppState`
 - 不要改动 `save_app_state` 代码路径，也不要改 `AppState` / `BotSettingsState` 的 JSON 序列化格式
 - 不要改 `app_data_dir()` / `persistent_state_dir()` 的路径解析——移动端路径本身是对的，bug 纯粹是派发动作丢失
-- 单元测试只验证 serde 往返契约，不碰文件 I/O，确保无副作用、可确定性执行
+- 单元测试覆盖 serde 往返契约、restore gate 判定逻辑、Settings UI 从恢复后的 `AppState` hydrate 的判定逻辑；不碰文件 I/O，确保无副作用、可确定性执行
 
 ## 决策
 
-- 修复位置：`src/sliding_sync.rs::handle_load_app_state`——移除原先基于 dock 非空的守卫，改为当 `load_app_state` 返回的 `AppState` 含有任何非默认持久化内容（dock、bot_settings、app_language、translation）时派发 `AppStateAction::RestoreAppStateFromPersistentState(Box::new(app_state))`
+- 修复位置：`src/sliding_sync.rs::handle_load_app_state`——移除原先基于 dock 非空的守卫，改为当 `load_app_state` 返回的 `AppState` 含有任何非默认持久化内容（`selected_room`、dock、bot_settings、app_language、translation）时派发 `AppStateAction::RestoreAppStateFromPersistentState(Box::new(app_state))`
 - 理由：`src/app.rs:1071-1095` 的恢复匹配分支已经做了完整的 `self.app_state = *app_state.clone()` 替换，并且无条件派发 `MainDesktopUiAction::LoadDockFromAppState`。因此不能再用"dock 非空"来决定是否恢复；否则移动端的非 dock 字段仍会丢失。但对于全新安装 / 无持久化文件返回的纯默认 `AppState`，保持 no-op 更符合既有语义，也避免用一份默认值去覆盖运行中的瞬时状态
 - 修改 `handle_load_app_state` 内的日志文案，从 "Loaded room panel state from app data directory. Restoring now..." 改为 "Loaded app state from persistent storage. Restoring now..."，防止后续读代码的人误以为这条路径只恢复 dock
 - 回归测试：在 `src/app.rs` 已有的 `#[cfg(test)] mod tests` 模块（约从 2568 行开始）内追加一个 serde 往返单测。构造一个启用了 App Service 的 `AppState`（`bot_settings.enabled = true`、非默认的 `botfather_user_id`、非默认的 `octos_service_url`）、`saved_dock_state_home` 为空；用 `serde_json::to_string` 序列化后再反序列化，断言三个 `bot_settings` 字段全部存活
+- restore gate 直接测试：在 `src/sliding_sync.rs` 的 `matrix_request_tests` 中覆盖空 dock + `bot_settings` 会恢复、空 dock + `selected_room` 会恢复、纯默认 `AppState` 不恢复
+- Settings UI hydrate：`src/settings/bot_settings.rs::BotSettings` 在事件处理入口从 `Scope<AppState>` 检查 `bot_settings` 是否已恢复或是否尚未首次 hydrate；需要时调用 `sync_ui`。不要依赖移动端上滑退出时的 `Shutdown` 保存，因为强杀不保证应用收到 shutdown 事件；保存仍然发生在 Save / Check Now / toggle 这些用户动作上
 - 单测名称保持与场景 `测试:` 选择器一致：`test_app_state_roundtrip_preserves_bot_settings_with_empty_dock`——把"防止哪种 bug"写进名字，未来维护者一眼能懂
 - 验证层次：机械层用单测覆盖 serde 契约；端到端的 Android force-quit + 重启场景用 `Test: manual_test_*` 形式绑定，交给用户手动验收
 
 ## 边界
 
 ### 允许变更
-- `src/sliding_sync.rs`——只改 `handle_load_app_state` 函数（约 4958-4990 行）
+- `src/sliding_sync.rs`——只改 `handle_load_app_state` 及其 restore gate helper / 单元测试
 - `src/app.rs`——只在已有的 `#[cfg(test)] mod tests` 块里追加新单测；`app.rs` 生产代码不改
+- `src/settings/bot_settings.rs`——只改 Settings UI 从 `Scope<AppState>` hydrate 的判定和相关单测；不改保存路径语义
 - `issues/009-mobile-appservice-binding-not-persisted.md`——修复落地后补写 "Fix Applied" 段
 
 ### 禁止
 - 不要改 `src/persistence/app_state.rs`（save/load 本身没问题）
 - 不要改 `src/persistence/matrix_state.rs`（`persistent_state_dir`、`app_data_dir` 解析）
 - 不要改 `src/app.rs` 中 `RestoreAppStateFromPersistentState` 匹配分支的生产代码
-- 不要改 `src/settings/bot_settings.rs`（保存路径正确；bug 不在写端）
+- 不要改 `src/settings/bot_settings.rs` 的保存路径语义（保存路径正确；只允许补 Settings UI hydrate）
 - 不要改 `AppState` / `BotSettingsState` 的字段布局、`#[serde]` 属性、默认值——这会影响用户设备上已有 JSON 的向后兼容性
 - 不要给 `Cargo.toml` 加 dev-dependency；serde_json 已经可用，不需要 mocking 框架
 - 不要新增对外公开 API（没有新的 `pub fn`，没有新的 `pub struct`）
@@ -59,6 +62,61 @@ estimate: 0.5d
   那么 反序列化后的 `bot_settings.enabled` 等于 `true`
   并且 反序列化后的 `bot_settings.botfather_user_id` 等于 `"@octosbot:example.com"`
   并且 反序列化后的 `bot_settings.octos_service_url` 等于 `"http://192.168.5.12:8010"`
+
+场景: 空 dock 且含 bot_settings 时 restore gate 允许恢复
+  测试: test_should_restore_loaded_app_state_with_bot_settings_and_empty_dock
+  层级: unit
+  命中: handle_load_app_state_restore_gate
+  假设 构造一个 `AppState`，其 `bot_settings` 非默认
+  并且 `saved_dock_state_home.open_rooms` 为空
+  并且 `saved_dock_state_home.dock_items` 为空
+  当 调用 `should_restore_loaded_app_state`
+  那么 返回 `true`
+
+场景: 空 dock 且含 selected_room 时 restore gate 允许恢复
+  测试: test_should_restore_loaded_app_state_with_selected_room_and_empty_dock
+  层级: unit
+  命中: handle_load_app_state_restore_gate
+  假设 构造一个 `AppState`，其 `selected_room` 非空
+  并且 `saved_dock_state_home.open_rooms` 为空
+  并且 `saved_dock_state_home.dock_items` 为空
+  当 调用 `should_restore_loaded_app_state`
+  那么 返回 `true`
+
+场景: 纯默认 AppState 时 restore gate 不派发恢复
+  测试: test_should_not_restore_loaded_default_app_state
+  层级: unit
+  命中: handle_load_app_state_fresh_install
+  假设 构造一个 `AppState::default()`
+  当 调用 `should_restore_loaded_app_state`
+  那么 返回 `false`
+
+场景: Settings UI 在 AppState 恢复后重新 hydrate App Service 表单
+  测试: test_bot_settings_scope_sync_detects_restored_state
+  层级: unit
+  命中: bot_settings_scope_hydration
+  假设 `BotSettings` 上次同步的是默认 `BotSettingsState`
+  并且 `Scope<AppState>` 中的 `bot_settings` 已恢复为非默认 App Service 配置
+  当 判断是否需要从 `AppState` 同步 UI
+  那么 返回 `true`
+
+场景: Settings UI 第一次处理事件时即使 AppState 是默认值也执行 hydrate
+  测试: test_bot_settings_scope_sync_runs_before_first_hydration
+  层级: unit
+  命中: bot_settings_scope_hydration
+  假设 `BotSettings` 还没有完成首次同步
+  并且 `Scope<AppState>` 中的 `bot_settings` 是默认值
+  当 判断是否需要从 `AppState` 同步 UI
+  那么 返回 `true`
+
+场景: Settings UI 已同步且 AppState 未变化时不重复 hydrate
+  测试: test_bot_settings_scope_sync_ignores_unchanged_state
+  层级: unit
+  命中: bot_settings_scope_hydration
+  假设 `BotSettings` 已经完成首次同步
+  并且 上次同步的 `BotSettingsState` 与 `Scope<AppState>` 中的 `bot_settings` 相同
+  当 判断是否需要从 `AppState` 同步 UI
+  那么 返回 `false`
 
 场景: 移动端 force-quit + 重启后 App Service 绑定得到恢复
   测试: manual_test_mobile_app_service_persists_across_force_quit

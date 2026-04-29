@@ -1482,6 +1482,43 @@ mod matrix_request_tests {
         );
     }
 
+    #[test]
+    fn test_should_restore_loaded_app_state_with_bot_settings_and_empty_dock() {
+        let mut app_state = crate::app::AppState::default();
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = "@octosbot:example.com".to_string();
+        app_state.bot_settings.octos_service_url = "http://192.168.5.12:8010".to_string();
+
+        assert!(
+            should_restore_loaded_app_state(&app_state),
+            "non-default bot settings must restore even when dock state is empty",
+        );
+    }
+
+    #[test]
+    fn test_should_restore_loaded_app_state_with_selected_room_and_empty_dock() {
+        let mut app_state = crate::app::AppState::default();
+        app_state.selected_room = Some(crate::app::SelectedRoom::JoinedRoom {
+            room_name_id: crate::utils::RoomNameId::new(
+                matrix_sdk::RoomDisplayName::Named("octosbot".into()),
+                "!room:example.org".parse().unwrap(),
+            ),
+        });
+
+        assert!(
+            should_restore_loaded_app_state(&app_state),
+            "selected_room is persisted state and must restore even when dock state is empty",
+        );
+    }
+
+    #[test]
+    fn test_should_not_restore_loaded_default_app_state() {
+        assert!(
+            !should_restore_loaded_app_state(&crate::app::AppState::default()),
+            "fresh installs should keep in-memory defaults instead of dispatching a no-op restore",
+        );
+    }
+
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -5378,11 +5415,32 @@ fn handle_ignore_user_list_subscriber(client: Client) {
 
 /// Asynchronously loads and restores the app state from persistent storage for the given user.
 ///
-/// Every successfully loaded `AppState` must be restored, including the all-default value.
-/// That default payload is still semantically meaningful: it clears stale per-account state
-/// during account switches and after corrupt-file fallback, while the restore handler keeps the
-/// live `logged_in` flag and routes desktop dock reloads safely through `LoadDockFromAppState`.
+/// Restores loaded app state when it contains meaningful persisted content.
+///
+/// The persistence layer returns `AppState::default()` for fresh installs and corrupt-file
+/// fallback, so the all-default value must remain a no-op. Empty-dock mobile state is still
+/// meaningful when non-dock fields such as `selected_room`, `bot_settings`, language, or
+/// translation settings were persisted.
 /// If loading fails, it shows a popup notification with the error message.
+fn should_restore_loaded_app_state(app_state: &crate::app::AppState) -> bool {
+    fn saved_dock_state_has_content(saved: &crate::app::SavedDockState) -> bool {
+        !saved.open_rooms.is_empty()
+            || !saved.dock_items.is_empty()
+            || !saved.room_order.is_empty()
+            || saved.selected_room.is_some()
+    }
+
+    app_state.selected_room.is_some()
+        || saved_dock_state_has_content(&app_state.saved_dock_state_home)
+        || app_state
+            .saved_dock_state_per_space
+            .values()
+            .any(saved_dock_state_has_content)
+        || app_state.bot_settings != crate::app::BotSettingsState::default()
+        || app_state.app_language != crate::i18n::AppLanguage::default()
+        || app_state.translation != crate::room::translation::TranslationConfig::default()
+}
+
 fn handle_load_app_state(user_id: OwnedUserId) {
     Handle::current().spawn(async move {
         match take_skip_app_state_restore_once(&user_id).await {
@@ -5398,8 +5456,10 @@ fn handle_load_app_state(user_id: OwnedUserId) {
 
         match load_app_state(&user_id).await {
             Ok(app_state) => {
-                log!("Loaded app state from persistent storage. Restoring now...");
-                Cx::post_action(AppStateAction::RestoreAppStateFromPersistentState(Box::new(app_state)));
+                if should_restore_loaded_app_state(&app_state) {
+                    log!("Loaded app state from persistent storage. Restoring now...");
+                    Cx::post_action(AppStateAction::RestoreAppStateFromPersistentState(Box::new(app_state)));
+                }
             }
             Err(_e) => {
                 log!("Failed to restore app state from persistent storage: {_e}");
