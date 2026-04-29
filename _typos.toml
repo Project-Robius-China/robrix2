@@ -1,0 +1,7 @@
+[files]
+extend-exclude = [
+    "fixtures/airbnb-mock/listings.json",
+]
+
+[default.extend-words]
+FPR = "FPR"
