@@ -68,6 +68,67 @@ Multiple messages in the same room may render the same mission instance. This is
 intentional: the room timeline remains the record, while the mission view is the
 current projection of that shared state.
 
+## Producer Contract
+
+OpenClaw / OctOS producers should treat Robrix as a consumer of Matrix events,
+not as a private RPC peer. A mission-state update is a normal room message whose
+original event content contains the app envelope:
+
+```json
+{
+  "body": "Mission update: plan is waiting for approval.",
+  "msgtype": "m.text",
+  "org.octos.app": {
+    "type": "mission_room",
+    "version": 1,
+    "scope": "room",
+    "app_id": "mission.main",
+    "initial_state": {}
+  },
+  "org.octos.actions": [
+    { "id": "approve_plan", "label": "Approve plan", "style": "primary" },
+    { "id": "request_plan_changes", "label": "Request changes", "style": "secondary" }
+  ]
+}
+```
+
+Producer rules:
+
+- Always include `scope: "room"` and a stable `app_id` for mission-room events.
+- Use `mission.main` for the default room mission unless the room deliberately
+  hosts multiple missions.
+- Emit a full `initial_state` snapshot for every shared mission update. Robrix
+  can keep local view state, but shared truth is the latest valid Matrix event.
+- Keep `body` useful as the fallback and audit summary.
+- Put shared human controls in `org.octos.actions`; the Splash mission card may
+  display pending actions, but it is not the transport for shared approvals.
+- Do not rely on `m.replace` edits to change mission app state. Robrix reads the
+  app envelope from the original event content.
+
+When a human clicks an OctOS action button, Robrix sends an
+`org.octos.action_response` that targets the original producer. The producer is
+responsible for validating the response, applying policy, and emitting a new
+mission-room snapshot event.
+
+For account-wide mission summaries, producers may emit:
+
+```json
+{
+  "body": "Mission dashboard update.",
+  "msgtype": "m.text",
+  "org.octos.app": {
+    "type": "mission_dashboard",
+    "version": 1,
+    "scope": "account",
+    "app_id": "missions.global",
+    "initial_state": {}
+  }
+}
+```
+
+The account dashboard is a global app instance keyed by `account_id + app_id`;
+it should summarize mission rooms, not replace room-scoped mission truth.
+
 ## User Experience
 
 The first screen is **Mission Control first**.

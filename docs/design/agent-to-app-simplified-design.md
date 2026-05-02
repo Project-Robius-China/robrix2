@@ -82,9 +82,9 @@ Robrix2 may render the app only if:
 
 If any step fails, Robrix2 renders `body`. There is no secondary rich-render bypass.
 
-The default scope is `message`. A `room` scoped app must include a stable
-`app_id`. `account` scoped apps are a later extension and should not be required
-for the first `agent2view` implementation.
+The default scope is `message`. A `room` or `account` scoped app must include a
+stable `app_id`. `account` scope is for global dashboards keyed by the current
+Matrix account, not for replacing room-scoped truth.
 
 ## Minimal Module Shape
 
@@ -198,7 +198,8 @@ For the first `agent2view` implementation:
 
 - support `message` scope by default.
 - support `room` scope when `app_id` is present.
-- defer `account` scope unless a concrete global-dashboard feature needs it.
+- support `account` scope for explicit global-dashboard apps such as
+  `mission_dashboard`.
 
 `message` scope means one Matrix event owns one local app instance:
 
@@ -213,8 +214,15 @@ same local app instance:
 room_id + app_id -> AgentViewSession
 ```
 
-`account` scope means multiple rooms may render the same app instance. This
-requires account-level persistence and conflict rules, so it is future work.
+`account` scope means multiple rooms may render the same app instance for the
+current Matrix account:
+
+```text
+account_id + app_id -> AgentViewSession
+```
+
+The first implementation keeps this state in memory. Persistence and conflict
+rules are future work.
 
 ### AgentViewSession
 
