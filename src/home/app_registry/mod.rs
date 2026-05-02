@@ -762,6 +762,8 @@ mod tests {
 
         assert!(splash.contains("Ship agent2view runtime"), "{splash}");
         assert!(splash.contains("Define AgentViewSession"), "{splash}");
+        assert!(splash.contains("high"), "{splash}");
+        assert!(splash.contains("Pending human actions"), "{splash}");
         assert!(splash.contains("Approve proposed plan"), "{splash}");
         assert!(splash.contains("mission_room"), "{splash}");
         assert!(!splash.contains("$state."), "{splash}");
