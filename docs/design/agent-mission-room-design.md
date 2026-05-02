@@ -110,6 +110,27 @@ When a human clicks an OctOS action button, Robrix sends an
 responsible for validating the response, applying policy, and emitting a new
 mission-room snapshot event.
 
+For app-originated actions, Robrix includes source app metadata in the response:
+
+```json
+{
+  "org.octos.action_response": {
+    "action_id": "approve_plan",
+    "source_event_id": "$mission123",
+    "app": {
+      "type": "mission_room",
+      "version": 1,
+      "scope": "room",
+      "app_id": "mission.main"
+    }
+  }
+}
+```
+
+The producer may still use `source_event_id` as the audit anchor, but the
+embedded `app` object makes routing explicit when a room hosts multiple mission
+apps.
+
 For account-wide mission summaries, producers may emit:
 
 ```json

@@ -505,6 +505,41 @@ struct OctosActionButtonContext {
     source_event_id: OwnedEventId,
     original_sender: OwnedUserId,
     request: OctosActionButtonRequest,
+    app_context: Option<OctosActionAppContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosActionAppContext {
+    app_type: String,
+    version: u32,
+    scope: String,
+    app_id: Option<String>,
+}
+
+impl OctosActionAppContext {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": self.app_type,
+            "version": self.version,
+            "scope": self.scope,
+            "app_id": self.app_id,
+        })
+    }
+}
+
+fn octos_action_app_context_from_content(content: &serde_json::Value) -> Option<OctosActionAppContext> {
+    let envelope = crate::home::app_registry::parse_envelope(content)?;
+    Some(OctosActionAppContext {
+        app_type: envelope.app_type,
+        version: envelope.version,
+        scope: match envelope.scope {
+            crate::home::app_registry::AgentViewScope::Message => "message",
+            crate::home::app_registry::AgentViewScope::Room => "room",
+            crate::home::app_registry::AgentViewScope::Account => "account",
+        }
+        .into(),
+        app_id: envelope.app_id,
+    })
 }
 
 fn build_octos_approval_response_request(
@@ -545,16 +580,22 @@ fn build_octos_action_response_request(
     action_id: &str,
     source_event_id: &EventId,
     original_sender: &UserId,
+    app_context: Option<&OctosActionAppContext>,
 ) -> OctosActionResponseRequest {
+    let mut action_response = serde_json::json!({
+        "action_id": action_id,
+        "source_event_id": source_event_id.as_str(),
+    });
+    if let Some(app_context) = app_context {
+        action_response["app"] = app_context.to_json();
+    }
+
     OctosActionResponseRequest {
         timeline_kind: timeline_kind.clone(),
         content: serde_json::json!({
             "msgtype": "m.text",
             "body": format!("[Action: {label}]"),
-            "org.octos.action_response": {
-                "action_id": action_id,
-                "source_event_id": source_event_id.as_str(),
-            },
+            "org.octos.action_response": action_response,
             "m.relates_to": {
                 "m.in_reply_to": {
                     "event_id": source_event_id.as_str(),
@@ -7917,6 +7958,7 @@ impl RoomScreen {
                         action_id,
                         clicked_context.source_event_id.as_ref(),
                         clicked_context.original_sender.as_ref(),
+                        clicked_context.app_context.as_ref(),
                     ),
                     OctosActionButtonRequest::Approval { request_id, title, decision, tool_args_digest, .. } => build_octos_approval_response_request(
                         &tl.kind,
@@ -10618,6 +10660,7 @@ fn populate_octos_action_buttons(
     };
 
     let parsed_payload = parse_octos_action_payload_for_render(content, original_content);
+    let app_context = original_content.and_then(octos_action_app_context_from_content);
 
     if parsed_payload.malformed_approval_request {
         warning!("org.octos.approval_request: skipping malformed approval request");
@@ -10696,6 +10739,7 @@ fn populate_octos_action_buttons(
                 source_event_id: source_event_id.clone(),
                 original_sender: original_sender.to_owned(),
                 request,
+                app_context: app_context.clone(),
             });
         }
     }
@@ -12782,6 +12826,12 @@ mod tests {
         };
         let source_event_id: OwnedEventId = "$mission123".try_into().unwrap();
         let original_sender: OwnedUserId = "@octos_planner:127.0.0.1:8128".try_into().unwrap();
+        let app_context = OctosActionAppContext {
+            app_type: "mission_room".into(),
+            version: 1,
+            scope: "room".into(),
+            app_id: Some("mission.main".into()),
+        };
 
         let request = build_octos_action_response_request(
             &timeline_kind,
@@ -12789,6 +12839,7 @@ mod tests {
             "approve_plan",
             source_event_id.as_ref(),
             original_sender.as_ref(),
+            Some(&app_context),
         );
 
         let action_response = &request.content["org.octos.action_response"];
@@ -12796,6 +12847,29 @@ mod tests {
         assert_eq!(request.content["body"], "[Action: Approve plan]");
         assert_eq!(action_response["action_id"], "approve_plan");
         assert_eq!(action_response["source_event_id"], "$mission123");
+        assert_eq!(action_response["app"]["type"], "mission_room");
+        assert_eq!(action_response["app"]["version"], 1);
+        assert_eq!(action_response["app"]["scope"], "room");
+        assert_eq!(action_response["app"]["app_id"], "mission.main");
+    }
+
+    #[test]
+    fn test_octos_action_app_context_parses_original_app_envelope() {
+        let context = octos_action_app_context_from_content(&serde_json::json!({
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "scope": "room",
+                "app_id": "mission.main",
+                "initial_state": {}
+            }
+        }))
+        .expect("valid mission room app envelope should produce action context");
+
+        assert_eq!(context.app_type, "mission_room");
+        assert_eq!(context.version, 1);
+        assert_eq!(context.scope, "room");
+        assert_eq!(context.app_id.as_deref(), Some("mission.main"));
     }
 
     #[test]
@@ -12991,6 +13065,7 @@ mod tests {
             "retry_pptx",
             source_event_id.as_ref(),
             original_sender.as_ref(),
+            None,
         );
 
         assert_eq!(request.timeline_kind, timeline_kind);
@@ -13012,6 +13087,7 @@ mod tests {
             "retry_pptx",
             source_event_id.as_ref(),
             original_sender.as_ref(),
+            None,
         );
 
         let action_response = &request.content["org.octos.action_response"];

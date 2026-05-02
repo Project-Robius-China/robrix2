@@ -31,6 +31,9 @@ action responses for shared decisions.
   not rewrite Matrix events.
 - Shared mission actions are transported by existing `org.octos.actions` /
   `org.octos.action_response`, not by hidden Splash-local state.
+- App-originated `org.octos.action_response` messages include source app
+  metadata (`type`, `version`, `scope`, `app_id`) when the source event has a
+  valid `org.octos.app` envelope.
 - OctOS/OpenClaw producers emit full mission snapshots as normal Matrix messages
   with useful `body` fallback text and original-content `org.octos.app`.
 - Room/account scoped snapshots are projected by timeline order: newer snapshots
@@ -153,6 +156,20 @@ Scenario: Mission room producer payload renders with action context
   When Robrix renders the event
   Then the Splash output contains the mission title, task title, priority, and pending action text
   And no unresolved `$state.` binding remains
+
+Scenario: Mission room action response includes source app context
+  Test: test_mission_room_action_response_preserves_mission_action_id
+  Given a user clicks a mission room approval action whose id is `approve_plan`
+  And the source event has `type: "mission_room"`, `scope: "room"`, and `app_id: "mission.main"`
+  When Robrix builds `org.octos.action_response`
+  Then the response preserves the clicked mission action id
+  And the response includes source `app.type`, `app.version`, `app.scope`, and `app.app_id`
+
+Scenario: Source app context is parsed from original app envelope
+  Test: test_octos_action_app_context_parses_original_app_envelope
+  Given the original event content contains a valid `org.octos.app` envelope
+  When Robrix prepares action-button context for that event
+  Then the context contains the source app `type`, `version`, `scope`, and `app_id`
 
 Scenario: Invalid mission state does not render Splash
   Test: mission_room_invalid_task_status_falls_back_to_body
