@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value as JsonValue;
 
-use super::{capability_descriptors, local_functions, news, template_cache, weather, widget_manifest};
+use super::{capability_descriptors, local_functions, mission_room, news, template_cache, weather, widget_manifest};
 
 /// Host-owned attribution envelope rendered around every template. Values
 /// come from the Robrix-side static `CapabilityDescriptor` table (see
@@ -1207,6 +1207,7 @@ fn splash_escape(input: &str) -> String {
 
 fn schema_for_capability(capability_id: &str) -> Option<&'static dyn CapabilitySchema> {
     match capability_id {
+        "mission_room" => Some(&mission_room::MISSION_ROOM_CAPABILITY_SCHEMA),
         "news_guidance" => Some(&news::NEWS_CAPABILITY_SCHEMA),
         "weather_guidance" => Some(&weather::WEATHER_CAPABILITY_SCHEMA),
         _ => None,

@@ -81,6 +81,19 @@ static CAPABILITY_DESCRIPTORS: LazyLock<HashMap<&'static str, CapabilityDescript
         );
 
         m.insert(
+            "mission_room",
+            CapabilityDescriptor {
+                capability_id: "mission_room",
+                display_name: "Mission Room",
+                icon_url: None,
+                trust_badge: TrustBadge::Builtin,
+                manifest_version: 1,
+                template_set_version: 1,
+                fallback_template_id: None,
+            },
+        );
+
+        m.insert(
             "news",
             CapabilityDescriptor {
                 capability_id: "news_guidance",
@@ -144,6 +157,18 @@ mod tests {
         let d = lookup("news").expect("news descriptor exists");
         assert_eq!(d.capability_id, "news_guidance");
         assert_eq!(d.display_name, "News");
+        assert_eq!(d.icon_url, None);
+        assert_eq!(d.trust_badge, TrustBadge::Builtin);
+        assert_eq!(d.manifest_version, 1);
+        assert_eq!(d.template_set_version, 1);
+        assert_eq!(d.fallback_template_id, None);
+    }
+
+    #[test]
+    fn mission_room_descriptor_has_all_six_fields() {
+        let d = lookup("mission_room").expect("mission_room descriptor exists");
+        assert_eq!(d.capability_id, "mission_room");
+        assert_eq!(d.display_name, "Mission Room");
         assert_eq!(d.icon_url, None);
         assert_eq!(d.trust_badge, TrustBadge::Builtin);
         assert_eq!(d.manifest_version, 1);

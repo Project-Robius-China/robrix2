@@ -19,6 +19,9 @@
 pub const WEATHER_CARD_STANDARD: &str =
     include_str!("templates/weather_guidance/card_standard.splash");
 
+pub const MISSION_ROOM_CONTROL: &str =
+    include_str!("templates/mission_room/mission_control.splash");
+
 pub const NEWS_HEADLINES_CARD: &str =
     include_str!("templates/news_guidance/headlines_card.splash");
 
@@ -33,6 +36,7 @@ pub const NEWS_DIGEST_CARD: &str =
 /// Used by the template-runtime preflight audit test (plan Slice A
 /// Step A.6) to iterate and validate every template at build time.
 pub const ALL_TEMPLATES: &[(&str, &str, &str)] = &[
+    ("mission_room", "mission_control", MISSION_ROOM_CONTROL),
     ("weather_guidance", "card_standard", WEATHER_CARD_STANDARD),
     ("news_guidance", "headlines_card", NEWS_HEADLINES_CARD),
     ("news_guidance", "digest_card", NEWS_DIGEST_CARD),
@@ -145,6 +149,7 @@ mod tests {
     fn all_templates_table_contains_all_shipped_pairs() {
         let required = [
             ("weather_guidance", "card_standard"),
+            ("mission_room", "mission_control"),
             ("news_guidance", "headlines_card"),
             ("news_guidance", "digest_card"),
         ];
@@ -167,6 +172,9 @@ mod tests {
                 ("weather_guidance", "card_standard") => {
                     assert_eq!(*src, WEATHER_CARD_STANDARD);
                 }
+                ("mission_room", "mission_control") => {
+                    assert_eq!(*src, MISSION_ROOM_CONTROL);
+                }
                 ("news_guidance", "headlines_card") => {
                     assert_eq!(*src, NEWS_HEADLINES_CARD);
                 }
@@ -181,6 +189,7 @@ mod tests {
     #[test]
     fn source_for_known_pairs_returns_some() {
         assert!(source_for("weather_guidance", "card_standard").is_some());
+        assert!(source_for("mission_room", "mission_control").is_some());
         assert!(source_for("news_guidance", "headlines_card").is_some());
         assert!(source_for("news_guidance", "digest_card").is_some());
     }
@@ -201,6 +210,10 @@ mod tests {
         assert_eq!(
             source_for("weather_guidance", "card_standard").unwrap(),
             WEATHER_CARD_STANDARD,
+        );
+        assert_eq!(
+            source_for("mission_room", "mission_control").unwrap(),
+            MISSION_ROOM_CONTROL,
         );
         assert_eq!(
             source_for("news_guidance", "headlines_card").unwrap(),

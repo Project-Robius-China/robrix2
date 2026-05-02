@@ -19,7 +19,9 @@ use serde_json::Value as JsonValue;
 use crate::i18n::AppLanguage;
 
 pub mod capability_descriptors;
+pub mod agent_view;
 pub mod local_functions;
+pub mod mission_room;
 pub mod news;
 pub mod splash_host;
 pub mod template_cache;
@@ -28,6 +30,8 @@ mod template_preflight_audit;
 pub mod templates;
 pub mod widget_manifest;
 pub mod weather;
+
+pub use agent_view::{AgentViewRuntime, AgentViewScope, AgentViewScopeKey};
 
 /// Validation error returned by an app factory's `init` method.
 ///
@@ -164,6 +168,7 @@ fn registry() -> &'static HashMap<&'static str, &'static dyn AppFactory> {
     static REGISTRY: OnceLock<HashMap<&'static str, &'static dyn AppFactory>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         let mut m: HashMap<&'static str, &'static dyn AppFactory> = HashMap::new();
+        m.insert(mission_room::TYPE_KEY, &mission_room::FACTORY);
         m.insert(news::TYPE_KEY, &news::FACTORY);
         m.insert(weather::TYPE_KEY, &weather::FACTORY);
         m
@@ -195,6 +200,8 @@ pub fn lookup(app_type: &str, version: u32) -> AppLookup {
 pub struct ParsedAppEnvelope {
     pub app_type: String,
     pub version: u32,
+    pub scope: AgentViewScope,
+    pub app_id: Option<String>,
     pub initial_state: JsonValue,
 }
 
@@ -202,10 +209,20 @@ pub fn parse_envelope(event_content: &JsonValue) -> Option<ParsedAppEnvelope> {
     let envelope = event_content.get("org.octos.app")?.as_object()?;
     let app_type = envelope.get("type")?.as_str()?.to_string();
     let version = envelope.get("version")?.as_u64().and_then(|n| u32::try_from(n).ok())?;
+    let scope = AgentViewScope::parse(envelope.get("scope").and_then(|v| v.as_str()))?;
+    let app_id = envelope
+        .get("app_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    if scope.requires_app_id() && app_id.as_deref().unwrap_or("").is_empty() {
+        return None;
+    }
     let initial_state = envelope.get("initial_state").cloned().unwrap_or(JsonValue::Null);
     Some(ParsedAppEnvelope {
         app_type,
         version,
+        scope,
+        app_id,
         initial_state,
     })
 }
@@ -670,5 +687,100 @@ mod tests {
         assert!(splash.contains("Tech Ledger"), "{splash}");
         assert!(splash.contains("news_guidance"), "{splash}");
         assert!(!splash.contains("$state."), "{splash}");
+    }
+
+    #[test]
+    fn raw_matrix_mission_room_event_renders_to_splash() {
+        let event_content = json!({
+            "body": "Mission fallback",
+            "msgtype": "m.text",
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "scope": "room",
+                "app_id": "mission.main",
+                "initial_state": {
+                    "goal": {
+                        "title": "Ship agent2view runtime",
+                        "status": "planning"
+                    },
+                    "phase": "planning",
+                    "tasks": [
+                        {
+                            "id": "task-1",
+                            "title": "Define AgentViewSession",
+                            "status": "planning",
+                            "owner_agent": "planner",
+                            "priority": "high",
+                            "requires_human_approval": true
+                        }
+                    ],
+                    "agents": [
+                        {
+                            "id": "planner",
+                            "role": "planner",
+                            "status": "waiting_human",
+                            "current_task_id": "task-1"
+                        }
+                    ],
+                    "pending_human_actions": [
+                        {
+                            "id": "approve-plan-1",
+                            "kind": "approve_plan",
+                            "label": "Approve proposed plan"
+                        }
+                    ],
+                    "decisions": [],
+                    "blockers": []
+                }
+            }
+        });
+
+        let splash = render_app_envelope_to_splash(&event_content, AppLanguage::English)
+            .expect("mission_room org.octos.app event should render");
+
+        assert!(splash.contains("Ship agent2view runtime"), "{splash}");
+        assert!(splash.contains("Define AgentViewSession"), "{splash}");
+        assert!(splash.contains("Approve proposed plan"), "{splash}");
+        assert!(splash.contains("mission_room"), "{splash}");
+        assert!(!splash.contains("$state."), "{splash}");
+    }
+
+    #[test]
+    fn mission_room_invalid_task_status_falls_back_to_body() {
+        let event_content = json!({
+            "body": "Mission fallback",
+            "msgtype": "m.text",
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "scope": "room",
+                "app_id": "mission.main",
+                "initial_state": {
+                    "goal": {
+                        "title": "Ship agent2view runtime",
+                        "status": "planning"
+                    },
+                    "phase": "planning",
+                    "tasks": [
+                        {
+                            "id": "task-1",
+                            "title": "Define AgentViewSession",
+                            "status": "invented",
+                            "owner_agent": "planner",
+                            "priority": "high",
+                            "requires_human_approval": true
+                        }
+                    ],
+                    "agents": [],
+                    "pending_human_actions": [],
+                    "decisions": [],
+                    "blockers": []
+                }
+            }
+        });
+
+        let splash = render_app_envelope_to_splash(&event_content, AppLanguage::English);
+        assert!(splash.is_none());
     }
 }
