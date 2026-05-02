@@ -33,6 +33,9 @@ action responses for shared decisions.
   `org.octos.action_response`, not by hidden Splash-local state.
 - OctOS/OpenClaw producers emit full mission snapshots as normal Matrix messages
   with useful `body` fallback text and original-content `org.octos.app`.
+- Room/account scoped snapshots are projected by timeline order: newer snapshots
+  replace older session state, older redraws cannot roll state back, and same
+  event redraws cannot clear local `dirty` reducer state.
 
 ## Boundaries
 
@@ -119,6 +122,28 @@ Scenario: Unsupported append is rejected without mutation
   Then it returns `UpdateOpNotYetSupported`
   And the session state is unchanged
   And `dirty` remains false
+
+Scenario: Newer room snapshot replaces older session state
+  Test: runtime_bind_snapshot_updates_room_session_from_newer_event
+  Given an existing room-scoped `AgentViewSession`
+  And the local reducer has marked it dirty
+  When Robrix binds a later producer snapshot for the same `room_id + app_id`
+  Then the session state is replaced by the later snapshot
+  And `dirty` is cleared
+
+Scenario: Older room snapshot redraw cannot roll state back
+  Test: runtime_bind_snapshot_ignores_older_room_event_redraw
+  Given a room-scoped `AgentViewSession` already points at a later snapshot
+  When an older timeline item for the same `room_id + app_id` redraws
+  Then the later session state is preserved
+  And the source event id remains the later event
+
+Scenario: Same event redraw preserves local dirty state
+  Test: runtime_bind_snapshot_preserves_dirty_state_on_same_event_redraw
+  Given a room-scoped `AgentViewSession` has local dirty state
+  When the same source event redraws due to PortalList virtualization
+  Then Robrix keeps the locally reduced state
+  And `dirty` remains true
 
 Scenario: Mission room producer payload renders with action context
   Test: raw_matrix_mission_room_event_renders_to_splash

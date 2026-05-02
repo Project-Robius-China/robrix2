@@ -78,6 +78,7 @@ impl AgentViewScopeKey {
 pub struct AgentViewSession {
     pub scope_key: AgentViewScopeKey,
     pub source_event_id: String,
+    pub source_ordinal: usize,
     pub app_type: String,
     pub version: u32,
     pub template_id: String,
@@ -124,6 +125,7 @@ impl AgentViewRuntime {
             .or_insert_with(|| AgentViewSession {
                 scope_key,
                 source_event_id: source_event_id.into(),
+                source_ordinal: 0,
                 app_type: app_type.into(),
                 version,
                 template_id: template_id.into(),
@@ -134,6 +136,47 @@ impl AgentViewRuntime {
 
     pub fn session(&self, scope_key: &AgentViewScopeKey) -> Option<&AgentViewSession> {
         self.sessions.get(scope_key)
+    }
+
+    pub fn bind_snapshot(
+        &mut self,
+        scope_key: AgentViewScopeKey,
+        source_event_id: impl Into<String>,
+        source_ordinal: usize,
+        app_type: impl Into<String>,
+        version: u32,
+        template_id: impl Into<String>,
+        snapshot_state: &JsonValue,
+    ) -> &mut AgentViewSession {
+        let source_event_id = source_event_id.into();
+        let app_type = app_type.into();
+        let template_id = template_id.into();
+        self.sessions
+            .entry(scope_key.clone())
+            .and_modify(|session| {
+                if source_ordinal > session.source_ordinal
+                    || (source_ordinal == session.source_ordinal
+                        && session.source_event_id != source_event_id)
+                {
+                    session.source_event_id = source_event_id.clone();
+                    session.source_ordinal = source_ordinal;
+                    session.app_type = app_type.clone();
+                    session.version = version;
+                    session.template_id = template_id.clone();
+                    session.state = snapshot_state.clone();
+                    session.dirty = false;
+                }
+            })
+            .or_insert_with(|| AgentViewSession {
+                scope_key,
+                source_event_id,
+                source_ordinal,
+                app_type,
+                version,
+                template_id,
+                state: snapshot_state.clone(),
+                dirty: false,
+            })
     }
 
     pub fn reduce_local_state(
@@ -415,6 +458,133 @@ mod tests {
         let session = runtime.session(&key).unwrap();
         assert_eq!(session.source_event_id, "$event1");
         assert_eq!(session.state["count"], 1);
+    }
+
+    #[test]
+    fn runtime_bind_snapshot_updates_room_session_from_newer_event() {
+        let mut runtime = AgentViewRuntime::default();
+        let initial = json!({ "phase": "planning" });
+        let updated = json!({ "phase": "active" });
+        let key = AgentViewScopeKey::from_parts(
+            AgentViewScope::Room,
+            "!room:example.org",
+            "$event1",
+            Some("mission.main"),
+        )
+        .unwrap();
+
+        runtime.bind_snapshot(
+            key.clone(),
+            "$event1",
+            3,
+            "mission_room",
+            1,
+            "mission_control",
+            &initial,
+        );
+        runtime
+            .reduce_local_state(
+                &key,
+                "/phase",
+                AgentViewLocalStateOp::Replace { value: json!("paused") },
+            )
+            .expect("local reducer should mark dirty");
+        runtime.bind_snapshot(
+            key.clone(),
+            "$event2",
+            4,
+            "mission_room",
+            1,
+            "mission_control",
+            &updated,
+        );
+
+        let session = runtime.session(&key).unwrap();
+        assert_eq!(session.source_event_id, "$event2");
+        assert_eq!(session.source_ordinal, 4);
+        assert_eq!(session.state["phase"], "active");
+        assert!(!session.dirty);
+    }
+
+    #[test]
+    fn runtime_bind_snapshot_ignores_older_room_event_redraw() {
+        let mut runtime = AgentViewRuntime::default();
+        let older = json!({ "phase": "planning" });
+        let newer = json!({ "phase": "active" });
+        let key = AgentViewScopeKey::from_parts(
+            AgentViewScope::Room,
+            "!room:example.org",
+            "$event1",
+            Some("mission.main"),
+        )
+        .unwrap();
+
+        runtime.bind_snapshot(
+            key.clone(),
+            "$event2",
+            4,
+            "mission_room",
+            1,
+            "mission_control",
+            &newer,
+        );
+        runtime.bind_snapshot(
+            key.clone(),
+            "$event1",
+            3,
+            "mission_room",
+            1,
+            "mission_control",
+            &older,
+        );
+
+        let session = runtime.session(&key).unwrap();
+        assert_eq!(session.source_event_id, "$event2");
+        assert_eq!(session.source_ordinal, 4);
+        assert_eq!(session.state["phase"], "active");
+    }
+
+    #[test]
+    fn runtime_bind_snapshot_preserves_dirty_state_on_same_event_redraw() {
+        let mut runtime = AgentViewRuntime::default();
+        let initial = json!({ "selected_lane": "all" });
+        let key = AgentViewScopeKey::from_parts(
+            AgentViewScope::Room,
+            "!room:example.org",
+            "$event1",
+            Some("mission.main"),
+        )
+        .unwrap();
+
+        runtime.bind_snapshot(
+            key.clone(),
+            "$event1",
+            3,
+            "mission_room",
+            1,
+            "mission_control",
+            &initial,
+        );
+        runtime
+            .reduce_local_state(
+                &key,
+                "/selected_lane",
+                AgentViewLocalStateOp::Replace { value: json!("blocked") },
+            )
+            .expect("local reducer should mark dirty");
+        runtime.bind_snapshot(
+            key.clone(),
+            "$event1",
+            3,
+            "mission_room",
+            1,
+            "mission_control",
+            &initial,
+        );
+
+        let session = runtime.session(&key).unwrap();
+        assert_eq!(session.state["selected_lane"], "blocked");
+        assert!(session.dirty);
     }
 
     #[test]

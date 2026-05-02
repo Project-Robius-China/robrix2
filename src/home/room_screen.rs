@@ -9549,6 +9549,7 @@ fn agent_view_template_id(envelope: &crate::home::app_registry::ParsedAppEnvelop
 
 fn render_agent_app_envelope_for_room_screen(
     event_content: &serde_json::Value,
+    item_id: usize,
     timeline_kind: &TimelineKind,
     event_tl_item: &EventTimelineItem,
     app_language: AppLanguage,
@@ -9566,15 +9567,26 @@ fn render_agent_app_envelope_for_room_screen(
         current_user_id().as_deref(),
         &envelope,
     )?;
-    agent_view_runtime.get_or_create(
+    let session_state = agent_view_runtime.bind_snapshot(
         scope_key,
         event_id.as_str(),
+        item_id,
         envelope.app_type.clone(),
         envelope.version,
         agent_view_template_id(&envelope),
         &envelope.initial_state,
-    );
-    Some(splash)
+    )
+    .state
+    .clone();
+    let session_envelope = crate::home::app_registry::ParsedAppEnvelope {
+        initial_state: session_state,
+        ..envelope
+    };
+    crate::home::app_registry::render_parsed_envelope_to_splash(
+        &session_envelope,
+        app_language,
+    )
+    .or(Some(splash))
 }
 
 /// Creates, populates, and adds a Message liveview widget to the given `PortalList`
@@ -9714,6 +9726,7 @@ fn populate_message_view(
                                 .and_then(|content| {
                                     render_agent_app_envelope_for_room_screen(
                                         content,
+                                        item_id,
                                         timeline_kind,
                                         event_tl_item,
                                         app_language,

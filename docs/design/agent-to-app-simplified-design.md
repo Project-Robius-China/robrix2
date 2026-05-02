@@ -260,6 +260,23 @@ Matrix/OctOS action response and let the agent produce a new event. Local
 reducers are for immediate view behavior, not for silently rewriting Matrix
 history.
 
+### Room Snapshot Projection
+
+For `room` and `account` scoped apps, Matrix events are full snapshots. When
+RoomScreen sees a valid app snapshot, it binds it to the scoped
+`AgentViewSession`.
+
+Projection rules:
+
+- a later timeline item for the same scope replaces the session state.
+- an older timeline item redrawn by `PortalList` must not roll the session back.
+- a redraw of the same event must not clear local `dirty` reducer state.
+- a new producer snapshot clears `dirty`, because shared Matrix state has
+  advanced.
+
+This keeps room-scoped apps stable under virtualization while preserving the
+Matrix timeline as the source of shared truth.
+
 ### Local Reducers
 
 The first `agent2view` reducer model should be narrow and app-type specific:

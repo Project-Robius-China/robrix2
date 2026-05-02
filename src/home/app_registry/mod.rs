@@ -199,6 +199,7 @@ pub fn lookup(app_type: &str, version: u32) -> AppLookup {
 /// Returns `Some` iff the event carries a valid envelope shape
 /// (regardless of whether the `type` is actually registered — the
 /// caller separately resolves the type via `lookup`).
+#[derive(Debug, Clone)]
 pub struct ParsedAppEnvelope {
     pub app_type: String,
     pub version: u32,
