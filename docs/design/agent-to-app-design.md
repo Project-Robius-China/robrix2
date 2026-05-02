@@ -1,7 +1,10 @@
 # Agent-to-App System Design
 
-**Status:** Living design document — the architectural commitments under which all
-future agent-to-app work evolves.
+**Status:** Long-term architecture note. For the current Robrix2 v1 implementation
+contract, use [`agent-to-app-simplified-design.md`](agent-to-app-simplified-design.md).
+This document is intentionally broader than the shipped static-template path and
+should not be used as the next implementation checklist.
+
 **Last revised:** 2026-04-23
 **Related:** `specs/task-agent-to-app-system.spec.md` (master contract),
 `specs/task-agent-to-app-producer-routing.spec.md` (producer half),
