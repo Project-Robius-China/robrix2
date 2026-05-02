@@ -251,7 +251,13 @@ pub fn render_app_envelope_to_splash(
     app_language: AppLanguage,
 ) -> Option<String> {
     let envelope = parse_envelope(event_content)?;
+    render_parsed_envelope_to_splash(&envelope, app_language)
+}
 
+pub fn render_parsed_envelope_to_splash(
+    envelope: &ParsedAppEnvelope,
+    app_language: AppLanguage,
+) -> Option<String> {
     match lookup(&envelope.app_type, envelope.version) {
         AppLookup::Supported(factory) => match factory.init(&envelope.initial_state) {
             Ok(rendered) => match rendered.render(app_language) {

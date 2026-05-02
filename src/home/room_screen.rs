@@ -41,6 +41,7 @@ use crate::{
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
+use crate::home::app_registry::AgentViewRuntime;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
 use crate::home::streaming_animation::StreamingAnimState;
 use crate::room::room_input_bar::RoomInputBarWidgetExt;
@@ -5276,6 +5277,7 @@ pub struct RoomScreen {
     #[rust] octos_action_button_contexts: HashMap<WidgetUid, OctosActionButtonContext>,
     #[rust] disabled_octos_action_source_event_ids: HashSet<OwnedEventId>,
     #[rust] selected_octos_action_by_source_event_id: HashMap<OwnedEventId, SelectedOctosActionState>,
+    #[rust] agent_view_runtime: AgentViewRuntime,
 }
 
 impl Drop for RoomScreen {
@@ -6391,6 +6393,7 @@ impl Widget for RoomScreen {
                                                 &room_bot_user_ids,
                                                 &known_bot_user_ids,
                                                 &mut tl_state.streaming_messages,
+                                                &mut self.agent_view_runtime,
                                                 &mut self.octos_action_button_contexts,
                                                 &self.disabled_octos_action_source_event_ids,
                                                 &self.selected_octos_action_by_source_event_id,
@@ -9512,6 +9515,68 @@ impl ItemDrawnStatus {
     }
 }
 
+fn agent_view_scope_key_for_event(
+    timeline_kind: &TimelineKind,
+    event_id: &EventId,
+    account_id: Option<&UserId>,
+    envelope: &crate::home::app_registry::ParsedAppEnvelope,
+) -> Option<crate::home::app_registry::AgentViewScopeKey> {
+    match envelope.scope {
+        crate::home::app_registry::AgentViewScope::Account => {
+            crate::home::app_registry::AgentViewScopeKey::from_account_parts(
+                account_id?.as_str(),
+                envelope.app_id.as_deref(),
+            )
+        }
+        scope => crate::home::app_registry::AgentViewScopeKey::from_parts(
+            scope,
+            timeline_kind.room_id().as_str(),
+            event_id.as_str(),
+            envelope.app_id.as_deref(),
+        ),
+    }
+}
+
+fn agent_view_template_id(envelope: &crate::home::app_registry::ParsedAppEnvelope) -> &'static str {
+    match envelope.app_type.as_str() {
+        crate::home::app_registry::mission_dashboard::TYPE_KEY => "account_overview",
+        crate::home::app_registry::mission_room::TYPE_KEY => "mission_control",
+        crate::home::app_registry::news::TYPE_KEY => "headlines_card",
+        crate::home::app_registry::weather::TYPE_KEY => "card_standard",
+        _ => "default",
+    }
+}
+
+fn render_agent_app_envelope_for_room_screen(
+    event_content: &serde_json::Value,
+    timeline_kind: &TimelineKind,
+    event_tl_item: &EventTimelineItem,
+    app_language: AppLanguage,
+    agent_view_runtime: &mut crate::home::app_registry::AgentViewRuntime,
+) -> Option<String> {
+    let envelope = crate::home::app_registry::parse_envelope(event_content)?;
+    let event_id = event_tl_item.event_id()?;
+    let splash = crate::home::app_registry::render_parsed_envelope_to_splash(
+        &envelope,
+        app_language,
+    )?;
+    let scope_key = agent_view_scope_key_for_event(
+        timeline_kind,
+        event_id,
+        current_user_id().as_deref(),
+        &envelope,
+    )?;
+    agent_view_runtime.get_or_create(
+        scope_key,
+        event_id.as_str(),
+        envelope.app_type.clone(),
+        envelope.version,
+        agent_view_template_id(&envelope),
+        &envelope.initial_state,
+    );
+    Some(splash)
+}
+
 /// Creates, populates, and adds a Message liveview widget to the given `PortalList`
 /// with the given `item_id`.
 ///
@@ -9538,6 +9603,7 @@ fn populate_message_view(
     room_bot_user_ids: &[OwnedUserId],
     known_bot_user_ids: &[OwnedUserId],
     streaming_messages: &mut HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>,
+    agent_view_runtime: &mut crate::home::app_registry::AgentViewRuntime,
     action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
     disabled_action_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
@@ -9646,9 +9712,12 @@ fn populate_message_view(
                             let app_splash_code = original_event_content_json(event_tl_item)
                                 .as_ref()
                                 .and_then(|content| {
-                                    crate::home::app_registry::render_app_envelope_to_splash(
+                                    render_agent_app_envelope_for_room_screen(
                                         content,
+                                        timeline_kind,
+                                        event_tl_item,
                                         app_language,
+                                        agent_view_runtime,
                                     )
                                 });
 
@@ -12714,6 +12783,97 @@ mod tests {
         assert_eq!(request.content["body"], "[Action: Approve plan]");
         assert_eq!(action_response["action_id"], "approve_plan");
         assert_eq!(action_response["source_event_id"], "$mission123");
+    }
+
+    #[test]
+    fn agent_view_scope_key_for_message_scope_uses_event_id() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let event_id = EventId::parse("$message123:127.0.0.1:8128").unwrap();
+        let envelope = crate::home::app_registry::ParsedAppEnvelope {
+            app_type: "weather".into(),
+            version: 1,
+            scope: crate::home::app_registry::AgentViewScope::Message,
+            app_id: None,
+            initial_state: serde_json::json!({}),
+        };
+
+        let key = agent_view_scope_key_for_event(
+            &timeline_kind,
+            event_id.as_ref(),
+            None,
+            &envelope,
+        ).expect("message scope should bind without account id");
+
+        assert_eq!(
+            key,
+            crate::home::app_registry::AgentViewScopeKey::Message {
+                room_id: "!room:127.0.0.1:8128".into(),
+                event_id: "$message123:127.0.0.1:8128".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn agent_view_scope_key_for_room_scope_uses_app_id() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let event_id = EventId::parse("$message123:127.0.0.1:8128").unwrap();
+        let envelope = crate::home::app_registry::ParsedAppEnvelope {
+            app_type: "mission_room".into(),
+            version: 1,
+            scope: crate::home::app_registry::AgentViewScope::Room,
+            app_id: Some("mission.main".into()),
+            initial_state: serde_json::json!({}),
+        };
+
+        let key = agent_view_scope_key_for_event(
+            &timeline_kind,
+            event_id.as_ref(),
+            None,
+            &envelope,
+        ).expect("room scope should bind without account id");
+
+        assert_eq!(
+            key,
+            crate::home::app_registry::AgentViewScopeKey::Room {
+                room_id: "!room:127.0.0.1:8128".into(),
+                app_id: "mission.main".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn agent_view_scope_key_for_account_scope_uses_current_account() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let event_id = EventId::parse("$message123:127.0.0.1:8128").unwrap();
+        let account_id = UserId::parse("@alice:127.0.0.1:8128").unwrap();
+        let envelope = crate::home::app_registry::ParsedAppEnvelope {
+            app_type: "mission_dashboard".into(),
+            version: 1,
+            scope: crate::home::app_registry::AgentViewScope::Account,
+            app_id: Some("mission.global".into()),
+            initial_state: serde_json::json!({}),
+        };
+
+        let key = agent_view_scope_key_for_event(
+            &timeline_kind,
+            event_id.as_ref(),
+            Some(account_id.as_ref()),
+            &envelope,
+        ).expect("account scope should bind with account id");
+
+        assert_eq!(
+            key,
+            crate::home::app_registry::AgentViewScopeKey::Account {
+                account_id: "@alice:127.0.0.1:8128".into(),
+                app_id: "mission.global".into(),
+            }
+        );
     }
 
     #[test]
