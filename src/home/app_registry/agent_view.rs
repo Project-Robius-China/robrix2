@@ -160,12 +160,73 @@ mod tests {
     }
 
     #[test]
+    fn parse_envelope_trims_room_scope_app_id() {
+        let event = json!({
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "scope": "room",
+                "app_id": "  mission.main  ",
+                "initial_state": {}
+            }
+        });
+
+        let parsed = parse_envelope(&event).expect("envelope should parse");
+
+        assert_eq!(parsed.app_id.as_deref(), Some("mission.main"));
+    }
+
+    #[test]
     fn parse_envelope_rejects_room_scope_without_app_id() {
         let event = json!({
             "org.octos.app": {
                 "type": "mission_room",
                 "version": 1,
                 "scope": "room",
+                "initial_state": {}
+            }
+        });
+
+        assert!(parse_envelope(&event).is_none());
+    }
+
+    #[test]
+    fn parse_envelope_rejects_room_scope_with_blank_app_id() {
+        let event = json!({
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "scope": "room",
+                "app_id": "   ",
+                "initial_state": {}
+            }
+        });
+
+        assert!(parse_envelope(&event).is_none());
+    }
+
+    #[test]
+    fn parse_envelope_rejects_mission_room_without_room_scope() {
+        let event = json!({
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "app_id": "mission.main",
+                "initial_state": {}
+            }
+        });
+
+        assert!(parse_envelope(&event).is_none());
+    }
+
+    #[test]
+    fn parse_envelope_rejects_mission_dashboard_without_account_scope() {
+        let event = json!({
+            "org.octos.app": {
+                "type": "mission_dashboard",
+                "version": 1,
+                "scope": "room",
+                "app_id": "missions.global",
                 "initial_state": {}
             }
         });

@@ -215,7 +215,12 @@ pub fn parse_envelope(event_content: &JsonValue) -> Option<ParsedAppEnvelope> {
     let app_id = envelope
         .get("app_id")
         .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(str::to_string);
+    if required_scope_for_app_type(&app_type).is_some_and(|required| required != scope) {
+        return None;
+    }
     if scope.requires_app_id() && app_id.as_deref().unwrap_or("").is_empty() {
         return None;
     }
@@ -227,6 +232,14 @@ pub fn parse_envelope(event_content: &JsonValue) -> Option<ParsedAppEnvelope> {
         app_id,
         initial_state,
     })
+}
+
+fn required_scope_for_app_type(app_type: &str) -> Option<AgentViewScope> {
+    match app_type {
+        mission_room::TYPE_KEY => Some(AgentViewScope::Room),
+        mission_dashboard::TYPE_KEY => Some(AgentViewScope::Account),
+        _ => None,
+    }
 }
 
 /// End-to-end: parse + lookup + init + render. Returns `Some` with
