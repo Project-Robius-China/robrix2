@@ -389,7 +389,10 @@ fn parse_octos_action_payload_for_render(
             .map(parse_octos_approval_actions_from_content)
             .unwrap_or_default()
     } else {
-        content
+        let action_source = original_content
+            .filter(|content| crate::home::app_registry::parse_envelope(content).is_some())
+            .or(content);
+        action_source
             .map(parse_octos_actions_from_content)
             .unwrap_or_default()
     };
@@ -12559,6 +12562,41 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0].id, "confirm");
         assert_eq!(actions[1].id, "cancel");
+    }
+
+    #[test]
+    fn test_app_originated_octos_actions_ignore_m_replace_edits() {
+        let latest_content = serde_json::json!({
+            "m.new_content": {
+                "org.octos.actions": [
+                    { "id": "auto_approve", "label": "Auto approve", "style": "danger" }
+                ]
+            },
+            "org.octos.actions": [
+                { "id": "approve_plan", "label": "Approve plan", "style": "primary" }
+            ]
+        });
+        let original_content = serde_json::json!({
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "scope": "room",
+                "app_id": "mission.main",
+                "initial_state": {}
+            },
+            "org.octos.actions": [
+                { "id": "approve_plan", "label": "Approve plan", "style": "primary" }
+            ]
+        });
+
+        let payload = parse_octos_action_payload_for_render(
+            Some(&latest_content),
+            Some(&original_content),
+        );
+
+        assert_eq!(payload.actions.len(), 1);
+        assert_eq!(payload.actions[0].id, "approve_plan");
+        assert_eq!(payload.actions[0].label, "Approve plan");
     }
 
     #[test]

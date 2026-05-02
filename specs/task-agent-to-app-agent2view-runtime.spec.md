@@ -31,6 +31,8 @@ action responses for shared decisions.
   not rewrite Matrix events.
 - Shared mission actions are transported by existing `org.octos.actions` /
   `org.octos.action_response`, not by hidden Splash-local state.
+- App-originated `org.octos.actions` are read from original event content; an
+  `m.replace` edit may not change Mission Room buttons after the event is sent.
 - App-originated `org.octos.action_response` messages include source app
   metadata (`type`, `version`, `scope`, `app_id`) when the source event has a
   valid `org.octos.app` envelope.
@@ -156,6 +158,15 @@ Scenario: Mission room producer payload renders with action context
   When Robrix renders the event
   Then the Splash output contains the mission title, task title, priority, and pending action text
   And no unresolved `$state.` binding remains
+
+Scenario: App-originated actions ignore m.replace edits
+  Test: test_app_originated_octos_actions_ignore_m_replace_edits
+  Given an original Mission Room event includes `org.octos.app`
+  And the original event includes an `approve_plan` action
+  And a later `m.replace` edit tries to replace it with `auto_approve`
+  When Robrix parses action buttons for rendering
+  Then the rendered action remains the original mission action
+  And the edited action is ignored
 
 Scenario: Mission room action response includes source app context
   Test: test_mission_room_action_response_preserves_mission_action_id

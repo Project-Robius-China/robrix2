@@ -104,6 +104,9 @@ Producer rules:
   display pending actions, but it is not the transport for shared approvals.
 - Do not rely on `m.replace` edits to change mission app state. Robrix reads the
   app envelope from the original event content.
+- Do not rely on `m.replace` edits to change mission action buttons. When an
+  event carries a valid `org.octos.app` envelope, Robrix also reads
+  `org.octos.actions` from original event content.
 
 When a human clicks an OctOS action button, Robrix sends an
 `org.octos.action_response` that targets the original producer. The producer is
