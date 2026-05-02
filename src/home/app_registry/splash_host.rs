@@ -1037,7 +1037,7 @@ fn resolve_state_json_binding<'a>(state: &'a JsonValue, path: &str) -> Option<&'
     Some(current)
 }
 
-fn replace_json_pointer(
+pub(super) fn replace_json_pointer(
     state: &mut JsonValue,
     path: &str,
     value: &JsonValue,
@@ -1080,7 +1080,7 @@ fn replace_json_pointer(
     }
 }
 
-fn remove_json_pointer(state: &mut JsonValue, path: &str) -> Result<bool, HostError> {
+pub(super) fn remove_json_pointer(state: &mut JsonValue, path: &str) -> Result<bool, HostError> {
     let mut segments = split_json_pointer(path)?;
     if segments.is_empty() {
         let changed = !state.is_null();

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde_json::Value as JsonValue;
 
+use super::splash_host::{remove_json_pointer, replace_json_pointer, HostError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentViewScope {
     Message,
@@ -83,6 +85,25 @@ pub struct AgentViewSession {
     pub dirty: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum AgentViewLocalStateOp {
+    Replace { value: JsonValue },
+    Remove,
+    Append { value: JsonValue },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentViewReducerError {
+    SessionNotFound,
+    Host(HostError),
+}
+
+impl From<HostError> for AgentViewReducerError {
+    fn from(error: HostError) -> Self {
+        Self::Host(error)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct AgentViewRuntime {
     sessions: HashMap<AgentViewScopeKey, AgentViewSession>,
@@ -114,6 +135,34 @@ impl AgentViewRuntime {
     pub fn session(&self, scope_key: &AgentViewScopeKey) -> Option<&AgentViewSession> {
         self.sessions.get(scope_key)
     }
+
+    pub fn reduce_local_state(
+        &mut self,
+        scope_key: &AgentViewScopeKey,
+        path: &str,
+        op: AgentViewLocalStateOp,
+    ) -> Result<bool, AgentViewReducerError> {
+        let session = self
+            .sessions
+            .get_mut(scope_key)
+            .ok_or(AgentViewReducerError::SessionNotFound)?;
+        let changed = match op {
+            AgentViewLocalStateOp::Replace { value } => {
+                replace_json_pointer(&mut session.state, path, &value)?
+            }
+            AgentViewLocalStateOp::Remove => remove_json_pointer(&mut session.state, path)?,
+            AgentViewLocalStateOp::Append { value } => {
+                let _ = value;
+                return Err(AgentViewReducerError::Host(
+                    HostError::UpdateOpNotYetSupported { op: "append".into() },
+                ));
+            }
+        };
+        if changed {
+            session.dirty = true;
+        }
+        Ok(changed)
+    }
 }
 
 
@@ -121,6 +170,8 @@ impl AgentViewRuntime {
 mod tests {
     use serde_json::json;
 
+    use super::{AgentViewLocalStateOp, AgentViewReducerError};
+    use super::super::splash_host::HostError;
     use super::super::{
         parse_envelope, AgentViewRuntime, AgentViewScope, AgentViewScopeKey,
     };
@@ -397,5 +448,128 @@ mod tests {
         let session = runtime.session(&key).unwrap();
         assert_eq!(session.source_event_id, "$event1");
         assert_eq!(session.state["open_missions"], 2);
+    }
+
+    #[test]
+    fn reducer_replace_updates_state_and_marks_dirty() {
+        let mut runtime = AgentViewRuntime::default();
+        let initial = json!({ "filter": { "lane": "all" } });
+        let key = AgentViewScopeKey::from_parts(
+            AgentViewScope::Room,
+            "!room:example.org",
+            "$event1",
+            Some("mission.main"),
+        )
+        .unwrap();
+
+        runtime.get_or_create(
+            key.clone(),
+            "$event1",
+            "mission_room",
+            1,
+            "mission_control",
+            &initial,
+        );
+        let changed = runtime
+            .reduce_local_state(
+                &key,
+                "/filter/lane",
+                AgentViewLocalStateOp::Replace { value: json!("blocked") },
+            )
+            .expect("replace should succeed");
+
+        let session = runtime.session(&key).unwrap();
+        assert!(changed);
+        assert!(session.dirty);
+        assert_eq!(session.state["filter"]["lane"], "blocked");
+    }
+
+    #[test]
+    fn reducer_remove_absent_key_is_noop_without_dirty() {
+        let mut runtime = AgentViewRuntime::default();
+        let initial = json!({ "filter": { "lane": "all" } });
+        let key = AgentViewScopeKey::from_parts(
+            AgentViewScope::Room,
+            "!room:example.org",
+            "$event1",
+            Some("mission.main"),
+        )
+        .unwrap();
+
+        runtime.get_or_create(
+            key.clone(),
+            "$event1",
+            "mission_room",
+            1,
+            "mission_control",
+            &initial,
+        );
+        let changed = runtime
+            .reduce_local_state(&key, "/filter/sort", AgentViewLocalStateOp::Remove)
+            .expect("remove absent key should be a no-op");
+
+        let session = runtime.session(&key).unwrap();
+        assert!(!changed);
+        assert!(!session.dirty);
+        assert_eq!(session.state, initial);
+    }
+
+    #[test]
+    fn reducer_append_is_rejected_without_mutating() {
+        let mut runtime = AgentViewRuntime::default();
+        let initial = json!({ "items": [1] });
+        let key = AgentViewScopeKey::from_parts(
+            AgentViewScope::Message,
+            "!room:example.org",
+            "$event1",
+            None,
+        )
+        .unwrap();
+
+        runtime.get_or_create(
+            key.clone(),
+            "$event1",
+            "counter",
+            1,
+            "counter_card",
+            &initial,
+        );
+        let err = runtime
+            .reduce_local_state(
+                &key,
+                "/items",
+                AgentViewLocalStateOp::Append { value: json!(2) },
+            )
+            .expect_err("append is outside reducer v1");
+
+        assert!(matches!(
+            err,
+            AgentViewReducerError::Host(HostError::UpdateOpNotYetSupported { .. })
+        ));
+        let session = runtime.session(&key).unwrap();
+        assert!(!session.dirty);
+        assert_eq!(session.state, initial);
+    }
+
+    #[test]
+    fn reducer_unknown_session_is_rejected() {
+        let mut runtime = AgentViewRuntime::default();
+        let key = AgentViewScopeKey::from_parts(
+            AgentViewScope::Message,
+            "!room:example.org",
+            "$event1",
+            None,
+        )
+        .unwrap();
+
+        let err = runtime
+            .reduce_local_state(
+                &key,
+                "/count",
+                AgentViewLocalStateOp::Replace { value: json!(2) },
+            )
+            .expect_err("missing session should not create state implicitly");
+
+        assert_eq!(err, AgentViewReducerError::SessionNotFound);
     }
 }
