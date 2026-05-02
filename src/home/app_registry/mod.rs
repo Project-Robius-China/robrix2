@@ -21,6 +21,7 @@ use crate::i18n::AppLanguage;
 pub mod capability_descriptors;
 pub mod agent_view;
 pub mod local_functions;
+pub mod mission_dashboard;
 pub mod mission_room;
 pub mod news;
 pub mod splash_host;
@@ -168,6 +169,7 @@ fn registry() -> &'static HashMap<&'static str, &'static dyn AppFactory> {
     static REGISTRY: OnceLock<HashMap<&'static str, &'static dyn AppFactory>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         let mut m: HashMap<&'static str, &'static dyn AppFactory> = HashMap::new();
+        m.insert(mission_dashboard::TYPE_KEY, &mission_dashboard::FACTORY);
         m.insert(mission_room::TYPE_KEY, &mission_room::FACTORY);
         m.insert(news::TYPE_KEY, &news::FACTORY);
         m.insert(weather::TYPE_KEY, &weather::FACTORY);
@@ -776,6 +778,78 @@ mod tests {
                     "pending_human_actions": [],
                     "decisions": [],
                     "blockers": []
+                }
+            }
+        });
+
+        let splash = render_app_envelope_to_splash(&event_content, AppLanguage::English);
+        assert!(splash.is_none());
+    }
+
+    #[test]
+    fn raw_matrix_mission_dashboard_event_renders_to_splash() {
+        let event_content = json!({
+            "body": "Dashboard fallback",
+            "msgtype": "m.text",
+            "org.octos.app": {
+                "type": "mission_dashboard",
+                "version": 1,
+                "scope": "account",
+                "app_id": "missions.global",
+                "initial_state": {
+                    "summary": {
+                        "title": "Open mission operations",
+                        "status": "active"
+                    },
+                    "missions": [
+                        {
+                            "room": "!mission1:example.org",
+                            "title": "Ship agent2view runtime",
+                            "phase": "active",
+                            "pending_human_actions": 1,
+                            "blocked_tasks": 0,
+                            "active_agents": 3
+                        }
+                    ]
+                }
+            }
+        });
+
+        let splash = render_app_envelope_to_splash(&event_content, AppLanguage::English)
+            .expect("mission_dashboard org.octos.app event should render");
+
+        assert!(splash.contains("Open mission operations"), "{splash}");
+        assert!(splash.contains("Ship agent2view runtime"), "{splash}");
+        assert!(splash.contains("1 pending"), "{splash}");
+        assert!(splash.contains("mission_dashboard"), "{splash}");
+        assert!(!splash.contains("$state."), "{splash}");
+    }
+
+    #[test]
+    fn mission_dashboard_invalid_phase_falls_back_to_body() {
+        let event_content = json!({
+            "body": "Dashboard fallback",
+            "msgtype": "m.text",
+            "org.octos.app": {
+                "type": "mission_dashboard",
+                "version": 1,
+                "scope": "account",
+                "app_id": "missions.global",
+                "initial_state": {
+                    "summary": {
+                        "title": "Open mission operations",
+                        "status": "active"
+                    },
+                    "missions": [
+                        {
+                            "room": "!mission1:example.org",
+                            "title": "Ship agent2view runtime",
+                            "phase": "invented",
+                            "pending_human_actions": 1,
+                            "blocked_tasks": 0,
+                            "active_agents": 3
+                        }
+                    ]
                 }
             }
         });

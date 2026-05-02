@@ -60,6 +60,16 @@ impl AgentViewScopeKey {
             AgentViewScope::Account => None,
         }
     }
+
+    pub fn from_account_parts(
+        account_id: impl Into<String>,
+        app_id: Option<&str>,
+    ) -> Option<Self> {
+        Some(Self::Account {
+            account_id: account_id.into(),
+            app_id: app_id?.to_string(),
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +212,23 @@ mod tests {
     }
 
     #[test]
+    fn scope_key_uses_account_id_and_app_id_for_account_scope() {
+        let key = AgentViewScopeKey::from_account_parts(
+            "@alice:example.org",
+            Some("missions.global"),
+        )
+        .expect("account scope should use app_id");
+
+        assert_eq!(
+            key,
+            AgentViewScopeKey::Account {
+                account_id: "@alice:example.org".into(),
+                app_id: "missions.global".into(),
+            }
+        );
+    }
+
+    #[test]
     fn runtime_keeps_message_scoped_sessions_isolated() {
         let mut runtime = AgentViewRuntime::default();
         let first = json!({ "count": 1 });
@@ -276,5 +303,38 @@ mod tests {
         let session = runtime.session(&key).unwrap();
         assert_eq!(session.source_event_id, "$event1");
         assert_eq!(session.state["count"], 1);
+    }
+
+    #[test]
+    fn runtime_reuses_account_scoped_session_by_account_and_app_id() {
+        let mut runtime = AgentViewRuntime::default();
+        let initial = json!({ "open_missions": 2 });
+        let ignored_later_initial = json!({ "open_missions": 9 });
+        let key = AgentViewScopeKey::from_account_parts(
+            "@alice:example.org",
+            Some("missions.global"),
+        )
+        .unwrap();
+
+        runtime.get_or_create(
+            key.clone(),
+            "$event1",
+            "mission_dashboard",
+            1,
+            "account_overview",
+            &initial,
+        );
+        runtime.get_or_create(
+            key.clone(),
+            "$event2",
+            "mission_dashboard",
+            1,
+            "account_overview",
+            &ignored_later_initial,
+        );
+
+        let session = runtime.session(&key).unwrap();
+        assert_eq!(session.source_event_id, "$event1");
+        assert_eq!(session.state["open_missions"], 2);
     }
 }

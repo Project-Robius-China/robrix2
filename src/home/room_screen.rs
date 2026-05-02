@@ -12661,6 +12661,62 @@ mod tests {
     }
 
     #[test]
+    fn test_mission_room_actions_use_generic_action_button_path() {
+        let payload = parse_octos_action_payload_for_render(
+            Some(&serde_json::json!({
+                "org.octos.app": {
+                    "type": "mission_room",
+                    "version": 1,
+                    "scope": "room",
+                    "app_id": "mission.main",
+                    "initial_state": {}
+                },
+                "org.octos.actions": [
+                    { "id": "approve_plan", "label": "Approve plan", "style": "primary" },
+                    { "id": "request_plan_changes", "label": "Request changes", "style": "secondary" },
+                    { "id": "reassign_task", "label": "Reassign", "style": "secondary" },
+                    { "id": "change_priority", "label": "Change priority", "style": "secondary" },
+                    { "id": "mark_blocked", "label": "Mark blocked", "style": "danger" },
+                    { "id": "approve_result", "label": "Approve result", "style": "primary" }
+                ]
+            })),
+            None,
+        );
+
+        assert!(payload.approval_request.is_none());
+        assert_eq!(payload.actions.len(), 6);
+        assert_eq!(payload.actions[0].id, "approve_plan");
+        assert_eq!(payload.actions[1].id, "request_plan_changes");
+        assert_eq!(payload.actions[2].id, "reassign_task");
+        assert_eq!(payload.actions[3].id, "change_priority");
+        assert_eq!(payload.actions[4].id, "mark_blocked");
+        assert_eq!(payload.actions[5].id, "approve_result");
+    }
+
+    #[test]
+    fn test_mission_room_action_response_preserves_mission_action_id() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$mission123".try_into().unwrap();
+        let original_sender: OwnedUserId = "@octos_planner:127.0.0.1:8128".try_into().unwrap();
+
+        let request = build_octos_action_response_request(
+            &timeline_kind,
+            "Approve plan",
+            "approve_plan",
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+        );
+
+        let action_response = &request.content["org.octos.action_response"];
+        assert_eq!(request.target_user_id, original_sender);
+        assert_eq!(request.content["body"], "[Action: Approve plan]");
+        assert_eq!(action_response["action_id"], "approve_plan");
+        assert_eq!(action_response["source_event_id"], "$mission123");
+    }
+
+    #[test]
     fn test_malformed_approval_request_hides_buttons() {
         let payload = parse_octos_action_payload_for_render(
             Some(&serde_json::json!({

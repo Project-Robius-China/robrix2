@@ -1,0 +1,62 @@
+RoundedView {
+  width: Fill height: Fit flow: Down
+  padding: Inset{left: 18. right: 18. top: 16. bottom: 16.}
+  spacing: 12.
+  draw_bg.color: #x1B2433
+  draw_bg.border_radius: 14.
+
+  View { width: Fill height: Fit flow: Right spacing: 12.
+    View { width: Fill height: Fit flow: Down spacing: 6.
+      Label { text: "$state.summary.title" draw_text.color: #xffffff draw_text.text_style.font_size: 20. }
+      Label { text: "$state.summary.status" draw_text.color: #xffffffbb draw_text.text_style.font_size: 12. }
+    }
+    RoundedView {
+      width: Fit height: Fit flow: Down spacing: 4.
+      padding: Inset{left: 10. right: 10. top: 8. bottom: 8.}
+      draw_bg.color: #xA7F3D0
+      draw_bg.border_radius: 9.
+      Label { text: "$state.summary.open_count" draw_text.color: #x123327 draw_text.text_style.font_size: 12. }
+    }
+  }
+
+  RoundedView {
+    width: Fill height: Fit flow: Down spacing: 8.
+    padding: Inset{left: 12. right: 12. top: 12. bottom: 12.}
+    draw_bg.color: #xF8FAFC
+    draw_bg.border_radius: 12.
+    Label { text: "Mission rooms" draw_text.color: #x172238 draw_text.text_style.font_size: 14. }
+
+    RoundedView { visible: $state.mission_1.visible width: Fill height: Fit flow: Down spacing: 3. padding: 8. draw_bg.color: #xffffff draw_bg.border_radius: 8.
+      Label { text: "$state.mission_1.title" draw_text.color: #x172238 draw_text.text_style.font_size: 12. }
+      Label { text: "$state.mission_1.room" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_1.phase" draw_text.color: #x2563EB draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_1.pending" draw_text.color: #x8A5A00 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_1.blockers" draw_text.color: #x8A1F11 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_1.agents" draw_text.color: #x166534 draw_text.text_style.font_size: 10. }
+    }
+    RoundedView { visible: $state.mission_2.visible width: Fill height: Fit flow: Down spacing: 3. padding: 8. draw_bg.color: #xffffff draw_bg.border_radius: 8.
+      Label { text: "$state.mission_2.title" draw_text.color: #x172238 draw_text.text_style.font_size: 12. }
+      Label { text: "$state.mission_2.room" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_2.phase" draw_text.color: #x2563EB draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_2.pending" draw_text.color: #x8A5A00 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_2.blockers" draw_text.color: #x8A1F11 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_2.agents" draw_text.color: #x166534 draw_text.text_style.font_size: 10. }
+    }
+    RoundedView { visible: $state.mission_3.visible width: Fill height: Fit flow: Down spacing: 3. padding: 8. draw_bg.color: #xffffff draw_bg.border_radius: 8.
+      Label { text: "$state.mission_3.title" draw_text.color: #x172238 draw_text.text_style.font_size: 12. }
+      Label { text: "$state.mission_3.room" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_3.phase" draw_text.color: #x2563EB draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_3.pending" draw_text.color: #x8A5A00 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_3.blockers" draw_text.color: #x8A1F11 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_3.agents" draw_text.color: #x166534 draw_text.text_style.font_size: 10. }
+    }
+    RoundedView { visible: $state.mission_4.visible width: Fill height: Fit flow: Down spacing: 3. padding: 8. draw_bg.color: #xffffff draw_bg.border_radius: 8.
+      Label { text: "$state.mission_4.title" draw_text.color: #x172238 draw_text.text_style.font_size: 12. }
+      Label { text: "$state.mission_4.room" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_4.phase" draw_text.color: #x2563EB draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_4.pending" draw_text.color: #x8A5A00 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_4.blockers" draw_text.color: #x8A1F11 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.mission_4.agents" draw_text.color: #x166534 draw_text.text_style.font_size: 10. }
+    }
+  }
+}

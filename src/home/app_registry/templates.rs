@@ -22,6 +22,9 @@ pub const WEATHER_CARD_STANDARD: &str =
 pub const MISSION_ROOM_CONTROL: &str =
     include_str!("templates/mission_room/mission_control.splash");
 
+pub const MISSION_DASHBOARD_ACCOUNT_OVERVIEW: &str =
+    include_str!("templates/mission_dashboard/account_overview.splash");
+
 pub const NEWS_HEADLINES_CARD: &str =
     include_str!("templates/news_guidance/headlines_card.splash");
 
@@ -37,6 +40,11 @@ pub const NEWS_DIGEST_CARD: &str =
 /// Step A.6) to iterate and validate every template at build time.
 pub const ALL_TEMPLATES: &[(&str, &str, &str)] = &[
     ("mission_room", "mission_control", MISSION_ROOM_CONTROL),
+    (
+        "mission_dashboard",
+        "account_overview",
+        MISSION_DASHBOARD_ACCOUNT_OVERVIEW,
+    ),
     ("weather_guidance", "card_standard", WEATHER_CARD_STANDARD),
     ("news_guidance", "headlines_card", NEWS_HEADLINES_CARD),
     ("news_guidance", "digest_card", NEWS_DIGEST_CARD),
@@ -150,6 +158,7 @@ mod tests {
         let required = [
             ("weather_guidance", "card_standard"),
             ("mission_room", "mission_control"),
+            ("mission_dashboard", "account_overview"),
             ("news_guidance", "headlines_card"),
             ("news_guidance", "digest_card"),
         ];
@@ -175,6 +184,9 @@ mod tests {
                 ("mission_room", "mission_control") => {
                     assert_eq!(*src, MISSION_ROOM_CONTROL);
                 }
+                ("mission_dashboard", "account_overview") => {
+                    assert_eq!(*src, MISSION_DASHBOARD_ACCOUNT_OVERVIEW);
+                }
                 ("news_guidance", "headlines_card") => {
                     assert_eq!(*src, NEWS_HEADLINES_CARD);
                 }
@@ -190,6 +202,7 @@ mod tests {
     fn source_for_known_pairs_returns_some() {
         assert!(source_for("weather_guidance", "card_standard").is_some());
         assert!(source_for("mission_room", "mission_control").is_some());
+        assert!(source_for("mission_dashboard", "account_overview").is_some());
         assert!(source_for("news_guidance", "headlines_card").is_some());
         assert!(source_for("news_guidance", "digest_card").is_some());
     }
@@ -214,6 +227,10 @@ mod tests {
         assert_eq!(
             source_for("mission_room", "mission_control").unwrap(),
             MISSION_ROOM_CONTROL,
+        );
+        assert_eq!(
+            source_for("mission_dashboard", "account_overview").unwrap(),
+            MISSION_DASHBOARD_ACCOUNT_OVERVIEW,
         );
         assert_eq!(
             source_for("news_guidance", "headlines_card").unwrap(),
