@@ -1,0 +1,90 @@
+RoundedView {
+  width: Fill height: Fit flow: Down
+  new_batch: true
+  padding: Inset{left: 18. right: 18. top: 16. bottom: 16.}
+  spacing: 12.
+  draw_bg.color: #x223047
+  draw_bg.border_radius: 14.
+
+  View { width: Fill height: Fit flow: Right spacing: 12.
+    View { width: Fill height: Fit flow: Down spacing: 6.
+      Label { text: "$state.goal.title" draw_text.color: #xffffff draw_text.text_style.font_size: 20. }
+      Label { text: "$state.phase" draw_text.color: #xffffffbb draw_text.text_style.font_size: 12. }
+      Label { text: "$state.progress.text" draw_text.color: #xBDE2FF draw_text.text_style.font_size: 12. }
+    }
+    RoundedView {
+      visible: $state.next_gate.visible
+      width: Fit height: Fit flow: Down spacing: 4.
+      new_batch: true
+      padding: Inset{left: 10. right: 10. top: 8. bottom: 8.}
+      draw_bg.color: #xF6C453
+      draw_bg.border_radius: 9.
+      Label { text: "Human gate" draw_text.color: #x3D2A00 draw_text.text_style.font_size: 10. }
+      Label { text: "$state.next_gate.text" draw_text.color: #x3D2A00 draw_text.text_style.font_size: 12. }
+    }
+  }
+
+  View { width: Fill height: Fit flow: Right spacing: 12.
+    RoundedView {
+      width: Fill height: Fit flow: Down spacing: 8.
+      new_batch: true
+      padding: Inset{left: 12. right: 12. top: 12. bottom: 12.}
+      draw_bg.color: #xffffff
+      draw_bg.border_radius: 12.
+      Label { text: "Board" draw_text.color: #x172238 draw_text.text_style.font_size: 14. }
+
+      RoundedView { visible: $state.task_1.visible width: Fill height: Fit flow: Down spacing: 2. new_batch: true padding: 8. draw_bg.color: #xEEF3F8 draw_bg.border_radius: 8.
+        Label { text: "$state.task_1.title" draw_text.color: #x172238 draw_text.text_style.font_size: 12. }
+        Label { text: "$state.task_1.status" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+        Label { text: "$state.task_1.owner" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+        Label { text: "$state.task_1.priority" draw_text.color: #x2563EB draw_text.text_style.font_size: 10. }
+      }
+      RoundedView { visible: $state.task_2.visible width: Fill height: Fit flow: Down spacing: 2. new_batch: true padding: 8. draw_bg.color: #xEEF3F8 draw_bg.border_radius: 8.
+        Label { text: "$state.task_2.title" draw_text.color: #x172238 draw_text.text_style.font_size: 12. }
+        Label { text: "$state.task_2.status" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+        Label { text: "$state.task_2.owner" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+        Label { text: "$state.task_2.priority" draw_text.color: #x2563EB draw_text.text_style.font_size: 10. }
+      }
+      RoundedView { visible: $state.task_3.visible width: Fill height: Fit flow: Down spacing: 2. new_batch: true padding: 8. draw_bg.color: #xEEF3F8 draw_bg.border_radius: 8.
+        Label { text: "$state.task_3.title" draw_text.color: #x172238 draw_text.text_style.font_size: 12. }
+        Label { text: "$state.task_3.status" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+        Label { text: "$state.task_3.owner" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+        Label { text: "$state.task_3.priority" draw_text.color: #x2563EB draw_text.text_style.font_size: 10. }
+      }
+      RoundedView { visible: $state.task_4.visible width: Fill height: Fit flow: Down spacing: 2. new_batch: true padding: 8. draw_bg.color: #xEEF3F8 draw_bg.border_radius: 8.
+        Label { text: "$state.task_4.title" draw_text.color: #x172238 draw_text.text_style.font_size: 12. }
+        Label { text: "$state.task_4.status" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+        Label { text: "$state.task_4.owner" draw_text.color: #x536A86 draw_text.text_style.font_size: 10. }
+        Label { text: "$state.task_4.priority" draw_text.color: #x2563EB draw_text.text_style.font_size: 10. }
+      }
+    }
+
+    RoundedView {
+      width: Fill height: Fit flow: Down spacing: 8.
+      new_batch: true
+      padding: Inset{left: 12. right: 12. top: 12. bottom: 12.}
+      draw_bg.color: #xF8FAFC
+      draw_bg.border_radius: 12.
+      Label { text: "Agents" draw_text.color: #x172238 draw_text.text_style.font_size: 14. }
+      Label { visible: $state.agent_1.visible text: "$state.agent_1.label" draw_text.color: #x223047 draw_text.text_style.font_size: 11. }
+      Label { visible: $state.agent_2.visible text: "$state.agent_2.label" draw_text.color: #x223047 draw_text.text_style.font_size: 11. }
+      Label { visible: $state.agent_3.visible text: "$state.agent_3.label" draw_text.color: #x223047 draw_text.text_style.font_size: 11. }
+      Label { visible: $state.agent_4.visible text: "$state.agent_4.label" draw_text.color: #x223047 draw_text.text_style.font_size: 11. }
+
+      Label { text: "Pending human actions" draw_text.color: #x172238 draw_text.text_style.font_size: 14. }
+      Label { visible: $state.action_1.visible text: "$state.action_1.label" draw_text.color: #x8A5A00 draw_text.text_style.font_size: 11. }
+      Label { visible: $state.action_2.visible text: "$state.action_2.label" draw_text.color: #x8A5A00 draw_text.text_style.font_size: 11. }
+      Label { visible: $state.action_3.visible text: "$state.action_3.label" draw_text.color: #x8A5A00 draw_text.text_style.font_size: 11. }
+    }
+  }
+
+  RoundedView {
+    width: Fill height: Fit flow: Down spacing: 6.
+    new_batch: true
+    padding: Inset{left: 12. right: 12. top: 12. bottom: 12.}
+    draw_bg.color: #xF4F7FB
+    draw_bg.border_radius: 12.
+    Label { visible: $state.decision_summary.visible text: "$state.decision_summary.text" draw_text.color: #x223047 draw_text.text_style.font_size: 11. }
+    Label { visible: $state.blocker_summary.visible text: "$state.blocker_summary.text" draw_text.color: #x8A1F11 draw_text.text_style.font_size: 11. }
+  }
+}

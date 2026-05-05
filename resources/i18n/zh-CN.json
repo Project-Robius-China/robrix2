@@ -310,6 +310,7 @@
   "settings.labs.app_service.status.enabled": "已启用",
   "settings.labs.app_service.status.disabled": "未启用",
   "settings.labs.app_service.health.service_label": "Octos 服务",
+  "settings.labs.app_service.health.gateway_label": "Matrix 网关",
   "settings.labs.app_service.health.placeholder": "http://127.0.0.1:8010",
   "settings.labs.app_service.health.button.save": "保存",
   "settings.labs.app_service.health.button.check_now": "立即检查",
@@ -669,5 +670,10 @@
   "space_lobby.item.member_one": "1 位成员",
   "space_lobby.item.member_n": "{count} 位成员",
   "space_lobby.item.child_room_one": "~{count} 个房间",
-  "space_lobby.item.child_room_n": "~{count} 个房间"
+  "space_lobby.item.child_room_n": "~{count} 个房间",
+  "agent_to_app.weather.feels_like": "体感",
+  "agent_to_app.weather.humidity": "湿度",
+  "agent_to_app.weather.wind": "风速",
+  "agent_to_app.weather.forecast": "预报",
+  "agent_to_app.weather.updated_at_prefix": "更新于"
 }

@@ -6,6 +6,9 @@ use std::{borrow::Cow, cell::{Cell, RefCell}, ops::{DerefMut, Range}, sync::Arc,
 use bytesize::ByteSize;
 use hashbrown::{HashMap, HashSet};
 use imbl::Vector;
+use makepad_widgets::makepad_draw::svg::{
+    collect_edges, collect_text_cmds, parse_svg, SvgDocument, SvgEdge, SvgTextAnchor, SvgTextCmd,
+};
 use makepad_widgets::{image_cache::ImageBuffer, *};
 use matrix_sdk::{
     OwnedServerName, media::{MediaFormat, MediaRequestParameters}, room::{RoomMember, RoomMemberRole}, ruma::{
@@ -38,6 +41,7 @@ use crate::{
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
+use crate::home::app_registry::AgentViewRuntime;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
 use crate::home::streaming_animation::StreamingAnimState;
 use crate::room::room_input_bar::RoomInputBarWidgetExt;
@@ -385,7 +389,10 @@ fn parse_octos_action_payload_for_render(
             .map(parse_octos_approval_actions_from_content)
             .unwrap_or_default()
     } else {
-        content
+        let action_source = original_content
+            .filter(|content| crate::home::app_registry::parse_envelope(content).is_some())
+            .or(content);
+        action_source
             .map(parse_octos_actions_from_content)
             .unwrap_or_default()
     };
@@ -501,6 +508,41 @@ struct OctosActionButtonContext {
     source_event_id: OwnedEventId,
     original_sender: OwnedUserId,
     request: OctosActionButtonRequest,
+    app_context: Option<OctosActionAppContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OctosActionAppContext {
+    app_type: String,
+    version: u32,
+    scope: String,
+    app_id: Option<String>,
+}
+
+impl OctosActionAppContext {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": self.app_type,
+            "version": self.version,
+            "scope": self.scope,
+            "app_id": self.app_id,
+        })
+    }
+}
+
+fn octos_action_app_context_from_content(content: &serde_json::Value) -> Option<OctosActionAppContext> {
+    let envelope = crate::home::app_registry::parse_envelope(content)?;
+    Some(OctosActionAppContext {
+        app_type: envelope.app_type,
+        version: envelope.version,
+        scope: match envelope.scope {
+            crate::home::app_registry::AgentViewScope::Message => "message",
+            crate::home::app_registry::AgentViewScope::Room => "room",
+            crate::home::app_registry::AgentViewScope::Account => "account",
+        }
+        .into(),
+        app_id: envelope.app_id,
+    })
 }
 
 fn build_octos_approval_response_request(
@@ -541,16 +583,22 @@ fn build_octos_action_response_request(
     action_id: &str,
     source_event_id: &EventId,
     original_sender: &UserId,
+    app_context: Option<&OctosActionAppContext>,
 ) -> OctosActionResponseRequest {
+    let mut action_response = serde_json::json!({
+        "action_id": action_id,
+        "source_event_id": source_event_id.as_str(),
+    });
+    if let Some(app_context) = app_context {
+        action_response["app"] = app_context.to_json();
+    }
+
     OctosActionResponseRequest {
         timeline_kind: timeline_kind.clone(),
         content: serde_json::json!({
             "msgtype": "m.text",
             "body": format!("[Action: {label}]"),
-            "org.octos.action_response": {
-                "action_id": action_id,
-                "source_event_id": source_event_id.as_str(),
-            },
+            "org.octos.action_response": action_response,
             "m.relates_to": {
                 "m.in_reply_to": {
                     "event_id": source_event_id.as_str(),
@@ -665,11 +713,12 @@ fn is_bot_provider_line(line: &str) -> bool {
 }
 
 fn strip_streaming_cursor_suffix(line: &str) -> &str {
-    line
-        .trim_end()
+    let trimmed = line.trim_end();
+    trimmed
         .strip_suffix('\u{25CF}')
+        .or_else(|| trimmed.strip_suffix('▋'))
         .map(str::trim_end)
-        .unwrap_or_else(|| line.trim_end())
+        .unwrap_or(trimmed)
 }
 
 fn is_bot_footer_line(line: &str) -> bool {
@@ -778,17 +827,8 @@ fn parse_bot_timeline_layers(raw_body: &str, is_bot_sender: bool) -> BotTimeline
         footer = Some(strip_streaming_cursor_suffix(content_lines[0]).trim().to_string());
         body.clear();
     }
-    if !is_viable_bot_body(&body) {
-        return if status.is_some() || provider.is_some() || footer.is_some() {
-            BotTimelineLayers {
-                status,
-                provider,
-                body,
-                footer,
-            }
-        } else {
-            BotTimelineLayers::plain(raw_body)
-        };
+    if !is_viable_bot_body(&body) && footer.is_none() {
+        return BotTimelineLayers::plain(raw_body);
     }
 
     BotTimelineLayers {
@@ -840,7 +880,49 @@ fn has_rich_markdown_syntax(text: &str) -> bool {
             || trimmed.contains("\n* ")
             || trimmed.contains("**")
             || trimmed.contains("`")
+            || trimmed.contains("$$")
+            || trimmed.contains("\\[")
+            || trimmed.contains("\\(")
+            || trimmed.contains("\\frac")
+            || trimmed.contains("\\sum")
+            || trimmed.contains("\\int")
         )
+}
+
+fn bot_streaming_markdown_display(raw: &str, is_live: bool) -> String {
+    if !is_live {
+        return raw.to_string();
+    }
+
+    let opts = streaming_markdown_kit::SanitizeOptions {
+        trim_unclosed_fence: false,
+        ..streaming_markdown_kit::SanitizeOptions::default()
+    };
+    streaming_markdown_kit::streaming_display_with_latex_autowrap_remend(
+        raw,
+        opts,
+    )
+}
+
+fn unwrap_outer_markdown_fence(text: &str) -> &str {
+    let trimmed_text = text.trim_start();
+    let bt_count = trimmed_text.bytes().take_while(|b| *b == b'`').count();
+    if bt_count < 3 {
+        return text;
+    }
+    let after_ticks = &trimmed_text[bt_count..];
+    let body_start = after_ticks
+        .strip_prefix("markdown\n")
+        .or_else(|| after_ticks.strip_prefix("md\n"));
+    let Some(body) = body_start else {
+        return text;
+    };
+    let close_pat = "`".repeat(bt_count);
+    let end_trimmed = body.trim_end();
+    if let Some(without_close) = end_trimmed.strip_suffix(&close_pat) {
+        return without_close.trim_end_matches('\n').trim_end();
+    }
+    body
 }
 
 fn should_render_streaming_full_snapshot(
@@ -877,9 +959,10 @@ fn should_render_bot_timeline_body_with_markdown_widget(
     render_state: &BotTimelineRenderState,
 ) -> bool {
     render_state.show_body_card
-        && render_state.body.contains("```")
+        && has_rich_markdown_syntax(&render_state.body)
 }
 
+#[cfg(test)]
 fn contains_cjk(text: &str) -> bool {
     text.chars().any(|ch|
         matches!(ch as u32,
@@ -899,33 +982,10 @@ fn contains_cjk(text: &str) -> bool {
     )
 }
 
-fn fenced_code_blocks_contain_cjk(text: &str) -> bool {
-    let mut in_fence = false;
-    let mut fence_has_cjk = false;
-
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            if in_fence && fence_has_cjk {
-                return true;
-            }
-            in_fence = !in_fence;
-            fence_has_cjk = false;
-            continue;
-        }
-
-        if in_fence && contains_cjk(line) {
-            fence_has_cjk = true;
-        }
-    }
-
-    in_fence && fence_has_cjk
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BotTimelineCodeBlockMode {
     None,
-    Highlighted,
-    Plain,
+    Rich,
 }
 
 fn bot_timeline_code_block_mode(render_state: &BotTimelineRenderState) -> BotTimelineCodeBlockMode {
@@ -933,11 +993,7 @@ fn bot_timeline_code_block_mode(render_state: &BotTimelineRenderState) -> BotTim
         return BotTimelineCodeBlockMode::None;
     }
 
-    if fenced_code_blocks_contain_cjk(&render_state.body) {
-        BotTimelineCodeBlockMode::Plain
-    } else {
-        BotTimelineCodeBlockMode::Highlighted
-    }
+    BotTimelineCodeBlockMode::Rich
 }
 
 fn streaming_update_requires_content_invalidation(
@@ -949,6 +1005,29 @@ fn streaming_update_requires_content_invalidation(
     state.target_text != new_text
         || state.is_live != is_live
         || state.render_full_target != render_full_target
+}
+
+fn should_start_streaming_animation_for_update(
+    is_live: bool,
+    already_tracked: bool,
+    is_append: bool,
+) -> bool {
+    is_live && !already_tracked && is_append
+}
+
+fn diagram_scroll_zoom_factor(scroll_delta: f64) -> Option<f64> {
+    if scroll_delta.abs() <= f64::EPSILON {
+        return None;
+    }
+    Some((scroll_delta * 0.0025).exp().clamp(0.82, 1.22))
+}
+
+#[cfg(test)]
+fn diagram_magnify_zoom_factor(magnification: f64) -> Option<f64> {
+    if magnification.abs() <= f64::EPSILON {
+        return None;
+    }
+    Some((magnification * 1.6).exp().clamp(0.82, 1.22))
 }
 
 thread_local! {
@@ -1479,10 +1558,639 @@ fn extract_bot_user_ids_from_listbots_reply(
     bot_user_ids
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BotDiagramKind {
+    Mermaid,
+    Diagram,
+}
+
+impl BotDiagramKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Mermaid => "Mermaid Diagram",
+            Self::Diagram => "Diagram",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BotDiagramModalRequest {
+    kind: BotDiagramKind,
+    source: String,
+}
+
+impl BotDiagramModalRequest {
+    fn new(kind: BotDiagramKind, source: &str) -> Option<Self> {
+        let source = source.trim();
+        if source.is_empty() {
+            return None;
+        }
+        Some(Self {
+            kind,
+            source: source.to_string(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum BotDiagramPreviewAction {
+    Open(BotDiagramModalRequest),
+    Close,
+    #[default]
+    None,
+}
+
+impl ActionDefaultRef for BotDiagramPreviewAction {
+    fn default_ref() -> &'static Self {
+        static DEFAULT: BotDiagramPreviewAction = BotDiagramPreviewAction::None;
+        &DEFAULT
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct BotTimelineMermaidSvgView {
+    #[uid]
+    uid: WidgetUid,
+    #[source]
+    source: ScriptObjectRef,
+    #[walk]
+    walk: Walk,
+    #[layout]
+    layout: Layout,
+    #[redraw]
+    #[live]
+    draw_svg: DrawSvg,
+    #[live]
+    draw_text: DrawText,
+    #[live]
+    draw_flow_dot: DrawColor,
+    #[live(false)]
+    interactive: bool,
+    #[live(false)]
+    animate_flow: bool,
+    #[rust]
+    doc: SvgDocument,
+    #[rust]
+    content_w: f64,
+    #[rust]
+    content_h: f64,
+    #[rust]
+    last_src_hash: u64,
+    #[rust]
+    pending_src_hash: u64,
+    #[rust]
+    cached_text_cmds: Vec<SvgTextCmd>,
+    #[rust]
+    cached_edges: Vec<SvgEdge>,
+    #[rust]
+    source_text: String,
+    #[rust(1.0f64)]
+    zoom: f64,
+    #[rust]
+    pan: DVec2,
+    #[rust]
+    drag_start_abs: Option<DVec2>,
+    #[rust]
+    drag_start_pan: DVec2,
+    #[rust]
+    previous_pinch_distance: Option<f64>,
+    #[rust]
+    last_rect: Rect,
+    #[rust]
+    anim_t: f32,
+    #[rust]
+    next_frame: NextFrame,
+}
+
+impl BotTimelineMermaidSvgView {
+    pub fn set_svg_str(&mut self, cx: &mut Cx, svg: &str) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        svg.hash(&mut hasher);
+        let hash = hasher.finish();
+        if hash == self.last_src_hash && !self.doc.root.is_empty() {
+            return;
+        }
+
+        self.last_src_hash = hash;
+        self.doc = parse_svg(svg);
+        self.cached_text_cmds = collect_text_cmds(&self.doc);
+        self.cached_edges = collect_edges(&self.doc);
+        self.draw_svg.cache_valid = false;
+        self.draw_svg.set_doc_bounds(&self.doc);
+        if let Some(vb) = self.doc.viewbox.as_ref() {
+            self.draw_svg.content_bounds = (vb.x, vb.y, vb.x + vb.width, vb.y + vb.height);
+            self.content_w = vb.width as f64;
+            self.content_h = vb.height as f64;
+            self.draw_svg.content_size = dvec2(self.content_w, self.content_h);
+        }
+        self.redraw(cx);
+    }
+
+    pub fn set_mermaid_src(&mut self, cx: &mut Cx, src: &str) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let cleaned: String = src.chars().filter(|c| *c != '▋').collect();
+        let trimmed = cleaned.trim();
+        if trimmed.is_empty() || trimmed.len() < 8 {
+            return;
+        }
+        self.source_text = trimmed.to_string();
+
+        let mut hasher = DefaultHasher::new();
+        trimmed.hash(&mut hasher);
+        let hash = hasher.finish();
+        if hash == self.last_src_hash && !self.doc.root.is_empty() {
+            return;
+        }
+
+        if !self.interactive && hash != self.pending_src_hash {
+            self.pending_src_hash = hash;
+            return;
+        }
+
+        match streaming_markdown_kit::render_mermaid_to_svg(trimmed) {
+            Ok(svg) => {
+                self.set_svg_str(cx, &svg);
+                self.last_src_hash = hash;
+            }
+            Err(err) => {
+                log!("mermaid render error: {:?}", err);
+            }
+        }
+    }
+}
+
+impl Widget for BotTimelineMermaidSvgView {
+    fn set_text(&mut self, cx: &mut Cx, v: &str) {
+        self.set_mermaid_src(cx, v);
+    }
+
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, _scope: &mut Scope) {
+        if !self.interactive {
+            match event.hits(cx, self.draw_svg.area()) {
+                Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
+                    if let Some(request) =
+                        BotDiagramModalRequest::new(BotDiagramKind::Mermaid, &self.source_text)
+                    {
+                        cx.widget_action(
+                            self.widget_uid(),
+                            BotDiagramPreviewAction::Open(request),
+                        );
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if self.next_frame.is_event(event).is_some() {
+            self.anim_t = (self.anim_t + 0.003).rem_euclid(1.0);
+            self.next_frame = cx.new_next_frame();
+            self.redraw(cx);
+        }
+
+        // Modal scroll blocking can prevent a nested DrawSvg area from receiving
+        // Hit::FingerScroll. Handle the raw event against our own rect first.
+        if let Event::Scroll(scroll_event) = event
+            && self.last_rect.contains(scroll_event.abs)
+        {
+            let delta = if scroll_event.scroll.y.abs() > f64::EPSILON {
+                scroll_event.scroll.y
+            } else {
+                scroll_event.scroll.x
+            };
+            if let Some(factor) = diagram_scroll_zoom_factor(delta) {
+                self.zoom_at(cx, scroll_event.abs, factor);
+                scroll_event.handled_x.set(true);
+                scroll_event.handled_y.set(true);
+            }
+            return;
+        }
+
+        if let Event::TouchUpdate(touch_event) = event {
+            let touches: Vec<_> = touch_event
+                .touches
+                .iter()
+                .filter(|touch| self.last_rect.contains(touch.abs))
+                .collect();
+            if touches.len() == 2 {
+                let p0 = touches[0].abs;
+                let p1 = touches[1].abs;
+                let distance = (p0 - p1).length();
+                if distance > f64::EPSILON {
+                    if let Some(previous) = self.previous_pinch_distance
+                        && previous > f64::EPSILON
+                    {
+                        let center = (p0 + p1) * 0.5;
+                        self.zoom_at(cx, center, distance / previous);
+                    }
+                    self.previous_pinch_distance = Some(distance);
+                }
+            } else {
+                self.previous_pinch_distance = None;
+            }
+        }
+
+        match event.hits_with_capture_overload(cx, self.draw_svg.area(), true) {
+            Hit::FingerDown(fe) if fe.is_primary_hit() => {
+                if fe.tap_count >= 2 {
+                    self.reset_view(cx);
+                } else {
+                    self.drag_start_abs = Some(fe.abs);
+                    self.drag_start_pan = self.pan;
+                    cx.set_cursor(MouseCursor::Grabbing);
+                }
+            }
+            Hit::FingerMove(fe) => {
+                if let Some(start) = self.drag_start_abs {
+                    self.pan = self.drag_start_pan + (fe.abs - start);
+                    self.redraw(cx);
+                }
+            }
+            Hit::FingerUp(_) => {
+                if self.drag_start_abs.is_some() {
+                    self.drag_start_abs = None;
+                    cx.set_cursor(MouseCursor::Grab);
+                }
+            }
+            Hit::FingerHoverIn(_) => cx.set_cursor(MouseCursor::Grab),
+            Hit::FingerScroll(fs) => {
+                let dy = if fs.scroll.y.abs() > f64::EPSILON {
+                    fs.scroll.y
+                } else {
+                    fs.scroll.x
+                };
+                if let Some(factor) = diagram_scroll_zoom_factor(dy) {
+                    self.zoom_at(cx, fs.abs, factor);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, _scope: &mut Scope, walk: Walk) -> DrawStep {
+        if self.doc.root.is_empty() {
+            return DrawStep::done();
+        }
+        let sw = self.draw_svg.content_size.x;
+        let sh = self.draw_svg.content_size.y;
+        if sw <= 0.0 || sh <= 0.0 {
+            return DrawStep::done();
+        }
+        let walk = Walk {
+            abs_pos: walk.abs_pos,
+            margin: walk.margin,
+            width: match walk.width {
+                Size::Fit { .. } => Size::Fixed(sw),
+                other => other,
+            },
+            height: match walk.height {
+                Size::Fit { .. } => Size::Fixed(sh),
+                other => other,
+            },
+            metrics: walk.metrics,
+        };
+        let rect = cx.walk_turtle(walk);
+        self.last_rect = rect;
+
+        let zoom = if self.zoom > 0.01 { self.zoom } else { 1.0 };
+        let effective_rect = Rect {
+            pos: rect.pos + self.pan,
+            size: rect.size * zoom,
+        };
+
+        self.draw_svg.svg_doc = Some(std::mem::take(&mut self.doc));
+        self.draw_svg.has_animations = false;
+        self.draw_svg.render_to_rect(cx, &effective_rect, 0.0);
+        self.doc = self.draw_svg.svg_doc.take().unwrap_or_default();
+
+        let text_cmds = std::mem::take(&mut self.cached_text_cmds);
+        self.render_text_cmds(cx, &effective_rect, &text_cmds);
+        self.cached_text_cmds = text_cmds;
+
+        if self.animate_flow {
+            let edges = std::mem::take(&mut self.cached_edges);
+            self.render_flow_dots(cx, &effective_rect, &edges);
+            let has_edges = !edges.is_empty();
+            self.cached_edges = edges;
+
+            if has_edges {
+                self.next_frame = cx.new_next_frame();
+            }
+        }
+
+        DrawStep::done()
+    }
+}
+
+impl BotTimelineMermaidSvgView {
+    fn reset_view(&mut self, cx: &mut Cx) {
+        self.zoom = 1.0;
+        self.pan = DVec2::default();
+        self.drag_start_abs = None;
+        self.previous_pinch_distance = None;
+        self.redraw(cx);
+    }
+
+    fn zoom_by_center(&mut self, cx: &mut Cx, factor: f64) {
+        if self.last_rect.size.x <= 0.0 || self.last_rect.size.y <= 0.0 {
+            return;
+        }
+        self.zoom_at(cx, self.last_rect.pos + self.last_rect.size * 0.5, factor);
+    }
+
+    fn zoom_at(&mut self, cx: &mut Cx, abs: DVec2, factor: f64) {
+        let old_zoom = self.zoom.max(0.01);
+        let new_zoom = (old_zoom * factor).clamp(0.2, 8.0);
+        if (new_zoom - old_zoom).abs() <= f64::EPSILON {
+            return;
+        }
+        let local = abs - self.last_rect.pos - self.pan;
+        let content_local = local / old_zoom;
+        self.pan = abs - self.last_rect.pos - content_local * new_zoom;
+        self.zoom = new_zoom;
+        self.redraw(cx);
+    }
+
+    fn render_text_cmds(&mut self, cx: &mut Cx2d, rect: &Rect, cmds: &[SvgTextCmd]) {
+        if cmds.is_empty() {
+            return;
+        }
+        let (min_x, min_y, max_x, max_y) = self.draw_svg.content_bounds;
+        let content_w = (max_x - min_x) as f64;
+        let content_h = (max_y - min_y) as f64;
+        if content_w <= 0.0 || content_h <= 0.0 {
+            return;
+        }
+        let scale = (rect.size.x / content_w).min(rect.size.y / content_h);
+        let render_w = content_w * scale;
+        let render_h = content_h * scale;
+        let origin_x = rect.pos.x + (rect.size.x - render_w) * 0.5;
+        let origin_y = rect.pos.y + (rect.size.y - render_h) * 0.5;
+        const PX_TO_PT: f64 = 0.75;
+
+        for cmd in cmds {
+            if cmd.text.trim().is_empty() {
+                continue;
+            }
+            let world_font_size = (cmd.font_size as f64 * scale * PX_TO_PT).max(1.0);
+            self.draw_text.text_style.font_size = world_font_size as f32;
+            self.draw_text.color = vec4(
+                cmd.color.0,
+                cmd.color.1,
+                cmd.color.2,
+                cmd.color.3.max(0.0),
+            );
+
+            let lines: Vec<&str> = cmd.text.split('\n').collect();
+            let line_step_screen = world_font_size * 1.2;
+            let base_cy = origin_y + (cmd.y as f64 - min_y as f64) * scale;
+            let base_cx_screen = origin_x + (cmd.x as f64 - min_x as f64) * scale;
+
+            for (line_index, line) in lines.iter().enumerate() {
+                if line.is_empty() {
+                    continue;
+                }
+                let estimated_width: f64 = line
+                    .chars()
+                    .map(|ch| {
+                        let advance = if (ch as u32) >= 0x2E80 { 1.0 } else { 0.55 };
+                        advance * world_font_size
+                    })
+                    .sum();
+                let anchor_shift = match cmd.text_anchor {
+                    SvgTextAnchor::Start => 0.0,
+                    SvgTextAnchor::Middle => -0.5,
+                    SvgTextAnchor::End => -1.0,
+                } * estimated_width;
+
+                let px = base_cx_screen + anchor_shift;
+                let cy = base_cy + line_step_screen * line_index as f64;
+                let py = cy - world_font_size * 0.7;
+                self.draw_text.draw_abs(cx, dvec2(px, py), line);
+            }
+        }
+    }
+
+    fn render_flow_dots(&mut self, cx: &mut Cx2d, rect: &Rect, edges: &[SvgEdge]) {
+        if edges.is_empty() {
+            return;
+        }
+        let (min_x, min_y, max_x, max_y) = self.draw_svg.content_bounds;
+        let content_w = (max_x - min_x) as f64;
+        let content_h = (max_y - min_y) as f64;
+        if content_w <= 0.0 || content_h <= 0.0 {
+            return;
+        }
+        let scale = (rect.size.x / content_w).min(rect.size.y / content_h);
+        let render_w = content_w * scale;
+        let render_h = content_h * scale;
+        let origin_x = rect.pos.x + (rect.size.x - render_w) * 0.5;
+        let origin_y = rect.pos.y + (rect.size.y - render_h) * 0.5;
+        let dot_size = 10.0_f64;
+        let pulse =
+            0.55 + 0.45 * (self.anim_t * std::f32::consts::TAU * 1.5).sin().abs();
+
+        for (edge_index, edge) in edges.iter().enumerate() {
+            if edge.points.len() < 2 {
+                continue;
+            }
+            let phase = (self.anim_t + edge_index as f32 * 0.17).rem_euclid(1.0);
+            let max_index = edge.points.len() - 1;
+            let float_index = phase * max_index as f32;
+            let point_index = float_index as usize;
+            let next_index = (point_index + 1).min(max_index);
+            let frac = float_index - point_index as f32;
+            let p0 = edge.points[point_index];
+            let p1 = edge.points[next_index];
+            let wx = p0.0 + (p1.0 - p0.0) * frac;
+            let wy = p0.1 + (p1.1 - p0.1) * frac;
+
+            let sx = origin_x + (wx as f64 - min_x as f64) * scale;
+            let sy = origin_y + (wy as f64 - min_y as f64) * scale;
+
+            self.draw_flow_dot.color = vec4(
+                edge.color.0,
+                edge.color.1,
+                edge.color.2,
+                edge.color.3 * pulse,
+            );
+            self.draw_flow_dot.draw_abs(
+                cx,
+                Rect {
+                    pos: dvec2(sx - dot_size * 0.5, sy - dot_size * 0.5),
+                    size: dvec2(dot_size, dot_size),
+                },
+            );
+        }
+    }
+}
+
+impl BotTimelineMermaidSvgViewRef {
+    pub fn set_svg_str(&self, cx: &mut Cx, svg: &str) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_svg_str(cx, svg);
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct BotTimelineDiagramPreview {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+    #[rust] source_text: String,
+}
+
+impl Widget for BotTimelineDiagramPreview {
+    fn set_text(&mut self, cx: &mut Cx, v: &str) {
+        self.source_text = v.trim().to_string();
+        self.widget(cx, ids!(diagram)).set_text(cx, v);
+    }
+
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+        match event.hits(cx, self.view.area()) {
+            Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
+                if let Some(request) =
+                    BotDiagramModalRequest::new(BotDiagramKind::Diagram, &self.source_text)
+                {
+                    cx.widget_action(
+                        self.widget_uid(),
+                        BotDiagramPreviewAction::Open(request),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct DiagramPreviewModal {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+    #[rust] current_request: Option<BotDiagramModalRequest>,
+}
+
+impl Widget for DiagramPreviewModal {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        if let Event::Actions(actions) = event {
+            if self.button(cx, ids!(panel.header.close_button)).clicked(actions)
+                || actions
+                    .iter()
+                    .any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed)))
+            {
+                self.clear(cx);
+                cx.action(BotDiagramPreviewAction::Close);
+                return;
+            }
+
+            let mermaid = self.bot_timeline_mermaid_svg_view(cx, ids!(panel.body.mermaid_view));
+            if self.button(cx, ids!(panel.header.zoom_controls.zoom_out_button)).clicked(actions) {
+                mermaid.borrow_mut().map(|mut inner| inner.zoom_by_center(cx, 0.82));
+                return;
+            }
+            if self.button(cx, ids!(panel.header.zoom_controls.reset_button)).clicked(actions) {
+                mermaid.borrow_mut().map(|mut inner| inner.reset_view(cx));
+                return;
+            }
+            if self.button(cx, ids!(panel.header.zoom_controls.zoom_in_button)).clicked(actions) {
+                mermaid.borrow_mut().map(|mut inner| inner.zoom_by_center(cx, 1.22));
+                return;
+            }
+        }
+
+        self.view.handle_event(cx, event, scope);
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl DiagramPreviewModal {
+    pub fn show(&mut self, cx: &mut Cx, request: BotDiagramModalRequest) {
+        self.current_request = Some(request.clone());
+        self.label(cx, ids!(panel.header.title_group.title)).set_text(cx, request.kind.title());
+        self.label(cx, ids!(panel.header.title_group.subtitle)).set_text(
+            cx,
+            "Scroll over the diagram to zoom. Drag to pan. Double-click or Reset to fit.",
+        );
+
+        let mermaid_view = self.view(cx, ids!(panel.body.mermaid_view));
+        let diagram_view = self.view(cx, ids!(panel.body.diagram_view));
+        let error_view = self.view(cx, ids!(panel.body.error_view));
+        let zoom_controls = self.view(cx, ids!(panel.header.zoom_controls));
+        mermaid_view.set_visible(cx, false);
+        diagram_view.set_visible(cx, false);
+        error_view.set_visible(cx, false);
+        zoom_controls.set_visible(cx, request.kind == BotDiagramKind::Mermaid);
+
+        match request.kind {
+            BotDiagramKind::Mermaid => {
+                match streaming_markdown_kit::render_mermaid_to_svg(&request.source) {
+                    Ok(svg) => {
+                        let mermaid = self
+                            .bot_timeline_mermaid_svg_view(cx, ids!(panel.body.mermaid_view));
+                        mermaid.set_visible(cx, true);
+                        mermaid.set_svg_str(cx, &svg);
+                    }
+                    Err(err) => {
+                        error_view.set_visible(cx, true);
+                        self.label(cx, ids!(panel.body.error_view.error_label)).set_text(
+                            cx,
+                            &format!("Mermaid render failed: {err}"),
+                        );
+                    }
+                }
+            }
+            BotDiagramKind::Diagram => {
+                diagram_view.set_visible(cx, true);
+                self.widget(cx, ids!(panel.body.diagram_view)).set_text(cx, &request.source);
+            }
+        }
+
+        self.reset_buttons(cx);
+        self.redraw(cx);
+    }
+
+    pub fn clear(&mut self, cx: &mut Cx) {
+        self.current_request = None;
+        self.view(cx, ids!(panel.body.mermaid_view)).set_visible(cx, false);
+        self.view(cx, ids!(panel.body.diagram_view)).set_visible(cx, false);
+        self.view(cx, ids!(panel.body.error_view)).set_visible(cx, false);
+        self.view(cx, ids!(panel.header.zoom_controls)).set_visible(cx, false);
+        self.redraw(cx);
+    }
+
+    fn reset_buttons(&mut self, cx: &mut Cx) {
+        self.button(cx, ids!(panel.header.zoom_controls.zoom_out_button)).reset_hover(cx);
+        self.button(cx, ids!(panel.header.zoom_controls.reset_button)).reset_hover(cx);
+        self.button(cx, ids!(panel.header.zoom_controls.zoom_in_button)).reset_hover(cx);
+        self.button(cx, ids!(panel.header.close_button)).reset_hover(cx);
+    }
+}
+
+impl DiagramPreviewModalRef {
+    pub fn show(&self, cx: &mut Cx, request: BotDiagramModalRequest) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show(cx, request);
+    }
+
+    pub fn clear(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.clear(cx);
+    }
+}
+
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
-
 
     mod.widgets.COLOR_BG = #xfff8ee
     mod.widgets.COLOR_OVERLAY_BG = #x000000d8
@@ -1494,14 +2202,213 @@ script_mod! {
     mod.widgets.COLOR_THREAD_SUMMARY_BG_HOVER = #FFEACC
     mod.widgets.COLOR_THREAD_SUMMARY_BORDER = #E8C99A
     mod.widgets.COLOR_THREAD_SUMMARY_REPLY_COUNT = #A35A00
-    mod.widgets.COLOR_BOT_CARD_BG = #xF7FAFE
-    mod.widgets.COLOR_BOT_CARD_BORDER = #xD8E3F0
-    mod.widgets.COLOR_BOT_STATUS_BG = #xEEF4FB
-    mod.widgets.COLOR_BOT_STATUS_TEXT = #x5A6F86
+    mod.widgets.COLOR_BOT_CARD_BG = #xEAF7F9
+    mod.widgets.COLOR_BOT_CARD_BORDER = #xA8D5DD
+    mod.widgets.COLOR_BOT_STATUS_BG = #xDDF2F5
+    mod.widgets.COLOR_BOT_STATUS_TEXT = #x0F6471
     mod.widgets.COLOR_BOT_PROVIDER_TEXT = #x708399
     mod.widgets.COLOR_BOT_FOOTER_TEXT = #x8B98A7
     mod.widgets.COLOR_BOT_CODE_BG = #xECF2F8
     mod.widgets.COLOR_BOT_CODE_BORDER = #xD5E0ED
+    mod.widgets.COLOR_APP_DETAIL_BG = #xE7F7F9
+    mod.widgets.COLOR_APP_DETAIL_BORDER = #x8BCAD4
+
+    mod.widgets.BotTimelineMermaidSvgView = #(BotTimelineMermaidSvgView::register_widget(vm)) {
+        width: Fill
+        height: Fit
+        cursor: MouseCursor.Hand
+        draw_flow_dot +: {
+            color: #x0F6471
+            pixel: fn() {
+                let r = length(self.pos - vec2(0.5, 0.5))
+                let core = 1.0 - smoothstep(0.30, 0.38, r)
+                let halo = (1.0 - smoothstep(0.38, 0.50, r)) * 0.55
+                let a = clamp(core + halo, 0.0, 1.0) * self.color.w
+                return Pal.premul(vec4(self.color.xyz, a))
+            }
+        }
+        draw_text +: {
+            color: (mod.widgets.MESSAGE_TEXT_COLOR)
+            text_style: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
+                font_size: 11.0
+            }
+        }
+    }
+
+    mod.widgets.BotTimelineDiagramPreview = #(BotTimelineDiagramPreview::register_widget(vm)) {
+        width: Fit
+        height: Fit
+        cursor: MouseCursor.Hand
+        diagram := DiagramView {
+            width: Fit
+            height: Fit
+        }
+    }
+
+    mod.widgets.DiagramPreviewModal = #(DiagramPreviewModal::register_widget(vm)) {
+        width: 1120
+        height: 760
+        flow: Overlay
+        align: Align{x: 0.5, y: 0.5}
+
+        panel := RoundedView {
+            width: Fill
+            height: Fill
+            flow: Down
+            spacing: 14.0
+            padding: Inset{ left: 18.0, right: 18.0, top: 16.0, bottom: 18.0 }
+            new_batch: true
+            show_bg: true
+            draw_bg +: {
+                color: #xF7FBFD
+                border_radius: 18.0
+                border_size: 1.0
+                border_color: #xA8D5DD
+                shadow_color: #0005
+                shadow_radius: 18.0
+                shadow_offset: vec2(0.0, 6.0)
+            }
+
+            header := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                spacing: 12.0
+                align: Align{ y: 0.5 }
+
+                title_group := View {
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 3.0
+
+                    title := Label {
+                        width: Fill
+                        height: Fit
+                        draw_text +: {
+                            text_style: theme.font_bold { font_size: 15.0 }
+                            color: (mod.widgets.MESSAGE_TEXT_COLOR)
+                        }
+                        text: "Diagram"
+                    }
+
+                    subtitle := Label {
+                        width: Fill
+                        height: Fit
+                        draw_text +: {
+                            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                            color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
+                        }
+                        text: ""
+                    }
+                }
+
+                zoom_controls := View {
+                    visible: false
+                    width: Fit
+                    height: Fit
+                    flow: Right
+                    spacing: 6.0
+
+                    zoom_out_button := Button {
+                        width: Fit
+                        height: 30
+                        padding: Inset{ left: 11.0, right: 11.0, top: 5.0, bottom: 5.0 }
+                        draw_text +: {
+                            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 12.0 }
+                            color: (mod.widgets.MESSAGE_TEXT_COLOR)
+                        }
+                        text: "-"
+                    }
+
+                    reset_button := Button {
+                        width: Fit
+                        height: 30
+                        padding: Inset{ left: 12.0, right: 12.0, top: 5.0, bottom: 5.0 }
+                        draw_text +: {
+                            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+                            color: (mod.widgets.MESSAGE_TEXT_COLOR)
+                        }
+                        text: "Reset"
+                    }
+
+                    zoom_in_button := Button {
+                        width: Fit
+                        height: 30
+                        padding: Inset{ left: 11.0, right: 11.0, top: 5.0, bottom: 5.0 }
+                        draw_text +: {
+                            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 12.0 }
+                            color: (mod.widgets.MESSAGE_TEXT_COLOR)
+                        }
+                        text: "+"
+                    }
+                }
+
+                close_button := RobrixNeutralIconButton {
+                    width: 40
+                    height: 34
+                    padding: 8
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{ width: 14, height: 14 }
+                    text: ""
+                }
+            }
+
+            body := RoundedView {
+                width: Fill
+                height: Fill
+                flow: Down
+                padding: Inset{ left: 8.0, right: 8.0, top: 8.0, bottom: 8.0 }
+                new_batch: true
+                show_bg: true
+                draw_bg +: {
+                    color: #xEDF6F8
+                    border_radius: 12.0
+                    border_size: 1.0
+                    border_color: #xC5E2E7
+                }
+
+                mermaid_view := mod.widgets.BotTimelineMermaidSvgView {
+                    visible: false
+                    width: 1048
+                    height: 650
+                    interactive: true
+                    animate_flow: true
+                }
+
+                diagram_view := DiagramView {
+                    visible: false
+                    width: Fit
+                    height: Fit
+                }
+
+                error_view := RoundedView {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
+                    show_bg: true
+                    draw_bg +: {
+                        color: #xFFF2F2
+                        border_radius: 10.0
+                        border_size: 1.0
+                        border_color: #xE4A1A1
+                    }
+
+                    error_label := Label {
+                        width: Fill
+                        height: Fit
+                        flow: Flow.Right{ wrap: true }
+                        draw_text +: {
+                            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 11.0 }
+                            color: #x8A1F1F
+                        }
+                        text: ""
+                    }
+                }
+            }
+        }
+    }
 
     mod.widgets.MessageActionPrimaryButton = RobrixPositiveIconButton {
         width: Fit
@@ -1563,6 +2470,7 @@ script_mod! {
         inline_code_padding: Inset{ top: 3, bottom: 3, left: 4, right: 4 }
         inline_code_margin: Inset{ left: 3, right: 3, bottom: 2, top: 2 }
         use_code_block_widget: true
+        use_math_widget: true
 
         draw_text +: {
             color: (MESSAGE_TEXT_COLOR)
@@ -1593,6 +2501,20 @@ script_mod! {
             quote_bg_color: #xEFF5FB
             quote_fg_color: #x7892AC
             code_color: (mod.widgets.COLOR_BOT_CODE_BG)
+            table_header_bg_color: #xD9EAF3
+            table_border_color: #xA8D5DD
+        }
+        draw_table_bg +: {
+            color: #xF7FBFD
+            border_color: instance(#xA8D5DD)
+            border_width: instance(1.0)
+            radius: instance(8.0)
+        }
+        draw_table_header_bg +: {
+            color: #xD9EAF3
+        }
+        draw_table_line +: {
+            color: #xA8D5DD
         }
         code_layout: Layout{
             flow: Flow.Right{wrap: true}
@@ -1615,7 +2537,6 @@ script_mod! {
             height: Fit
             flow: Overlay
             padding: 0.0
-            new_batch: true
             show_bg: true
             draw_bg +: {
                 color: (mod.widgets.COLOR_BOT_CODE_BG)
@@ -1658,6 +2579,32 @@ script_mod! {
                     }
                 }
             }
+        }
+        diagram_block := ScrollXView {
+            width: Fill
+            height: Fit
+            flow: Right
+            diagram_view := mod.widgets.BotTimelineDiagramPreview {
+                width: Fit
+                height: Fit
+            }
+        }
+        mermaid_block := ScrollXView {
+            width: Fill
+            height: Fit
+            flow: Right
+            mermaid_view := mod.widgets.BotTimelineMermaidSvgView {
+                width: Fit
+                height: Fit
+            }
+        }
+        inline_math := MathView {
+            color: (MESSAGE_TEXT_COLOR)
+            font_size: 13.0
+        }
+        display_math := MathView {
+            color: (MESSAGE_TEXT_COLOR)
+            font_size: 15.0
         }
     }
 
@@ -1926,10 +2873,6 @@ script_mod! {
                         bot_card_markdown := mod.widgets.BotTimelineMarkdown {
                             body: ""
                         }
-                        bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
-                            use_code_block_widget: false
-                            body: ""
-                        }
                     }
 
                     bot_metadata_footer := View {
@@ -1964,6 +2907,23 @@ script_mod! {
 
                 message := HtmlOrPlaintext { }
                 splash_card := Splash { visible: false }
+                app_detail_card := RoundedView {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    new_batch: true
+                    margin: Inset{ top: 6.0, bottom: 2.0 }
+                    padding: Inset{ left: 14.0, right: 14.0, top: 11.0, bottom: 11.0 }
+                    show_bg: true
+                    draw_bg +: {
+                        color: (mod.widgets.COLOR_APP_DETAIL_BG)
+                        border_radius: 13.0
+                        border_size: 1.0
+                        border_color: (mod.widgets.COLOR_APP_DETAIL_BORDER)
+                    }
+                    app_detail_body := HtmlOrPlaintext { }
+                }
                 action_buttons := View {
                     visible: false
                     width: Fill
@@ -2117,10 +3077,6 @@ script_mod! {
                         bot_card_markdown := mod.widgets.BotTimelineMarkdown {
                             body: ""
                         }
-                        bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
-                            use_code_block_widget: false
-                            body: ""
-                        }
                     }
 
                     bot_metadata_footer := View {
@@ -2154,6 +3110,24 @@ script_mod! {
                 }
 
                 message := HtmlOrPlaintext { }
+                splash_card := Splash { visible: false }
+                app_detail_card := RoundedView {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    new_batch: true
+                    margin: Inset{ top: 6.0, bottom: 2.0 }
+                    padding: Inset{ left: 14.0, right: 14.0, top: 11.0, bottom: 11.0 }
+                    show_bg: true
+                    draw_bg +: {
+                        color: (mod.widgets.COLOR_APP_DETAIL_BG)
+                        border_radius: 13.0
+                        border_size: 1.0
+                        border_color: (mod.widgets.COLOR_APP_DETAIL_BORDER)
+                    }
+                    app_detail_body := HtmlOrPlaintext { }
+                }
                 action_buttons := View {
                     visible: false
                     width: Fill
@@ -3522,6 +4496,12 @@ script_mod! {
                 }
             }
 
+            diagram_preview_modal := Modal {
+                content +: {
+                    diagram_preview_modal_inner := mod.widgets.DiagramPreviewModal {}
+                }
+            }
+
 
             /*
              * TODO: add the action bar back in as a series of floating buttons.
@@ -4341,6 +5321,7 @@ pub struct RoomScreen {
     #[rust] octos_action_button_contexts: HashMap<WidgetUid, OctosActionButtonContext>,
     #[rust] disabled_octos_action_source_event_ids: HashSet<OwnedEventId>,
     #[rust] selected_octos_action_by_source_event_id: HashMap<OwnedEventId, SelectedOctosActionState>,
+    #[rust] agent_view_runtime: AgentViewRuntime,
 }
 
 impl Drop for RoomScreen {
@@ -4387,6 +5368,7 @@ impl Widget for RoomScreen {
         set_room_info_action_modal_open(
             self.view.modal(cx, ids!(report_room_modal)).is_open()
                 || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open()
+                || self.view.modal(cx, ids!(diagram_preview_modal)).is_open()
         );
 
         // Streaming animation frame handler
@@ -4610,17 +5592,20 @@ impl Widget for RoomScreen {
                     if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
                         self.close_report_room_modal(cx);
                         self.close_leave_room_confirm_modal(cx);
+                        self.close_diagram_preview_modal(cx);
                     }
                 }
                 if let Some(AppStateAction::RoomFocused(selected_room)) = action.downcast_ref() {
                     if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
                         self.close_report_room_modal(cx);
                         self.close_leave_room_confirm_modal(cx);
+                        self.close_diagram_preview_modal(cx);
                     }
                 }
                 if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
                     self.close_report_room_modal(cx);
                     self.close_leave_room_confirm_modal(cx);
+                    self.close_diagram_preview_modal(cx);
                 }
 
                 // Handle actions related to restoring the previously-saved state of rooms.
@@ -4921,7 +5906,8 @@ impl Widget for RoomScreen {
         //
         let room_info_action_modal_open =
             self.view.modal(cx, ids!(report_room_modal)).is_open()
-            || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open();
+            || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open()
+            || self.view.modal(cx, ids!(diagram_preview_modal)).is_open();
         let is_interactive_hit = utils::is_interactive_hit_event(event);
         let is_pane_shown: bool;
         if room_info_action_modal_open {
@@ -5198,6 +6184,30 @@ impl Widget for RoomScreen {
                     None => {}
                 }
 
+                match action.downcast_ref::<BotDiagramPreviewAction>() {
+                    Some(BotDiagramPreviewAction::Close) => {
+                        self.close_diagram_preview_modal(cx);
+                        return false;
+                    }
+                    Some(BotDiagramPreviewAction::Open(request)) => {
+                        self.open_diagram_preview_modal(cx, request.clone());
+                        return false;
+                    }
+                    Some(BotDiagramPreviewAction::None) | None => {}
+                }
+
+                match action.as_widget_action().cast::<BotDiagramPreviewAction>() {
+                    BotDiagramPreviewAction::Open(request) => {
+                        self.open_diagram_preview_modal(cx, request);
+                        return false;
+                    }
+                    BotDiagramPreviewAction::Close => {
+                        self.close_diagram_preview_modal(cx);
+                        return false;
+                    }
+                    BotDiagramPreviewAction::None => {}
+                }
+
                 if let ConfirmationModalAction::Close(accepted) = action
                     .as_widget_action()
                     .widget_uid_eq(leave_room_confirm_modal_uid)
@@ -5427,6 +6437,7 @@ impl Widget for RoomScreen {
                                                 &room_bot_user_ids,
                                                 &known_bot_user_ids,
                                                 &mut tl_state.streaming_messages,
+                                                &mut self.agent_view_runtime,
                                                 &mut self.octos_action_button_contexts,
                                                 &self.disabled_octos_action_source_event_ids,
                                                 &self.selected_octos_action_by_source_event_id,
@@ -5870,6 +6881,13 @@ impl RoomScreen {
         self.view.modal(cx, ids!(leave_room_confirm_modal)).close(cx);
     }
 
+    fn close_diagram_preview_modal(&self, cx: &mut Cx) {
+        self.view
+            .diagram_preview_modal(cx, ids!(diagram_preview_modal_inner))
+            .clear(cx);
+        self.view.modal(cx, ids!(diagram_preview_modal)).close(cx);
+    }
+
     fn open_create_bot_modal(&mut self, cx: &mut Cx) {
         let Some(room_name_id) = self.room_name_id.clone() else {
             return;
@@ -5918,12 +6936,20 @@ impl RoomScreen {
         self.view.modal(cx, ids!(leave_room_confirm_modal)).open(cx);
     }
 
+    fn open_diagram_preview_modal(&mut self, cx: &mut Cx, request: BotDiagramModalRequest) {
+        self.view
+            .diagram_preview_modal(cx, ids!(diagram_preview_modal_inner))
+            .show(cx, request);
+        self.view.modal(cx, ids!(diagram_preview_modal)).open(cx);
+    }
+
     fn reset_app_service_ui(&mut self, cx: &mut Cx) {
         self.set_app_service_actions_visible(cx, false);
         self.close_create_bot_modal(cx);
         self.close_delete_bot_modal(cx);
         self.close_report_room_modal(cx);
         self.close_leave_room_confirm_modal(cx);
+        self.close_diagram_preview_modal(cx);
     }
 
     fn resolved_app_service_bot_user_id(
@@ -6102,15 +7128,6 @@ impl RoomScreen {
         let curr_first_id = portal_list.first_id();
         let ui = self.widget_uid();
         let Some(tl) = self.tl_state.as_mut() else { return };
-        let (
-            resolved_parent_bot_user_id,
-            room_bot_user_ids,
-            known_bot_user_ids,
-        ) = compute_timeline_bot_context(
-            app_state,
-            tl.kind.room_id(),
-            tl.room_members.as_ref(),
-        );
 
         let mut done_loading = false;
         let mut should_continue_backwards_pagination = false;
@@ -6346,42 +7363,22 @@ impl RoomScreen {
                             new_items.len(),
                         );
 
-                        let old_event_ids: HashSet<&EventId> = tl.items.iter()
-                            .filter_map(|item| item_event_id(item))
-                            .collect();
-
                         for idx in scan_range {
                             let Some(new_item) = new_items.get(idx) else { continue };
                             let TimelineItemKind::Event(new_evt) = new_item.kind() else { continue };
                             let Some(event_id) = new_evt.event_id().map(|id| id.to_owned()) else { continue };
                             let live = is_msc4357_live(new_evt);
                             let Some(new_text) = Self::extract_message_text(new_item) else { continue };
-                            let render_full_target = should_render_streaming_full_snapshot(
-                                &new_text,
-                                new_evt.content()
-                                    .as_message()
-                                    .and_then(|message| match message.msgtype() {
-                                        MessageType::Text(TextMessageEventContent { formatted, .. }) => formatted.as_ref(),
-                                        MessageType::Notice(NoticeMessageEventContent { formatted, .. }) => formatted.as_ref(),
-                                        _ => None,
-                                    }),
-                                is_timeline_sender_bot(
-                                    new_evt.sender(),
-                                    resolved_parent_bot_user_id.as_deref(),
-                                    &room_bot_user_ids,
-                                    &known_bot_user_ids,
-                                ),
-                            );
-
+                            let already_tracked = tl.streaming_messages.contains_key(&event_id);
                             if let Some(state) = tl.streaming_messages.get_mut(&event_id) {
                                 let should_invalidate_content = streaming_update_requires_content_invalidation(
                                     state,
                                     &new_text,
                                     live,
-                                    render_full_target,
+                                    false,
                                 );
                                 state.update_target(&new_text, live);
-                                state.set_render_full_target(render_full_target);
+                                state.set_render_full_target(false);
                                 if should_invalidate_content
                                     && let Some(idx) = state.timeline_index
                                 {
@@ -6392,10 +7389,15 @@ impl RoomScreen {
                                 continue;
                             }
 
-                            if live && !old_event_ids.contains(&*event_id) {
+                            if should_start_streaming_animation_for_update(live, already_tracked, is_append) {
                                 let mut state = StreamingAnimState::new(&new_text, true);
-                                state.set_render_full_target(render_full_target);
+                                state.set_render_full_target(false);
                                 should_schedule_frame |= state.needs_frame();
+                                log!(
+                                    "MSC4357 streaming animation started: event_id={} body_len={}",
+                                    event_id,
+                                    new_text.len(),
+                                );
                                 tl.streaming_messages.insert(event_id, state);
                             }
                         }
@@ -6959,6 +7961,7 @@ impl RoomScreen {
                         action_id,
                         clicked_context.source_event_id.as_ref(),
                         clicked_context.original_sender.as_ref(),
+                        clicked_context.app_context.as_ref(),
                     ),
                     OctosActionButtonRequest::Approval { request_id, title, decision, tool_args_digest, .. } => build_octos_approval_response_request(
                         &tl.kind,
@@ -8557,6 +9560,80 @@ impl ItemDrawnStatus {
     }
 }
 
+fn agent_view_scope_key_for_event(
+    timeline_kind: &TimelineKind,
+    event_id: &EventId,
+    account_id: Option<&UserId>,
+    envelope: &crate::home::app_registry::ParsedAppEnvelope,
+) -> Option<crate::home::app_registry::AgentViewScopeKey> {
+    match envelope.scope {
+        crate::home::app_registry::AgentViewScope::Account => {
+            crate::home::app_registry::AgentViewScopeKey::from_account_parts(
+                account_id?.as_str(),
+                envelope.app_id.as_deref(),
+            )
+        }
+        scope => crate::home::app_registry::AgentViewScopeKey::from_parts(
+            scope,
+            timeline_kind.room_id().as_str(),
+            event_id.as_str(),
+            envelope.app_id.as_deref(),
+        ),
+    }
+}
+
+fn agent_view_template_id(envelope: &crate::home::app_registry::ParsedAppEnvelope) -> &'static str {
+    match envelope.app_type.as_str() {
+        crate::home::app_registry::mission_dashboard::TYPE_KEY => "account_overview",
+        crate::home::app_registry::mission_room::TYPE_KEY => "mission_control",
+        crate::home::app_registry::news::TYPE_KEY => "headlines_card",
+        crate::home::app_registry::weather::TYPE_KEY => "card_standard",
+        _ => "default",
+    }
+}
+
+fn render_agent_app_envelope_for_room_screen(
+    event_content: &serde_json::Value,
+    item_id: usize,
+    timeline_kind: &TimelineKind,
+    event_tl_item: &EventTimelineItem,
+    app_language: AppLanguage,
+    agent_view_runtime: &mut crate::home::app_registry::AgentViewRuntime,
+) -> Option<String> {
+    let envelope = crate::home::app_registry::parse_envelope(event_content)?;
+    let event_id = event_tl_item.event_id()?;
+    let splash = crate::home::app_registry::render_parsed_envelope_to_splash(
+        &envelope,
+        app_language,
+    )?;
+    let scope_key = agent_view_scope_key_for_event(
+        timeline_kind,
+        event_id,
+        current_user_id().as_deref(),
+        &envelope,
+    )?;
+    let session_state = agent_view_runtime.bind_snapshot(
+        scope_key,
+        event_id.as_str(),
+        item_id,
+        envelope.app_type.clone(),
+        envelope.version,
+        agent_view_template_id(&envelope),
+        &envelope.initial_state,
+    )
+    .state
+    .clone();
+    let session_envelope = crate::home::app_registry::ParsedAppEnvelope {
+        initial_state: session_state,
+        ..envelope
+    };
+    crate::home::app_registry::render_parsed_envelope_to_splash(
+        &session_envelope,
+        app_language,
+    )
+    .or(Some(splash))
+}
+
 /// Creates, populates, and adds a Message liveview widget to the given `PortalList`
 /// with the given `item_id`.
 ///
@@ -8583,6 +9660,7 @@ fn populate_message_view(
     room_bot_user_ids: &[OwnedUserId],
     known_bot_user_ids: &[OwnedUserId],
     streaming_messages: &mut HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>,
+    agent_view_runtime: &mut crate::home::app_registry::AgentViewRuntime,
     action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
     disabled_action_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
@@ -8639,20 +9717,31 @@ fn populate_message_view(
                             .and_then(|eid| streaming_messages.get_mut(&eid.to_owned()));
 
                         if let Some(state) = is_streaming {
+                            item.splash(cx, ids!(content.splash_card))
+                                .set_visible(cx, false);
+                            item.view(cx, ids!(content.app_detail_card))
+                                .set_visible(cx, false);
                             let render_full_snapshot = should_render_streaming_full_snapshot(
                                 body,
                                 formatted.as_ref(),
                                 sender_is_bot,
                             );
-                            state.set_render_full_target(render_full_snapshot);
+                            state.set_render_full_target(false);
 
                             // STREAMING MODE:
                             // - markdown-rich bot replies render the latest full snapshot directly
                             // - plain text keeps the local typewriter prefix with cursor
                             let mut link_preview_ref =
                                 item.link_preview(cx, ids!(content.link_preview_view));
+                            let stream_body_storage;
                             let (stream_body, stream_formatted) = if render_full_snapshot {
-                                (body.as_str(), formatted.as_ref())
+                                let visible_end = state.displayed_byte_offset.min(state.target_text.len());
+                                stream_body_storage =
+                                    bot_streaming_markdown_display(
+                                        &state.target_text[..visible_end],
+                                        state.is_live || state.needs_frame(),
+                                    );
+                                (stream_body_storage.as_str(), None)
                             } else {
                                 state.fill_display_buffer();
                                 (state.display_buffer.as_str(), None)
@@ -8667,10 +9756,33 @@ fn populate_message_view(
                                 Some(media_cache),
                                 Some(link_preview_cache),
                                 sender_is_bot,
+                                true,
                             );
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
-                            // Check for Splash card in custom event field
+                            // Agent-to-app envelope (L1 registry path).
+                            // Reads from the ORIGINAL event content to enforce
+                            // the immutability rule from the master spec
+                            // (`specs/task-agent-to-app-system.spec.md`
+                            // §消息不可变性): m.replace edits must not alter
+                            // the rendered app envelope.
+                            let app_splash_code = original_event_content_json(event_tl_item)
+                                .as_ref()
+                                .and_then(|content| {
+                                    render_agent_app_envelope_for_room_screen(
+                                        content,
+                                        item_id,
+                                        timeline_kind,
+                                        event_tl_item,
+                                        app_language,
+                                        agent_view_runtime,
+                                    )
+                                });
+
+                            // Legacy raw Splash card path. Still reads from
+                            // the latest effective content for now; will
+                            // eventually be gated to development builds
+                            // only (master spec §Out of Scope).
                             let splash_code = latest_effective_event_content_json(event_tl_item)
                                 .and_then(|content|
                                     content
@@ -8678,15 +9790,51 @@ fn populate_message_view(
                                         .and_then(|v| v.as_str().map(|s| s.to_string()))
                                 );
 
-                            if let Some(ref splash) = splash_code {
-                                // SPLASH CARD MODE: render native Makepad card
+                            // Priority: org.octos.app registry path wins over
+                            // raw splash_card when both are present (per L1
+                            // sub-spec §解析与接线).
+                            if let Some(ref splash) = app_splash_code {
+                                item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
                                 item.view(cx, ids!(content.message)).set_visible(cx, false);
+                                let splash_widget = item.splash(cx, ids!(content.splash_card));
+                                splash_widget.set_visible(cx, true);
+                                splash_widget.set_text(cx, splash);
+                                let detail_card =
+                                    item.view(cx, ids!(content.app_detail_card));
+                                let detail_body_widget =
+                                    item.html_or_plaintext(cx, ids!(content.app_detail_card.app_detail_body));
+                                if body.trim().is_empty() {
+                                    detail_card.set_visible(cx, false);
+                                    new_drawn_status.content_drawn = true;
+                                } else {
+                                    detail_card.set_visible(cx, true);
+                                    new_drawn_status.content_drawn = populate_text_message_content(
+                                        cx,
+                                        &detail_body_widget,
+                                        app_language,
+                                        body,
+                                        formatted.as_ref(),
+                                        None,
+                                        None,
+                                        None,
+                                    );
+                                }
+                            } else if let Some(ref splash) = splash_code {
+                                // SPLASH CARD MODE: render native Makepad card
+                                item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
+                                item.view(cx, ids!(content.message)).set_visible(cx, false);
+                                item.view(cx, ids!(content.app_detail_card))
+                                    .set_visible(cx, false);
                                 let splash_widget = item.splash(cx, ids!(content.splash_card));
                                 splash_widget.set_visible(cx, true);
                                 splash_widget.set_text(cx, splash);
                                 new_drawn_status.content_drawn = true;
                             } else {
                                 // NORMAL MODE: existing logic
+                                item.splash(cx, ids!(content.splash_card))
+                                    .set_visible(cx, false);
+                                item.view(cx, ids!(content.app_detail_card))
+                                    .set_visible(cx, false);
                                 let mut link_preview_ref =
                                     item.link_preview(cx, ids!(content.link_preview_view));
                                 new_drawn_status.content_drawn = populate_bot_text_message_content(
@@ -8699,6 +9847,7 @@ fn populate_message_view(
                                     Some(media_cache),
                                     Some(link_preview_cache),
                                     sender_is_bot,
+                                    false,
                                 );
                             }
                         }
@@ -8742,6 +9891,7 @@ fn populate_message_view(
                             Some(media_cache),
                             Some(link_preview_cache),
                             sender_is_bot,
+                            false,
                         );
                         (item, false)
                     }
@@ -9359,10 +10509,22 @@ fn populate_bot_text_message_content(
     media_cache: Option<&mut MediaCache>,
     link_preview_cache: Option<&mut LinkPreviewCache>,
     is_bot_sender: bool,
+    animate_markdown_streaming: bool,
 ) -> bool {
     let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
     let bot_card_view = item.view(cx, ids!(content.bot_message_card));
     let message_view = item.html_or_plaintext(cx, ids!(content.message));
+
+    if is_bot_sender {
+        log!(
+            "OctOS bot render input: show_card={} show_body_card={} body_len={} has_fence={} formatted_html={}",
+            render_state.show_card,
+            render_state.show_body_card,
+            render_state.body.len(),
+            render_state.body.contains("```"),
+            formatted_body.is_some_and(|formatted| formatted.format == MessageFormat::Html),
+        );
+    }
 
     bot_card_view.set_visible(cx, render_state.show_card);
     message_view.set_visible(cx, !render_state.show_card);
@@ -9409,17 +10571,31 @@ fn populate_bot_text_message_content(
     body_card.set_visible(cx, render_state.show_body_card);
     let body_widget = item.html_or_plaintext(cx, ids!(content.bot_message_card.bot_body_card.bot_card_body));
     let mut markdown_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown));
-    let mut markdown_plain_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown_plain));
-    let code_block_mode = bot_timeline_code_block_mode(&render_state);
-    body_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::None);
-    markdown_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Highlighted);
-    markdown_plain_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Plain);
+    let mut body_render_state = render_state.clone();
+    body_render_state.show_body_card =
+        render_state.show_body_card && !body_render_state.body.trim().is_empty();
+    let code_block_mode = bot_timeline_code_block_mode(&body_render_state);
+    body_widget.set_visible(cx, body_render_state.show_body_card && code_block_mode == BotTimelineCodeBlockMode::None);
+    markdown_widget.set_visible(cx, body_render_state.show_body_card && code_block_mode == BotTimelineCodeBlockMode::Rich);
 
-    if render_state.show_body_card {
+    if is_bot_sender {
+        log!(
+            "OctOS bot renderer selected: show_body_card={} code_block_mode={:?} body_len={}",
+            body_render_state.show_body_card,
+            code_block_mode,
+            body_render_state.body.len(),
+        );
+    }
+
+    if body_render_state.show_body_card {
         if code_block_mode != BotTimelineCodeBlockMode::None {
             match code_block_mode {
-                BotTimelineCodeBlockMode::Highlighted => markdown_widget.set_text(cx, &render_state.body),
-                BotTimelineCodeBlockMode::Plain => markdown_plain_widget.set_text(cx, &render_state.body),
+                BotTimelineCodeBlockMode::Rich => {
+                    markdown_widget.set_text(cx, unwrap_outer_markdown_fence(&body_render_state.body));
+                    if animate_markdown_streaming {
+                        markdown_widget.start_streaming_animation();
+                    }
+                }
                 BotTimelineCodeBlockMode::None => { }
             }
 
@@ -9427,7 +10603,7 @@ fn populate_bot_text_message_content(
                 (link_preview_ref, media_cache, link_preview_cache)
             {
                 let mut links = Vec::new();
-                let _ = utils::linkify_get_urls(&render_state.body, false, Some(&mut links));
+                let _ = utils::linkify_get_urls(&body_render_state.body, false, Some(&mut links));
                 link_preview_ref.populate_below_message(
                     cx,
                     &links,
@@ -9450,12 +10626,12 @@ fn populate_bot_text_message_content(
             }
         } else {
             let formatted_body_for_card =
-                select_bot_timeline_body_formatted_body(&render_state, formatted_body);
+                select_bot_timeline_body_formatted_body(&body_render_state, formatted_body);
             populate_text_message_content(
                 cx,
                 &body_widget,
                 app_language,
-                &render_state.body,
+                &body_render_state.body,
                 formatted_body_for_card.as_ref(),
                 link_preview_ref,
                 media_cache,
@@ -9487,6 +10663,7 @@ fn populate_octos_action_buttons(
     };
 
     let parsed_payload = parse_octos_action_payload_for_render(content, original_content);
+    let app_context = original_content.and_then(octos_action_app_context_from_content);
 
     if parsed_payload.malformed_approval_request {
         warning!("org.octos.approval_request: skipping malformed approval request");
@@ -9565,6 +10742,7 @@ fn populate_octos_action_buttons(
                 source_event_id: source_event_id.clone(),
                 original_sender: original_sender.to_owned(),
                 request,
+                app_context: app_context.clone(),
             });
         }
     }
@@ -11226,6 +12404,50 @@ mod tests {
     }
 
     #[test]
+    fn bot_diagram_modal_request_rejects_empty_source() {
+        assert!(BotDiagramModalRequest::new(BotDiagramKind::Mermaid, "  \n\t  ").is_none());
+    }
+
+    #[test]
+    fn bot_diagram_modal_request_trims_source() {
+        let request = BotDiagramModalRequest::new(BotDiagramKind::Diagram, "\nsequence: A -> B\n")
+            .expect("non-empty diagram source should be accepted");
+
+        assert_eq!(request.kind, BotDiagramKind::Diagram);
+        assert_eq!(request.source, "sequence: A -> B");
+    }
+
+    #[test]
+    fn bot_diagram_kind_titles_are_user_facing() {
+        assert_eq!(BotDiagramKind::Mermaid.title(), "Mermaid Diagram");
+        assert_eq!(BotDiagramKind::Diagram.title(), "Diagram");
+    }
+
+    #[test]
+    fn bot_diagram_scroll_zoom_factor_zooms_in_on_positive_scroll() {
+        let zoom_in = diagram_scroll_zoom_factor(12.0).expect("positive scroll should zoom");
+        let zoom_out = diagram_scroll_zoom_factor(-12.0).expect("negative scroll should zoom");
+
+        assert!(zoom_in > 1.0);
+        assert!(zoom_out < 1.0);
+    }
+
+    #[test]
+    fn bot_diagram_magnify_zoom_factor_tracks_pinch_direction() {
+        let zoom_in = diagram_magnify_zoom_factor(0.08).expect("positive magnify should zoom");
+        let zoom_out = diagram_magnify_zoom_factor(-0.08).expect("negative magnify should zoom");
+
+        assert!(zoom_in > 1.0);
+        assert!(zoom_out < 1.0);
+    }
+
+    #[test]
+    fn bot_diagram_scroll_zoom_factor_ignores_zero_scroll() {
+        assert!(diagram_scroll_zoom_factor(0.0).is_none());
+        assert!(diagram_magnify_zoom_factor(0.0).is_none());
+    }
+
+    #[test]
     fn test_bot_detection_heuristic_fallback() {
         let user_id: OwnedUserId = "@myservice_bot:other.server".try_into().unwrap();
         let known_bot_user_ids = Vec::new();
@@ -11340,6 +12562,41 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0].id, "confirm");
         assert_eq!(actions[1].id, "cancel");
+    }
+
+    #[test]
+    fn test_app_originated_octos_actions_ignore_m_replace_edits() {
+        let latest_content = serde_json::json!({
+            "m.new_content": {
+                "org.octos.actions": [
+                    { "id": "auto_approve", "label": "Auto approve", "style": "danger" }
+                ]
+            },
+            "org.octos.actions": [
+                { "id": "approve_plan", "label": "Approve plan", "style": "primary" }
+            ]
+        });
+        let original_content = serde_json::json!({
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "scope": "room",
+                "app_id": "mission.main",
+                "initial_state": {}
+            },
+            "org.octos.actions": [
+                { "id": "approve_plan", "label": "Approve plan", "style": "primary" }
+            ]
+        });
+
+        let payload = parse_octos_action_payload_for_render(
+            Some(&latest_content),
+            Some(&original_content),
+        );
+
+        assert_eq!(payload.actions.len(), 1);
+        assert_eq!(payload.actions[0].id, "approve_plan");
+        assert_eq!(payload.actions[0].label, "Approve plan");
     }
 
     #[test]
@@ -11568,6 +12825,183 @@ mod tests {
     }
 
     #[test]
+    fn test_mission_room_actions_use_generic_action_button_path() {
+        let payload = parse_octos_action_payload_for_render(
+            Some(&serde_json::json!({
+                "org.octos.app": {
+                    "type": "mission_room",
+                    "version": 1,
+                    "scope": "room",
+                    "app_id": "mission.main",
+                    "initial_state": {}
+                },
+                "org.octos.actions": [
+                    { "id": "approve_plan", "label": "Approve plan", "style": "primary" },
+                    { "id": "request_plan_changes", "label": "Request changes", "style": "secondary" },
+                    { "id": "reassign_task", "label": "Reassign", "style": "secondary" },
+                    { "id": "change_priority", "label": "Change priority", "style": "secondary" },
+                    { "id": "mark_blocked", "label": "Mark blocked", "style": "danger" },
+                    { "id": "approve_result", "label": "Approve result", "style": "primary" }
+                ]
+            })),
+            None,
+        );
+
+        assert!(payload.approval_request.is_none());
+        assert_eq!(payload.actions.len(), 6);
+        assert_eq!(payload.actions[0].id, "approve_plan");
+        assert_eq!(payload.actions[1].id, "request_plan_changes");
+        assert_eq!(payload.actions[2].id, "reassign_task");
+        assert_eq!(payload.actions[3].id, "change_priority");
+        assert_eq!(payload.actions[4].id, "mark_blocked");
+        assert_eq!(payload.actions[5].id, "approve_result");
+    }
+
+    #[test]
+    fn test_mission_room_action_response_preserves_mission_action_id() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$mission123".try_into().unwrap();
+        let original_sender: OwnedUserId = "@octos_planner:127.0.0.1:8128".try_into().unwrap();
+        let app_context = OctosActionAppContext {
+            app_type: "mission_room".into(),
+            version: 1,
+            scope: "room".into(),
+            app_id: Some("mission.main".into()),
+        };
+
+        let request = build_octos_action_response_request(
+            &timeline_kind,
+            "Approve plan",
+            "approve_plan",
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+            Some(&app_context),
+        );
+
+        let action_response = &request.content["org.octos.action_response"];
+        assert_eq!(request.target_user_id, original_sender);
+        assert_eq!(request.content["body"], "[Action: Approve plan]");
+        assert_eq!(action_response["action_id"], "approve_plan");
+        assert_eq!(action_response["source_event_id"], "$mission123");
+        assert_eq!(action_response["app"]["type"], "mission_room");
+        assert_eq!(action_response["app"]["version"], 1);
+        assert_eq!(action_response["app"]["scope"], "room");
+        assert_eq!(action_response["app"]["app_id"], "mission.main");
+    }
+
+    #[test]
+    fn test_octos_action_app_context_parses_original_app_envelope() {
+        let context = octos_action_app_context_from_content(&serde_json::json!({
+            "org.octos.app": {
+                "type": "mission_room",
+                "version": 1,
+                "scope": "room",
+                "app_id": "mission.main",
+                "initial_state": {}
+            }
+        }))
+        .expect("valid mission room app envelope should produce action context");
+
+        assert_eq!(context.app_type, "mission_room");
+        assert_eq!(context.version, 1);
+        assert_eq!(context.scope, "room");
+        assert_eq!(context.app_id.as_deref(), Some("mission.main"));
+    }
+
+    #[test]
+    fn agent_view_scope_key_for_message_scope_uses_event_id() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let event_id = EventId::parse("$message123:127.0.0.1:8128").unwrap();
+        let envelope = crate::home::app_registry::ParsedAppEnvelope {
+            app_type: "weather".into(),
+            version: 1,
+            scope: crate::home::app_registry::AgentViewScope::Message,
+            app_id: None,
+            initial_state: serde_json::json!({}),
+        };
+
+        let key = agent_view_scope_key_for_event(
+            &timeline_kind,
+            event_id.as_ref(),
+            None,
+            &envelope,
+        ).expect("message scope should bind without account id");
+
+        assert_eq!(
+            key,
+            crate::home::app_registry::AgentViewScopeKey::Message {
+                room_id: "!room:127.0.0.1:8128".into(),
+                event_id: "$message123:127.0.0.1:8128".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn agent_view_scope_key_for_room_scope_uses_app_id() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let event_id = EventId::parse("$message123:127.0.0.1:8128").unwrap();
+        let envelope = crate::home::app_registry::ParsedAppEnvelope {
+            app_type: "mission_room".into(),
+            version: 1,
+            scope: crate::home::app_registry::AgentViewScope::Room,
+            app_id: Some("mission.main".into()),
+            initial_state: serde_json::json!({}),
+        };
+
+        let key = agent_view_scope_key_for_event(
+            &timeline_kind,
+            event_id.as_ref(),
+            None,
+            &envelope,
+        ).expect("room scope should bind without account id");
+
+        assert_eq!(
+            key,
+            crate::home::app_registry::AgentViewScopeKey::Room {
+                room_id: "!room:127.0.0.1:8128".into(),
+                app_id: "mission.main".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn agent_view_scope_key_for_account_scope_uses_current_account() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!room:127.0.0.1:8128".try_into().unwrap(),
+        };
+        let event_id = EventId::parse("$message123:127.0.0.1:8128").unwrap();
+        let account_id = UserId::parse("@alice:127.0.0.1:8128").unwrap();
+        let envelope = crate::home::app_registry::ParsedAppEnvelope {
+            app_type: "mission_dashboard".into(),
+            version: 1,
+            scope: crate::home::app_registry::AgentViewScope::Account,
+            app_id: Some("mission.global".into()),
+            initial_state: serde_json::json!({}),
+        };
+
+        let key = agent_view_scope_key_for_event(
+            &timeline_kind,
+            event_id.as_ref(),
+            Some(account_id.as_ref()),
+            &envelope,
+        ).expect("account scope should bind with account id");
+
+        assert_eq!(
+            key,
+            crate::home::app_registry::AgentViewScopeKey::Account {
+                account_id: "@alice:127.0.0.1:8128".into(),
+                app_id: "mission.global".into(),
+            }
+        );
+    }
+
+    #[test]
     fn test_malformed_approval_request_hides_buttons() {
         let payload = parse_octos_action_payload_for_render(
             Some(&serde_json::json!({
@@ -11669,6 +13103,7 @@ mod tests {
             "retry_pptx",
             source_event_id.as_ref(),
             original_sender.as_ref(),
+            None,
         );
 
         assert_eq!(request.timeline_kind, timeline_kind);
@@ -11690,6 +13125,7 @@ mod tests {
             "retry_pptx",
             source_event_id.as_ref(),
             original_sender.as_ref(),
+            None,
         );
 
         let action_response = &request.content["org.octos.action_response"];
@@ -11925,7 +13361,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bot_timeline_body_prefers_markdown_widget_for_fenced_code_blocks() {
+    fn test_bot_timeline_body_uses_rich_markdown_widget_for_fenced_code_blocks() {
         let state = compute_bot_timeline_render_state(
             "## 标题\n\n```rust\nlet answer = 42;\n```\n\n这里是中文说明。",
             true,
@@ -11934,26 +13370,26 @@ mod tests {
         assert!(should_render_bot_timeline_body_with_markdown_widget(&state));
         assert_eq!(
             bot_timeline_code_block_mode(&state),
-            BotTimelineCodeBlockMode::Highlighted,
+            BotTimelineCodeBlockMode::Rich,
         );
     }
 
     #[test]
-    fn test_bot_timeline_body_keeps_html_widget_for_non_code_markdown() {
+    fn test_bot_timeline_body_uses_rich_markdown_widget_for_non_code_markdown() {
         let state = compute_bot_timeline_render_state(
             "## 标题\n\n这里有 **加粗**，但没有代码块。",
             true,
         );
 
-        assert!(!should_render_bot_timeline_body_with_markdown_widget(&state));
+        assert!(should_render_bot_timeline_body_with_markdown_widget(&state));
         assert_eq!(
             bot_timeline_code_block_mode(&state),
-            BotTimelineCodeBlockMode::None,
+            BotTimelineCodeBlockMode::Rich,
         );
     }
 
     #[test]
-    fn test_bot_timeline_body_uses_plain_markdown_code_block_for_cjk_code() {
+    fn test_bot_timeline_body_uses_rich_markdown_for_cjk_comments_with_language() {
         let state = compute_bot_timeline_render_state(
             "```rust\n// 中文注释\nprintln!(\"你好\");\n```",
             true,
@@ -11961,15 +13397,69 @@ mod tests {
 
         assert_eq!(
             bot_timeline_code_block_mode(&state),
-            BotTimelineCodeBlockMode::Plain,
+            BotTimelineCodeBlockMode::Rich,
         );
     }
 
     #[test]
-    fn test_fenced_code_blocks_ignore_cjk_outside_code_block() {
+    fn test_bot_timeline_body_uses_rich_markdown_for_untyped_cjk_code_block() {
+        let state = compute_bot_timeline_render_state(
+            "```\n// 中文注释\nprintln!(\"你好\");\n```",
+            true,
+        );
+
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::Rich,
+        );
+    }
+
+    #[test]
+    fn test_bot_timeline_body_uses_rich_markdown_for_tables() {
+        let state = compute_bot_timeline_render_state(
+            "| 项目 | 状态 |\n| --- | --- |\n| table | ok |",
+            true,
+        );
+
+        assert!(should_render_bot_timeline_body_with_markdown_widget(&state));
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::Rich,
+        );
+    }
+
+    #[test]
+    fn test_bot_timeline_body_uses_rich_markdown_for_math() {
+        let state = compute_bot_timeline_render_state(
+            "公式：$$\\frac{a}{b}$$",
+            true,
+        );
+
+        assert!(should_render_bot_timeline_body_with_markdown_widget(&state));
+        assert_eq!(
+            bot_timeline_code_block_mode(&state),
+            BotTimelineCodeBlockMode::Rich,
+        );
+    }
+
+    #[test]
+    fn test_unwrap_outer_markdown_fence_removes_streaming_wrapper() {
+        let text = "```markdown\n# 标题\n\n```rust\nlet x = 1;\n```\n```\n";
+
+        let unwrapped = unwrap_outer_markdown_fence(text);
+
+        assert!(unwrapped.starts_with("# 标题"));
+        assert!(unwrapped.contains("```rust"));
+        assert!(!unwrapped.starts_with("```markdown"));
+    }
+
+    #[test]
+    fn test_contains_cjk_detects_chinese_text() {
         let body = "## 标题\n\n```rust\nlet answer = 42;\n```\n\n这里是中文总结。";
 
-        assert!(!fenced_code_blocks_contain_cjk(body));
+        assert!(contains_cjk(body));
+        assert!(!contains_cjk("let answer = 42;"));
+        assert!(contains_cjk("这里是中文总结。"));
     }
 
     #[test]
@@ -11995,6 +13485,43 @@ mod tests {
             true,
             true,
         ));
+    }
+
+    #[test]
+    fn test_live_marker_starts_animation_even_for_existing_event_update() {
+        assert!(should_start_streaming_animation_for_update(true, false, true));
+    }
+
+    #[test]
+    fn test_non_live_update_does_not_start_animation() {
+        assert!(!should_start_streaming_animation_for_update(false, false, true));
+    }
+
+    #[test]
+    fn test_already_tracked_live_update_does_not_recreate_animation() {
+        assert!(!should_start_streaming_animation_for_update(true, true, true));
+    }
+
+    #[test]
+    fn test_historical_live_marker_does_not_start_animation_on_reconnect_update() {
+        assert!(!should_start_streaming_animation_for_update(true, false, false));
+    }
+
+    #[test]
+    fn test_bot_streaming_markdown_display_adds_stream_cursor() {
+        let rendered = bot_streaming_markdown_display("## 标题\n\n内容", true);
+
+        assert!(rendered.ends_with('▋'));
+        assert!(rendered.contains("## 标题"));
+    }
+
+    #[test]
+    fn test_bot_streaming_markdown_display_keeps_unclosed_code_fence_for_rich_markdown_path() {
+        let rendered = bot_streaming_markdown_display("```rust\nlet answer = 42;", true);
+
+        assert!(rendered.contains("```rust"));
+        assert!(rendered.contains("let answer = 42;"));
+        assert!(rendered.ends_with('▋'));
     }
 
     #[test]

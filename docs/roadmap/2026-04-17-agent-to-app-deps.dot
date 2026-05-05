@@ -1,0 +1,46 @@
+warning: skipping specs/task-realtime-translation.spec.md: parse error at line 12: unknown top-level section header 'Context' - use only Intent/Constraints/Decisions/Boundaries/Acceptance Criteria/Out of Scope
+warning: skipping specs/task-mention-list-scrolling.spec.md: parse error at line 12: unknown top-level section header 'Context' - use only Intent/Constraints/Decisions/Boundaries/Acceptance Criteria/Out of Scope
+digraph spec_dependencies {
+  rankdir=LR;
+  node [fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9];
+
+  "task-agent-to-app-l1-weather-v2-doc-sync" [label="Agent-to-App L1 Weather — v2 Schema Documentation Sync\n[0.5d]", shape=box];
+  "task-tg-bot-menu-button" [label="Telegram Bot UI Alignment — Phase 4a: Menu Button & Pure Command Send-on-Select\n[1d]", shape=box];
+  "task-tg-bot-explicit-room-no-fallback" [label="Telegram Bot UI Alignment — Phase 2b: ExplicitRoom Suppresses Room Fallback\n[1d]", shape=box];
+  "task-tg-bot-mention-reply-first" [label="Telegram Bot UI Alignment — Phase 3: Mention/Reply-First Targeting\n[1d]", shape=box];
+  "task-tg-bot-ui-alignment" [label="Telegram Bot UI Alignment — Phase 1: Bot Badge & Message Identity\n[1d]", shape=box];
+  "task-sso-reclick-after-cancel" [label="SSO Option Is Re-clickable After Cancel\n[1d]", shape=box];
+  "task-tg-bot-explicit-targeting" [label="Telegram Bot UI Alignment — Phase 2: Explicit Target Model (SUPERSEDED)\n[3d]", shape=box];
+  "task-tg-bot-timeline-cards" [label="Telegram Bot UI Alignment — Phase 4: Bot Timeline Cards\n[1d]", shape=box];
+  "task-tg-bot-action-buttons" [label="Telegram Bot UI Alignment — Phase 4c: Bot Message Action Buttons\n[2d]", shape=box];
+  "task-agent-to-app-producer-routing" [label="Agent-to-App Producer Routing — OctOS-side Intent-to-Capability Contract\n[3d]", shape=box];
+  "task-tg-bot-command-at-addressing" [label="Telegram Bot UI Alignment — Phase 4b: /command@bot Explicit Addressing\n[1d]", shape=box];
+  "task-app-service-octos-health" [label="App Service Settings — Octos Service Health Status\n[0.5d]", shape=box];
+  "task-mention-user" [label="@mention User Autocomplete\n[3d]", shape=box];
+  "project" [label="Robrix2 — Matrix Chat Client on Makepad 2.0", shape=box];
+  "task-mention-visible-display-text" [label="Visible @mention Display Text in Composer", shape=box];
+  "task-tg-bot-approval-request" [label="Telegram Bot UI Alignment — Approval Requests via Inline Buttons\n[2d]", shape=box];
+  "task-agent-to-app-l1-weather-card" [label="Agent-to-App L1: Weather Card (first reference mini-app)\n[2d]", shape=box];
+  "task-agent-to-app-system" [label="Agent-to-App — Mini-Apps System Contract\n[5d]", shape=box];
+  "task-room-info-modal-cancel-flow" [label="Room Info Modal Cancel Flow Consistency\n[1d]", shape=box];
+  "task-octos-approval-policy-config" [label="Octos Native Approval Policy Configuration\n[1.5d]", shape=box];
+
+  "task-agent-to-app-l1-weather-card" -> "task-agent-to-app-l1-weather-v2-doc-sync" [arrowhead=vee];
+  "task-agent-to-app-producer-routing" -> "task-agent-to-app-l1-weather-v2-doc-sync" [arrowhead=vee, color=red, penwidth=2.0];
+  "task-tg-bot-mention-reply-first" -> "task-tg-bot-menu-button" [arrowhead=vee];
+  "task-tg-bot-explicit-targeting" -> "task-tg-bot-explicit-room-no-fallback" [arrowhead=vee, color=red, penwidth=2.0];
+  "task-tg-bot-explicit-targeting" -> "task-tg-bot-mention-reply-first" [arrowhead=vee];
+  "task-tg-bot-explicit-room-no-fallback" -> "task-tg-bot-mention-reply-first" [arrowhead=vee, color=red, penwidth=2.0];
+  "task-tg-bot-ui-alignment" -> "task-tg-bot-explicit-targeting" [arrowhead=vee, color=red, penwidth=2.0];
+  "task-tg-bot-ui-alignment" -> "task-tg-bot-timeline-cards" [arrowhead=vee];
+  "task-tg-bot-mention-reply-first" -> "task-tg-bot-timeline-cards" [arrowhead=vee];
+  "task-tg-bot-mention-reply-first" -> "task-tg-bot-action-buttons" [arrowhead=vee, color=red, penwidth=2.0];
+  "task-agent-to-app-system" -> "task-agent-to-app-producer-routing" [arrowhead=vee];
+  "task-agent-to-app-l1-weather-card" -> "task-agent-to-app-producer-routing" [arrowhead=vee, color=red, penwidth=2.0];
+  "task-tg-bot-menu-button" -> "task-tg-bot-command-at-addressing" [arrowhead=vee];
+  "task-tg-bot-action-buttons" -> "task-tg-bot-approval-request" [arrowhead=vee];
+  "task-agent-to-app-system" -> "task-agent-to-app-l1-weather-card" [arrowhead=vee, color=red, penwidth=2.0];
+  "task-tg-bot-action-buttons" -> "task-agent-to-app-system" [arrowhead=vee, color=red, penwidth=2.0];
+  "task-tg-bot-approval-request" -> "task-octos-approval-policy-config" [arrowhead=vee];
+}

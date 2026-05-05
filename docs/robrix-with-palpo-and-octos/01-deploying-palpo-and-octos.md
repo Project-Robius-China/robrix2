@@ -129,7 +129,7 @@ You should see three services (`palpo_postgres`, `palpo`, `octos`) all in `runni
    - Toggle **Enabled** on
    - Fill in:
      - **BotFather User ID**: `@octosbot:127.0.0.1:8128`
-     - **Octos Service**: `http://127.0.0.1:8010`
+     - **Octos Service**: `http://127.0.0.1:8010` if Octos runs in Docker, or `http://127.0.0.1:8080` if you run `octos serve --port 8080` natively on the host
    - Click **Save**, then **Check Now** -- it should show a green **Reachable** indicator
 
 5. **Talk to the AI bot**: After logging in, create a room and invite the bot:
@@ -188,7 +188,7 @@ This file tells Palpo about Octos -- which user namespaces Octos manages and whe
 
 ```yaml
 id: octos-matrix-appservice
-url: "http://octos:8009"
+url: "http://host.docker.internal:8009"
 
 as_token: "d1f46062a08e4833b18286d95c5e09a5f3e4a1b2c3d4e5f6a7b8c9d0e1f2a3b4"
 hs_token: "e2a57173b19f5944c29397ea6d6f1ab6a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9"
@@ -209,7 +209,7 @@ namespaces:
 | Field | Description |
 |-------|-------------|
 | `id` | A unique identifier for this appservice registration. |
-| `url` | Where Palpo sends events. Uses the Docker service name `octos` (not `localhost`), because both containers share the same Docker network. |
+| `url` | Where Palpo sends events. Use `http://host.docker.internal:8009` when Palpo stays in Docker but Octos runs natively on the host. If Octos also runs in Docker, switch this back to `http://octos:8009`. |
 | `as_token` | Token that Octos uses when calling Palpo's API. **Must match** `botfather.json`. |
 | `hs_token` | Token that Palpo uses when pushing events to Octos. **Must match** `botfather.json`. |
 | `sender_localpart` | The bot's Matrix local username. Becomes `@octosbot:127.0.0.1:8128`. |
@@ -257,7 +257,7 @@ client = "http://127.0.0.1:8128"
 
 > **Note:** The `server_name` `"127.0.0.1:8128"` is for local development only. For production deployment, replace it with your actual domain name (e.g., `"chat.example.com"`). When you change `server_name`, you must also update it in `octos-registration.yaml` (the regex patterns) and `botfather.json` (`server_name` field).
 
-> **Important:** In this local Docker setup, the Matrix identity is `127.0.0.1:8128`, so `server_name`, the appservice regex, and bot user IDs must all use `127.0.0.1:8128`. Only container-to-container traffic uses Docker service names like `palpo:8008` or `octos:8009`.
+> **Important:** In this local setup, the Matrix identity is `127.0.0.1:8128`, so `server_name`, the appservice regex, and bot user IDs must all use `127.0.0.1:8128`. The transport URL depends on topology: `host.docker.internal:8009` for host-native Octos, `octos:8009` for Docker-native Octos.
 
 ### 3.5 Octos Bot Profile (`config/botfather.json`)
 
@@ -313,7 +313,7 @@ This file defines the bot's identity, LLM provider, and Matrix channel configura
 | Field | Description |
 |-------|-------------|
 | `type` | Must be `"matrix"`. |
-| `homeserver` | Palpo's internal URL. Uses Docker service name `palpo`, not `localhost`. |
+| `homeserver` | Palpo URL from Octos's point of view. Use `http://palpo:8008` when Octos runs in Docker, or `http://127.0.0.1:8128` when Octos runs natively on the host. |
 | `as_token` / `hs_token` | Must match the appservice registration YAML. |
 | `server_name` | The Matrix domain. Must match `server_name` in `palpo.toml`. |
 | `sender_localpart` | Bot username. Must match the registration file. |
@@ -321,7 +321,44 @@ This file defines the bot's identity, LLM provider, and Matrix channel configura
 | `port` | Port Octos listens on for Appservice events from Palpo. |
 | `allowed_senders` | Matrix user IDs allowed to talk to the bot. Empty `[]` = everyone. |
 
-> **Important:** `homeserver` is the internal Docker URL Octos uses to call Palpo. `server_name` is the Matrix domain embedded in user IDs. They are related but not interchangeable. See [Architecture](03-how-robrix-palpo-octos-work-together.md) for why.
+> **Important:** `homeserver` is the HTTP endpoint Octos calls. `server_name` is the Matrix domain embedded in user IDs. They are related but not interchangeable. See [Architecture](03-how-robrix-palpo-octos-work-together.md) for why.
+
+#### 3.5.1 Host-native Octos for local development
+
+If you keep `palpo` in Docker but run Octos directly from a local repo checkout, keep these values aligned:
+
+- Palpo appservice registration: `palpo-and-octos-deploy/appservices/octos-registration.yaml`
+  - `url: "http://host.docker.internal:8009"`
+  - `sender_localpart: octosbot`
+- Native Octos profile: copy `octos/examples/matrix-appservice/botfather-local.json` to `.octos/profiles/botfather-local.host.json`
+  - `homeserver: "http://127.0.0.1:8128"`
+  - `server_name: "127.0.0.1:8128"`
+  - `sender_localpart: "octosbot"`
+  - `user_prefix: "octosbot_"`
+  - `as_token` / `hs_token` must match the Palpo registration file exactly
+
+Build the native binary with Matrix support enabled. Without the `matrix` feature, Octos will log `channel not supported, skipping channel="matrix"` and never open port `8009`.
+After copying the example profile, edit the copied file so its Matrix channel values match the aligned settings above.
+
+```bash
+cd /path/to/octos
+cargo build -p octos-cli --release --features matrix
+# keep the example file untouched; put host-local values in a gitignored profile
+cp examples/matrix-appservice/botfather-local.json .octos/profiles/botfather-local.host.json
+# then edit .octos/profiles/botfather-local.host.json for your local homeserver/tokens
+target/release/octos gateway \
+  --profile .octos/profiles/botfather-local.host.json \
+  --data-dir /tmp/octos-local
+```
+
+Expected healthy signs:
+
+- the Octos log prints `Starting Matrix appservice channel`
+- the Octos log prints `Matrix appservice listening on 0.0.0.0:8009`
+- `lsof -nP -iTCP:8009 -sTCP:LISTEN` shows the native `octos` process
+- `curl -i http://127.0.0.1:8009/_matrix/app/v1/transactions/test` returns `405 Method Not Allowed` with `allow: PUT`
+
+If you also run `octos serve --port 8080` on the host for the Robrix health check, set **Octos Service** in `Settings -> Labs` to `http://127.0.0.1:8080`. The Docker-mapped `8010` value is only for the Dockerized Octos service.
 
 **Gateway settings:**
 

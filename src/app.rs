@@ -1670,6 +1670,7 @@ impl AppMain for App {
         // });
         makepad_widgets::widgets_mod(vm);
         makepad_code_editor::script_mod(vm);
+        makepad_diagram_kit::script_mod(vm);
         crate::shared::script_mod(vm);
 
         #[cfg(feature = "tsp")]

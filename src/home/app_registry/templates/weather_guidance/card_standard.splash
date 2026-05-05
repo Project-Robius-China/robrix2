@@ -1,0 +1,115 @@
+RoundedView {
+  width: Fill height: Fit flow: Down
+  padding: Inset{left: 18. right: 18. top: 16. bottom: 16.}
+  spacing: 14.
+  draw_bg.color: $state.hero.bg_color
+  draw_bg.border_radius: 14.
+
+  View { width: Fill height: Fit flow: Right spacing: 8.
+    View { width: Fill height: Fit flow: Down spacing: 10.
+      Label { text: "$state.location" draw_text.color: #xffffff draw_text.text_style.font_size: 18. }
+      View { width: Fill height: Fit flow: Right spacing: 12.
+        Label { text: "$state.hero.symbol" draw_text.color: #xffffff draw_text.text_style.font_size: 32. }
+        Label { text: "$state.hero.temp_text" draw_text.color: #xffffff draw_text.text_style.font_size: 46. }
+        View { width: Fit height: Fit flow: Down spacing: 2.
+          Label { visible: $state.range.visible text: "$state.range.text" draw_text.color: #ffffffdd draw_text.text_style.font_size: 13. }
+          Label { text: "$state.condition_summary" draw_text.color: #xffffffbb draw_text.text_style.font_size: 11. }
+        }
+      }
+    }
+
+    View { width: Fit height: Fit flow: Down spacing: 3.
+      Label { visible: $state.updated.visible text: "$state.updated.text" draw_text.color: #xffffffbb draw_text.text_style.font_size: 10. }
+      Label { visible: $state.feels_like.visible text: "$state.feels_like.text" draw_text.color: #xffffff draw_text.text_style.font_size: 11. }
+      Label { visible: $state.humidity.visible text: "$state.humidity.text" draw_text.color: #xffffff draw_text.text_style.font_size: 11. }
+      Label { visible: $state.wind.visible text: "$state.wind.text" draw_text.color: #xffffff draw_text.text_style.font_size: 11. }
+    }
+  }
+
+  RoundedView {
+    width: Fill height: Fit flow: Down spacing: 10.
+    padding: Inset{left: 14. right: 14. top: 14. bottom: 14.}
+    draw_bg.color: #xffffff
+    draw_bg.border_radius: 12.
+
+    Label { text: "$state.guidance_header" draw_text.color: #x43516A draw_text.text_style.font_size: 12. }
+    Label { text: "$state.headline" draw_text.color: #x182133 draw_text.text_style.font_size: 22. }
+    Label { text: "$state.summary" draw_text.color: #x526076 draw_text.text_style.font_size: 12. }
+
+    View { visible: $state.periods_section.visible width: Fill height: Fit flow: Down spacing: 6.
+      RoundedView {
+        visible: $state.period_1.visible
+        width: Fill height: Fit flow: Right spacing: 10.
+        padding: Inset{left: 10. right: 10. top: 9. bottom: 9.}
+        draw_bg.color: #xEEF3F8
+        draw_bg.border_radius: 10.
+        View { width: Fill height: Fit flow: Down spacing: 2.
+          Label { text: "$state.period_1.label" draw_text.color: #x4E627C draw_text.text_style.font_size: 11. }
+          Label { text: "$state.period_1.advice" draw_text.color: #x182133 draw_text.text_style.font_size: 13. }
+        }
+        Label { text: "$state.period_1.temp_text" draw_text.color: #x182133 draw_text.text_style.font_size: 18. }
+      }
+
+      RoundedView {
+        visible: $state.period_2.visible
+        width: Fill height: Fit flow: Right spacing: 10.
+        padding: Inset{left: 10. right: 10. top: 9. bottom: 9.}
+        draw_bg.color: #xEEF3F8
+        draw_bg.border_radius: 10.
+        View { width: Fill height: Fit flow: Down spacing: 2.
+          Label { text: "$state.period_2.label" draw_text.color: #x4E627C draw_text.text_style.font_size: 11. }
+          Label { text: "$state.period_2.advice" draw_text.color: #x182133 draw_text.text_style.font_size: 13. }
+        }
+        Label { text: "$state.period_2.temp_text" draw_text.color: #x182133 draw_text.text_style.font_size: 18. }
+      }
+
+      RoundedView {
+        visible: $state.period_3.visible
+        width: Fill height: Fit flow: Right spacing: 10.
+        padding: Inset{left: 10. right: 10. top: 9. bottom: 9.}
+        draw_bg.color: #xEEF3F8
+        draw_bg.border_radius: 10.
+        View { width: Fill height: Fit flow: Down spacing: 2.
+          Label { text: "$state.period_3.label" draw_text.color: #x4E627C draw_text.text_style.font_size: 11. }
+          Label { text: "$state.period_3.advice" draw_text.color: #x182133 draw_text.text_style.font_size: 13. }
+        }
+        Label { text: "$state.period_3.temp_text" draw_text.color: #x182133 draw_text.text_style.font_size: 18. }
+      }
+    }
+
+    View { visible: $state.chips_section.visible width: Fill height: Fit flow: Right spacing: 8.
+      RoundedView {
+        visible: $state.chip_1.visible
+        width: Fit height: Fit flow: Right
+        padding: Inset{left: 9. right: 9. top: 6. bottom: 6.}
+        draw_bg.color: #xE7EEF7
+        draw_bg.border_radius: 999.
+        Label { text: "$state.chip_1.text" draw_text.color: #x516377 draw_text.text_style.font_size: 11. }
+      }
+      RoundedView {
+        visible: $state.chip_2.visible
+        width: Fit height: Fit flow: Right
+        padding: Inset{left: 9. right: 9. top: 6. bottom: 6.}
+        draw_bg.color: #xE7EEF7
+        draw_bg.border_radius: 999.
+        Label { text: "$state.chip_2.text" draw_text.color: #x516377 draw_text.text_style.font_size: 11. }
+      }
+      RoundedView {
+        visible: $state.chip_3.visible
+        width: Fit height: Fit flow: Right
+        padding: Inset{left: 9. right: 9. top: 6. bottom: 6.}
+        draw_bg.color: #xE7EEF7
+        draw_bg.border_radius: 999.
+        Label { text: "$state.chip_3.text" draw_text.color: #x516377 draw_text.text_style.font_size: 11. }
+      }
+      RoundedView {
+        visible: $state.chip_4.visible
+        width: Fit height: Fit flow: Right
+        padding: Inset{left: 9. right: 9. top: 6. bottom: 6.}
+        draw_bg.color: #xE7EEF7
+        draw_bg.border_radius: 999.
+        Label { text: "$state.chip_4.text" draw_text.color: #x516377 draw_text.text_style.font_size: 11. }
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 use makepad_widgets::{ScriptVm, event::{DigitId, FingerDownEvent, FingerLongPressEvent, FingerUpEvent}};
 
 pub mod add_room;
+pub mod app_registry;
 pub mod bot_binding_modal;
 pub mod create_bot_modal;
 pub mod delete_bot_modal;
