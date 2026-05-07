@@ -45,7 +45,7 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     account_manager::{self, Account},
     app::{AppStateAction, RoomFilterRemoteSearchAction}, app_data_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
-        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineDiff, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
     }, homeserver::{CapabilityProbeAction, HsCapabilities, IdentityProviderSummary}, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
@@ -1587,13 +1587,15 @@ mod matrix_request_tests {
 
     #[test]
     fn test_should_restore_loaded_app_state_with_selected_room_and_empty_dock() {
-        let mut app_state = crate::app::AppState::default();
-        app_state.selected_room = Some(crate::app::SelectedRoom::JoinedRoom {
-            room_name_id: crate::utils::RoomNameId::new(
-                matrix_sdk::RoomDisplayName::Named("octosbot".into()),
-                "!room:example.org".parse().unwrap(),
-            ),
-        });
+        let app_state = crate::app::AppState {
+            selected_room: Some(crate::app::SelectedRoom::JoinedRoom {
+                room_name_id: crate::utils::RoomNameId::new(
+                    matrix_sdk::RoomDisplayName::Named("octosbot".into()),
+                    "!room:example.org".parse().unwrap(),
+                ),
+            }),
+            ..crate::app::AppState::default()
+        };
 
         assert!(
             should_restore_loaded_app_state(&app_state),
@@ -6401,21 +6403,25 @@ async fn timeline_subscriber_handler(
             let mut clear_cache = false;
             // whether the changes include items being appended to the end of the timeline
             let mut is_append = false;
+            let mut item_diffs = Vec::new();
             for diff in batch {
                 num_updates += 1;
                 match diff {
                     VectorDiff::Append { values } => {
                         let _values_len = values.len();
                         index_of_first_change = min(index_of_first_change, timeline_items.len());
-                        timeline_items.extend(values);
+                        let diff_values = values.clone();
+                        timeline_items.append(values);
                         index_of_last_change = max(index_of_last_change, timeline_items.len());
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Append {_values_len}. Changes: {index_of_first_change}..{index_of_last_change}"); }
                         is_append = true;
+                        item_diffs.push(TimelineDiff::Append { values: diff_values });
                     }
                     VectorDiff::Clear => {
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Clear"); }
                         clear_cache = true;
                         timeline_items.clear();
+                        item_diffs.push(TimelineDiff::Clear);
                     }
                     VectorDiff::PushFront { value } => {
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff PushFront"); }
@@ -6426,14 +6432,16 @@ async fn timeline_subscriber_handler(
                         }
 
                         clear_cache = true;
-                        timeline_items.push_front(value);
+                        timeline_items.push_front(value.clone());
+                        item_diffs.push(TimelineDiff::PushFront { value });
                     }
                     VectorDiff::PushBack { value } => {
                         index_of_first_change = min(index_of_first_change, timeline_items.len());
-                        timeline_items.push_back(value);
+                        timeline_items.push_back(value.clone());
                         index_of_last_change = max(index_of_last_change, timeline_items.len());
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff PushBack. Changes: {index_of_first_change}..{index_of_last_change}"); }
                         is_append = true;
+                        item_diffs.push(TimelineDiff::PushBack { value });
                     }
                     VectorDiff::PopFront => {
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff PopFront"); }
@@ -6443,12 +6451,14 @@ async fn timeline_subscriber_handler(
                             *i = i.saturating_sub(1); // account for the first item being removed.
                         }
                         // This doesn't affect whether we should reobtain the latest event.
+                        item_diffs.push(TimelineDiff::PopFront);
                     }
                     VectorDiff::PopBack => {
                         timeline_items.pop_back();
                         index_of_first_change = min(index_of_first_change, timeline_items.len());
                         index_of_last_change = usize::MAX;
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff PopBack. Changes: {index_of_first_change}..{index_of_last_change}"); }
+                        item_diffs.push(TimelineDiff::PopBack);
                     }
                     VectorDiff::Insert { index, value } => {
                         if index == 0 {
@@ -6471,14 +6481,16 @@ async fn timeline_subscriber_handler(
                                 .map(|(i, ev)| (i + index, ev));
                         }
 
-                        timeline_items.insert(index, value);
+                        timeline_items.insert(index, value.clone());
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Insert at {index}. Changes: {index_of_first_change}..{index_of_last_change}"); }
+                        item_diffs.push(TimelineDiff::Insert { index, value });
                     }
                     VectorDiff::Set { index, value } => {
                         index_of_first_change = min(index_of_first_change, index);
                         index_of_last_change  = max(index_of_last_change, index.saturating_add(1));
-                        timeline_items.set(index, value);
+                        timeline_items.set(index, value.clone());
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Set at {index}. Changes: {index_of_first_change}..{index_of_last_change}"); }
+                        item_diffs.push(TimelineDiff::Set { index, value });
                     }
                     VectorDiff::Remove { index } => {
                         if index == 0 {
@@ -6495,6 +6507,7 @@ async fn timeline_subscriber_handler(
                         }
                         timeline_items.remove(index);
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Remove at {index}. Changes: {index_of_first_change}..{index_of_last_change}"); }
+                        item_diffs.push(TimelineDiff::Remove { index });
                     }
                     VectorDiff::Truncate { length } => {
                         if length == 0 {
@@ -6505,11 +6518,13 @@ async fn timeline_subscriber_handler(
                         }
                         timeline_items.truncate(length);
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Truncate to length {length}. Changes: {index_of_first_change}..{index_of_last_change}"); }
+                        item_diffs.push(TimelineDiff::Truncate { length });
                     }
                     VectorDiff::Reset { values } => {
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Reset, new length {}", values.len()); }
                         clear_cache = true; // we must assume all items have changed.
-                        timeline_items = values;
+                        timeline_items = values.clone();
+                        item_diffs.push(TimelineDiff::Reset { values });
                     }
                 }
             }
@@ -6530,14 +6545,14 @@ async fn timeline_subscriber_handler(
                 if LOG_TIMELINE_DIFFS {
                     log!("timeline_subscriber: applied {num_updates} updates for room {room_id}, thread {thread_root_event_id:?}, timeline now has {} items. is_append? {is_append}, clear_cache? {clear_cache}. Changes: {changed_indices:?}.", timeline_items.len());
                 }
-                timeline_update_sender.send(TimelineUpdate::NewItems {
-                    new_items: timeline_items.clone(),
+                timeline_update_sender.send(TimelineUpdate::ItemsChanged {
+                    item_diffs,
                     changed_indices,
                     clear_cache,
                     is_append,
-                }).expect("Error: timeline update sender couldn't send update with new items!");
+                }).expect("Error: timeline update sender couldn't send timeline item diffs!");
 
-                // We must send this update *after* the actual NewItems update,
+                // We must send this update *after* the actual ItemsChanged update,
                 // otherwise the UI thread (RoomScreen) won't be able to correctly locate the target event.
                 if let Some((index, found_event_id)) = found_target_event_id.take() {
                     target_event_id = None;
