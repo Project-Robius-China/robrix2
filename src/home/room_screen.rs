@@ -60,6 +60,7 @@ const BLURHASH_IMAGE_MAX_SIZE: u32 = 500;
 /// Use a larger batch when we are trying to fill the initial viewport,
 /// otherwise many short messages can trigger a long chain of tiny paginations.
 const VIEWPORT_FILL_PAGINATION_SIZE: u16 = 150;
+const MAX_TIMELINE_UPDATES_PER_SIGNAL: usize = 8;
 const TOPIC_PREVIEW_CHARS: usize = 140;
 const ROOM_INFO_PANE_DESKTOP_WIDTH: f32 = 320.0;
 const ROOM_INFO_PANE_MOBILE_BREAKPOINT: f32 = 700.0;
@@ -1026,10 +1027,9 @@ fn compute_translation_lang_popup_abs_pos(button_rect: Rect, container_rect: Rec
     dvec2(popup_x, popup_y)
 }
 
-fn streaming_scan_range(
+fn timeline_update_scan_range(
     clear_cache: bool,
     changed_indices: &Range<usize>,
-    _old_len: usize,
     new_len: usize,
 ) -> Range<usize> {
     if clear_cache {
@@ -1038,6 +1038,67 @@ fn streaming_scan_range(
         let start = changed_indices.start.min(new_len);
         let end = changed_indices.end.min(new_len);
         start..end
+    }
+}
+
+fn should_yield_timeline_update_batch(processed_updates: usize) -> bool {
+    processed_updates >= MAX_TIMELINE_UPDATES_PER_SIGNAL
+}
+
+pub enum TimelineDiff<T> {
+    Append { values: Vector<T> },
+    Clear,
+    Insert { index: usize, value: T },
+    Set { index: usize, value: T },
+    Remove { index: usize },
+    PushFront { value: T },
+    PushBack { value: T },
+    PopFront,
+    PopBack,
+    Truncate { length: usize },
+    Reset { values: Vector<T> },
+}
+
+fn apply_timeline_diffs<T: Clone>(
+    items: &mut Vector<T>,
+    diffs: impl IntoIterator<Item = TimelineDiff<T>>,
+) {
+    for diff in diffs {
+        match diff {
+            TimelineDiff::Append { values } => {
+                items.append(values);
+            }
+            TimelineDiff::Clear => {
+                items.clear();
+            }
+            TimelineDiff::Insert { index, value } => {
+                items.insert(index, value);
+            }
+            TimelineDiff::Set { index, value } => {
+                items.set(index, value);
+            }
+            TimelineDiff::Remove { index } => {
+                items.remove(index);
+            }
+            TimelineDiff::PushFront { value } => {
+                items.push_front(value);
+            }
+            TimelineDiff::PushBack { value } => {
+                items.push_back(value);
+            }
+            TimelineDiff::PopFront => {
+                items.pop_front();
+            }
+            TimelineDiff::PopBack => {
+                items.pop_back();
+            }
+            TimelineDiff::Truncate { length } => {
+                items.truncate(length);
+            }
+            TimelineDiff::Reset { values } => {
+                *items = values;
+            }
+        }
     }
 }
 
@@ -5790,10 +5851,13 @@ impl RoomScreen {
         Some(plaintext_body_of_timeline_item(event))
     }
 
-    fn discover_known_bot_user_ids_from_timeline_items(
+    fn discover_known_bot_user_ids_from_timeline_items<'a, I>(
         app_state: &AppState,
-        timeline_items: &Vector<Arc<TimelineItem>>,
-    ) -> Vec<OwnedUserId> {
+        timeline_items: I,
+    ) -> Vec<OwnedUserId>
+    where
+        I: IntoIterator<Item = &'a Arc<TimelineItem>>,
+    {
         let Ok(parent_bot_user_id) = app_state
             .bot_settings
             .resolved_bot_user_id(current_user_id().as_deref())
@@ -6116,7 +6180,15 @@ impl RoomScreen {
         let mut should_continue_backwards_pagination = false;
         let mut typing_users = None;
         let mut num_updates = 0;
-        while let Ok(update) = tl.update_receiver.try_recv() {
+        let mut has_pending_updates = false;
+        loop {
+            if should_yield_timeline_update_batch(num_updates) {
+                has_pending_updates = !tl.update_receiver.is_empty();
+                break;
+            }
+            let Ok(update) = tl.update_receiver.try_recv() else {
+                break;
+            };
             num_updates += 1;
             match update {
                 TimelineUpdate::FirstUpdate { initial_items } => {
@@ -6158,12 +6230,22 @@ impl RoomScreen {
                     }
                     done_loading = true;
                 }
-                TimelineUpdate::NewItems { new_items, changed_indices, is_append, clear_cache } => {
+                TimelineUpdate::ItemsChanged { item_diffs, changed_indices, is_append, clear_cache } => {
+                    let old_items = tl.items.clone();
+                    apply_timeline_diffs(&mut tl.items, item_diffs);
+
                     if let Some(app_state) = app_state {
+                        let discovery_range = timeline_update_scan_range(
+                            clear_cache,
+                            &changed_indices,
+                            tl.items.len(),
+                        );
                         let discovered_bot_user_ids =
                             Self::discover_known_bot_user_ids_from_timeline_items(
                                 app_state,
-                                &new_items,
+                                tl.items
+                                    .focus()
+                                    .narrow(discovery_range),
                             );
                         if !discovered_bot_user_ids.is_empty() {
                             Cx::post_action(AppStateAction::KnownBotUserIdsDiscovered {
@@ -6171,9 +6253,9 @@ impl RoomScreen {
                             });
                         }
                     }
-                    if new_items.is_empty() {
-                        if !tl.items.is_empty() {
-                            log!("process_timeline_updates(): timeline (had {} items) was cleared for room {}", tl.items.len(), tl.kind.room_id());
+                    if tl.items.is_empty() {
+                        if !old_items.is_empty() {
+                            log!("process_timeline_updates(): timeline (had {} items) was cleared for room {}", old_items.len(), tl.kind.room_id());
                             // For now, we paginate a cleared timeline in order to be able to show something at least.
                             // A proper solution would be what's described below, which would be to save a few event IDs
                             // and then either focus on them (if we're not close to the end of the timeline)
@@ -6205,12 +6287,12 @@ impl RoomScreen {
 
                     let prior_items_changed = clear_cache || changed_indices.start <= curr_first_id;
 
-                    if new_items.len() == tl.items.len() {
+                    if tl.items.len() == old_items.len() {
                         // log!("process_timeline_updates(): no jump necessary for updated timeline of same length: {}", items.len());
                     }
-                    else if curr_first_id > new_items.len() {
-                        log!("process_timeline_updates(): jumping to bottom: curr_first_id {} is out of bounds for {} new items", curr_first_id, new_items.len());
-                        portal_list.set_first_id_and_scroll(new_items.len().saturating_sub(1), 0.0);
+                    else if curr_first_id > tl.items.len() {
+                        log!("process_timeline_updates(): jumping to bottom: curr_first_id {} is out of bounds for {} new items", curr_first_id, tl.items.len());
+                        portal_list.set_first_id_and_scroll(tl.items.len().saturating_sub(1), 0.0);
                         portal_list.set_tail_range(true);
                         jump_to_bottom_button.update_visibility(cx, true);
                     }
@@ -6219,7 +6301,7 @@ impl RoomScreen {
                     // which ensures that the timeline doesn't jump around unexpectedly and ruin the user's experience.
                     else if let Some((curr_item_idx, new_item_idx, new_item_scroll, _event_id)) =
                         prior_items_changed.then(||
-                            find_new_item_matching_current_item(cx, portal_list, curr_first_id, &tl.items, &new_items)
+                            find_new_item_matching_current_item(cx, portal_list, curr_first_id, &old_items, &tl.items)
                         )
                         .flatten()
                     {
@@ -6253,12 +6335,12 @@ impl RoomScreen {
                         }
                     }
 
-                    let start = changed_indices.start.min(new_items.len());
-                    let end = changed_indices.end.min(new_items.len());
+                    let start = changed_indices.start.min(tl.items.len());
+                    let end = changed_indices.end.min(tl.items.len());
                     let mut accepted_users: Vec<OwnedUserId> = Vec::new();
                     let mut room_members_changed = false;
                     for idx in start..end {
-                        let Some(new_item) = new_items.get(idx) else { continue };
+                        let Some(new_item) = tl.items.get(idx) else { continue };
                         let TimelineItemKind::Event(event_tl_item) = new_item.kind() else { continue };
                         let TimelineItemContent::MembershipChange(membership_change) = event_tl_item.content() else { continue };
                         if is_append {
@@ -6302,7 +6384,7 @@ impl RoomScreen {
                         if let LoadingPaneState::BackwardsPaginateUntilEvent {
                             events_paginated, target_event_id, ..
                         } = &mut loading_pane_state {
-                            *events_paginated += new_items.len().saturating_sub(tl.items.len());
+                            *events_paginated += tl.items.len().saturating_sub(old_items.len());
                             log!("While finding target event {target_event_id}, we have now loaded {events_paginated} messages...");
                             // Here, we assume that we have not yet found the target event,
                             // so we need to continue paginating backwards.
@@ -6330,28 +6412,27 @@ impl RoomScreen {
                         let previous_streaming_messages = std::mem::take(&mut tl.streaming_messages);
                         let (rebuilt_streaming_messages, should_schedule_frame) =
                             rebuild_streaming_messages_for_full_snapshot(
-                                streaming_candidates_from_items(&new_items),
+                                streaming_candidates_from_items(&tl.items),
                                 Some(&previous_streaming_messages),
                             );
                         tl.streaming_messages = rebuilt_streaming_messages;
                         if should_schedule_frame {
                             self.streaming_next_frame = cx.new_next_frame();
                         }
-                    } else if !new_items.is_empty() {
+                    } else if !tl.items.is_empty() {
                         let mut should_schedule_frame = false;
-                        let scan_range = streaming_scan_range(
+                        let scan_range = timeline_update_scan_range(
                             clear_cache,
                             &changed_indices,
                             tl.items.len(),
-                            new_items.len(),
                         );
 
-                        let old_event_ids: HashSet<&EventId> = tl.items.iter()
+                        let old_event_ids: HashSet<&EventId> = old_items.iter()
                             .filter_map(|item| item_event_id(item))
                             .collect();
 
                         for idx in scan_range {
-                            let Some(new_item) = new_items.get(idx) else { continue };
+                            let Some(new_item) = tl.items.get(idx) else { continue };
                             let TimelineItemKind::Event(new_evt) = new_item.kind() else { continue };
                             let Some(event_id) = new_evt.event_id().map(|id| id.to_owned()) else { continue };
                             let live = is_msc4357_live(new_evt);
@@ -6406,7 +6487,6 @@ impl RoomScreen {
                     }
                     // --- End streaming detection ---
 
-                    tl.items = new_items;
                     refresh_stream_indices(
                         tl.items.iter().map(item_event_id),
                         &mut tl.streaming_messages,
@@ -6499,7 +6579,7 @@ impl RoomScreen {
                     if direction == PaginationDirection::Backwards {
                         tl.backwards_pagination_in_flight = false;
                         // Don't set `done_loading` to `true` here, because we want to keep the top space visible
-                        // (with the "loading" message) until the corresponding `NewItems` update is received.
+                        // (with the "loading" message) until the corresponding timeline item update is received.
                         tl.fully_paginated = fully_paginated;
                         if fully_paginated {
                             done_loading = true;
@@ -6707,6 +6787,9 @@ impl RoomScreen {
             self.schedule_stream_timeout(cx);
             // log!("Applied {} timeline updates for room {}, redrawing with {} items...", num_updates, tl.kind.room_id(), tl.items.len());
             self.redraw(cx);
+            if has_pending_updates {
+                SignalToUI::set_ui_signal();
+            }
         }
     }
 
@@ -8199,10 +8282,10 @@ pub enum TimelineUpdate {
         /// The initial list of timeline items (events) for a room.
         initial_items: Vector<Arc<TimelineItem>>,
     },
-    /// The content of a room's timeline was updated in the background.
-    NewItems {
-        /// The entire list of timeline items (events) for a room.
-        new_items: Vector<Arc<TimelineItem>>,
+    /// The content of a room's timeline changed in the background.
+    ItemsChanged {
+        /// The ordered list of changes to apply to the current timeline items.
+        item_diffs: Vec<TimelineDiff<Arc<TimelineItem>>>,
         /// The range of indices in the `items` list that have been changed in this update
         /// and thus must be removed from any caches of drawn items in the timeline.
         /// Any items outside of this range are assumed to be unchanged and need not be redrawn.
@@ -11044,15 +11127,57 @@ mod tests {
     }
 
     #[test]
-    fn test_streaming_scan_range() {
-        // Incremental: clamp sentinel to new_len
-        assert_eq!(streaming_scan_range(false, &(5..usize::MAX), 8, 9), 5..9);
-        // Append: new item at end is scanned
-        assert_eq!(streaming_scan_range(false, &(8..9), 8, 9), 8..9);
-        // No changes: empty range
-        assert_eq!(streaming_scan_range(false, &(8..8), 8, 8), 8..8);
-        // Clear cache: full scan
-        assert_eq!(streaming_scan_range(true, &(5..usize::MAX), 8, 9), 0..9);
+    fn timeline_update_scan_range_limits_incremental_work() {
+        assert_eq!(timeline_update_scan_range(false, &(5..usize::MAX), 9), 5..9);
+        assert_eq!(timeline_update_scan_range(false, &(8..9), 9), 8..9);
+        assert_eq!(timeline_update_scan_range(false, &(8..8), 8), 8..8);
+        assert_eq!(timeline_update_scan_range(true, &(5..usize::MAX), 9), 0..9);
+        assert_eq!(timeline_update_scan_range(false, &(10..12), 1000), 10..12);
+        assert_eq!(timeline_update_scan_range(false, &(998..usize::MAX), 1000), 998..1000);
+        assert_eq!(timeline_update_scan_range(true, &(10..12), 1000), 0..1000);
+    }
+
+    #[test]
+    fn timeline_update_batch_yields_after_budget() {
+        assert!(!should_yield_timeline_update_batch(0));
+        assert!(!should_yield_timeline_update_batch(MAX_TIMELINE_UPDATES_PER_SIGNAL - 1));
+        assert!(should_yield_timeline_update_batch(MAX_TIMELINE_UPDATES_PER_SIGNAL));
+        assert!(should_yield_timeline_update_batch(MAX_TIMELINE_UPDATES_PER_SIGNAL + 1));
+    }
+
+    #[test]
+    fn timeline_items_apply_append_and_set_diffs() {
+        let mut items = Vector::from(vec![1, 2]);
+
+        apply_timeline_diffs(
+            &mut items,
+            [
+                TimelineDiff::Append { values: Vector::from(vec![3]) },
+                TimelineDiff::Set { index: 1, value: 20 },
+                TimelineDiff::Insert { index: 1, value: 10 },
+            ],
+        );
+
+        assert_eq!(items.into_iter().collect::<Vec<_>>(), vec![1, 10, 20, 3]);
+    }
+
+    #[test]
+    fn timeline_items_apply_remove_truncate_clear_reset_diffs() {
+        let mut items = Vector::from(vec![1, 2, 3, 4]);
+
+        apply_timeline_diffs(
+            &mut items,
+            [
+                TimelineDiff::PopFront,
+                TimelineDiff::PopBack,
+                TimelineDiff::Remove { index: 1 },
+                TimelineDiff::Truncate { length: 1 },
+                TimelineDiff::Clear,
+                TimelineDiff::Reset { values: Vector::from(vec![9, 8]) },
+            ],
+        );
+
+        assert_eq!(items.into_iter().collect::<Vec<_>>(), vec![9, 8]);
     }
 
     #[test]
