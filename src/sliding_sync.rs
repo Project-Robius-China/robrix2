@@ -1587,13 +1587,15 @@ mod matrix_request_tests {
 
     #[test]
     fn test_should_restore_loaded_app_state_with_selected_room_and_empty_dock() {
-        let mut app_state = crate::app::AppState::default();
-        app_state.selected_room = Some(crate::app::SelectedRoom::JoinedRoom {
-            room_name_id: crate::utils::RoomNameId::new(
-                matrix_sdk::RoomDisplayName::Named("octosbot".into()),
-                "!room:example.org".parse().unwrap(),
-            ),
-        });
+        let app_state = crate::app::AppState {
+            selected_room: Some(crate::app::SelectedRoom::JoinedRoom {
+                room_name_id: crate::utils::RoomNameId::new(
+                    matrix_sdk::RoomDisplayName::Named("octosbot".into()),
+                    "!room:example.org".parse().unwrap(),
+                ),
+            }),
+            ..crate::app::AppState::default()
+        };
 
         assert!(
             should_restore_loaded_app_state(&app_state),
