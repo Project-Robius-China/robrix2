@@ -32,7 +32,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt}, avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, MatrixRequest, PaginationDirection, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -408,6 +408,7 @@ script_mod! {
                 padding: Inset{ left: 10.0 }
 
                 message := TextOrImage { }
+                animated_message := AnimatedImage { visible: false }
                 View {
                     width: Fill,
                     height: Fit,
@@ -428,6 +429,7 @@ script_mod! {
         body +: {
             content +: {
                 message := TextOrImage { }
+                animated_message := AnimatedImage { visible: false }
                 View {
                     width: Fill,
                     height: Fit,
@@ -3914,9 +3916,11 @@ fn populate_message_view(
                     } else {
                         let image_info = image.info.clone();
                         let text_or_image_ref = item.text_or_image(cx, ids!(content.message));
+                        let animated_image_ref = item.animated_image(cx, ids!(content.animated_message));
                         let is_image_fully_drawn = populate_image_message_content(
                             cx,
                             &text_or_image_ref,
+                            Some(&animated_image_ref),
                             image_info,
                             image.source.clone(),
                             msg.body(),
@@ -4085,6 +4089,7 @@ fn populate_message_view(
                     let is_image_fully_drawn = populate_image_message_content(
                         cx,
                         &text_or_image_ref,
+                        None,
                         Some(Box::new(image_info.clone())),
                         MediaSource::Plain(owned_mxc_url.clone()),
                         body,
@@ -4349,7 +4354,17 @@ fn populate_text_message_content(
             &links,
             media_cache,
             link_preview_cache,
-            &populate_image_message_content,
+            &|cx, text_or_image_ref, image_info_source, original_source, body, media_cache| {
+                populate_image_message_content(
+                    cx,
+                    text_or_image_ref,
+                    None,
+                    image_info_source,
+                    original_source,
+                    body,
+                    media_cache,
+                )
+            },
         )
     } else {
         true
@@ -4362,6 +4377,7 @@ fn populate_text_message_content(
 fn populate_image_message_content(
     cx: &mut Cx,
     text_or_image_ref: &TextOrImageRef,
+    animated_image_ref: Option<&AnimatedImageRef>,
     image_info_source: Option<Box<ImageInfo>>,
     original_source: MediaSource,
     body: &str,
@@ -4372,6 +4388,33 @@ fn populate_image_message_content(
     let (mimetype, _width, _height) = image_info_source.as_ref()
         .map(|info| (info.mimetype.as_deref(), info.width, info.height))
         .unwrap_or_default();
+
+    let is_animated_image = mimetype
+        .map(utils::is_animated_image_mime)
+        .unwrap_or_else(|| utils::is_animated_image_filename(body));
+    if is_animated_image {
+        if let Some(animated_image_ref) = animated_image_ref {
+            text_or_image_ref.set_visible(cx, false);
+            animated_image_ref.set_visible(cx, true);
+            return animated_image_ref.populate_from_media_source(
+                cx,
+                original_source,
+                body,
+                media_cache,
+            );
+        }
+
+        text_or_image_ref.show_text(
+            cx,
+            format!("{body}\n\nAnimated image messages require the animated image widget."),
+        );
+        return true;
+    }
+
+    if let Some(animated_image_ref) = animated_image_ref {
+        animated_image_ref.set_visible(cx, false);
+    }
+    text_or_image_ref.set_visible(cx, true);
 
     // If we have a known mimetype and it's not a static image,
     // then show a message about it being unsupported (e.g., for animated gifs).
