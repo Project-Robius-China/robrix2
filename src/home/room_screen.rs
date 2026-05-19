@@ -26,13 +26,13 @@ use matrix_sdk_ui::timeline::{
 use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent}, owned_room_id};
 
 use crate::{
-    app::{AppState, AppStateAction, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, tombstone_footer::SuccessorRoomDetails}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
+    app::{AppState, AppStateAction, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, summarize_audio_message, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, tombstone_footer::SuccessorRoomDetails}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
         user_profile::{ShowUserProfileAction, UserProfile, UserProfileAndRoomId, UserProfilePaneInfo, UserProfileSlidingPaneRef, UserProfileSlidingPaneWidgetExt},
         user_profile_cache,
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt}, avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt}, audio_message_player::{AudioMessagePlayerRef, AudioMessagePlayerWidgetRefExt}, avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, MatrixRequest, PaginationDirection, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -340,6 +340,7 @@ script_mod! {
                 }
 
                 message := HtmlOrPlaintext { }
+                audio_player := AudioMessagePlayer { visible: false }
                 link_preview_view := mod.widgets.LinkPreview {}
                 View {
                     width: Fill,
@@ -385,6 +386,7 @@ script_mod! {
                 padding: Inset{ left: 10.0 }
 
                 message := HtmlOrPlaintext { }
+                audio_player := AudioMessagePlayer { visible: false }
                 link_preview_view := mod.widgets.LinkPreview {}
                 View {
                     width: Fill,
@@ -2228,6 +2230,7 @@ impl RoomScreen {
                     if let (MediaFormat::File, media_source) = (request.format, request.source) {
                         populate_matrix_image_modal(cx, media_source, &mut tl.media_cache);
                     }
+                    tl.content_drawn_since_last_update.clear();
                     // Here, to be most efficient, we could redraw only the media items in the timeline,
                     // but for now we just fall through and let the final `redraw()` call re-draw the whole timeline view.
                 }
@@ -3986,10 +3989,15 @@ fn populate_message_view(
                     } else {
                         let html_or_plaintext_ref =
                             item.html_or_plaintext(cx, ids!(content.message));
+                        html_or_plaintext_ref.set_visible(cx, false);
+                        let audio_player_ref =
+                            item.audio_message_player(cx, ids!(content.audio_player));
+                        audio_player_ref.set_visible(cx, true);
                         new_drawn_status.content_drawn = populate_audio_message_content(
                             cx,
-                            &html_or_plaintext_ref,
+                            &audio_player_ref,
                             audio,
+                            media_cache,
                         );
                         (item, false)
                     }
@@ -4576,37 +4584,15 @@ fn populate_file_message_content(
 /// Returns whether the audio message content was fully drawn.
 fn populate_audio_message_content(
     cx: &mut Cx,
-    message_content_widget: &HtmlOrPlaintextRef,
+    audio_player: &AudioMessagePlayerRef,
     audio: &AudioMessageEventContent,
+    media_cache: &mut MediaCache,
 ) -> bool {
-    // Display the file name, human-readable size, caption, and a button to download it.
-    let filename = htmlize::escape_text(audio.filename());
-    let (duration, mime, size) = audio
-        .info
-        .as_ref()
-        .map(|info| (
-            info.duration
-                .map(|d| format!("  {:.2} sec,", d.as_secs_f64()))
-                .unwrap_or_default(),
-            info.mimetype
-                .as_ref()
-                .map(|m| format!("  {m},"))
-                .unwrap_or_default(),
-            info.size
-                .map(|bytes| format!("  ({}),", ByteSize::b(bytes.into())))
-                .unwrap_or_default(),
-        ))
-        .unwrap_or_default();
-    let caption = audio.formatted_caption()
-        .map(|fb| format!("<br><i>{}</i>", fb.body))
-        .or_else(|| audio.caption().map(|c| format!("<br><i>{c}</i>")))
-        .unwrap_or_default();
-
-    // TODO: add an audio to play the audio file
-
-    message_content_widget.show_html(
+    audio_player.populate_from_summary(
         cx,
-        format!("Audio: <b>{filename}</b>{mime}{duration}{size}{caption}<br> → <i>Audio playback not yet supported.</i>"),
+        summarize_audio_message(audio),
+        audio.source.clone(),
+        media_cache,
     );
     true
 }

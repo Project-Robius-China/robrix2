@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use matrix_sdk::{ruma::{OwnedUserId, events::{room::{guest_access::GuestAccess, history_visibility::HistoryVisibility, join_rules::JoinRule, message::{MessageFormat, MessageType}}, AnySyncMessageLikeEvent, AnySyncTimelineEvent, FullStateEventContent, SyncMessageLikeEvent}, serde::Raw, UserId}};
+use matrix_sdk::{ruma::{OwnedUserId, events::{room::{guest_access::GuestAccess, history_visibility::HistoryVisibility, join_rules::JoinRule, message::{AudioMessageEventContent, MessageFormat, MessageType}}, AnySyncMessageLikeEvent, AnySyncTimelineEvent, FullStateEventContent, SyncMessageLikeEvent}, serde::Raw, UserId}};
 use matrix_sdk_base::crypto::types::events::UtdCause;
 use matrix_sdk_ui::timeline::{self, AnyOtherFullStateEventContent, EncryptedMessage, EventTimelineItem, MemberProfileChange, MembershipChange, MsgLikeKind, OtherMessageLike, RoomMembershipChange, TimelineItemContent};
 
@@ -30,6 +30,14 @@ pub enum BeforeText {
 pub struct TextPreview {
     text: String,
     before_text: BeforeText,
+}
+
+pub(crate) struct AudioSummary {
+    pub(crate) filename: String,
+    pub(crate) mime: Option<String>,
+    pub(crate) duration_secs: Option<f64>,
+    pub(crate) size_bytes: Option<u64>,
+    pub(crate) caption_html: Option<String>,
 }
 impl From<(String, BeforeText)> for TextPreview {
     fn from((text, before_text): (String, BeforeText)) -> Self {
@@ -57,6 +65,67 @@ impl TextPreview {
                 text,
             ),
         }
+    }
+}
+
+pub(crate) fn summarize_audio_message(audio: &AudioMessageEventContent) -> AudioSummary {
+    AudioSummary {
+        filename: audio.filename().to_string(),
+        mime: audio.info.as_ref().and_then(|info| info.mimetype.clone()),
+        duration_secs: audio
+            .info
+            .as_ref()
+            .and_then(|info| info.duration)
+            .map(|duration| duration.as_secs_f64()),
+        size_bytes: audio
+            .info
+            .as_ref()
+            .and_then(|info| info.size)
+            .map(Into::into),
+        caption_html: audio
+            .formatted_caption()
+            .map(|formatted| formatted.body.clone())
+            .or_else(|| audio.caption().map(|caption| htmlize::escape_text(caption).to_string())),
+    }
+}
+
+pub fn format_mmss(secs: f64) -> String {
+    if !secs.is_finite() || secs < 0.0 {
+        return "00:00".to_string();
+    }
+    let secs = secs.floor() as u64;
+    format!("{:02}:{:02}", secs / 60, secs % 60)
+}
+
+pub fn infer_audio_extension(filename: &str, mime: Option<&str>) -> &'static str {
+    let from_filename = filename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.trim().to_ascii_lowercase())
+        .and_then(|extension| audio_extension_from_str(&extension));
+    from_filename.unwrap_or_else(|| {
+        mime.and_then(audio_extension_from_mime).unwrap_or("")
+    })
+}
+
+fn audio_extension_from_str(extension: &str) -> Option<&'static str> {
+    match extension {
+        "mp3" => Some("mp3"),
+        "wav" | "wave" => Some("wav"),
+        "aif" | "aiff" => Some("aiff"),
+        "flac" => Some("flac"),
+        "m4a" | "mp4" => Some("m4a"),
+        _ => None,
+    }
+}
+
+fn audio_extension_from_mime(mime: &str) -> Option<&'static str> {
+    match mime.to_ascii_lowercase().split(';').next().unwrap_or("").trim() {
+        "audio/mpeg" | "audio/mp3" => Some("mp3"),
+        "audio/wav" | "audio/wave" | "audio/x-wav" => Some("wav"),
+        "audio/aiff" | "audio/x-aiff" => Some("aiff"),
+        "audio/flac" | "audio/x-flac" => Some("flac"),
+        "audio/mp4" | "audio/x-m4a" | "audio/m4a" | "audio/aac" => Some("m4a"),
+        _ => None,
     }
 }
 
@@ -327,6 +396,100 @@ pub fn text_preview_of_raw_timeline_event(
             ))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests_audio_summary {
+    use std::time::Duration;
+
+    use matrix_sdk::ruma::{
+        events::room::{MediaSource, message::{AudioInfo, AudioMessageEventContent, FormattedBody, MessageFormat}},
+        uint,
+    };
+
+    use super::*;
+
+    fn audio_message(body: &str) -> AudioMessageEventContent {
+        AudioMessageEventContent::new(
+            body.to_string(),
+            MediaSource::Plain("mxc://example.org/audio".try_into().unwrap()),
+        )
+    }
+
+    #[test]
+    fn test_audio_summary_full_info() {
+        let mut audio = audio_message("call-recording.ogg");
+        let mut info = AudioInfo::new();
+        info.mimetype = Some("audio/ogg".to_string());
+        info.duration = Some(Duration::from_millis(12_500));
+        info.size = Some(uint!(98_304));
+        audio.info = Some(Box::new(info));
+
+        let summary = summarize_audio_message(&audio);
+
+        assert_eq!(summary.filename, "call-recording.ogg");
+        assert_eq!(summary.mime, Some("audio/ogg".to_string()));
+        assert_eq!(summary.duration_secs, Some(12.5));
+        assert_eq!(summary.size_bytes, Some(98_304));
+    }
+
+    #[test]
+    fn test_audio_summary_missing_info() {
+        let audio = audio_message("voice-note.wav");
+
+        let summary = summarize_audio_message(&audio);
+
+        assert_eq!(summary.mime, None);
+        assert_eq!(summary.duration_secs, None);
+        assert_eq!(summary.size_bytes, None);
+        assert_eq!(summary.filename, "voice-note.wav");
+    }
+
+    #[test]
+    fn test_audio_summary_with_formatted_caption() {
+        let mut audio = audio_message("Voice memo");
+        audio.filename = Some("voice.ogg".to_string());
+        audio.formatted = Some(FormattedBody {
+            format: MessageFormat::Html,
+            body: "<i>Voice memo</i>".to_string(),
+        });
+
+        let summary = summarize_audio_message(&audio);
+
+        assert_eq!(summary.caption_html, Some("<i>Voice memo</i>".to_string()));
+    }
+
+    #[test]
+    fn test_format_mmss_sub_minute() {
+        assert_eq!(format_mmss(2.6), "00:02");
+    }
+
+    #[test]
+    fn test_format_mmss_over_one_minute() {
+        assert_eq!(format_mmss(65.0), "01:05");
+    }
+
+    #[test]
+    fn test_format_mmss_handles_bad_input() {
+        for value in [f64::NAN, -1.0, f64::INFINITY] {
+            assert_eq!(format_mmss(value), "00:00");
+        }
+    }
+
+    #[test]
+    fn test_infer_audio_extension_prefers_filename() {
+        assert_eq!(infer_audio_extension("call.wav", Some("audio/mpeg")), "wav");
+    }
+
+    #[test]
+    fn test_infer_audio_extension_falls_back_to_mime() {
+        assert_eq!(infer_audio_extension("recording", Some("audio/mpeg")), "mp3");
+    }
+
+    #[test]
+    fn test_infer_audio_extension_returns_empty() {
+        assert_eq!(infer_audio_extension("recording", None), "");
     }
 }
 
