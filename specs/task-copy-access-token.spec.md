@@ -23,7 +23,7 @@ Hermes Agent 的 Matrix 接入文档推荐用户在 `MATRIX_ACCESS_TOKEN` 中粘
 - worker 从当前全局 Matrix `Client` 读取 `client.access_token()`
 - worker 通过 `AccessTokenCopyAction` 回传成功或失败；成功 payload 只在同一事件周期内用于 `cx.copy_to_clipboard`
 - 成功提示使用通用文案 `Access token copied to clipboard`，不显示 token 内容
-- 失败分两类：未登录/无当前 client；当前 session 没有可用 access token
+- 失败分两类，由 `AccessTokenCopyError` 枚举（`NoSession` / `Unavailable`）表示；worker 没有 `AppLanguage`，故不构造用户文案，由 UI 线程按当前语言把枚举映射成本地化错误提示
 
 ## Boundaries
 
@@ -62,15 +62,15 @@ Scenario: 当前没有 Matrix client 时返回失败
   Test: test_access_token_copy_result_fails_without_client
   Given 当前没有登录的 Matrix client
   When worker 处理 `MatrixRequest::GetAccessTokenForCopy`
-  Then 产生 `AccessTokenCopyAction::Failed`
-  And 错误文本不包含任何 token 字段或敏感值
+  Then 产生 `AccessTokenCopyAction::Failed { reason: NoSession }`
+  And 失败 payload 只携带枚举原因，不含任何 token 字段或敏感值
 
 Scenario: Matrix client 没有 access token 时返回失败
   Test: test_access_token_copy_result_fails_without_access_token
   Given 当前 Matrix client 存在但 `access_token()` 返回 `None`
   When worker 处理 `MatrixRequest::GetAccessTokenForCopy`
-  Then 产生 `AccessTokenCopyAction::Failed`
-  And 错误文本说明当前 session 没有可用 access token
+  Then 产生 `AccessTokenCopyAction::Failed { reason: Unavailable }`
+  And UI 按当前语言把 `Unavailable` 映射为"当前会话没有可复制的 access token"提示
 
 Scenario: Account Settings 成功复制 token 后只显示非敏感提示
   Test: manual_test_copy_access_token_button_copies_without_displaying_token

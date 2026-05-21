@@ -1662,13 +1662,12 @@ mod matrix_request_tests {
 
     #[test]
     fn test_access_token_copy_result_fails_without_client() {
-        let action = access_token_copy_result_for_client(None);
-
-        assert!(matches!(action, AccessTokenCopyAction::Failed { .. }));
-        if let AccessTokenCopyAction::Failed { error } = action {
-            assert!(!error.contains("token"));
-            assert!(!error.contains("secret"));
-        }
+        assert_eq!(
+            access_token_copy_result_for_client(None),
+            AccessTokenCopyAction::Failed {
+                reason: AccessTokenCopyError::NoSession,
+            },
+        );
     }
 
     #[test]
@@ -1676,7 +1675,7 @@ mod matrix_request_tests {
         assert_eq!(
             access_token_copy_result(None),
             AccessTokenCopyAction::Failed {
-                error: "Current session has no available access token.".to_owned(),
+                reason: AccessTokenCopyError::Unavailable,
             },
         );
     }
@@ -1735,13 +1734,26 @@ pub enum LoginRequest{
 
 }
 
+/// Why a [`MatrixRequest::GetAccessTokenForCopy`] request produced no token.
+///
+/// Variants are locale-independent: the worker thread has no `AppLanguage`, so
+/// it reports *what* went wrong and leaves the user-facing wording to the UI
+/// thread, which owns the active language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessTokenCopyError {
+    /// No Matrix client is currently logged in.
+    NoSession,
+    /// A client is logged in but its session carries no access token.
+    Unavailable,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum AccessTokenCopyAction {
     Ready {
         access_token: String,
     },
     Failed {
-        error: String,
+        reason: AccessTokenCopyError,
     },
 }
 
@@ -1752,9 +1764,9 @@ impl std::fmt::Debug for AccessTokenCopyAction {
                 .debug_struct("AccessTokenCopyAction::Ready")
                 .field("access_token", &"<redacted>")
                 .finish(),
-            AccessTokenCopyAction::Failed { error } => f
+            AccessTokenCopyAction::Failed { reason } => f
                 .debug_struct("AccessTokenCopyAction::Failed")
-                .field("error", error)
+                .field("reason", reason)
                 .finish(),
         }
     }
@@ -1764,7 +1776,7 @@ fn access_token_copy_result(access_token: Option<String>) -> AccessTokenCopyActi
     match access_token {
         Some(access_token) => AccessTokenCopyAction::Ready { access_token },
         None => AccessTokenCopyAction::Failed {
-            error: "Current session has no available access token.".to_owned(),
+            reason: AccessTokenCopyError::Unavailable,
         },
     }
 }
@@ -1772,7 +1784,7 @@ fn access_token_copy_result(access_token: Option<String>) -> AccessTokenCopyActi
 fn access_token_copy_result_for_client(client: Option<Client>) -> AccessTokenCopyAction {
     let Some(client) = client else {
         return AccessTokenCopyAction::Failed {
-            error: "No active Matrix session is available.".to_owned(),
+            reason: AccessTokenCopyError::NoSession,
         };
     };
     access_token_copy_result(client.access_token())

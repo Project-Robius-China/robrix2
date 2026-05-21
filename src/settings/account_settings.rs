@@ -6,7 +6,7 @@ use makepad_widgets::{text::selection::Cursor, *};
 use rfd::FileDialog;
 use matrix_sdk::ruma::OwnedUserId;
 
-use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{AccessTokenCopyAction, AccountDataAction, AccountSwitchAction, MatrixRequest, submit_async_request}, utils};
+use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, submit_async_request}, utils};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use crate::{app::ConfirmDeleteAction, shared::confirmation_modal::ConfirmationModalContent};
 
@@ -407,7 +407,6 @@ script_mod! {
                     text: "Log out"
                 }
             }
-
         }
     }
 }
@@ -535,9 +534,13 @@ impl MatchEvent for AccountSettings {
                     );
                     continue;
                 }
-                Some(AccessTokenCopyAction::Failed { error }) => {
+                Some(AccessTokenCopyAction::Failed { reason }) => {
+                    let error_key = match reason {
+                        AccessTokenCopyError::NoSession => "settings.account.popup.access_token_no_session",
+                        AccessTokenCopyError::Unavailable => "settings.account.popup.access_token_unavailable",
+                    };
                     enqueue_popup_notification(
-                        error.clone(),
+                        tr_key(self.app_language, error_key),
                         PopupKind::Error,
                         Some(4.0),
                     );
