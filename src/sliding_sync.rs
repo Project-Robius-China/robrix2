@@ -9,7 +9,7 @@ use makepad_widgets::{error, log, warning, Cx, SignalToUI};
 use mime::{IMAGE_JPEG, IMAGE_PNG};
 use matrix_sdk_base::crypto::{DecryptionSettings, TrustRequirement};
 use matrix_sdk::{
-    config::RequestConfig, encryption::EncryptionSettings, event_handler::EventHandlerDropGuard, media::MediaRequestParameters, room::{edit::EditedContent, reply::Reply, IncludeRelations, ListThreadsOptions, RelationsOptions, RoomMember, RoomMemberRole}, ruma::{
+    config::RequestConfig, encryption::{identities::Device, EncryptionSettings}, event_handler::EventHandlerDropGuard, media::MediaRequestParameters, room::{edit::EditedContent, reply::Reply, IncludeRelations, ListThreadsOptions, RelationsOptions, RoomMember, RoomMemberRole}, ruma::{
         api::{Direction, client::{
             account::register::v3::Request as RegistrationRequest,
             room::{Visibility, create_room::v3::{Request as CreateRoomRequest, RoomPreset}},
@@ -628,6 +628,9 @@ pub enum AccountDataAction {
     DisplayNameChanged(Option<String>),
     /// Failed to update the user's display name.
     DisplayNameChangeFailed(String),
+    /// Result of [`MatrixRequest::GetOwnDevice`], in a `Box` because `Device` is large.
+    /// * `None` if not logged in or the crypto store isn't ready yet.
+    OwnDeviceFetched(Option<Box<Device>>),
 }
 
 /// Actions emitted in response to account switching.
@@ -1020,6 +1023,9 @@ pub enum MatrixRequest {
         /// * If `None`, the display name will be removed.
         new_display_name: Option<String>,
     },
+    /// Request to fetch our own [`Device`].
+    /// The response is delivered via [`AccountDataAction::OwnDeviceFetched`].
+    GetOwnDevice,
     /// Request to fetch an Avatar image from the server.
     /// Upon completion of the async media request, the `on_fetched` function
     /// will be invoked with the content of an `AvatarUpdate`.
@@ -3018,6 +3024,20 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::GetOwnDevice => {
+                let Some(client) = get_client() else { continue };
+                let _get_own_device_task = Handle::current().spawn(async move {
+                    let device = match client.encryption().get_own_device().await {
+                        Ok(device) => device,
+                        Err(e) => {
+                            error!("Failed to get own device: {e:?}");
+                            None
+                        }
+                    };
+                    Cx::post_action(AccountDataAction::OwnDeviceFetched(device.map(Box::new)));
+                });
+            }
+
             MatrixRequest::GenerateMatrixLink { room_id, event_id, use_matrix_scheme, join_on_click } => {
                 let Some(client) = get_client() else { continue };
                 let _gen_link_task = Handle::current().spawn(async move {
@@ -4818,14 +4838,6 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                                 log!("matrix worker task ended with error due to account switch: {e:?}");
                             } else {
                                 error!("Error: matrix worker task ended:\n\t{e:?}");
-                                rooms_list::enqueue_rooms_list_update(RoomsListUpdate::Status {
-                                    status: e.to_string(),
-                                });
-                                enqueue_popup_notification(
-                                    format!("Rooms list update error: {e}"),
-                                    PopupKind::Error,
-                                    None,
-                                );
                             }
                         },
                         Err(e) => {

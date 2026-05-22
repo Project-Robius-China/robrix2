@@ -525,6 +525,11 @@ script_mod! {
                 }
             }
         }
+
+        View {
+            width: Fill
+            height: 20
+        }
         
     }
 
