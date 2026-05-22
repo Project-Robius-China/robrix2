@@ -10,7 +10,7 @@ use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, RoomI
 use serde::{Deserialize, Serialize};
 use url::Url;
 use crate::{
-    avatar_cache::{self, clear_avatar_cache}, home::{
+    avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::RoomContextMenuWidgetRefExt, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
@@ -344,6 +344,8 @@ script_mod! {
 
                         // Tooltips must be shown in front of all other UI elements,
                         // since they can be shown as a hover atop any other widget.
+                        // This tooltip widget handles TooltipActions directly by itself,
+                        // so we don't need to call show/hide ourselves.
                         app_tooltip := CalloutTooltip {}
                     }
                 } // end of body
@@ -629,19 +631,6 @@ impl MatchEvent for App {
             // Clean up old log files to prevent disk space issues
             cleanup_old_logs(MAX_LOG_FILES_TO_KEEP);
         }
-        // Override Makepad's new default-JSON logger. We just want regular formatting.
-        fn regular_log(file_name: &str, line_start: u32, column_start: u32, _line_end: u32, _column_end: u32, message: String, level: LogLevel) {
-            let l = match level {
-                LogLevel::Panic   => "[!]",
-                LogLevel::Error   => "[E]",
-                LogLevel::Warning => "[W]",
-                LogLevel::Log     => "[I]",
-                LogLevel::Wait    => "[.]",
-            };
-            println!("{l} {file_name}:{}:{}: {message}", line_start + 1, column_start + 1);
-        }
-        *LOG_WITH_LEVEL.write().unwrap() = regular_log;
-
         // Initialize the project directory here from the main UI thread
         // such that background threads/tasks will be able to can access it.
         let _app_data_dir = crate::app_data_dir();
@@ -1300,30 +1289,6 @@ impl MatchEvent for App {
                 _ => {}
             }
 
-            // Handle actions for showing or hiding the tooltip.
-            match action.as_widget_action().cast() {
-                TooltipAction::HoverIn { text, widget_rect, options } => {
-                    // Don't show any tooltips if the message context menu is currently shown.
-                    if self.ui.new_message_context_menu(cx, ids!(new_message_context_menu)).is_currently_shown(cx) {
-                        self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
-                    }
-                    else {
-                        self.ui.callout_tooltip(cx, ids!(app_tooltip)).show_with_options(
-                            cx,
-                            &text,
-                            widget_rect,
-                            options,
-                        );
-                    }
-                    continue;
-                }
-                TooltipAction::HoverOut => {
-                    self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
-                    continue;
-                }
-                _ => {}
-            }
-
             // Handle actions needed to open/close the join/leave room modal.
             match action.downcast_ref() {
                 Some(JoinLeaveRoomModalAction::Open { kind, show_tip }) => {
@@ -1610,6 +1575,7 @@ fn clear_all_app_state(cx: &mut Cx) {
     clear_all_invited_rooms(cx);
     clear_timeline_states(cx);
     clear_avatar_cache(cx);
+    clear_room_preview_cache(cx);
 }
 
 impl AppMain for App {
