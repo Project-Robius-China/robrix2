@@ -629,22 +629,23 @@ impl MatchEvent for App {
             // Clean up old log files to prevent disk space issues
             cleanup_old_logs(MAX_LOG_FILES_TO_KEEP);
         }
-        // Override Makepad's new default-JSON logger. We just want regular formatting.
-        fn regular_log(file_name: &str, line_start: u32, column_start: u32, _line_end: u32, _column_end: u32, message: String, level: LogLevel) {
-            let l = match level {
-                LogLevel::Panic   => "[!]",
-                LogLevel::Error   => "[E]",
-                LogLevel::Warning => "[W]",
-                LogLevel::Log     => "[I]",
-                LogLevel::Wait    => "[.]",
-            };
-            println!("{l} {file_name}:{}:{}: {message}", line_start + 1, column_start + 1);
+        
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            // Override Makepad's new default-JSON logger. We just want regular formatting.
+            fn regular_log(file_name: &str, line_start: u32, column_start: u32, _line_end: u32, _column_end: u32, message: String, level: LogLevel) {
+                let l = match level {
+                    LogLevel::Panic   => "[!]",
+                    LogLevel::Error   => "[E]",
+                    LogLevel::Warning => "[W]",
+                    LogLevel::Log     => "[I]",
+                    LogLevel::Wait    => "[.]",
+                };
+                println!("{l} {file_name}:{}:{}: {message}", line_start + 1, column_start + 1);
+            }
+            *LOG_WITH_LEVEL.write().unwrap() = regular_log;
         }
-        *LOG_WITH_LEVEL.write().unwrap() = regular_log;
 
-        // Initialize the project directory here from the main UI thread
-        // such that background threads/tasks will be able to can access it.
-        let _app_data_dir = crate::app_data_dir();
         log!("App::handle_startup(): app_data_dir: {:?}", _app_data_dir);
 
         if let Err(e) = persistence::load_window_state(self.ui.window(cx, ids!(main_window)), cx) {
