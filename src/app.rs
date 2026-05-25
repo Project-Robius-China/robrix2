@@ -19,7 +19,7 @@ use crate::{
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
-    }
+    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom}
 };
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
@@ -642,6 +642,7 @@ impl MatchEvent for App {
 
         self.update_login_visibility(cx);
         self.sync_app_language(cx);
+        self.app_state.app_prefs.broadcast_all(cx);
         self.skipped_update_version = load_skipped_update_version();
         self.start_auto_update_check(cx);
 
@@ -725,6 +726,19 @@ impl MatchEvent for App {
         }
 
         for action in actions.iter() {
+            if let Some(
+                AppPreferencesAction::ViewModeChanged(_)
+                | AppPreferencesAction::SendOnEnterChanged(_)
+                | AppPreferencesAction::UiZoomChanged(_)
+            ) = action.downcast_ref() {
+                if let Some(user_id) = current_user_id() {
+                    if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                        error!("Failed to persist app state after updating app preferences. Error: {e}");
+                    }
+                }
+                continue;
+            }
+
             if let RoomFilterResultAction::Clicked(target) = action.as_widget_action().cast() {
                 self.ui.modal(cx, ids!(room_filter_modal)).close(cx);
                 match target {
@@ -1190,6 +1204,7 @@ impl MatchEvent for App {
                     self.app_state.logged_in = logged_in_actual;
                     // Initialize the global translation config so RoomInputBar can access it.
                     crate::room::translation::set_global_config(&self.app_state.translation);
+                    self.app_state.app_prefs.broadcast_all(cx);
                     if removed_room_bindings > 0 {
                         if let Some(user_id) = current_user_id() {
                             if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
@@ -1613,6 +1628,17 @@ impl AppMain for App {
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
+        if let Event::LiveEdit = event {
+            self.app_state.app_prefs.broadcast_all(cx);
+        }
+        if let Event::WindowGeomChange(_) = event {
+            if !self.app_state.app_prefs.ui_zoom.is_default() {
+                self.app_state.app_prefs.on_ui_zoom_changed(cx);
+            }
+        }
+
+        self.handle_ui_zoom_shortcuts(cx, event);
+
         if let Event::Shutdown = event {
             let window_ref = self.ui.window(cx, ids!(main_window));
             if let Err(e) = persistence::save_window_state(window_ref, cx) {
@@ -1654,6 +1680,30 @@ impl AppMain for App {
 }
 
 impl App {
+    fn apply_ui_zoom(&mut self, cx: &mut Cx, new_zoom: UiZoom) {
+        if new_zoom != self.app_state.app_prefs.ui_zoom {
+            self.app_state.app_prefs.ui_zoom = new_zoom;
+            self.app_state.app_prefs.on_ui_zoom_changed(cx);
+        }
+    }
+
+    fn handle_ui_zoom_shortcuts(&mut self, cx: &mut Cx, event: &Event) {
+        let Event::KeyDown(e) = event else { return };
+        if !e.modifiers.is_primary() {
+            return;
+        }
+        let current = self.app_state.app_prefs.ui_zoom;
+        let new_zoom = match e.key_code {
+            KeyCode::Equals | KeyCode::NumpadEquals | KeyCode::NumpadAdd => {
+                current.zoom_in_by(UiZoom::STEP)
+            }
+            KeyCode::Minus | KeyCode::NumpadSubtract => current.zoom_out_by(UiZoom::STEP),
+            KeyCode::Key0 | KeyCode::Numpad0 => UiZoom::reset(),
+            _ => return,
+        };
+        self.apply_ui_zoom(cx, new_zoom);
+    }
+
     fn start_auto_update_check(&mut self, cx: &mut Cx) {
         if self.auto_update_check_started {
             return;
@@ -2056,6 +2106,9 @@ pub struct AppState {
     pub logged_in: bool,
     /// The preferred app language.
     pub app_language: AppLanguage,
+    /// App-wide UI/behavior preferences.
+    #[serde(default)]
+    pub app_prefs: AppPreferences,
     /// Whether the app is currently showing the login screen for adding another account.
     /// This is transient state and not persisted.
     #[serde(skip)]

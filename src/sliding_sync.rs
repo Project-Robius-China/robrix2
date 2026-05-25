@@ -5841,6 +5841,7 @@ fn should_restore_loaded_app_state(app_state: &crate::app::AppState) -> bool {
             .any(saved_dock_state_has_content)
         || app_state.bot_settings != crate::app::BotSettingsState::default()
         || app_state.app_language != crate::i18n::AppLanguage::default()
+        || app_state.app_prefs != crate::settings::app_preferences::AppPreferences::default()
         || app_state.translation != crate::room::translation::TranslationConfig::default()
 }
 

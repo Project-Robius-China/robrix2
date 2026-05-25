@@ -2282,6 +2282,8 @@ script_mod! {
         }
     }
 
+    mod.widgets.IMG_MSG_FIT = Fit{max: FitBound.Abs(200.0)}
+
     // The view used for each static image-based message event in a room's timeline.
     // This excludes stickers and other animated GIFs, video clips, audio clips, etc.
     mod.widgets.ImageMessage = mod.widgets.Message {
@@ -2291,7 +2293,14 @@ script_mod! {
                 height: Fit
                 padding: Inset{ left: 10.0 }
 
-                message := TextOrImage { }
+                message := TextOrImage {
+                    image_view +: { image +: {
+                        height: (mod.widgets.IMG_MSG_FIT)
+                    } }
+                    default_image_view +: { image +: {
+                        height: (mod.widgets.IMG_MSG_FIT)
+                    } }
+                }
                 View {
                     width: Fill,
                     height: Fit,
@@ -2311,7 +2320,14 @@ script_mod! {
     mod.widgets.CondensedImageMessage = mod.widgets.CondensedMessage {
         body +: {
             content +: {
-                message := TextOrImage { }
+                message := TextOrImage {
+                    image_view +: { image +: {
+                        height: (mod.widgets.IMG_MSG_FIT)
+                    } }
+                    default_image_view +: { image +: {
+                        height: (mod.widgets.IMG_MSG_FIT)
+                    } }
+                }
                 View {
                     width: Fill,
                     height: Fit,
