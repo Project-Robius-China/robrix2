@@ -4395,12 +4395,32 @@ pub fn start_matrix_tokio() -> Result<tokio::runtime::Handle> {
             return;
         }
 
+        // If this device previously failed to reach the default homeserver during pre-build,
+        // skip the attempt entirely to avoid spamming ERRORs from matrix-sdk internals.
+        // The SSO login path always falls back to building a fresh client on click.
+        let prebuild_flag_path = app_data_dir().join(".sso_prebuild_failed");
+        if prebuild_flag_path.exists() {
+            log!("Skipping DEFAULT_SSO_CLIENT pre-build (previously failed on this device; SSO login will build a fresh client on click).");
+            DEFAULT_SSO_CLIENT_NOTIFIER.notify_one();
+            Cx::post_action(LoginAction::SsoPending(false));
+            return;
+        }
+
         match build_client(&Cli::default(), app_data_dir()).await {
             Ok(client_and_session) => {
                 DEFAULT_SSO_CLIENT.lock().unwrap()
                     .get_or_insert(client_and_session);
+                // Clear any stale failure flag (e.g., after the user configures a proxy).
+                let _ = std::fs::remove_file(&prebuild_flag_path);
             }
-            Err(e) => error!("Error: could not create DEFAULT_SSO_CLIENT object: {e}"),
+            Err(e) => {
+                // Persist the failure so future startups skip this noisy pre-build path.
+                let _ = std::fs::write(&prebuild_flag_path, b"");
+                warning!(
+                    "DEFAULT_SSO_CLIENT pre-build failed; SSO login will build a fresh client on click. \
+                     Cause: {e}"
+                );
+            }
         };
         DEFAULT_SSO_CLIENT_NOTIFIER.notify_one();
         Cx::post_action(LoginAction::SsoPending(false));
