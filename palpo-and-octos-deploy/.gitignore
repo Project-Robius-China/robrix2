@@ -1,8 +1,7 @@
 # Runtime data (created by docker compose)
 data/
 
-# Source repos cloned by setup.sh
-repos/
+# Source repos are now git submodules (tracked in .gitmodules)
 
 # User's local env file (contains API keys)
 .env
