@@ -87,7 +87,15 @@ fn check_latest_version_without_signature(endpoint: &str, current_version: &str)
 
     let runtime = Runtime::new().map_err(|error| format!("Failed to create async runtime: {error}"))?;
     runtime.block_on(async move {
-        let response = matrix_sdk::reqwest::get(endpoint)
+        let proxy = crate::proxy_config::resolve_effective_proxy_url(None);
+        let client = crate::proxy_config::build_policy_reqwest_client(
+            proxy.as_deref(),
+            Some(std::time::Duration::from_secs(10)),
+        )
+            .map_err(|error| format!("Failed to build updater HTTP client: {error}"))?;
+        let response = client
+            .get(endpoint)
+            .send()
             .await
             .map_err(|error| format!("Failed to fetch updater metadata: {error}"))?;
         if response.status().is_success() {
@@ -100,7 +108,9 @@ fn check_latest_version_without_signature(endpoint: &str, current_version: &str)
 
         if response.status() == StatusCode::NOT_FOUND && current_version.contains('-') {
             if let Some(fallback_endpoint) = endpoint_with_current_tag(endpoint, current_version) {
-                let fallback_response = matrix_sdk::reqwest::get(&fallback_endpoint)
+                let fallback_response = client
+                    .get(&fallback_endpoint)
+                    .send()
                     .await
                     .map_err(|error| format!("Failed to fetch updater metadata: {error}"))?;
                 if fallback_response.status().is_success() {

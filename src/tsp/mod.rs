@@ -605,9 +605,25 @@ pub enum TspRequest {
 
 
 fn create_reqwest_client() -> reqwest::Result<reqwest::Client> {
-    reqwest::ClientBuilder::new()
+    // TSP runs on its own reqwest 0.12 (the matrix-sdk uses 0.13 transitively)
+    // so we can't reuse build_policy_reqwest_client directly, but we mirror its
+    // policy here: TLS 1.2 minimum, loopback bypass, explicit no_proxy() when
+    // the user has no proxy configured (so shell env can't sneak in).
+    let mut builder = reqwest::ClientBuilder::new()
         .user_agent(format!("Robrix v{}", env!("CARGO_PKG_VERSION")))
-        .build()
+        .min_tls_version(reqwest::tls::Version::TLS_1_2);
+    match crate::proxy_config::resolve_effective_proxy_url(None) {
+        Some(proxy_url) => {
+            let no_proxy = reqwest::NoProxy::from_string(
+                &crate::proxy_config::DEFAULT_NO_PROXY_BYPASS.join(","),
+            );
+            builder = builder.proxy(reqwest::Proxy::all(&proxy_url)?.no_proxy(no_proxy));
+        }
+        None => {
+            builder = builder.no_proxy();
+        }
+    }
+    builder.build()
 }
 
 
