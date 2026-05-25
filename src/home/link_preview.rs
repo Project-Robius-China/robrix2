@@ -25,6 +25,8 @@ const MAX_DESCRIPTION_LENGTH: usize = 180;
 const MAX_CACHE_ENTRIES_BEFORE_CLEANUP: usize = 100;
 /// Maximum age for cache entries in seconds (1 hour)
 const CACHE_ENTRY_MAX_AGE_SECS: u64 = 3600;
+/// Maximum number of link previews shown before collapsing behind a button.
+const MAX_LINK_PREVIEWS_BY_EXPAND: usize = 2;
 
 /// Specific error types for link preview failures
 #[derive(Clone, Debug)]
@@ -327,6 +329,26 @@ impl LinkPreview {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct LinkPreviewCollapsibleState {
+    show_buttons: bool,
+    hidden_count: usize,
+}
+
+fn link_preview_collapsible_state(total_views: usize) -> LinkPreviewCollapsibleState {
+    if total_views > MAX_LINK_PREVIEWS_BY_EXPAND {
+        LinkPreviewCollapsibleState {
+            show_buttons: true,
+            hidden_count: total_views - MAX_LINK_PREVIEWS_BY_EXPAND,
+        }
+    } else {
+        LinkPreviewCollapsibleState {
+            show_buttons: false,
+            hidden_count: 0,
+        }
+    }
+}
+
 impl LinkPreviewRef {
     fn item_template(&self) -> Option<LivePtr> {
         if let Some(inner) = self.borrow() {
@@ -361,6 +383,15 @@ impl LinkPreviewRef {
             expand_btn.set_visible(cx, true);
             inner.view.button(cx, ids!(collapsible_buttons.collapse_button)).set_visible(cx, false);
             inner.view.view(cx, ids!(collapsible_buttons)).set_visible(cx, true);
+        }
+    }
+
+    fn reset_collapsible_buttons(&mut self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.show_collapsible_buttons = false;
+            inner.is_expanded = false;
+            inner.hidden_links_count = 0;
+            inner.update_button_and_visibility(cx);
         }
     }
 
@@ -466,7 +497,6 @@ impl LinkPreviewRef {
         F: Fn(&mut Cx, &TextOrImageRef, Option<Box<ImageInfo>>, MediaSource, &str, &mut MediaCache) -> bool,
     {
         const SKIPPED_DOMAINS: &[&str] = &["matrix.to", "matrix.io"];
-        const MAX_LINK_PREVIEWS_BY_EXPAND: usize = 2;
         let mut fully_drawn_count = 0;
         let mut accepted_link_count = 0;
         let mut views = Vec::new();
@@ -501,9 +531,11 @@ impl LinkPreviewRef {
             fully_drawn_count += was_image_drawn as usize;
             views.push(view_ref);
         }
-        if views.len() > MAX_LINK_PREVIEWS_BY_EXPAND {
-            let hidden_count = views.len() - MAX_LINK_PREVIEWS_BY_EXPAND;
-            self.show_collapsible_buttons(cx, hidden_count);
+        let collapsible_state = link_preview_collapsible_state(views.len());
+        if collapsible_state.show_buttons {
+            self.show_collapsible_buttons(cx, collapsible_state.hidden_count);
+        } else {
+            self.reset_collapsible_buttons(cx);
         }
         self.set_children(views);
         fully_drawn_count == accepted_link_count
@@ -722,4 +754,33 @@ fn insert_into_cache(
         let _ = sender.send(TimelineUpdate::LinkPreviewFetched);
     }
     SignalToUI::set_ui_signal();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_link_preview_collapsible_state_hides_buttons_for_empty_results() {
+        let state = link_preview_collapsible_state(0);
+
+        assert!(!state.show_buttons);
+        assert_eq!(state.hidden_count, 0);
+    }
+
+    #[test]
+    fn test_link_preview_collapsible_state_hides_buttons_within_limit() {
+        let state = link_preview_collapsible_state(2);
+
+        assert!(!state.show_buttons);
+        assert_eq!(state.hidden_count, 0);
+    }
+
+    #[test]
+    fn test_link_preview_collapsible_state_shows_buttons_above_limit() {
+        let state = link_preview_collapsible_state(4);
+
+        assert!(state.show_buttons);
+        assert_eq!(state.hidden_count, 2);
+    }
 }

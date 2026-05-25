@@ -39,7 +39,6 @@ use crate::{
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
-use crate::home::streaming_animation::StreamingAnimState;
 use crate::room::room_input_bar::RoomInputBarWidgetExt;
 use crate::shared::mentionable_text_input::MentionableTextInputAction;
 
@@ -869,18 +868,6 @@ fn has_rich_markdown_syntax(text: &str) -> bool {
         )
 }
 
-fn should_render_streaming_full_snapshot(
-    body: &str,
-    formatted_body: Option<&FormattedBody>,
-    is_bot_sender: bool,
-) -> bool {
-    is_bot_sender
-        && (
-            formatted_body.is_some_and(|formatted| formatted.format == MessageFormat::Html)
-            || has_rich_markdown_syntax(body)
-        )
-}
-
 fn select_bot_timeline_body_formatted_body(
     render_state: &BotTimelineRenderState,
     formatted_body: Option<&FormattedBody>,
@@ -964,17 +951,6 @@ fn bot_timeline_code_block_mode(render_state: &BotTimelineRenderState) -> BotTim
     } else {
         BotTimelineCodeBlockMode::Highlighted
     }
-}
-
-fn streaming_update_requires_content_invalidation(
-    state: &StreamingAnimState,
-    new_text: &str,
-    is_live: bool,
-    render_full_target: bool,
-) -> bool {
-    state.target_text != new_text
-        || state.is_live != is_live
-        || state.render_full_target != render_full_target
 }
 
 thread_local! {
@@ -1112,6 +1088,52 @@ fn streaming_candidates_from_items<'a>(
     })
 }
 
+fn streaming_texts_by_event_id(
+    items: &Vector<Arc<TimelineItem>>,
+) -> HashMap<OwnedEventId, String> {
+    items.iter().filter_map(|item| {
+        let TimelineItemKind::Event(event) = item.kind() else {
+            return None;
+        };
+        let event_id = event.event_id()?.to_owned();
+        let text = RoomScreen::extract_message_text(item)?;
+        Some((event_id, text))
+    }).collect()
+}
+
+fn create_streaming_state_for_live_update(
+    event_id: &OwnedEventId,
+    new_text: &str,
+    live: bool,
+    previous_streaming_messages: Option<&HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>>,
+    previous_item_texts: &HashMap<OwnedEventId, String>,
+    allow_new_state_when_missing: bool,
+) -> Option<super::streaming_animation::StreamingAnimState> {
+    use crate::home::streaming_animation::StreamingAnimState;
+
+    if !live {
+        return None;
+    }
+
+    if let Some(previous_state) = previous_streaming_messages
+        .and_then(|states| states.get(event_id))
+    {
+        return Some(StreamingAnimState::restore(previous_state, new_text, true));
+    }
+
+    if let Some(previous_text) = previous_item_texts.get(event_id) {
+        if previous_text == new_text {
+            return None;
+        }
+
+        let mut previous_state = StreamingAnimState::new(previous_text, true);
+        previous_state.advance_displayed(previous_state.target_char_count);
+        return Some(StreamingAnimState::restore(&previous_state, new_text, true));
+    }
+
+    allow_new_state_when_missing.then(|| StreamingAnimState::new(new_text, true))
+}
+
 fn rebuild_streaming_messages_for_full_snapshot<I>(
     items: I,
     previous_streaming_messages: Option<&HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>>,
@@ -1141,6 +1163,36 @@ where
             should_schedule_frame |= state.needs_frame();
             rebuilt.insert(event_id, state);
         }
+    }
+
+    (rebuilt, should_schedule_frame)
+}
+
+fn rebuild_streaming_messages_for_clear_cache_update<I>(
+    items: I,
+    previous_streaming_messages: Option<&HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>>,
+    previous_item_texts: &HashMap<OwnedEventId, String>,
+) -> (HashMap<OwnedEventId, super::streaming_animation::StreamingAnimState>, bool)
+where
+    I: IntoIterator<Item = (OwnedEventId, String, bool)>,
+{
+    let mut rebuilt = HashMap::new();
+    let mut should_schedule_frame = false;
+
+    for (event_id, new_text, live) in items {
+        let Some(state) = create_streaming_state_for_live_update(
+            &event_id,
+            &new_text,
+            live,
+            previous_streaming_messages,
+            previous_item_texts,
+            true,
+        ) else {
+            continue;
+        };
+
+        should_schedule_frame |= state.needs_frame();
+        rebuilt.insert(event_id, state);
     }
 
     (rebuilt, should_schedule_frame)
@@ -6372,15 +6424,6 @@ impl RoomScreen {
         let curr_first_tl_idx = tl_idx_from_item_id(curr_first_id, has_encryption_notice).unwrap_or(0);
         let ui = self.widget_uid();
         let Some(tl) = self.tl_state.as_mut() else { return };
-        let (
-            resolved_parent_bot_user_id,
-            room_bot_user_ids,
-            known_bot_user_ids,
-        ) = compute_timeline_bot_context(
-            app_state,
-            tl.kind.room_id(),
-            tl.room_members.as_ref(),
-        );
 
         let mut done_loading = false;
         let mut should_continue_backwards_pagination = false;
@@ -6611,11 +6654,13 @@ impl RoomScreen {
 
                     // --- MSC4357 streaming detection ---
                     if clear_cache {
+                        let previous_item_texts = streaming_texts_by_event_id(&tl.items);
                         let previous_streaming_messages = std::mem::take(&mut tl.streaming_messages);
                         let (rebuilt_streaming_messages, should_schedule_frame) =
-                            rebuild_streaming_messages_for_full_snapshot(
+                            rebuild_streaming_messages_for_clear_cache_update(
                                 streaming_candidates_from_items(&new_items),
                                 Some(&previous_streaming_messages),
+                                &previous_item_texts,
                             );
                         tl.streaming_messages = rebuilt_streaming_messages;
                         if should_schedule_frame {
@@ -6633,6 +6678,7 @@ impl RoomScreen {
                         let old_event_ids: HashSet<&EventId> = tl.items.iter()
                             .filter_map(|item| item_event_id(item))
                             .collect();
+                        let previous_item_texts = streaming_texts_by_event_id(&tl.items);
 
                         for idx in scan_range {
                             let Some(new_item) = new_items.get(idx) else { continue };
@@ -6640,45 +6686,22 @@ impl RoomScreen {
                             let Some(event_id) = new_evt.event_id().map(|id| id.to_owned()) else { continue };
                             let live = is_msc4357_live(new_evt);
                             let Some(new_text) = Self::extract_message_text(new_item) else { continue };
-                            let render_full_target = should_render_streaming_full_snapshot(
-                                &new_text,
-                                new_evt.content()
-                                    .as_message()
-                                    .and_then(|message| match message.msgtype() {
-                                        MessageType::Text(TextMessageEventContent { formatted, .. }) => formatted.as_ref(),
-                                        MessageType::Notice(NoticeMessageEventContent { formatted, .. }) => formatted.as_ref(),
-                                        _ => None,
-                                    }),
-                                is_timeline_sender_bot(
-                                    new_evt.sender(),
-                                    resolved_parent_bot_user_id.as_deref(),
-                                    &room_bot_user_ids,
-                                    &known_bot_user_ids,
-                                ),
-                            );
 
                             if let Some(state) = tl.streaming_messages.get_mut(&event_id) {
-                                let should_invalidate_content = streaming_update_requires_content_invalidation(
-                                    state,
-                                    &new_text,
-                                    live,
-                                    render_full_target,
-                                );
                                 state.update_target(&new_text, live);
-                                state.set_render_full_target(render_full_target);
-                                if should_invalidate_content
-                                    && let Some(idx) = state.timeline_index
-                                {
-                                    tl.content_drawn_since_last_update.remove(idx .. idx + 1);
-                                }
                                 // Schedule frame for animation OR for cleanup of just-completed state
                                 should_schedule_frame |= state.needs_frame() || state.is_complete();
                                 continue;
                             }
 
-                            if live && !old_event_ids.contains(&*event_id) {
-                                let mut state = StreamingAnimState::new(&new_text, true);
-                                state.set_render_full_target(render_full_target);
+                            if let Some(state) = create_streaming_state_for_live_update(
+                                &event_id,
+                                &new_text,
+                                live,
+                                None,
+                                &previous_item_texts,
+                                !old_event_ids.contains(&*event_id),
+                            ) {
                                 should_schedule_frame |= state.needs_frame();
                                 tl.streaming_messages.insert(event_id, state);
                             }
@@ -9296,34 +9319,21 @@ fn populate_message_view(
                             .and_then(|eid| streaming_messages.get_mut(&eid.to_owned()));
 
                         if let Some(state) = is_streaming {
-                            let render_full_snapshot = should_render_streaming_full_snapshot(
-                                body,
-                                formatted.as_ref(),
-                                sender_is_bot,
-                            );
-                            state.set_render_full_target(render_full_snapshot);
-
-                            // STREAMING MODE:
-                            // - markdown-rich bot replies render the latest full snapshot directly
-                            // - plain text keeps the local typewriter prefix with cursor
+                            // STREAMING MODE: show the latest live snapshot + cursor inside the bot card shell.
+                            state.fill_display_buffer();
                             let mut link_preview_ref =
                                 item.link_preview(cx, ids!(content.link_preview_view));
-                            let (stream_body, stream_formatted) = if render_full_snapshot {
-                                (body.as_str(), formatted.as_ref())
-                            } else {
-                                state.fill_display_buffer();
-                                (state.display_buffer.as_str(), None)
-                            };
                             let _ = populate_bot_text_message_content(
                                 cx,
                                 &item,
                                 app_language,
-                                stream_body,
-                                stream_formatted,
+                                body,
+                                formatted.as_ref(),
                                 Some(&mut link_preview_ref),
                                 Some(media_cache),
                                 Some(link_preview_cache),
                                 sender_is_bot,
+                                Some(state.display_buffer.as_str()),
                             );
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
@@ -9337,7 +9347,9 @@ fn populate_message_view(
 
                             if let Some(ref splash) = splash_code {
                                 // SPLASH CARD MODE: render native Makepad card
+                                item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
                                 item.view(cx, ids!(content.message)).set_visible(cx, false);
+                                item.view(cx, ids!(content.link_preview_view)).set_visible(cx, false);
                                 let splash_widget = item.splash(cx, ids!(content.splash_card));
                                 splash_widget.set_visible(cx, true);
                                 splash_widget.set_text(cx, splash);
@@ -9356,6 +9368,7 @@ fn populate_message_view(
                                     Some(media_cache),
                                     Some(link_preview_cache),
                                     sender_is_bot,
+                                    None,
                                 );
                             }
                         }
@@ -9408,6 +9421,7 @@ fn populate_message_view(
                             Some(media_cache),
                             Some(link_preview_cache),
                             sender_is_bot,
+                            None,
                         );
                         (item, false)
                     }
@@ -10025,10 +10039,45 @@ fn populate_bot_text_message_content(
     media_cache: Option<&mut MediaCache>,
     link_preview_cache: Option<&mut LinkPreviewCache>,
     is_bot_sender: bool,
+    streaming_display_buffer: Option<&str>,
 ) -> bool {
-    let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
     let bot_card_view = item.view(cx, ids!(content.bot_message_card));
     let message_view = item.html_or_plaintext(cx, ids!(content.message));
+    let link_preview_view = item.view(cx, ids!(content.link_preview_view));
+    let splash_widget = item.splash(cx, ids!(content.splash_card));
+
+    if let Some(display_buffer) = streaming_display_buffer {
+        splash_widget.set_visible(cx, false);
+        link_preview_view.set_visible(cx, false);
+        if is_bot_sender {
+            bot_card_view.set_visible(cx, true);
+            message_view.set_visible(cx, false);
+
+            item.view(cx, ids!(content.bot_message_card.bot_status_strip))
+                .set_visible(cx, false);
+            item.view(cx, ids!(content.bot_message_card.bot_metadata_footer))
+                .set_visible(cx, false);
+
+            let body_card = item.view(cx, ids!(content.bot_message_card.bot_body_card));
+            body_card.set_visible(cx, true);
+            let body_widget = item.html_or_plaintext(cx, ids!(content.bot_message_card.bot_body_card.bot_card_body));
+            let markdown_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown));
+            let markdown_plain_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown_plain));
+            body_widget.set_visible(cx, true);
+            markdown_widget.set_visible(cx, false);
+            markdown_plain_widget.set_visible(cx, false);
+            body_widget.show_plaintext(cx, display_buffer);
+        } else {
+            bot_card_view.set_visible(cx, false);
+            message_view.set_visible(cx, true);
+            message_view.show_plaintext(cx, display_buffer);
+        }
+        return false;
+    }
+
+    splash_widget.set_visible(cx, false);
+    link_preview_view.set_visible(cx, true);
+    let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
 
     bot_card_view.set_visible(cx, render_state.show_card);
     message_view.set_visible(cx, !render_state.show_card);
@@ -11860,7 +11909,11 @@ mod tests {
         let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
         let mut previous = HashMap::new();
         let mut previous_state = make_state("hello");
-        previous_state.advance_displayed(3);
+        // make_state() syncs displayed to target; push it back to simulate an
+        // in-flight tween with displayed=3 of 5.
+        previous_state.displayed_char_count = 3;
+        previous_state.displayed_byte_offset = 3;
+        previous_state.reveal_base_char = 0;
         previous.insert(event_id.clone(), previous_state);
 
         let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_full_snapshot(
@@ -11869,8 +11922,14 @@ mod tests {
         );
 
         let restored = rebuilt.get(&event_id).unwrap();
+        // Full-snapshot rebuild must preserve the in-flight tween: the
+        // previously-displayed prefix stays visible and the tween continues
+        // rather than snapping to fully revealed. This is the end-to-end
+        // guarantee that prevents the "stuck then jumps" artefact users
+        // observed when switching rooms mid-stream.
         assert_eq!(restored.displayed_char_count, 3);
         assert!(restored.is_live);
+        assert!(restored.needs_frame());
         assert!(should_schedule_frame);
     }
 
@@ -11884,6 +11943,89 @@ mod tests {
         let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_full_snapshot(
             [(event_id.clone(), String::from("hello world"), true)],
             None,
+        );
+
+        assert!(rebuilt.is_empty());
+        assert!(!should_schedule_frame);
+    }
+
+    #[test]
+    fn test_clear_cache_update_rebuild_starts_new_live_stream_without_cached_state() {
+        let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
+        let previous_item_texts = HashMap::new();
+
+        let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_clear_cache_update(
+            [(event_id.clone(), String::from("hello world"), true)],
+            None,
+            &previous_item_texts,
+        );
+
+        let state = rebuilt.get(&event_id).unwrap();
+        assert_eq!(state.displayed_char_count, state.target_char_count);
+        assert!(!state.needs_frame());
+        assert!(!should_schedule_frame);
+    }
+
+    #[test]
+    fn test_clear_cache_update_rebuild_restores_from_previous_item_text() {
+        let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
+        let previous_item_texts = HashMap::from([(event_id.clone(), String::from("hello"))]);
+
+        let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_clear_cache_update(
+            [(event_id.clone(), String::from("hello world"), true)],
+            None,
+            &previous_item_texts,
+        );
+
+        let state = rebuilt.get(&event_id).unwrap();
+        assert_eq!(state.displayed_char_count, state.target_char_count);
+        assert!(!state.needs_frame());
+        assert!(!should_schedule_frame);
+    }
+
+    #[test]
+    fn test_clear_cache_update_rebuild_preserves_in_flight_tween_from_cached_state() {
+        // Integration coverage: ensure a mid-tween cached state flowing
+        // through `rebuild_streaming_messages_for_clear_cache_update` keeps
+        // its in-flight tween rather than snapping to fully displayed. This
+        // is the end-to-end guarantee for the growth-rebuild case pushed
+        // through the real clear_cache path (not just restore() in
+        // isolation).
+        let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
+        let mut previous_state = make_state(&"a".repeat(20));
+        // Force mid-tween: displayed=5 of 20.
+        previous_state.displayed_char_count = 5;
+        previous_state.displayed_byte_offset = 5;
+        previous_state.reveal_base_char = 0;
+        let mut previous_streaming_messages = HashMap::new();
+        previous_streaming_messages.insert(event_id.clone(), previous_state);
+        let previous_item_texts = HashMap::new();
+
+        let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_clear_cache_update(
+            // Rebuild brings a LONGER target (50 chars) — growth case.
+            [(event_id.clone(), "a".repeat(50), true)],
+            Some(&previous_streaming_messages),
+            &previous_item_texts,
+        );
+
+        let state = rebuilt.get(&event_id).unwrap();
+        // displayed preserved at previous mid-tween position; fresh tween
+        // window anchored there.
+        assert_eq!(state.displayed_char_count, 5);
+        assert_eq!(state.reveal_base_char, 5);
+        assert!(state.needs_frame());
+        assert!(should_schedule_frame);
+    }
+
+    #[test]
+    fn test_clear_cache_update_rebuild_skips_unchanged_live_without_cached_state() {
+        let event_id: OwnedEventId = "$event-live:example.com".try_into().unwrap();
+        let previous_item_texts = HashMap::from([(event_id.clone(), String::from("hello"))]);
+
+        let (rebuilt, should_schedule_frame) = rebuild_streaming_messages_for_clear_cache_update(
+            [(event_id, String::from("hello"), true)],
+            None,
+            &previous_item_texts,
         );
 
         assert!(rebuilt.is_empty());
@@ -12571,25 +12713,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rich_markdown_streaming_prefers_full_snapshot_rendering() {
-        let formatted = FormattedBody::html("<p><strong>OpenClaw</strong></p>");
-        assert!(should_render_streaming_full_snapshot(
-            "根据搜索结果， **OpenClaw** 有两个不同的项目。",
-            Some(&formatted),
-            true,
-        ));
-    }
-
-    #[test]
-    fn test_plain_text_streaming_keeps_typewriter_path() {
-        assert!(!should_render_streaming_full_snapshot(
-            "你好，我是 Octos。",
-            None,
-            true,
-        ));
-    }
-
-    #[test]
     fn test_bot_timeline_card_visible_for_bot_text_message() {
         let state = compute_bot_timeline_render_state(
             "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。\n\n_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_",
@@ -12723,31 +12846,6 @@ mod tests {
         let body = "## 标题\n\n```rust\nlet answer = 42;\n```\n\n这里是中文总结。";
 
         assert!(!fenced_code_blocks_contain_cjk(body));
-    }
-
-    #[test]
-    fn test_streaming_update_requires_content_invalidation_for_new_full_snapshot_text() {
-        let state = StreamingAnimState::new("你好", true);
-
-        assert!(streaming_update_requires_content_invalidation(
-            &state,
-            "## 标题\n\n内容",
-            true,
-            true,
-        ));
-    }
-
-    #[test]
-    fn test_streaming_update_skips_invalidation_when_target_and_mode_are_unchanged() {
-        let mut state = StreamingAnimState::new("## 标题\n\n内容", true);
-        state.set_render_full_target(true);
-
-        assert!(!streaming_update_requires_content_invalidation(
-            &state,
-            "## 标题\n\n内容",
-            true,
-            true,
-        ));
     }
 
     #[test]
