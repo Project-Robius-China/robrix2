@@ -13,10 +13,27 @@ use crate::app_data_dir;
 
 
 const PROXY_STATE_FILE_NAME: &str = "proxy_state.json";
+// Loopback + private network ranges. A user filling in a public HTTP proxy
+// (e.g. Clash on 127.0.0.1:7890) typically also wants LAN homeservers to
+// stay direct — sending RFC 1918 traffic into a public proxy almost always
+// fails. Bypass is best-effort: matrix.* on a corporate VPN that resolves to
+// 10.x.x.x will also be treated as direct, which is the right call 99% of
+// the time (VPN already provides encrypted transport).
 pub const DEFAULT_NO_PROXY_BYPASS: &[&str] = &[
+    // Loopback
     "localhost",
     "127.0.0.1",
     "::1",
+    // IPv4 RFC 1918 private ranges (home routers, Docker, corporate LAN)
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    // IPv4 link-local (self-assigned when DHCP fails)
+    "169.254.0.0/16",
+    // IPv6 ULA (RFC 4193, IPv6 analog of RFC 1918)
+    "fc00::/7",
+    // IPv6 link-local
+    "fe80::/10",
 ];
 
 // Holds the CLI `--proxy` value parsed once at startup so every code path
@@ -210,10 +227,13 @@ mod tests {
                 "proxy debug {proxy_debug:?} should include bypass {expected}"
             );
         }
-        for unexpected in ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.1.58"] {
+        // Guard against accidentally baking specific user/CI homeserver IPs
+        // into the bypass list. CIDR ranges above cover these, but the
+        // verbatim addresses should never appear in the debug string.
+        for unexpected in ["192.168.1.58", "10.42.0.1", "172.20.0.5"] {
             assert!(
                 !proxy_debug.contains(unexpected),
-                "proxy debug {proxy_debug:?} should not include implicit bypass {unexpected}"
+                "proxy debug {proxy_debug:?} should not hardcode specific LAN IP {unexpected}"
             );
         }
     }

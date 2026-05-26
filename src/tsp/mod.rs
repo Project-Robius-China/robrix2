@@ -1442,10 +1442,10 @@ mod tests {
                 "proxy debug {proxy_debug:?} should include bypass {expected}"
             );
         }
-        for unexpected in ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.1.58"] {
+        for unexpected in ["192.168.1.58", "10.42.0.1", "172.20.0.5"] {
             assert!(
                 !proxy_debug.contains(unexpected),
-                "proxy debug {proxy_debug:?} should not include implicit bypass {unexpected}"
+                "proxy debug {proxy_debug:?} should not hardcode specific LAN IP {unexpected}"
             );
         }
     }

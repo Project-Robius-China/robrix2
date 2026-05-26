@@ -13,10 +13,16 @@ tags: [proxy, network, matrix, persistence]
 - Source of truth: `proxy_state.json` / GUI 保存值优先于 shell 或系统继承的 `http_proxy`、`https_proxy`、`all_proxy`、`NO_PROXY`
 - `proxy_url = null` 表示强制无代理，Robrix 创建的 reqwest / Matrix HTTP client 必须显式调用 `no_proxy()`，不依赖也不修改进程环境变量
 - `proxy_url = Some(...)` 表示启用代理，Robrix 创建的 reqwest / Matrix HTTP client 必须显式设置该 proxy URL 和统一 bypass 规则，不通过环境变量传播
-- Proxy bypass baseline: 只包含通用 loopback: `localhost`、`127.0.0.1`、`::1`
-- 本地 homeserver 地址不在代码中硬编码，也不从 homeserver URL 隐式追加 bypass；如未来需要配置非 loopback bypass，应作为 GUI 配置项进入 `proxy_state.json`
+- Proxy bypass baseline:
+  - Loopback: `localhost`、`127.0.0.1`、`::1`
+  - IPv4 RFC 1918 私有网段: `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`
+  - IPv4 link-local: `169.254.0.0/16`
+  - IPv6 ULA (RFC 4193): `fc00::/7`
+  - IPv6 link-local: `fe80::/10`
+- Bypass 是 best-effort，目的是让 GUI 填了公网 HTTP proxy（如 `127.0.0.1:7890` 的 Clash）的同时仍能直连 LAN 上的 self-hosted homeserver/Palpo。Trade-off: 公司 VPN 将公网 homeserver 解析到 RFC 1918 时也会走直连——这是预期行为（VPN 已提供加密传输），目前不提供 GUI 例外配置
+- 不硬编码具体 LAN IP；只硬编码标准化网段。如未来需要非 RFC 1918 的额外 bypass（如 CGNAT、自定义 LAN），应作为 GUI 配置项进入 `proxy_state.json`
 - Matrix SDK client、homeserver discovery reqwest client、直接下载 reqwest client、updater reqwest client 必须复用同一 proxy policy helper
-- TSP 使用不同 reqwest 版本，必须镜像同一 proxy policy: TLS 1.2、loopback bypass、无 GUI proxy 时显式禁用 system proxy
+- TSP 使用不同 reqwest 版本，必须镜像同一 proxy policy: TLS 1.2、共享 `DEFAULT_NO_PROXY_BYPASS`、无 GUI proxy 时显式禁用 system proxy
 - 显式 reqwest proxy 必须带相同 no-proxy bypass 规则；无 GUI proxy 时显式禁用 reqwest system proxy
 - 不新增 Cargo 依赖，不运行 `cargo fmt`
 
@@ -72,7 +78,7 @@ Scenario: 显式 reqwest client 遵循无代理策略
   Then client builder 显式禁用 system proxy
   And 本地 homeserver 请求不会被旧环境代理污染
 
-Scenario: 显式 reqwest proxy 只包含最小 loopback bypass
+Scenario: 显式 reqwest proxy 包含 loopback + 私有网段 bypass
   Test: build_policy_reqwest_client_attaches_no_proxy_bypass_for_local_addresses
   Level: unit
   Test Double: reqwest proxy debug representation
@@ -81,7 +87,9 @@ Scenario: 显式 reqwest proxy 只包含最小 loopback bypass
   When Robrix 构建 homeserver discovery、下载、restore session 或 updater 使用的 reqwest client
   Then 显式 proxy 使用相同代理 URL
   And no-proxy bypass 包含 localhost、127.0.0.1、::1
-  And 不包含硬编码私有网段或具体局域网 homeserver IP
+  And no-proxy bypass 包含 RFC 1918 网段（10.0.0.0/8、172.16.0.0/12、192.168.0.0/16）
+  And no-proxy bypass 包含 link-local 与 IPv6 ULA（169.254.0.0/16、fc00::/7、fe80::/10）
+  And 不包含硬编码的具体局域网 homeserver IP
 
 Scenario: 非 Matrix reqwest 路径遵循同一代理策略
   Test: updater_http_client_disables_system_proxy_when_proxy_is_none
