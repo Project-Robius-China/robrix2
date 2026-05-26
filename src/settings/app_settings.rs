@@ -554,7 +554,7 @@ impl AppSettings {
         self.view.check_box(cx, ids!(send_on_cmd_enter_toggle))
             .set_text(SEND_SHORTCUT_TOGGLE_LABEL);
         self.view.check_box(cx, ids!(send_on_cmd_enter_toggle))
-            .set_active(cx, !prefs.send_on_enter);
+            .set_active(cx, !prefs.send_on_enter, Animate::No);
         Self::update_send_shortcut_description(cx, &self.view, prefs.send_on_enter);
 
         let (small, medium, unlimited, custom, custom_text) = match prefs.thumbnail_max_height {
