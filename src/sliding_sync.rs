@@ -4988,10 +4988,6 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             if let Ok(mut client_opt) = DEFAULT_SSO_CLIENT.lock() {
                 let _ = client_opt.take();
             }
-            // Clear the SSO pre-build skip flag: a successful login proves the
-            // network can reach a homeserver, so future startups should retry
-            // the pre-build optimization instead of permanently skipping it.
-            clear_sso_prebuild_failure_flag();
 
             let logged_in_user_id: OwnedUserId = client.user_id()
                 .expect("BUG: Client::user_id() returned None after successful login!")
@@ -5014,6 +5010,14 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             if let Some(_existing) = CLIENT.lock().unwrap().replace(client.clone()) {
                 error!("BUG: unexpectedly replaced an existing client when initializing the matrix client.");
             }
+
+            // Clear the SSO pre-build skip flag now that CLIENT is set, so any
+            // in-flight pre-build that fails after this point will observe
+            // `get_client().is_some()` and skip writing a stale flag. A
+            // successful login proves the network reaches a homeserver, so
+            // future startups should retry the pre-build optimization
+            // instead of permanently skipping it.
+            clear_sso_prebuild_failure_flag();
 
             // Listen for changes to our verification status and incoming verification requests.
             add_verification_event_handlers_and_sync_client(client.clone());
