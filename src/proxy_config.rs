@@ -105,7 +105,16 @@ fn load_saved_proxy_url_from_path(state_path: &Path) -> Option<String> {
         }
     };
 
-    normalize_proxy_url(proxy_state.proxy_url.as_deref())
+    let normalized = normalize_proxy_url(proxy_state.proxy_url.as_deref())?;
+    // A previous version accepted socks5 schemes. After dropping that support,
+    // a stale socks5:// entry would otherwise reach build_policy_reqwest_client
+    // and surface as an opaque client-build failure. Warn and treat as None so
+    // the user can re-save a supported scheme via Settings.
+    if let Err(e) = validate_proxy_url(&normalized) {
+        warning!("Ignoring saved proxy URL {normalized:?} that no longer validates: {e}");
+        return None;
+    }
+    Some(normalized)
 }
 
 pub fn resolve_effective_proxy_url(proxy_override: Option<&str>) -> Option<String> {
@@ -206,6 +215,27 @@ mod tests {
 
         assert_eq!(saved.as_deref(), Some(proxy));
         assert_eq!(load_saved_proxy_url_from_path(&state_path).as_deref(), Some(proxy));
+        let _ = std::fs::remove_file(state_path);
+    }
+
+    #[test]
+    fn load_saved_proxy_url_ignores_legacy_socks_scheme() {
+        let state_path = proxy_state_test_path("legacy_socks");
+        if let Some(parent) = state_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let legacy_state = serde_json::to_vec(&ProxyState {
+            proxy_url: Some("socks5://127.0.0.1:1080".to_string()),
+        })
+        .unwrap();
+        std::fs::write(&state_path, legacy_state).unwrap();
+
+        let loaded = load_saved_proxy_url_from_path(&state_path);
+
+        assert_eq!(
+            loaded, None,
+            "legacy socks5 URL should be ignored on load so reqwest client builds don't fail with an opaque scheme error"
+        );
         let _ = std::fs::remove_file(state_path);
     }
 

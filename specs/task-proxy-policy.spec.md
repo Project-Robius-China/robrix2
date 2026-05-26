@@ -24,6 +24,7 @@ tags: [proxy, network, matrix, persistence]
 - Matrix SDK client、homeserver discovery reqwest client、直接下载 reqwest client、updater reqwest client 必须复用同一 proxy policy helper
 - TSP 使用不同 reqwest 版本，必须镜像同一 proxy policy: TLS 1.2、共享 `DEFAULT_NO_PROXY_BYPASS`、无 GUI proxy 时显式禁用 system proxy
 - 显式 reqwest proxy 必须带相同 no-proxy bypass 规则；无 GUI proxy 时显式禁用 reqwest system proxy
+- 加载已保存的 proxy 时，遇到当前 `validate_proxy_url` 不再支持的 scheme（如旧版 `socks5://`）必须降级为 None 并 `warning!`，不让陈旧记录在 HTTP client 构造期才以不透明错误浮出
 - 不新增 Cargo 依赖，不运行 `cargo fmt`
 
 ## Boundaries
@@ -111,6 +112,16 @@ Scenario: 无效代理 URL 被拒绝
   Given GUI 或登录页输入代理 "ftp://proxy.invalid"
   When Robrix 构建 discovery HTTP client
   Then 构建失败并报告不支持的 proxy scheme
+
+Scenario: 加载旧版 socks5 保存会降级为无代理
+  Test: load_saved_proxy_url_ignores_legacy_socks_scheme
+  Level: unit
+  Test Double: temp proxy_state file with legacy socks5 entry
+  Targets: src/proxy_config.rs
+  Given `proxy_state.json` 中保留了旧版本写入的 `socks5://127.0.0.1:1080`
+  When Robrix 启动并调用 `load_saved_proxy_url`
+  Then 返回 None 而非透传 socks5 URL
+  And 记录 warning 提示用户重新在 Settings 中保存支持的 scheme
 
 Scenario: cargo build passes
   Test: cargo_build
