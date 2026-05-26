@@ -4396,8 +4396,10 @@ pub fn start_matrix_tokio() -> Result<tokio::runtime::Handle> {
         }
 
         // If this device previously failed to reach the default homeserver during pre-build,
-        // skip the attempt entirely to avoid spamming ERRORs from matrix-sdk internals.
+        // skip the attempt entirely to avoid spamming error logs from matrix-sdk internals.
         // The SSO login path always falls back to building a fresh client on click.
+        // The flag is cleared after any successful login, so a working network
+        // restores the optimization automatically without manual intervention.
         let prebuild_flag_path = app_data_dir().join(".sso_prebuild_failed");
         if prebuild_flag_path.exists() {
             log!("Skipping DEFAULT_SSO_CLIENT pre-build (previously failed on this device; SSO login will build a fresh client on click).");
@@ -4415,6 +4417,8 @@ pub fn start_matrix_tokio() -> Result<tokio::runtime::Handle> {
             }
             Err(e) => {
                 // Persist the failure so future startups skip this noisy pre-build path.
+                // Ensure the parent dir exists on fresh installs where no DB has been created yet.
+                let _ = std::fs::create_dir_all(app_data_dir());
                 let _ = std::fs::write(&prebuild_flag_path, b"");
                 warning!(
                     "DEFAULT_SSO_CLIENT pre-build failed; SSO login will build a fresh client on click. \
@@ -4956,6 +4960,10 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             if let Ok(mut client_opt) = DEFAULT_SSO_CLIENT.lock() {
                 let _ = client_opt.take();
             }
+            // Clear the SSO pre-build skip flag: a successful login proves the
+            // network can reach a homeserver, so future startups should retry
+            // the pre-build optimization instead of permanently skipping it.
+            let _ = std::fs::remove_file(app_data_dir().join(".sso_prebuild_failed"));
 
             let logged_in_user_id: OwnedUserId = client.user_id()
                 .expect("BUG: Client::user_id() returned None after successful login!")
