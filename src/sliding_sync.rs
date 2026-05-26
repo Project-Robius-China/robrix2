@@ -4416,14 +4416,22 @@ pub fn start_matrix_tokio() -> Result<tokio::runtime::Handle> {
                 let _ = std::fs::remove_file(&prebuild_flag_path);
             }
             Err(e) => {
-                // Persist the failure so future startups skip this noisy pre-build path.
-                // Ensure the parent dir exists on fresh installs where no DB has been created yet.
-                let _ = std::fs::create_dir_all(app_data_dir());
-                let _ = std::fs::write(&prebuild_flag_path, b"");
-                warning!(
-                    "DEFAULT_SSO_CLIENT pre-build failed; SSO login will build a fresh client on click. \
-                     Cause: {e}"
-                );
+                // If the user has already logged in (e.g. password or custom-homeserver SSO)
+                // while the pre-build was still racing the network, do NOT record a failure:
+                // we'd be writing the flag right after the post-login cleanup just cleared it,
+                // which would permanently disable the optimization for the wrong reason.
+                if get_client().is_some() {
+                    log!("DEFAULT_SSO_CLIENT pre-build failed after user already logged in; not recording skip flag. Cause: {e}");
+                } else {
+                    // Persist the failure so future startups skip this noisy pre-build path.
+                    // Ensure the parent dir exists on fresh installs where no DB has been created yet.
+                    let _ = std::fs::create_dir_all(app_data_dir());
+                    let _ = std::fs::write(&prebuild_flag_path, b"");
+                    warning!(
+                        "DEFAULT_SSO_CLIENT pre-build failed; SSO login will build a fresh client on click. \
+                         Cause: {e}"
+                    );
+                }
             }
         };
         DEFAULT_SSO_CLIENT_NOTIFIER.notify_one();
@@ -5092,6 +5100,14 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                                 log!("matrix worker task ended with error due to account switch: {e:?}");
                             } else {
                                 error!("Error: matrix worker task ended:\n\t{e:?}");
+                                rooms_list::enqueue_rooms_list_update(RoomsListUpdate::Status {
+                                    status: e.to_string(),
+                                });
+                                enqueue_popup_notification(
+                                    format!("Matrix worker error: {e}"),
+                                    PopupKind::Error,
+                                    None,
+                                );
                             }
                         },
                         Err(e) => {
