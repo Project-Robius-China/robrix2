@@ -4296,6 +4296,30 @@ fn should_prebuild_default_sso_client(
     most_recent_user_id.is_none() && !cli_has_valid_username_password
 }
 
+/// Path to the marker file that records a previous [`DEFAULT_SSO_CLIENT`] pre-build
+/// failure on this device, so subsequent startups can skip the noisy attempt.
+fn sso_prebuild_failure_flag_path() -> PathBuf {
+    app_data_dir().join(".sso_prebuild_failed")
+}
+
+/// Records that the [`DEFAULT_SSO_CLIENT`] pre-build failed on this device,
+/// so future startups skip the attempt instead of re-spamming matrix-sdk error logs.
+///
+/// Safe to call from a fresh install: the parent directory is created on demand.
+/// Errors are swallowed: at worst the flag isn't persisted and the noise repeats once more.
+fn record_sso_prebuild_failure_flag() {
+    let _ = std::fs::create_dir_all(app_data_dir());
+    let _ = std::fs::write(sso_prebuild_failure_flag_path(), b"");
+}
+
+/// Clears the [`DEFAULT_SSO_CLIENT`] pre-build skip flag, if present.
+///
+/// Called after any successful pre-build or login, so a working network restores
+/// the optimization automatically without manual filesystem intervention.
+fn clear_sso_prebuild_failure_flag() {
+    let _ = std::fs::remove_file(sso_prebuild_failure_flag_path());
+}
+
 async fn attach_room_to_space(client: &Client, child_room: &Room, space_id: &OwnedRoomId) -> Result<()> {
     let user_id = client.user_id().ok_or_else(|| anyhow!("Current user ID not found"))?;
     let space_room = client.get_room(space_id)
@@ -4400,8 +4424,7 @@ pub fn start_matrix_tokio() -> Result<tokio::runtime::Handle> {
         // The SSO login path always falls back to building a fresh client on click.
         // The flag is cleared after any successful login, so a working network
         // restores the optimization automatically without manual intervention.
-        let prebuild_flag_path = app_data_dir().join(".sso_prebuild_failed");
-        if prebuild_flag_path.exists() {
+        if sso_prebuild_failure_flag_path().exists() {
             log!("Skipping DEFAULT_SSO_CLIENT pre-build (previously failed on this device; SSO login will build a fresh client on click).");
             DEFAULT_SSO_CLIENT_NOTIFIER.notify_one();
             Cx::post_action(LoginAction::SsoPending(false));
@@ -4413,7 +4436,7 @@ pub fn start_matrix_tokio() -> Result<tokio::runtime::Handle> {
                 DEFAULT_SSO_CLIENT.lock().unwrap()
                     .get_or_insert(client_and_session);
                 // Clear any stale failure flag (e.g., after the user configures a proxy).
-                let _ = std::fs::remove_file(&prebuild_flag_path);
+                clear_sso_prebuild_failure_flag();
             }
             Err(e) => {
                 // If the user has already logged in (e.g. password or custom-homeserver SSO)
@@ -4423,10 +4446,7 @@ pub fn start_matrix_tokio() -> Result<tokio::runtime::Handle> {
                 if get_client().is_some() {
                     log!("DEFAULT_SSO_CLIENT pre-build failed after user already logged in; not recording skip flag. Cause: {e}");
                 } else {
-                    // Persist the failure so future startups skip this noisy pre-build path.
-                    // Ensure the parent dir exists on fresh installs where no DB has been created yet.
-                    let _ = std::fs::create_dir_all(app_data_dir());
-                    let _ = std::fs::write(&prebuild_flag_path, b"");
+                    record_sso_prebuild_failure_flag();
                     warning!(
                         "DEFAULT_SSO_CLIENT pre-build failed; SSO login will build a fresh client on click. \
                          Cause: {e}"
@@ -4971,7 +4991,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             // Clear the SSO pre-build skip flag: a successful login proves the
             // network can reach a homeserver, so future startups should retry
             // the pre-build optimization instead of permanently skipping it.
-            let _ = std::fs::remove_file(app_data_dir().join(".sso_prebuild_failed"));
+            clear_sso_prebuild_failure_flag();
 
             let logged_in_user_id: OwnedUserId = client.user_id()
                 .expect("BUG: Client::user_id() returned None after successful login!")
