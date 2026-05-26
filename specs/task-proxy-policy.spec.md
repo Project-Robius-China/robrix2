@@ -6,16 +6,17 @@ tags: [proxy, network, matrix, persistence]
 
 ## Intent
 
-统一 Robrix2 的网络代理策略，消除 GUI 保存配置与进程继承环境变量同时生效导致的请求路径不一致。GUI 保存的 `proxy_state.json` 是唯一来源：关闭代理必须强制无代理，开启代理必须通过同一套策略影响 Robrix 发起的 HTTP/Matrix 请求，并且本地 homeserver 不能被外部代理环境劫持。
+统一 Robrix2 的网络代理策略，消除 GUI 保存配置与进程继承环境变量同时生效导致的请求路径不一致。GUI 保存的 `proxy_state.json` 是唯一来源：关闭代理必须让 Robrix 自己创建的 HTTP client 显式禁用系统代理，开启代理必须通过同一套显式策略影响 Robrix 发起的 HTTP/Matrix 请求，并且本地 homeserver 不能被外部代理环境劫持。
 
 ## Decisions
 
 - Source of truth: `proxy_state.json` / GUI 保存值优先于 shell 或系统继承的 `http_proxy`、`https_proxy`、`all_proxy`、`NO_PROXY`
-- `proxy_url = null` 表示强制无代理，启动和保存时都必须清理进程代理环境
-- `proxy_url = Some(...)` 表示启用代理，必须设置 `http_proxy`、`https_proxy`、`all_proxy` 与 `NO_PROXY`/`no_proxy`
+- `proxy_url = null` 表示强制无代理，Robrix 创建的 reqwest / Matrix HTTP client 必须显式调用 `no_proxy()`，不依赖也不修改进程环境变量
+- `proxy_url = Some(...)` 表示启用代理，Robrix 创建的 reqwest / Matrix HTTP client 必须显式设置该 proxy URL 和统一 bypass 规则，不通过环境变量传播
 - Proxy bypass baseline: 只包含通用 loopback: `localhost`、`127.0.0.1`、`::1`
 - 本地 homeserver 地址不在代码中硬编码，也不从 homeserver URL 隐式追加 bypass；如未来需要配置非 loopback bypass，应作为 GUI 配置项进入 `proxy_state.json`
-- Matrix SDK client、homeserver discovery reqwest client、直接下载 reqwest client 必须复用同一 proxy policy helper
+- Matrix SDK client、homeserver discovery reqwest client、直接下载 reqwest client、updater reqwest client 必须复用同一 proxy policy helper
+- TSP 使用不同 reqwest 版本，必须镜像同一 proxy policy: TLS 1.2、loopback bypass、无 GUI proxy 时显式禁用 system proxy
 - 显式 reqwest proxy 必须带相同 no-proxy bypass 规则；无 GUI proxy 时显式禁用 reqwest system proxy
 - 不新增 Cargo 依赖，不运行 `cargo fmt`
 
@@ -39,45 +40,35 @@ tags: [proxy, network, matrix, persistence]
 
 ## Completion Criteria
 
-Scenario: 启动时无保存代理会清理继承环境
-  Test: proxy_state_none_clears_inherited_env_proxy_vars
+Scenario: 保存关闭代理不会修改进程环境
+  Test: save_proxy_url_none_persists_direct_policy
   Level: unit
-  Test Double: serialized process env snapshot
+  Test Double: temp proxy_state file
   Targets: src/proxy_config.rs
-  Given 进程环境里存在旧的 `http_proxy`、`https_proxy`、`all_proxy` 和 `NO_PROXY`
-  And `proxy_state.json` 不存在或 `proxy_url` 为 null
-  When Robrix 启动并应用保存的代理配置
-  Then 旧代理环境变量被清理
-  And 后续 HTTP client 不会自动继承 system proxy
-
-Scenario: 保存关闭代理会立即强制无代理
-  Test: save_proxy_url_none_clears_env_proxy_vars
-  Level: unit
-  Test Double: temp proxy_state file and serialized process env snapshot
-  Targets: src/proxy_config.rs
-  Given 进程环境里存在旧的代理变量
+  Given GUI proxy policy 为 None
   When GUI 保存 `proxy_url = null`
   Then `proxy_state.json` 保存 null
-  And 进程代理环境变量被清理
+  And Robrix 不提供任何运行期写入代理环境变量的 production API
+  And 强制无代理由后续 HTTP client 的显式 `no_proxy()` 实现
 
-Scenario: 保存开启代理会设置统一环境和 bypass
-  Test: save_proxy_url_some_sets_proxy_env_and_bypass_rules
+Scenario: 保存开启代理不会通过环境变量传播
+  Test: save_proxy_url_some_persists_proxy_policy
   Level: unit
-  Test Double: temp proxy_state file and serialized process env snapshot
+  Test Double: temp proxy_state file
   Targets: src/proxy_config.rs
   Given GUI 输入代理 "http://127.0.0.1:7890"
   When 保存代理配置
-  Then `http_proxy`、`https_proxy`、`all_proxy` 都等于该代理
-  And `NO_PROXY` 或 `no_proxy` 包含 localhost 和 loopback bypass 规则
+  Then `proxy_state.json` 保存该代理
+  And Robrix 不提供任何运行期写入代理环境变量的 production API
+  And 代理传播由后续 HTTP client 的显式 proxy builder 实现
 
 Scenario: 显式 reqwest client 遵循无代理策略
   Test: build_policy_reqwest_client_disables_system_proxy_when_proxy_is_none
   Level: unit
-  Test Double: serialized process env snapshot
+  Test Double: in-memory client builder construction
   Targets: src/proxy_config.rs, src/sliding_sync.rs
-  Given shell 环境中存在 `http_proxy`
-  And GUI proxy policy 为 None
-  When Robrix 构建 homeserver discovery 或下载使用的 reqwest client
+  Given GUI proxy policy 为 None
+  When Robrix 构建 homeserver discovery、下载、restore session 或 updater 使用的 reqwest client
   Then client builder 显式禁用 system proxy
   And 本地 homeserver 请求不会被旧环境代理污染
 
@@ -87,10 +78,22 @@ Scenario: 显式 reqwest proxy 只包含最小 loopback bypass
   Test Double: reqwest proxy debug representation
   Targets: src/proxy_config.rs, src/sliding_sync.rs
   Given GUI proxy policy 为 "http://127.0.0.1:7890"
-  When Robrix 构建 homeserver discovery 或下载使用的 reqwest client
+  When Robrix 构建 homeserver discovery、下载、restore session 或 updater 使用的 reqwest client
   Then 显式 proxy 使用相同代理 URL
   And no-proxy bypass 包含 localhost、127.0.0.1、::1
   And 不包含硬编码私有网段或具体局域网 homeserver IP
+
+Scenario: 非 Matrix reqwest 路径遵循同一代理策略
+  Test: updater_http_client_disables_system_proxy_when_proxy_is_none
+  Test: tsp_proxy_policy_disables_system_proxy_when_proxy_is_none
+  Test: tsp_proxy_policy_attaches_no_proxy_bypass_for_local_addresses
+  Level: unit
+  Test Double: code path inspection and shared helper construction
+  Targets: src/updater.rs, src/tsp/mod.rs
+  Given GUI proxy policy 为 None
+  When updater 或 TSP 创建 reqwest client
+  Then updater 复用 `build_policy_reqwest_client`
+  And TSP 镜像同一 policy 并显式调用 `no_proxy()`
 
 Scenario: 无效代理 URL 被拒绝
   Test: discovery_http_client_rejects_invalid_proxy_override

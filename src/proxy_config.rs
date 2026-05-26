@@ -1,8 +1,7 @@
-use std::{io::ErrorKind, path::{Path, PathBuf}, sync::{Mutex, OnceLock}, time::Duration};
+use std::{io::ErrorKind, path::{Path, PathBuf}, sync::OnceLock, time::Duration};
 
-use makepad_widgets::{error, warning};
+use makepad_widgets::warning;
 use matrix_sdk::reqwest::{Client, ClientBuilder, NoProxy, Proxy, tls};
-use robius_proxy::ProxyConfig;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -19,8 +18,6 @@ pub const DEFAULT_NO_PROXY_BYPASS: &[&str] = &[
     "127.0.0.1",
     "::1",
 ];
-
-static PROXY_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 // Holds the CLI `--proxy` value parsed once at startup so every code path
 // (restore_session, downloads, SSO pre-build) can resolve the same override
@@ -100,12 +97,6 @@ pub fn resolve_effective_proxy_url(proxy_override: Option<&str>) -> Option<Strin
         .or_else(load_saved_proxy_url)
 }
 
-pub fn effective_proxy_url_from_saved_policy() -> Result<Option<String>, String> {
-    let saved_proxy = load_saved_proxy_url();
-    apply_proxy_to_process_env(saved_proxy.as_deref())?;
-    Ok(saved_proxy)
-}
-
 pub fn save_proxy_url(proxy_url: Option<&str>) -> Result<Option<String>, String> {
     save_proxy_url_to_path(proxy_url, &proxy_state_file_path())
 }
@@ -127,67 +118,10 @@ fn save_proxy_url_to_path(proxy_url: Option<&str>, state_path: &Path) -> Result<
     let serialized_proxy_state = serde_json::to_vec(&proxy_state)
         .map_err(|e| format!("Failed to serialize proxy state: {e}"))?;
 
-    // Hold the env lock across the file write + env apply so two concurrent
-    // saves can never leave file and env disagreeing.
-    let _env_guard = lock_proxy_env();
     std::fs::write(state_path, serialized_proxy_state)
         .map_err(|e| format!("Failed to write proxy state file {}: {e}", state_path.display()))?;
-    apply_proxy_to_env_locked(normalized_proxy_url.as_deref())?;
 
     Ok(normalized_proxy_url)
-}
-
-fn build_env_proxy_config(proxy_url: &str) -> ProxyConfig {
-    ProxyConfig::new()
-        .direct(false)
-        .manual_all(proxy_url)
-        .manual_http(proxy_url)
-        .manual_https(proxy_url)
-        .bypass(DEFAULT_NO_PROXY_BYPASS.iter().copied())
-}
-
-fn lock_proxy_env() -> std::sync::MutexGuard<'static, ()> {
-    // Recover from a prior panic-while-held: the env vars may be in an unknown
-    // state, but every caller of this lock is about to overwrite them anyway.
-    match PROXY_ENV_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            PROXY_ENV_LOCK.clear_poison();
-            poisoned.into_inner()
-        }
-    }
-}
-
-fn apply_proxy_to_env_locked(proxy_url: Option<&str>) -> Result<(), String> {
-    let normalized_proxy_url = normalize_proxy_url(proxy_url);
-    match normalized_proxy_url.as_deref() {
-        Some(proxy_url) => {
-            validate_proxy_url(proxy_url)?;
-            build_env_proxy_config(proxy_url)
-                .apply_to_env()
-                .map_err(|e| format!("Failed to apply proxy to process env: {e:?}"))?;
-        }
-        None => {
-            ProxyConfig::clear_env()
-                .map_err(|e| format!("Failed to clear proxy env vars: {e:?}"))?;
-        }
-    }
-    Ok(())
-}
-
-pub fn apply_proxy_to_process_env(proxy_url: Option<&str>) -> Result<(), String> {
-    let _env_guard = lock_proxy_env();
-    apply_proxy_to_env_locked(proxy_url)
-}
-
-pub fn load_and_apply_saved_proxy_to_process_env() -> Option<String> {
-    match effective_proxy_url_from_saved_policy() {
-        Ok(saved_proxy) => saved_proxy,
-        Err(e) => {
-            error!("Failed to apply saved proxy to process env: {e}");
-            load_saved_proxy_url()
-        }
-    }
 }
 
 pub fn build_reqwest_proxy(
@@ -227,58 +161,7 @@ pub fn build_policy_reqwest_client(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-
-    const PROXY_ENV_VARS: &[&str] = &[
-        "http_proxy",
-        "HTTP_PROXY",
-        "https_proxy",
-        "HTTPS_PROXY",
-        "all_proxy",
-        "ALL_PROXY",
-        "ftp_proxy",
-        "FTP_PROXY",
-        "no_proxy",
-        "NO_PROXY",
-    ];
-
-    static TEST_PROXY_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn with_proxy_env_lock(test: impl FnOnce()) {
-        let _guard = TEST_PROXY_ENV_LOCK.lock().unwrap();
-        let snapshot: Vec<(&str, Option<String>)> = PROXY_ENV_VARS
-            .iter()
-            .map(|key| (*key, std::env::var(key).ok()))
-            .collect();
-
-        clear_proxy_env();
-        test();
-        clear_proxy_env();
-
-        for (key, value) in snapshot {
-            if let Some(value) = value {
-                set_env_var(key, &value);
-            }
-        }
-    }
-
-    fn clear_proxy_env() {
-        for key in PROXY_ENV_VARS {
-            remove_env_var(key);
-        }
-    }
-
-    fn remove_env_var(key: &str) {
-        // Tests serialize environment mutation with TEST_PROXY_ENV_LOCK.
-        unsafe { std::env::remove_var(key); }
-    }
-
-    fn set_env_var(key: &str, value: &str) {
-        // Tests serialize environment mutation with TEST_PROXY_ENV_LOCK.
-        unsafe { std::env::set_var(key, value); }
-    }
 
     fn proxy_state_test_path(name: &str) -> PathBuf {
         std::env::temp_dir()
@@ -286,105 +169,53 @@ mod tests {
             .join(PROXY_STATE_FILE_NAME)
     }
 
-    fn assert_proxy_env_cleared() {
-        for key in PROXY_ENV_VARS {
-            assert!(
-                std::env::var(key).is_err(),
-                "{key} should be cleared but was {:?}",
-                std::env::var(key).ok()
-            );
-        }
-    }
+    #[test]
+    fn save_proxy_url_none_persists_direct_policy() {
+        let state_path = proxy_state_test_path("none");
 
-    fn set_all_proxy_env(value: &str) {
-        for key in PROXY_ENV_VARS {
-            set_env_var(key, value);
-        }
+        let saved = save_proxy_url_to_path(None, &state_path).unwrap();
+
+        assert_eq!(saved, None);
+        assert_eq!(load_saved_proxy_url_from_path(&state_path), None);
+        let _ = std::fs::remove_file(state_path);
     }
 
     #[test]
-    fn proxy_state_none_clears_inherited_env_proxy_vars() {
-        with_proxy_env_lock(|| {
-            set_all_proxy_env("http://127.0.0.1:9999");
+    fn save_proxy_url_some_persists_proxy_policy() {
+        let proxy = "http://127.0.0.1:7890";
+        let state_path = proxy_state_test_path("some");
 
-            apply_proxy_to_process_env(None).unwrap();
+        let saved = save_proxy_url_to_path(Some(proxy), &state_path).unwrap();
 
-            assert_proxy_env_cleared();
-        });
-    }
-
-    #[test]
-    fn save_proxy_url_none_clears_env_proxy_vars() {
-        with_proxy_env_lock(|| {
-            set_all_proxy_env("http://127.0.0.1:9999");
-            let state_path = proxy_state_test_path("none");
-
-            let saved = save_proxy_url_to_path(None, &state_path).unwrap();
-
-            assert_eq!(saved, None);
-            assert_eq!(load_saved_proxy_url_from_path(&state_path), None);
-            assert_proxy_env_cleared();
-            let _ = std::fs::remove_file(state_path);
-        });
-    }
-
-    #[test]
-    fn save_proxy_url_some_sets_proxy_env_and_bypass_rules() {
-        with_proxy_env_lock(|| {
-            let proxy = "http://127.0.0.1:7890";
-            let state_path = proxy_state_test_path("some");
-
-            let saved = save_proxy_url_to_path(Some(proxy), &state_path).unwrap();
-
-            assert_eq!(saved.as_deref(), Some(proxy));
-            assert_eq!(load_saved_proxy_url_from_path(&state_path).as_deref(), Some(proxy));
-            assert_eq!(std::env::var("http_proxy").as_deref(), Ok(proxy));
-            assert_eq!(std::env::var("https_proxy").as_deref(), Ok(proxy));
-            assert_eq!(std::env::var("all_proxy").as_deref(), Ok(proxy));
-
-            let no_proxy = std::env::var("NO_PROXY")
-                .or_else(|_| std::env::var("no_proxy"))
-                .unwrap();
-            for expected in DEFAULT_NO_PROXY_BYPASS {
-                assert!(
-                    no_proxy.split(',').any(|value| value == *expected),
-                    "NO_PROXY {no_proxy:?} should include {expected}"
-                );
-            }
-            let _ = std::fs::remove_file(state_path);
-        });
+        assert_eq!(saved.as_deref(), Some(proxy));
+        assert_eq!(load_saved_proxy_url_from_path(&state_path).as_deref(), Some(proxy));
+        let _ = std::fs::remove_file(state_path);
     }
 
     #[test]
     fn build_policy_reqwest_client_disables_system_proxy_when_proxy_is_none() {
-        with_proxy_env_lock(|| {
-            set_env_var("http_proxy", "http://127.0.0.1:9999");
+        let client = build_policy_reqwest_client(None, None).unwrap();
 
-            let client = build_policy_reqwest_client(None, None).unwrap();
-
-            drop(client);
-        });
+        drop(client);
     }
 
     #[test]
     fn build_policy_reqwest_client_attaches_no_proxy_bypass_for_local_addresses() {
-        with_proxy_env_lock(|| {
-            let proxy = build_reqwest_proxy("http://127.0.0.1:7890").unwrap();
-            let proxy_debug = format!("{proxy:?}");
+        let proxy = build_reqwest_proxy("http://127.0.0.1:7890").unwrap();
+        let proxy_debug = format!("{proxy:?}");
 
-            for expected in DEFAULT_NO_PROXY_BYPASS {
-                assert!(
-                    proxy_debug.contains(expected),
-                    "proxy debug {proxy_debug:?} should include bypass {expected}"
-                );
-            }
-            for unexpected in ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.1.58"] {
-                assert!(
-                    !proxy_debug.contains(unexpected),
-                    "proxy debug {proxy_debug:?} should not include implicit bypass {unexpected}"
-                );
-            }
-        });
+        for expected in DEFAULT_NO_PROXY_BYPASS {
+            assert!(
+                proxy_debug.contains(expected),
+                "proxy debug {proxy_debug:?} should include bypass {expected}"
+            );
+        }
+        for unexpected in ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.1.58"] {
+            assert!(
+                !proxy_debug.contains(unexpected),
+                "proxy debug {proxy_debug:?} should not include implicit bypass {unexpected}"
+            );
+        }
     }
 
     #[test]
@@ -409,22 +240,5 @@ mod tests {
                 "expected scheme-rejection message, got {err:?}"
             );
         }
-    }
-
-    #[test]
-    fn apply_proxy_to_process_env_recovers_from_poisoned_lock() {
-        with_proxy_env_lock(|| {
-            // Simulate a prior panic-while-held by poisoning the lock manually.
-            let _ = std::panic::catch_unwind(|| {
-                let _guard = PROXY_ENV_LOCK.lock().unwrap();
-                panic!("poisoning PROXY_ENV_LOCK on purpose");
-            });
-            assert!(PROXY_ENV_LOCK.is_poisoned(), "lock should be poisoned for the test setup");
-
-            // The next apply call must transparently recover and succeed.
-            apply_proxy_to_process_env(Some("http://127.0.0.1:7890")).unwrap();
-            assert_eq!(std::env::var("http_proxy").as_deref(), Ok("http://127.0.0.1:7890"));
-            assert!(!PROXY_ENV_LOCK.is_poisoned(), "lock should be cleared after recovery");
-        });
     }
 }
