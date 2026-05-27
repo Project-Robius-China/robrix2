@@ -26,6 +26,16 @@ use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWi
 use crate::shared::file_upload_modal::{FilePreviewerMetaData, ThumbnailData};
 
 const ROOM_INFO_CARD_MOBILE_BREAKPOINT: f32 = 700.0;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+enum PendingFileSelection {
+    Selected(std::path::PathBuf),
+    Cancelled,
+    Error(String),
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+type PendingFileSelectionReceiver = std::sync::mpsc::Receiver<PendingFileSelection>;
+
 #[cfg(test)]
 const TRANSLATION_LANG_POPUP_WIDTH: f64 = 220.0;
 #[cfg(test)]
@@ -1092,6 +1102,9 @@ pub struct RoomInputBar {
     /// The pending file load operation, if any. Contains the receiver channel
     /// for receiving the loaded file data from a background thread.
     #[rust] pending_file_load: Option<crate::shared::file_upload_modal::FileLoadReceiver>,
+    /// The pending file picker operation, if any. Contains the receiver channel
+    /// for receiving the selected file path from a background thread.
+    #[rust] pending_file_selection: Option<PendingFileSelectionReceiver>,
 
     // --- Translation state ---
     /// Whether real-time translation is currently active.
@@ -1188,6 +1201,32 @@ impl Widget for RoomInputBar {
 
         // Handle signal events for pending file loads from background threads.
         if let Event::Signal = event {
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            if let Some(receiver) = &self.pending_file_selection {
+                let mut remove_receiver = false;
+                match receiver.try_recv() {
+                    Ok(PendingFileSelection::Selected(path)) => {
+                        self.start_file_preview_load(cx, path);
+                        remove_receiver = true;
+                    }
+                    Ok(PendingFileSelection::Cancelled) => {
+                        remove_receiver = true;
+                    }
+                    Ok(PendingFileSelection::Error(error)) => {
+                        enqueue_popup_notification(error, PopupKind::Error, None);
+                        remove_receiver = true;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        remove_receiver = true;
+                    }
+                }
+                if remove_receiver {
+                    self.pending_file_selection = None;
+                    self.redraw(cx);
+                }
+            }
+
             if let Some(receiver) = &self.pending_file_load {
                 let mut remove_receiver = false;
                 match receiver.try_recv() {
@@ -1981,16 +2020,45 @@ impl RoomInputBar {
     /// Opens the native file picker dialog to select a file for upload.
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     fn open_file_picker(&mut self, cx: &mut Cx) {
-        // Run file dialog on main thread (required for non-windowed environments)
-        let dialog = rfd::FileDialog::new()
+        if self.pending_file_selection.is_some() || self.pending_file_load.is_some() {
+            enqueue_popup_notification(
+                "A file selection or file load is already in progress.",
+                PopupKind::Error,
+                None,
+            );
+            return;
+        }
+
+        let dialog_task = rfd::AsyncFileDialog::new()
             .set_title("Select file to upload")
             .add_filter("All files", &["*"])
             .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
-            .add_filter("Documents", &["pdf", "doc", "docx", "txt", "rtf"]);
+            .add_filter("Documents", &["pdf", "doc", "docx", "txt", "rtf"])
+            .pick_file();
 
-        if let Some(selected_file_path) = dialog.pick_file() {
-            self.start_file_preview_load(cx, selected_file_path);
-        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.pending_file_selection = Some(receiver);
+        cx.spawn_thread(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    if sender.send(PendingFileSelection::Error(format!("Failed to open file picker: {error}"))).is_err() {
+                        makepad_widgets::error!("Failed to send file picker error to UI: receiver dropped");
+                    }
+                    SignalToUI::set_ui_signal();
+                    return;
+                }
+            };
+            let selection = runtime.block_on(dialog_task);
+            let result = match selection {
+                Some(file_handle) => PendingFileSelection::Selected(file_handle.path().to_path_buf()),
+                None => PendingFileSelection::Cancelled,
+            };
+            if sender.send(result).is_err() {
+                makepad_widgets::error!("Failed to send file picker result to UI: receiver dropped");
+            }
+            SignalToUI::set_ui_signal();
+        });
     }
 
     /// Shows a "not supported" message on mobile platforms.
@@ -2290,11 +2358,11 @@ impl RoomInputBarRef {
     }
 
     /// Shows an upload error with retry option.
-    pub fn show_upload_error(&self, cx: &mut Cx, error: &str, file_data: FileData) {
+    pub fn show_upload_error(&self, cx: &mut Cx, error: &str, file_data: FileData, retryable: bool) {
         let Some(inner) = self.borrow() else { return };
         inner.child_by_path(ids!(upload_progress_view))
             .as_upload_progress_view()
-            .show_error(cx, error, file_data);
+            .show_error(cx, error, file_data, retryable);
     }
 
     /// Handles a confirmed file upload from the file upload modal.

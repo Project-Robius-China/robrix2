@@ -17,7 +17,7 @@ script_mod! {
         height: Fit,
         flow: Down,
         padding: 10,
-        spacing: 8,
+        spacing: 15,
 
         show_bg: true,
         draw_bg +: {
@@ -44,6 +44,8 @@ script_mod! {
 
             file_name_label := Label {
                 width: Fill,
+                flow: Flow.Right {wrap: true}
+                margin: Inset { left: 1 }
                 draw_text +: {
                     text_style: REGULAR_TEXT { font_size: 10 },
                     color: (COLOR_TEXT)
@@ -76,14 +78,17 @@ script_mod! {
 
             status_label := Label {
                 width: Fill,
+                flow: Flow.Right {wrap: true}
+                margin: Inset { left: 1 }
                 draw_text +: {
-                    text_style: REGULAR_TEXT { font_size: 9 },
+                    text_style: REGULAR_TEXT { font_size: 11 },
                     color: (SMALL_STATE_TEXT_COLOR)
                 }
                 text: ""
             }
 
             retry_button := RobrixPositiveIconButton {
+                visible: false,
                 enabled: false,
                 padding: Inset{top: 4, bottom: 4, left: 8, right: 8}
                 draw_text +: {
@@ -174,6 +179,7 @@ impl UploadProgressView {
         self.label(cx, ids!(file_name_label)).set_text(cx, file_name);
         self.label(cx, ids!(status_label)).set_text(cx, "Starting upload...");
         self.button(cx, ids!(retry_button)).set_enabled(cx, false);
+        self.button(cx, ids!(retry_button)).set_visible(cx, false);
         self.button(cx, ids!(cancel_button)).set_enabled(cx, true);
 
         // Reset progress bar
@@ -220,7 +226,7 @@ impl UploadProgressView {
     }
 
     /// Shows an error state with the given message.
-    pub fn show_error(&mut self, cx: &mut Cx, error: &str, file_data: FileData) {
+    pub fn show_error(&mut self, cx: &mut Cx, error: &str, file_data: FileData, retryable: bool) {
         self.state = UploadViewState::Error {
             message: error.to_string(),
             file_data,
@@ -229,7 +235,8 @@ impl UploadProgressView {
         // Update UI for error state
         self.label(cx, ids!(status_label))
             .set_text(cx, &format!("Error: {}", error));
-        self.button(cx, ids!(retry_button)).set_enabled(cx, true);
+        self.button(cx, ids!(retry_button)).set_enabled(cx, retryable);
+        self.button(cx, ids!(retry_button)).set_visible(cx, retryable);
         self.button(cx, ids!(cancel_button)).set_enabled(cx, true);
 
         // Set progress bar to error color - no longer apply color change via script_apply_eval
@@ -269,9 +276,9 @@ impl UploadProgressViewRef {
     }
 
     /// Shows an error state with the given message.
-    pub fn show_error(&self, cx: &mut Cx, error: &str, file_data: FileData) {
+    pub fn show_error(&self, cx: &mut Cx, error: &str, file_data: FileData, retryable: bool) {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.show_error(cx, error, file_data);
+            inner.show_error(cx, error, file_data, retryable);
         }
     }
 }

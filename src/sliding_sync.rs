@@ -4017,6 +4017,45 @@ async fn matrix_worker_task(
                     let content_type: mime::Mime = file_data.mime_type.parse()
                         .unwrap_or_else(|_| "application/octet-stream".parse().unwrap());
 
+                    let max_upload_size = match get_client() {
+                        Some(client) => match client.load_or_fetch_max_upload_size().await {
+                            Ok(max_upload_size) => Some(max_upload_size),
+                            Err(e) => {
+                                warning!("Could not fetch homeserver max upload size for {timeline_kind}: {e:?}; continuing without local size-limit check.");
+                                None
+                            }
+                        },
+                        None => {
+                            warning!("Could not fetch homeserver max upload size for {timeline_kind}: client unavailable; continuing without local size-limit check.");
+                            None
+                        }
+                    };
+                    if let Some(max_upload_size) = max_upload_size {
+                        let exceeds_max_upload_size = matrix_sdk::ruma::UInt::try_from(file_data.size)
+                            .map(|upload_size| upload_size > max_upload_size)
+                            .unwrap_or(true);
+                        if exceeds_max_upload_size {
+                            let max_size: u64 = max_upload_size.into();
+                            let error = format!(
+                                "file size ({}) exceeds homeserver limit ({}).",
+                                crate::utils::format_file_size(file_data.size),
+                                crate::utils::format_file_size(max_size),
+                            );
+                            let _ = sender.send(TimelineUpdate::FileUploadError {
+                                error: error.clone(),
+                                file_data: file_data.clone(),
+                                retryable: false,
+                            });
+                            enqueue_popup_notification(
+                                format!("Failed to upload file: {error}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                            SignalToUI::set_ui_signal();
+                            return;
+                        }
+                    }
+
                     // Create a progress observable to track upload progress
                     let send_progress: SharedObservable<matrix_sdk::TransmissionProgress> = Default::default();
                     let progress_subscriber = send_progress.subscribe();
@@ -4064,6 +4103,7 @@ async fn matrix_worker_task(
                             let _ = sender.send(TimelineUpdate::FileUploadError {
                                 error: format!("{e}"),
                                 file_data: file_data.clone(),
+                                retryable: true,
                             });
                             enqueue_popup_notification(
                                 format!("Failed to upload file: {e}"),
