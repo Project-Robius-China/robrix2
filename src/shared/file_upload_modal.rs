@@ -131,6 +131,7 @@ script_mod! {
 
             file_size_label := Label {
                 width: Fill,
+                margin: Inset{ left: 4.5}
                 draw_text +: {
                     text_style: REGULAR_TEXT { font_size: 10 },
                     color: (SMALL_STATE_TEXT_COLOR)
