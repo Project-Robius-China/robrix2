@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-05
 **Severity:** Medium (visible rendering degradation for streaming bot replies)
-**Status:** Open
+**Status:** Fixed in `feat/agent-to-app`
 **Affected component:** `src/home/room_screen.rs` bot Markdown streaming path and `src/home/streaming_animation.rs`
 
 ## Summary

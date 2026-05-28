@@ -889,6 +889,7 @@ fn has_rich_markdown_syntax(text: &str) -> bool {
         )
 }
 
+#[cfg(test)]
 fn bot_streaming_markdown_display(raw: &str, is_live: bool) -> String {
     if !is_live {
         return raw.to_string();
@@ -1005,6 +1006,21 @@ fn streaming_update_requires_content_invalidation(
     state.target_text != new_text
         || state.is_live != is_live
         || state.render_full_target != render_full_target
+}
+
+fn select_streaming_body_for_render<'a>(
+    state: &'a mut StreamingAnimState,
+    body: &'a str,
+    formatted: Option<&'a FormattedBody>,
+    render_full_snapshot: bool,
+) -> (&'a str, Option<&'a FormattedBody>) {
+    state.set_render_full_target(render_full_snapshot);
+    if render_full_snapshot {
+        (body, formatted)
+    } else {
+        state.fill_display_buffer();
+        (state.display_buffer.as_str(), None)
+    }
 }
 
 fn should_start_streaming_animation_for_update(
@@ -7128,6 +7144,15 @@ impl RoomScreen {
         let curr_first_id = portal_list.first_id();
         let ui = self.widget_uid();
         let Some(tl) = self.tl_state.as_mut() else { return };
+        let (
+            resolved_parent_bot_user_id,
+            room_bot_user_ids,
+            known_bot_user_ids,
+        ) = compute_timeline_bot_context(
+            app_state,
+            tl.kind.room_id(),
+            tl.room_members.as_ref(),
+        );
 
         let mut done_loading = false;
         let mut should_continue_backwards_pagination = false;
@@ -7369,16 +7394,32 @@ impl RoomScreen {
                             let Some(event_id) = new_evt.event_id().map(|id| id.to_owned()) else { continue };
                             let live = is_msc4357_live(new_evt);
                             let Some(new_text) = Self::extract_message_text(new_item) else { continue };
+                            let render_full_target = should_render_streaming_full_snapshot(
+                                &new_text,
+                                new_evt.content()
+                                    .as_message()
+                                    .and_then(|message| match message.msgtype() {
+                                        MessageType::Text(TextMessageEventContent { formatted, .. }) => formatted.as_ref(),
+                                        MessageType::Notice(NoticeMessageEventContent { formatted, .. }) => formatted.as_ref(),
+                                        _ => None,
+                                    }),
+                                is_timeline_sender_bot(
+                                    new_evt.sender(),
+                                    resolved_parent_bot_user_id.as_deref(),
+                                    &room_bot_user_ids,
+                                    &known_bot_user_ids,
+                                ),
+                            );
                             let already_tracked = tl.streaming_messages.contains_key(&event_id);
                             if let Some(state) = tl.streaming_messages.get_mut(&event_id) {
                                 let should_invalidate_content = streaming_update_requires_content_invalidation(
                                     state,
                                     &new_text,
                                     live,
-                                    false,
+                                    render_full_target,
                                 );
                                 state.update_target(&new_text, live);
-                                state.set_render_full_target(false);
+                                state.set_render_full_target(render_full_target);
                                 if should_invalidate_content
                                     && let Some(idx) = state.timeline_index
                                 {
@@ -7391,7 +7432,7 @@ impl RoomScreen {
 
                             if should_start_streaming_animation_for_update(live, already_tracked, is_append) {
                                 let mut state = StreamingAnimState::new(&new_text, true);
-                                state.set_render_full_target(false);
+                                state.set_render_full_target(render_full_target);
                                 should_schedule_frame |= state.needs_frame();
                                 log!(
                                     "MSC4357 streaming animation started: event_id={} body_len={}",
@@ -9726,26 +9767,19 @@ fn populate_message_view(
                                 formatted.as_ref(),
                                 sender_is_bot,
                             );
-                            state.set_render_full_target(false);
 
                             // STREAMING MODE:
                             // - markdown-rich bot replies render the latest full snapshot directly
                             // - plain text keeps the local typewriter prefix with cursor
                             let mut link_preview_ref =
                                 item.link_preview(cx, ids!(content.link_preview_view));
-                            let stream_body_storage;
-                            let (stream_body, stream_formatted) = if render_full_snapshot {
-                                let visible_end = state.displayed_byte_offset.min(state.target_text.len());
-                                stream_body_storage =
-                                    bot_streaming_markdown_display(
-                                        &state.target_text[..visible_end],
-                                        state.is_live || state.needs_frame(),
-                                    );
-                                (stream_body_storage.as_str(), None)
-                            } else {
-                                state.fill_display_buffer();
-                                (state.display_buffer.as_str(), None)
-                            };
+                            let (stream_body, stream_formatted) =
+                                select_streaming_body_for_render(
+                                    state,
+                                    body,
+                                    formatted.as_ref(),
+                                    render_full_snapshot,
+                                );
                             let _ = populate_bot_text_message_content(
                                 cx,
                                 &item,
@@ -13485,6 +13519,23 @@ mod tests {
             true,
             true,
         ));
+    }
+
+    #[test]
+    fn test_rich_markdown_streaming_draw_uses_full_snapshot_not_prefix() {
+        let mut state = StreamingAnimState::new("## 标题\n\n完整内容", true);
+        state.advance_displayed(2);
+
+        let (stream_body, stream_formatted) = select_streaming_body_for_render(
+            &mut state,
+            "## 标题\n\n完整内容",
+            None,
+            true,
+        );
+
+        assert_eq!(stream_body, "## 标题\n\n完整内容");
+        assert!(stream_formatted.is_none());
+        assert_eq!(state.displayed_byte_offset, state.target_text.len());
     }
 
     #[test]
