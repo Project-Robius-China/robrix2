@@ -358,6 +358,7 @@ async fn reset_runtime_state_for_relogin() {
     if let Some(sync_service) = sync_service {
         sync_service.stop().await;
     }
+    SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
 
     CLIENT.lock().unwrap().take();
     DEFAULT_SSO_CLIENT.lock().unwrap().take();
