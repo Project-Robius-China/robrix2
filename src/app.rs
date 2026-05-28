@@ -48,7 +48,12 @@ script_mod! {
                         }
                     }
                 }
-            
+
+                window_menu := WindowMenu {
+                    main := MenuItem.Main{items:[@app_menu]}
+                    app_menu := MenuItem.Sub { name:"Robrix" items:[@quit] }
+                    quit := MenuItem.Item { name:"Quit Robrix" key: KeyCode.KeyQ enabled: true }
+                }
 
                 body +: {
                     show_bg: true
