@@ -7,12 +7,6 @@ use matrix_sdk::ruma::events::room::MediaSource;
 
 use crate::home::room_screen::TimelineUpdate;
 use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
-use makepad_widgets::SignalToUI;
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
-use crate::media_cache::media_source_mxc;
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
-use crate::sliding_sync::{MatrixRequest, spawn_async_task, submit_async_request};
 
 #[derive(Clone, Debug)]
 pub struct DownloadableAttachment {
@@ -63,6 +57,8 @@ pub fn start_attachment_download(
     info: DownloadableAttachment,
     update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
 ) {
+    use crate::sliding_sync::{MatrixRequest, spawn_async_task, submit_async_request};
+
     let dialog = build_save_dialog(&info);
     spawn_async_task(async move {
         match dialog.save_file().await {
@@ -78,9 +74,9 @@ pub fn start_attachment_download(
             // pending, so revert it now or the spinner stays forever.
             None => {
                 if let Some(sender) = update_sender {
-                    let mxc = media_source_mxc(&info.media_source).clone();
+                    let mxc = crate::media_cache::media_source_mxc(&info.media_source).clone();
                     let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc));
-                    SignalToUI::set_ui_signal();
+                    makepad_widgets::SignalToUI::set_ui_signal();
                 }
             }
         }
@@ -92,6 +88,8 @@ pub fn start_attachment_download(
 /// round-trip and writes straight to disk.
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn save_loaded_attachment(info: DownloadableAttachment, bytes: Arc<[u8]>) {
+    use crate::sliding_sync::spawn_async_task;
+
     let dialog = build_save_dialog(&info);
     spawn_async_task(async move {
         let Some(handle) = dialog.save_file().await else { return };
