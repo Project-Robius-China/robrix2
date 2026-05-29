@@ -32,6 +32,7 @@ use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidget
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
+    use mod.draw.KeyCode
 
     load_all_resources() do #(App::script_component(vm)) {
         ui: Root {
