@@ -1138,6 +1138,14 @@ pub enum MatrixRequest {
     DownloadAndSaveFile {
         mxc_uri: OwnedMxcUri,
         app_language: crate::i18n::AppLanguage,
+        update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
+    },
+    /// Fetches a media attachment in full and writes it to the given path.
+    DownloadMediaToFile {
+        media_source: MediaSource,
+        save_path: PathBuf,
+        filename: String,
+        update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
     },
     /// Request to send a message to the given room.
     SendMessage {
@@ -1810,6 +1818,17 @@ pub fn submit_async_request(req: MatrixRequest) {
         sender.send(req)
             .expect("BUG: matrix worker task receiver has died!");
     }
+}
+
+/// Spawns a one-off async task on the backend Tokio runtime.
+pub fn spawn_async_task<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let rt_handle = TOKIO_RUNTIME.lock().unwrap().get_or_insert_with(|| {
+        tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime")
+    }).handle().clone();
+    rt_handle.spawn(future);
 }
 
 fn forward_success_feedback_text(destination_room_id: &RoomId) -> String {
@@ -3557,12 +3576,24 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::DownloadAndSaveFile { mxc_uri, app_language } => {
-                let Some(client) = get_client() else { continue };
+            MatrixRequest::DownloadAndSaveFile { mxc_uri, app_language, update_sender } => {
+                let Some(client) = get_client() else {
+                    if let Some(sender) = update_sender.as_ref() {
+                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_uri.clone()));
+                        SignalToUI::set_ui_signal();
+                    }
+                    continue;
+                };
 
                 let _download_task = Handle::current().spawn(async move {
                     use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
                     use crate::i18n::{tr_key, tr_fmt};
+                    let notify_download_finished = |update_sender: &Option<crossbeam_channel::Sender<TimelineUpdate>>, mxc_uri: &OwnedMxcUri| {
+                        if let Some(sender) = update_sender.as_ref() {
+                            let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_uri.clone()));
+                            SignalToUI::set_ui_signal();
+                        }
+                    };
 
                     log!("DownloadAndSaveFile: downloading {mxc_uri}");
 
@@ -3584,6 +3615,7 @@ async fn matrix_worker_task(
                         Ok(client) => client,
                         Err(e) => {
                             error!("Failed to build download HTTP client: {e}");
+                            notify_download_finished(&update_sender, &mxc_uri);
                             return;
                         }
                     };
@@ -3606,6 +3638,7 @@ async fn matrix_worker_task(
                                     let downloads_dir = crate::app_data_dir().join("downloads");
                                     if let Err(e) = std::fs::create_dir_all(&downloads_dir) {
                                         error!("Failed to create downloads dir: {e:?}");
+                                        notify_download_finished(&update_sender, &mxc_uri);
                                         return;
                                     }
                                     let dest = downloads_dir.join(&filename);
@@ -3664,6 +3697,65 @@ async fn matrix_worker_task(
                             );
                             SignalToUI::set_ui_signal();
                         }
+                    }
+                    notify_download_finished(&update_sender, &mxc_uri);
+                });
+            }
+
+            MatrixRequest::DownloadMediaToFile { media_source, save_path, filename, update_sender } => {
+                let Some(client) = get_client() else {
+                    if let Some(sender) = update_sender.as_ref() {
+                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(
+                            match &media_source {
+                                MediaSource::Plain(uri) => uri.clone(),
+                                MediaSource::Encrypted(file) => file.url.clone(),
+                            }
+                        ));
+                        SignalToUI::set_ui_signal();
+                    }
+                    continue;
+                };
+
+                let _download_task = Handle::current().spawn(async move {
+                    let mxc_uri = match &media_source {
+                        MediaSource::Plain(uri) => uri.clone(),
+                        MediaSource::Encrypted(file) => file.url.clone(),
+                    };
+                    let media_request = MediaRequestParameters {
+                        source: media_source,
+                        format: matrix_sdk::media::MediaFormat::File,
+                    };
+                    match client.media().get_media_content(&media_request, true).await {
+                        Ok(bytes) => match tokio::fs::write(&save_path, &bytes).await {
+                            Ok(()) => {
+                                log!("Saved downloaded attachment {filename:?} to {}", save_path.display());
+                                enqueue_popup_notification(
+                                    format!("Saved \"{filename}\" to {}", save_path.display()),
+                                    PopupKind::Success,
+                                    Some(5.0),
+                                );
+                            }
+                            Err(e) => {
+                                error!("Failed to write downloaded attachment {filename:?} to {}: {e}", save_path.display());
+                                enqueue_popup_notification(
+                                    format!("Failed to save \"{filename}\": {e}"),
+                                    PopupKind::Error,
+                                    None,
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to fetch media content for attachment {filename:?}: {e}");
+                            enqueue_popup_notification(
+                                format!("Failed to download \"{filename}\": {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                        }
+                    }
+                    if let Some(sender) = update_sender.as_ref() {
+                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_uri));
+                        SignalToUI::set_ui_signal();
                     }
                 });
             }
