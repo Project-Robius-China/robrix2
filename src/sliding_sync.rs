@@ -5392,14 +5392,6 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                         Ok(Err(e)) => {
                             if !is_logout_in_progress() && !is_account_switch_pending() {
                                 error!("Error: room list service loop task ended:\n\t{e:?}");
-                                rooms_list::enqueue_rooms_list_update(RoomsListUpdate::Status {
-                                    status: e.to_string(),
-                                });
-                                enqueue_popup_notification(
-                                    format!("Room list service error: {e}"),
-                                    PopupKind::Error,
-                                    None,
-                                );
                             }
                         },
                         Err(e) => {
@@ -5421,14 +5413,6 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                         Ok(Err(e)) => {
                             if !is_logout_in_progress() && !is_account_switch_pending() {
                                 error!("Error: space service loop task ended:\n\t{e:?}");
-                                rooms_list::enqueue_rooms_list_update(RoomsListUpdate::Status {
-                                    status: e.to_string(),
-                                });
-                                enqueue_popup_notification(
-                                    format!("Space service error: {e}"),
-                                    PopupKind::Error,
-                                    None,
-                                );
                             }
                         },
                         Err(e) => {
