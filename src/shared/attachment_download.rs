@@ -3,12 +3,15 @@
 
 use std::sync::Arc;
 
-use makepad_widgets::SignalToUI;
 use matrix_sdk::ruma::events::room::MediaSource;
 
 use crate::home::room_screen::TimelineUpdate;
-use crate::media_cache::media_source_mxc;
 use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+use makepad_widgets::SignalToUI;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+use crate::media_cache::media_source_mxc;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::sliding_sync::{MatrixRequest, spawn_async_task, submit_async_request};
 
 #[derive(Clone, Debug)]
