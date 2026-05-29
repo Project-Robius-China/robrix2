@@ -3,10 +3,60 @@
 
 use std::sync::Arc;
 
-use matrix_sdk::ruma::events::room::MediaSource;
+use matrix_sdk::ruma::{OwnedMxcUri, events::room::MediaSource};
 
 use crate::home::room_screen::TimelineUpdate;
 use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
+
+/// The mxc URI inside any media source, whether plain or encrypted.
+pub fn media_source_mxc(source: &MediaSource) -> &OwnedMxcUri {
+    match source {
+        MediaSource::Plain(uri) => uri,
+        MediaSource::Encrypted(file) => &file.url,
+    }
+}
+
+/// Info about a download that has begun or recently completed.
+pub struct PendingDownload {
+    pub mxc: OwnedMxcUri,
+    pub state: PendingDownloadState,
+}
+
+pub enum PendingDownloadState {
+    /// The download request has been submitted to and is being handled by
+    /// the backend worker task.
+    InProgress,
+    /// The download was successful, and will show a success indicator for a few seconds.
+    JustSucceeded,
+    /// The download failed, and will show an error indicator for a few seconds.
+    JustFailed,
+}
+impl PendingDownloadState {
+    pub fn display(&self) -> DownloadDisplayState {
+        match self {
+            Self::InProgress => DownloadDisplayState::InProgress,
+            Self::JustSucceeded => DownloadDisplayState::Succeeded,
+            Self::JustFailed => DownloadDisplayState::Failed,
+        }
+    }
+}
+
+/// What the download section below a message should show.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum DownloadDisplayState {
+    /// Default: show the download button.
+    #[default]
+    Idle,
+    /// Show a loading spinner and cancel button.
+    InProgress,
+    /// Briefly show a green success button.
+    Succeeded,
+    /// Briefly show a red failed button.
+    Failed,
+}
+
+/// How long (in seconds) the success/failure state stays visible before resetting the button.
+pub const DOWNLOAD_RESULT_DURATION_SECS: f64 = 5.0;
 
 #[derive(Clone, Debug)]
 pub struct DownloadableAttachment {
@@ -74,8 +124,8 @@ pub fn start_attachment_download(
             // pending, so revert it now or the spinner stays forever.
             None => {
                 if let Some(sender) = update_sender {
-                    let mxc = crate::media_cache::media_source_mxc(&info.media_source).clone();
-                    let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc));
+                    let mxc = media_source_mxc(&info.media_source).clone();
+                    let _ = sender.send(TimelineUpdate::AttachmentDownloadReset(mxc));
                     makepad_widgets::SignalToUI::set_ui_signal();
                 }
             }

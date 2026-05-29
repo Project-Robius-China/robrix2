@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadKind, DownloadableAttachment, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -1736,26 +1736,54 @@ script_mod! {
 
         downloading_view := View {
             visible: false,
-            width: Fit, height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
+            width: Fit, height: mod.widgets.SETTINGS_BUTTON_HEIGHT
             flow: Right,
-            align: Align{y: 0.5},
+            align: Align{y: 0.5}
             spacing: 8,
-            padding: Inset{left: 12, right: 12}
+            padding: Inset{left: 12, right: 6}
 
             spinner := LoadingSpinner {
-                width: 16, height: 16,
+                width: 16, height: 16
                 draw_bg.color: (COLOR_ACTIVE_PRIMARY)
             }
             status_label := Label {
-                width: Fit, height: Fit,
-                padding: 0,
-                margin: 0,
+                width: Fit, height: Fit
+                padding: 0
+                margin: 0
                 draw_text +: {
                     text_style: REGULAR_TEXT { font_size: 11 },
                     color: (COLOR_ACTIVE_PRIMARY)
                 }
-                text: "Downloading..."
+                text: "Downloading…"
             }
+            cancel_button := RobrixNegativeIconButton {
+                height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
+                padding: Inset{left: 12, right: 12}
+                margin: 0
+                draw_icon.svg: (ICON_CLOSE)
+                icon_walk: Walk{width: 16, height: 16}
+                text: "Cancel"
+            }
+        }
+
+        success_button := RobrixPositiveIconButton {
+            visible: false,
+            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
+            padding: Inset{left: 12, right: 12}
+            margin: 0
+            draw_icon.svg: (ICON_CHECKMARK)
+            icon_walk: Walk{width: 16, height: 16}
+            text: "Downloaded"
+        }
+
+        failure_button := RobrixNegativeIconButton {
+            visible: false,
+            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
+            padding: Inset{left: 12, right: 12}
+            margin: 0
+            draw_icon.svg: (ICON_CLOSE)
+            icon_walk: Walk{width: 16, height: 16}
+            text: "Download Failed"
         }
     }
 
@@ -2343,6 +2371,7 @@ script_mod! {
                         height: (mod.widgets.IMG_MSG_FIT)
                     } }
                 }
+                download_section := mod.widgets.MessageDownloadSection {}
                 View {
                     width: Fill,
                     height: Fit,
@@ -2370,6 +2399,7 @@ script_mod! {
                         height: (mod.widgets.IMG_MSG_FIT)
                     } }
                 }
+                download_section := mod.widgets.MessageDownloadSection {}
                 View {
                     width: Fill,
                     height: Fit,
@@ -7012,8 +7042,18 @@ impl RoomScreen {
                     tl.tombstone_info = Some(successor_room_details);
                 }
                 TimelineUpdate::LinkPreviewFetched => {}
-                TimelineUpdate::AttachmentDownloadFinished(mxc_uri) => {
-                    tl.pending_downloads.retain(|pending| pending != &mxc_uri);
+                TimelineUpdate::AttachmentDownloadFinished(mxc_uri, result) => {
+                    if let Some(entry) = tl.pending_downloads.iter_mut().find(|pending| pending.mxc == mxc_uri) {
+                        entry.state = match result {
+                            Ok(()) => PendingDownloadState::JustSucceeded,
+                            Err(_) => PendingDownloadState::JustFailed,
+                        };
+                    }
+                    portal_list.redraw(cx);
+                }
+                TimelineUpdate::AttachmentDownloadReset(mxc_uri) => {
+                    tl.pending_downloads.retain(|pending| pending.mxc != mxc_uri);
+                    portal_list.redraw(cx);
                 }
                 TimelineUpdate::FileUploadConfirmed(file_data) => {
                     let room_input_bar = self.view.room_input_bar(cx, ids!(room_input_bar));
@@ -7700,13 +7740,19 @@ impl RoomScreen {
                 MessageAction::DownloadAttachment(info) => {
                     let Some(tl) = self.tl_state.as_mut() else { continue };
                     let mxc_uri = media_source_mxc(&info.media_source).clone();
-                    if tl.pending_downloads.iter().any(|pending| pending == &mxc_uri) {
+                    if tl.pending_downloads.iter().any(|pending| pending.mxc == mxc_uri) {
                         continue;
                     }
-                    tl.pending_downloads.push(mxc_uri);
+                    tl.pending_downloads.push(PendingDownload {
+                        mxc: mxc_uri,
+                        state: PendingDownloadState::InProgress,
+                    });
                     portal_list.redraw(cx);
                     let update_sender = tl.media_cache.timeline_update_sender().cloned();
                     start_attachment_download(info.clone(), update_sender);
+                }
+                MessageAction::CancelDownload(mxc) => {
+                    submit_async_request(MatrixRequest::CancelDownload(mxc.clone()));
                 }
                 // This is handled within the Message widget itself.
                 MessageAction::HighlightMessage(..) => { }
@@ -8748,7 +8794,13 @@ pub enum TimelineUpdate {
     /// File upload completed successfully.
     FileUploadComplete,
     /// A file/media attachment download has completed (or failed) for this timeline.
-    AttachmentDownloadFinished(OwnedMxcUri),
+    ///
+    /// The `Result` indicates whether the save operation succeeded or failed.
+    /// This does not immediately clear the pending-download entry so the UI can
+    /// briefly show success/failure state.
+    AttachmentDownloadFinished(OwnedMxcUri, Result<(), String>),
+    /// Remove the given pending-download entry and return to idle button state.
+    AttachmentDownloadReset(OwnedMxcUri),
 }
 
 thread_local! {
@@ -8890,7 +8942,7 @@ struct TimelineUiState {
     /// are contained within. If `None`, the room has not been tombstoned.
     tombstone_info: Option<SuccessorRoomDetails>,
     /// Media attachments currently being downloaded in this timeline.
-    pending_downloads: Vec<OwnedMxcUri>,
+    pending_downloads: Vec<PendingDownload>,
 }
 
 #[derive(Default, Debug)]
@@ -9336,7 +9388,7 @@ fn populate_message_view(
     pending_thread_summary_fetches: &mut HashSet<OwnedEventId>,
     user_power_levels: &UserPowerLevels,
     pinned_events: &[OwnedEventId],
-    pending_downloads: &[OwnedMxcUri],
+    pending_downloads: &[PendingDownload],
     item_drawn_status: ItemDrawnStatus,
     room_screen_widget_uid: WidgetUid,
     resolved_parent_bot_user_id: Option<&UserId>,
@@ -9967,10 +10019,14 @@ fn populate_message_view(
         ),
         should_be_highlighted: event_tl_item.is_highlighted() || has_room_mention,
     };
-    let is_downloading = download_info.as_ref().is_some_and(|info| {
-        pending_downloads.iter().any(|pending| pending == media_source_mxc(&info.media_source))
-    });
-    item.as_message().set_data(cx, message_details, download_info, is_downloading);
+    let download_state = download_info.as_ref()
+        .and_then(|info|
+            pending_downloads.iter()
+                .find(|pending| pending.mxc == *media_source_mxc(&info.media_source))
+        )
+        .map(|entry| entry.state.display())
+        .unwrap_or_default();
+    item.as_message().set_data(cx, message_details, download_info, download_state);
 
 
     // If `used_cached_item` is false, we should always redraw the profile, even if profile_drawn is true.
@@ -11432,6 +11488,8 @@ pub enum MessageAction {
 
     /// The user clicked the "Download" button on a media/file message.
     DownloadAttachment(DownloadableAttachment),
+    /// The user clicked "Cancel" on an in-progress attachment download.
+    CancelDownload(OwnedMxcUri),
     /// The message at the given item index in the timeline should be highlighted.
     HighlightMessage(usize),
     /// The user requested that we show a context menu with actions
@@ -11658,7 +11716,13 @@ pub struct Message {
     #[apply_default] animator: Animator,
 
     #[rust] details: Option<MessageDetails>,
+    /// Set on file/image/audio/video messages so the download button knows
+    /// what to save when the user clicks it. `None` for plain text messages,
+    /// which hide the download button entirely.
     #[rust] download_info: Option<DownloadableAttachment>,
+    /// Cached so `set_data` can reset_hover only on the button that just
+    /// transitioned into visibility, not on every redraw.
+    #[rust] download_state: DownloadDisplayState,
 }
 
 impl Widget for Message {
@@ -11816,6 +11880,14 @@ impl Widget for Message {
                     MessageAction::DownloadAttachment(info.clone()),
                 );
             }
+            if let Some(info) = self.download_info.as_ref()
+                && self.view.button(cx, ids!(content.download_section.downloading_view.cancel_button)).clicked(actions)
+            {
+                cx.widget_action(
+                    details.room_screen_widget_uid,
+                    MessageAction::CancelDownload(media_source_mxc(&info.media_source).clone()),
+                );
+            }
             for action in actions {
                 match action.as_widget_action().widget_uid_eq(details.room_screen_widget_uid).cast_ref() {
                     MessageAction::HighlightMessage(id) if id == &details.item_id => {
@@ -11848,8 +11920,11 @@ impl Message {
         cx: &mut Cx,
         details: MessageDetails,
         download_info: Option<DownloadableAttachment>,
-        is_downloading: bool,
+        download_state: DownloadDisplayState,
     ) {
+        let prev_section_visible = self.download_info.is_some();
+        let prev_state = self.download_state;
+
         self.details = Some(details);
         self.download_info = download_info;
         let section_visible = self.download_info.is_some();
@@ -11858,10 +11933,25 @@ impl Message {
         if let Some(info) = self.download_info.as_ref() {
             let download_button = self.view.button(cx, ids!(content.download_section.download_button));
             let downloading_view = self.view.view(cx, ids!(content.download_section.downloading_view));
+            let cancel_button = self.view.button(cx, ids!(content.download_section.downloading_view.cancel_button));
+            let success_button = self.view.button(cx, ids!(content.download_section.success_button));
+            let failure_button = self.view.button(cx, ids!(content.download_section.failure_button));
             download_button.set_text(cx, info.kind.button_text());
-            download_button.set_visible(cx, !is_downloading);
-            downloading_view.set_visible(cx, is_downloading);
+            download_button.set_visible(cx, matches!(download_state, DownloadDisplayState::Idle));
+            downloading_view.set_visible(cx, matches!(download_state, DownloadDisplayState::InProgress));
+            success_button.set_visible(cx, matches!(download_state, DownloadDisplayState::Succeeded));
+            failure_button.set_visible(cx, matches!(download_state, DownloadDisplayState::Failed));
+            let newly_visible = !prev_section_visible || prev_state != download_state;
+            if newly_visible {
+                match download_state {
+                    DownloadDisplayState::Idle => download_button.reset_hover(cx),
+                    DownloadDisplayState::InProgress => cancel_button.reset_hover(cx),
+                    DownloadDisplayState::Succeeded => success_button.reset_hover(cx),
+                    DownloadDisplayState::Failed => failure_button.reset_hover(cx),
+                }
+            }
         }
+        self.download_state = download_state;
     }
 }
 
@@ -11871,10 +11961,10 @@ impl MessageRef {
         cx: &mut Cx,
         details: MessageDetails,
         download_info: Option<DownloadableAttachment>,
-        is_downloading: bool,
+        download_state: DownloadDisplayState,
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.set_data(cx, details, download_info, is_downloading);
+        inner.set_data(cx, details, download_info, download_state);
     }
 }
 

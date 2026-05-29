@@ -1148,6 +1148,8 @@ pub enum MatrixRequest {
         filename: String,
         update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
     },
+    /// Request to cancel an in-progress download.
+    CancelDownload(OwnedMxcUri),
     /// Request to send a message to the given room.
     SendMessage {
         timeline_kind: TimelineKind,
@@ -1945,6 +1947,8 @@ async fn matrix_worker_task(
     let mut subscribers_own_user_read_receipts: HashMap<TimelineKind, JoinHandle<()>> = HashMap::new();
     // The async tasks that are spawned to subscribe to changes in the pinned events for each room.
     let mut subscribers_pinned_events: HashMap<OwnedRoomId, JoinHandle<()>> = HashMap::new();
+    // In-flight attachment-download tasks keyed by MXC URI, for cancel support.
+    let download_tasks: Arc<Mutex<HashMap<OwnedMxcUri, futures_util::future::AbortHandle>>> = Arc::new(Mutex::new(HashMap::new()));
 
     while let Some(request) = request_receiver.recv().await {
         match request {
@@ -3580,7 +3584,10 @@ async fn matrix_worker_task(
             MatrixRequest::DownloadAndSaveFile { mxc_uri, app_language, update_sender } => {
                 let Some(client) = get_client() else {
                     if let Some(sender) = update_sender.as_ref() {
-                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_uri.clone()));
+                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(
+                            mxc_uri.clone(),
+                            Err("Client unavailable".to_string()),
+                        ));
                         SignalToUI::set_ui_signal();
                     }
                     continue;
@@ -3589,9 +3596,9 @@ async fn matrix_worker_task(
                 let _download_task = Handle::current().spawn(async move {
                     use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
                     use crate::i18n::{tr_key, tr_fmt};
-                    let notify_download_finished = |update_sender: &Option<crossbeam_channel::Sender<TimelineUpdate>>, mxc_uri: &OwnedMxcUri| {
+                    let notify_download_finished = |update_sender: &Option<crossbeam_channel::Sender<TimelineUpdate>>, mxc_uri: &OwnedMxcUri, result: Result<(), String>| {
                         if let Some(sender) = update_sender.as_ref() {
-                            let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_uri.clone()));
+                            let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_uri.clone(), result));
                             SignalToUI::set_ui_signal();
                         }
                     };
@@ -3616,10 +3623,11 @@ async fn matrix_worker_task(
                         Ok(client) => client,
                         Err(e) => {
                             error!("Failed to build download HTTP client: {e}");
-                            notify_download_finished(&update_sender, &mxc_uri);
+                            notify_download_finished(&update_sender, &mxc_uri, Err(e.to_string()));
                             return;
                         }
                     };
+                    let mut result = Err("Download failed".to_string());
                     match http_client.get(&download_url).send().await {
                         Ok(resp) if resp.status().is_success() => {
                             // Extract filename from Content-Disposition header or use media_id
@@ -3639,7 +3647,7 @@ async fn matrix_worker_task(
                                     let downloads_dir = crate::app_data_dir().join("downloads");
                                     if let Err(e) = std::fs::create_dir_all(&downloads_dir) {
                                         error!("Failed to create downloads dir: {e:?}");
-                                        notify_download_finished(&update_sender, &mxc_uri);
+                                        notify_download_finished(&update_sender, &mxc_uri, Err(e.to_string()));
                                         return;
                                     }
                                     let dest = downloads_dir.join(&filename);
@@ -3657,6 +3665,7 @@ async fn matrix_worker_task(
                                                 log!("Could not open file: {e:?}");
                                             }
                                             SignalToUI::set_ui_signal();
+                                            result = Ok(());
                                         }
                                         Err(e) => {
                                             error!("DownloadAndSaveFile: write failed: {e:?}");
@@ -3699,7 +3708,7 @@ async fn matrix_worker_task(
                             SignalToUI::set_ui_signal();
                         }
                     }
-                    notify_download_finished(&update_sender, &mxc_uri);
+                    notify_download_finished(&update_sender, &mxc_uri, result);
                 });
             }
 
@@ -3710,23 +3719,28 @@ async fn matrix_worker_task(
                             match &media_source {
                                 MediaSource::Plain(uri) => uri.clone(),
                                 MediaSource::Encrypted(file) => file.url.clone(),
-                            }
+                            },
+                            Err("Client unavailable".to_string()),
                         ));
                         SignalToUI::set_ui_signal();
                     }
                     continue;
                 };
 
-                let _download_task = Handle::current().spawn(async move {
-                    let mxc_uri = match &media_source {
-                        MediaSource::Plain(uri) => uri.clone(),
-                        MediaSource::Encrypted(file) => file.url.clone(),
-                    };
+                let mxc_uri = match &media_source {
+                    MediaSource::Plain(uri) => uri.clone(),
+                    MediaSource::Encrypted(file) => file.url.clone(),
+                };
+                let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
+                let mxc_for_task = mxc_uri.clone();
+                let mxc_for_finished = mxc_uri.clone();
+                let tasks_for_cleanup = download_tasks.clone();
+                let download_future = async move {
                     let media_request = MediaRequestParameters {
                         source: media_source,
                         format: matrix_sdk::media::MediaFormat::File,
                     };
-                    match client.media().get_media_content(&media_request, true).await {
+                    let result: Result<(), String> = match client.media().get_media_content(&media_request, true).await {
                         Ok(bytes) => match tokio::fs::write(&save_path, &bytes).await {
                             Ok(()) => {
                                 log!("Saved downloaded attachment {filename:?} to {}", save_path.display());
@@ -3735,6 +3749,7 @@ async fn matrix_worker_task(
                                     PopupKind::Success,
                                     Some(5.0),
                                 );
+                                Ok(())
                             }
                             Err(e) => {
                                 error!("Failed to write downloaded attachment {filename:?} to {}: {e}", save_path.display());
@@ -3743,6 +3758,7 @@ async fn matrix_worker_task(
                                     PopupKind::Error,
                                     None,
                                 );
+                                Err(e.to_string())
                             }
                         }
                         Err(e) => {
@@ -3752,18 +3768,40 @@ async fn matrix_worker_task(
                                 PopupKind::Error,
                                 None,
                             );
+                            Err(e.to_string())
                         }
-                    }
-                    if let Some(sender) = update_sender.as_ref() {
-                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_uri));
+                    };
+                    if let Some(sender) = update_sender {
+                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_for_finished, result));
                         SignalToUI::set_ui_signal();
+                        let reset_sender = sender.clone();
+                        Handle::current().spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs_f64(
+                                crate::shared::attachment_download::DOWNLOAD_RESULT_DURATION_SECS,
+                            )).await;
+                            let _ = reset_sender.send(TimelineUpdate::AttachmentDownloadReset(mxc_for_task));
+                            SignalToUI::set_ui_signal();
+                        });
                     }
+                };
+
+                let mxc_for_cleanup = mxc_uri.clone();
+                download_tasks.lock().unwrap().insert(mxc_uri, abort_handle);
+                Handle::current().spawn(async move {
+                    let _ = futures_util::future::Abortable::new(download_future, abort_registration).await;
+                    tasks_for_cleanup.lock().unwrap().remove(&mxc_for_cleanup);
                 });
+            }
+
+            MatrixRequest::CancelDownload(mxc) => {
+                if let Some(abort) = download_tasks.lock().unwrap().remove(&mxc) {
+                    abort.abort();
+                }
             }
 
             MatrixRequest::FetchMedia { media_request, on_fetched, destination, update_sender } => {
                 let Some(client) = get_client() else { continue };
-                
+
                 let _fetch_task = Handle::current().spawn(async move {
                     // log!("Sending fetch media request for {media_request:?}...");
                     let res = client.media().get_media_content(&media_request, true).await;
