@@ -6,3 +6,10 @@
 .vscode
 .DS_Store
 proxychains.conf
+
+## Local tooling / machine-specific (not part of the project)
+.mcp.json
+.playwright-mcp/
+.superpowers/
+.claude/scheduled_tasks.lock
+weather-directions-*.png

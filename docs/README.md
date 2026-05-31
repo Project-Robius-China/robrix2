@@ -75,6 +75,23 @@ For users who want to connect [Hermes Agent](https://github.com/NousResearch/Her
 
 ---
 
+## Robrix + agent-chat (Multi-Agent Workflow)
+
+For users who want to drive a **team of AI agents** through a software workflow
+(`issue → spec → plan → implement → review`) by sending chat messages from Robrix —
+all on a local Palpo homeserver, zero source changes to Robrix or agent-chat:
+
+| Guide | Goal |
+|-------|------|
+| [Robrix × agent-chat: Chat-Driven Multi-Agent Workflow](robrix-with-agentchat/README.md) | **Stand up a coordinator/implementer/reviewer agent team and drive it from Robrix chat.** End-to-end setup + usage, walked through with a real case (agents grow a hello-world seed into a minimal Makepad 2.0 counter app) and live screenshots, plus two web dashboards (Agent Monitor + Workflow Board). |
+
+> Like OpenClaw/Hermes, agent-chat connects as a regular Matrix client (not an
+> Appservice). What's different here is **orchestration**: multiple agents
+> collaborate through a shared skill, with a human approval gate and adversarial
+> review. Design analysis: [`roadmap/robrix-agentchat-demo-integration-zh.md`](../roadmap/robrix-agentchat-demo-integration-zh.md).
+
+---
+
 ## Palpo and Octos Deployment Files
 
 The [`palpo-and-octos-deploy/`](../palpo-and-octos-deploy/) directory (at the repository root) holds the runnable lightweight-mode deployment — see its [README](../palpo-and-octos-deploy/README.md) for the 3-step Quickstart.
