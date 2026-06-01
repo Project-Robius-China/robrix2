@@ -247,8 +247,7 @@ script_mod! {
 
                         preferences_proxy_use_card := RoundedView {
                             width: Fill, height: Fit,
-                            flow: Right
-                            align: Align{x: 1.0, y: 0.5}
+                            flow: Down
                             show_bg: true
                             draw_bg +: {
                                 color: #F8F8FA
@@ -257,40 +256,43 @@ script_mod! {
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
                             margin: Inset{top: (SPACE_XS)}
 
-                            preferences_proxy_use_label := SubsectionLabel {
-                                margin: Inset{top: 0, bottom: 0}
-                                text: "Use proxy"
-                            }
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{x: 1.0, y: 0.5}
 
-                            preferences_proxy_use_toggle := Toggle {
-                                width: Fit
-                                height: Fit
-                                padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
-                                text: ""
-                                active: false
-                                draw_bg +: {
-                                    size: 20.0
-                                    color_active: (COLOR_ACTIVE_PRIMARY)
-                                    border_color_active: (COLOR_ACTIVE_PRIMARY)
-                                    mark_color_active: #fff
+                                preferences_proxy_use_label := SubsectionLabel {
+                                    margin: Inset{top: 0, bottom: 0}
+                                    text: "Use proxy"
+                                }
+
+                                preferences_proxy_use_toggle := Toggle {
+                                    width: Fit
+                                    height: Fit
+                                    padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
+                                    text: ""
+                                    active: false
+                                    draw_bg +: {
+                                        size: 20.0
+                                        color_active: (COLOR_ACTIVE_PRIMARY)
+                                        border_color_active: (COLOR_ACTIVE_PRIMARY)
+                                        mark_color_active: #fff
+                                    }
                                 }
                             }
-                        }
 
-                        preferences_proxy_fields_section := RoundedView {
-                            visible: false
-                            width: Fill, height: Fit,
-                            flow: Down
-                            spacing: 0
-                            show_bg: true
-                            draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
-                            }
-                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_XS), bottom: (SPACE_SM)}
-                            margin: Inset{top: (SPACE_XS)}
+                            preferences_proxy_fields_section := View {
+                                visible: false
+                                width: Fill, height: Fit,
+                                flow: Down
+                                spacing: 0
 
-                            preferences_proxy_address_row := View {
+                                LineH {
+                                    draw_bg.color: #DDDDDD
+                                    margin: Inset{top: (SPACE_SM), bottom: 0}
+                                }
+
+                                preferences_proxy_address_row := View {
                                 width: Fill, height: Fit,
                                 flow: Right
                                 align: Align{y: 0.5}
@@ -391,6 +393,7 @@ script_mod! {
                                     is_password: true,
                                     padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                 }
+                            }
                             }
                         }
 
