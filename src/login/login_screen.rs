@@ -631,7 +631,7 @@ script_mod! {
                                 draw_text +: {
                                     color: (COLOR_TEXT_WARNING_NOT_FOUND)
                                     text_style: REGULAR_TEXT {font_size: 11}
-                                    wrap: Word
+                                    wrap: Words
                                 }
                                 text: ""
                             }
