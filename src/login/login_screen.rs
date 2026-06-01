@@ -645,7 +645,7 @@ script_mod! {
                                 proxy_settings_save_button := RobrixIconButton {
                                     width: 160, height: 42
                                     align: Align{x: 0.5, y: 0.5}
-                                    text: "Save"
+                                    text: "Save Proxy"
                                 }
                             }
                         }

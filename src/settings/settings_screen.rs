@@ -316,8 +316,6 @@ script_mod! {
                                 }
                             }
 
-                            LineH { draw_bg.color: #DDDDDD }
-
                             preferences_proxy_port_row := View {
                                 width: Fill, height: Fit,
                                 flow: Right
@@ -342,8 +340,6 @@ script_mod! {
                                 }
                             }
 
-                            LineH { draw_bg.color: #DDDDDD }
-
                             preferences_proxy_account_row := View {
                                 width: Fill, height: Fit,
                                 flow: Right
@@ -367,8 +363,6 @@ script_mod! {
                                     padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                 }
                             }
-
-                            LineH { draw_bg.color: #DDDDDD }
 
                             preferences_proxy_password_row := View {
                                 width: Fill, height: Fit,
