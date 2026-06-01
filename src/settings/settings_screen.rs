@@ -394,31 +394,31 @@ script_mod! {
                                     padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                 }
                             }
+
+                            preferences_proxy_error_label := Label {
+                                visible: false
+                                width: Fill, height: Fit
+                                margin: Inset{top: (SPACE_SM)}
+                                draw_text +: {
+                                    color: (COLOR_TEXT_WARNING_NOT_FOUND)
+                                    text_style: REGULAR_TEXT {font_size: 11}
+                                    wrap: Word
+                                }
+                                text: ""
                             }
-                        }
 
-                        preferences_proxy_error_label := Label {
-                            visible: false
-                            width: Fill, height: Fit
-                            margin: Inset{top: (SPACE_XS)}
-                            draw_text +: {
-                                color: (COLOR_TEXT_WARNING_NOT_FOUND)
-                                text_style: REGULAR_TEXT {font_size: 11}
-                                wrap: Word
+                            preferences_proxy_save_button_row := View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{x: 0.0, y: 0.5}
+                                margin: Inset{top: (SPACE_SM)}
+
+                                preferences_proxy_save_button := RobrixIconButton {
+                                    width: 160, height: 40
+                                    align: Align{x: 0.5, y: 0.5}
+                                    text: "Save Proxy"
+                                }
                             }
-                            text: ""
-                        }
-
-                        preferences_proxy_save_button_row := View {
-                            width: Fill, height: Fit
-                            flow: Right
-                            align: Align{x: 0.0, y: 0.5}
-                            margin: Inset{top: (SPACE_SM), bottom: (SPACE_XS)}
-
-                            preferences_proxy_save_button := RobrixIconButton {
-                                width: 160, height: 40
-                                align: Align{x: 0.5, y: 0.5}
-                                text: "Save Proxy"
                             }
                         }
                     }
