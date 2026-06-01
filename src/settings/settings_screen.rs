@@ -245,9 +245,6 @@ script_mod! {
 
                         preferences_proxy_title := TitleLabel {
                             text: "Proxy"
-                            draw_text +: {
-                                color: (COLOR_ACTIVE_PRIMARY)
-                            }
                         }
 
                         preferences_proxy_use_card := RoundedView {
@@ -256,20 +253,14 @@ script_mod! {
                             align: Align{x: 1.0, y: 0.5}
                             show_bg: true
                             draw_bg +: {
-                                color: #F5F5F5
-                                border_radius: 8.0
-                                border_size: 1.0
-                                border_color: #DADADA
+                                color: #F8F8FA
+                                border_radius: (RADIUS_LG)
                             }
-                            padding: Inset{top: 12, bottom: 12, left: 12, right: 12}
-                            margin: Inset{left: 5, right: 8, top: 2}
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
+                            margin: Inset{top: (SPACE_XS)}
 
-                            preferences_proxy_use_label := Label {
-                                width: Fill, height: Fit
-                                draw_text +: {
-                                    color: (COLOR_TEXT)
-                                    text_style: TITLE_TEXT {font_size: 12}
-                                }
+                            preferences_proxy_use_label := SubsectionLabel {
+                                margin: Inset{top: 0, bottom: 0}
                                 text: "Use proxy"
                             }
 
@@ -295,13 +286,11 @@ script_mod! {
                             spacing: 0
                             show_bg: true
                             draw_bg +: {
-                                color: #F5F5F5
-                                border_radius: 8.0
-                                border_size: 1.0
-                                border_color: #DADADA
+                                color: #F8F8FA
+                                border_radius: (RADIUS_LG)
                             }
-                            padding: Inset{top: 4, left: 12, right: 12, bottom: 8}
-                            margin: Inset{left: 5, right: 8, top: 4}
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_XS), bottom: (SPACE_SM)}
+                            margin: Inset{top: (SPACE_XS)}
 
                             preferences_proxy_address_row := View {
                                 width: Fill, height: Fit,
@@ -407,11 +396,29 @@ script_mod! {
                             }
                         }
 
-                        preferences_proxy_save_button := RobrixIconButton {
-                            width: Fit, height: Fit
-                            padding: Inset{left: 15, right: 15, top: 8, bottom: 8}
-                            margin: Inset{left: 5, top: 5, bottom: 4}
-                            text: "Save Proxy"
+                        preferences_proxy_error_label := Label {
+                            visible: false
+                            width: Fill, height: Fit
+                            margin: Inset{top: (SPACE_XS)}
+                            draw_text +: {
+                                color: (COLOR_TEXT_WARNING_NOT_FOUND)
+                                text_style: REGULAR_TEXT {font_size: 11}
+                                wrap: Word
+                            }
+                            text: ""
+                        }
+
+                        preferences_proxy_save_button_row := View {
+                            width: Fill, height: Fit
+                            flow: Right
+                            align: Align{x: 0.5, y: 0.5}
+                            margin: Inset{top: (SPACE_SM), bottom: (SPACE_XS)}
+
+                            preferences_proxy_save_button := RobrixIconButton {
+                                width: 160, height: 40
+                                align: Align{x: 0.5, y: 0.5}
+                                text: "Save Proxy"
+                            }
                         }
                     }
                 }
@@ -711,10 +718,12 @@ impl Widget for SettingsScreen {
             }
 
             if self.view.button(cx, ids!(preferences_proxy_save_button)).clicked(actions) {
+                let error_label = self.view.label(cx, ids!(preferences_proxy_error_label));
                 match self.build_proxy_url_from_preferences(cx) {
                     Ok(proxy_url) => {
                         match crate::proxy_config::save_proxy_url(proxy_url.as_deref()) {
                             Ok(_) => {
+                                error_label.set_visible(cx, false);
                                 enqueue_popup_notification(
                                     tr_key(self.app_language, "settings.preferences.proxy.popup.saved").to_string(),
                                     PopupKind::Success,
@@ -722,30 +731,25 @@ impl Widget for SettingsScreen {
                                 );
                             }
                             Err(proxy_error) => {
-                                enqueue_popup_notification(
-                                    format!(
-                                        "{}\n\n{}",
-                                        tr_key(self.app_language, "settings.preferences.proxy.popup.invalid"),
-                                        proxy_error
-                                    ),
-                                    PopupKind::Error,
-                                    None,
-                                );
+                                error_label.set_text(cx, &format!(
+                                    "{}\n{}",
+                                    tr_key(self.app_language, "settings.preferences.proxy.popup.invalid"),
+                                    proxy_error,
+                                ));
+                                error_label.set_visible(cx, true);
                             }
                         }
                     }
                     Err(proxy_error) => {
-                        enqueue_popup_notification(
-                            format!(
-                                "{}\n\n{}",
-                                tr_key(self.app_language, "settings.preferences.proxy.popup.invalid"),
-                                proxy_error
-                            ),
-                            PopupKind::Error,
-                            None,
-                        );
+                        error_label.set_text(cx, &format!(
+                            "{}\n{}",
+                            tr_key(self.app_language, "settings.preferences.proxy.popup.invalid"),
+                            proxy_error,
+                        ));
+                        error_label.set_visible(cx, true);
                     }
                 }
+                self.redraw(cx);
             }
 
             if self.view.button(cx, ids!(category_account_button)).clicked(actions) {
@@ -972,6 +976,9 @@ impl SettingsScreen {
         self.view
             .view(cx, ids!(preferences_proxy_fields_section))
             .set_visible(cx, enabled);
+        self.view
+            .label(cx, ids!(preferences_proxy_error_label))
+            .set_visible(cx, false);
         self.view.redraw(cx);
     }
 

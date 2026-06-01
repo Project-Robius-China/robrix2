@@ -450,12 +450,12 @@ script_mod! {
                         proxy_settings_modal_inner := RoundedView {
                             width: 380, height: Fit,
                             flow: Down
-                            spacing: 12.0
-                            padding: Inset{top: 18, left: 16, right: 16, bottom: 16}
+                            spacing: 14.0
+                            padding: Inset{top: 20, left: 20, right: 20, bottom: 20}
                             show_bg: true
                             draw_bg +: {
                                 color: (COLOR_PRIMARY)
-                                border_radius: 10.0
+                                border_radius: 12.0
                                 border_size: 1.0
                                 border_color: #D8D8D8
                             }
@@ -470,14 +470,14 @@ script_mod! {
                                     width: Fill, height: Fit
                                     draw_text +: {
                                         color: (COLOR_ACTIVE_PRIMARY)
-                                        text_style: TITLE_TEXT {font_size: 14}
+                                        text_style: TITLE_TEXT {font_size: 15}
                                     }
                                     text: "Network proxy settings"
                                 }
 
                                 proxy_settings_close_button := RobrixNeutralIconButton {
                                     width: Fit, height: Fit
-                                    padding: Inset{left: 7, right: 4, top: 7, bottom: 7}
+                                    padding: Inset{left: 6, right: 6, top: 6, bottom: 6}
                                     text: ""
                                     icon_walk: Walk{width: 14, height: 14, margin: 0}
                                     draw_icon.svg: (ICON_CLOSE)
@@ -491,11 +491,11 @@ script_mod! {
                                 show_bg: true
                                 draw_bg +: {
                                     color: #F5F5F5
-                                    border_radius: 8.0
+                                    border_radius: 10.0
                                     border_size: 1.0
                                     border_color: #DADADA
                                 }
-                                padding: Inset{top: 12, bottom: 12, left: 12, right: 12}
+                                padding: Inset{top: 12, bottom: 12, left: 14, right: 14}
 
                                 proxy_use_label := Label {
                                     width: Fill, height: Fit
@@ -541,11 +541,11 @@ script_mod! {
                                 show_bg: true
                                 draw_bg +: {
                                     color: #F5F5F5
-                                    border_radius: 8.0
+                                    border_radius: 10.0
                                     border_size: 1.0
                                     border_color: #DADADA
                                 }
-                                padding: Inset{top: 4, left: 12, right: 12, bottom: 8}
+                                padding: Inset{top: 4, left: 14, right: 14, bottom: 8}
 
                                 proxy_address_row := View {
                                     width: Fill, height: Fit,
@@ -651,10 +651,29 @@ script_mod! {
                                 }
                             }
 
-                            proxy_settings_save_button := RobrixIconButton {
-                                width: 120, height: 40
+                            proxy_settings_error_label := Label {
+                                visible: false
+                                width: Fill, height: Fit
+                                margin: Inset{top: 0, bottom: 0, left: 2, right: 2}
+                                draw_text +: {
+                                    color: (COLOR_TEXT_WARNING_NOT_FOUND)
+                                    text_style: REGULAR_TEXT {font_size: 11}
+                                    wrap: Word
+                                }
+                                text: ""
+                            }
+
+                            proxy_settings_save_button_row := View {
+                                width: Fill, height: Fit
+                                flow: Right
                                 align: Align{x: 0.5, y: 0.5}
-                                text: "Save"
+                                margin: Inset{top: 2}
+
+                                proxy_settings_save_button := RobrixIconButton {
+                                    width: 160, height: 42
+                                    align: Align{x: 0.5, y: 0.5}
+                                    text: "Save"
+                                }
                             }
                         }
                     }
@@ -818,6 +837,9 @@ impl LoginScreen {
         self.view
             .view(cx, ids!(proxy_fields_section))
             .set_visible(cx, enabled);
+        self.view
+            .label(cx, ids!(proxy_settings_error_label))
+            .set_visible(cx, false);
         self.redraw(cx);
     }
 
@@ -1027,11 +1049,13 @@ impl WidgetMatchEvent for LoginScreen {
 
         if self.view.button(cx, ids!(proxy_settings_button)).clicked(actions) {
             self.sync_proxy_settings_modal_layout(cx);
+            self.view.label(cx, ids!(proxy_settings_error_label)).set_visible(cx, false);
             proxy_settings_modal.open(cx);
             self.redraw(cx);
         }
 
         if self.view.button(cx, ids!(proxy_settings_close_button)).clicked(actions) {
+            self.view.label(cx, ids!(proxy_settings_error_label)).set_visible(cx, false);
             proxy_settings_modal.close(cx);
             self.redraw(cx);
         }
@@ -1049,18 +1073,18 @@ impl WidgetMatchEvent for LoginScreen {
         }
 
         if self.view.button(cx, ids!(proxy_settings_save_button)).clicked(actions) {
+            let error_label = self.view.label(cx, ids!(proxy_settings_error_label));
             match self.build_proxy_url_from_form(cx) {
                 Ok(proxy_url) => {
                     if let Err(e) = crate::proxy_config::save_proxy_url(proxy_url.as_deref()) {
                         warning!("Failed to persist proxy configuration from proxy settings modal: {e}");
-                        login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login.status.invalid_proxy.title"));
                         let error_text = tr_fmt(self.app_language, "login.status.invalid_proxy.body", &[
                             ("error", e.as_str()),
                         ]);
-                        login_status_modal_inner.set_status(cx, &error_text);
-                        login_status_modal_inner.button_ref(cx).set_text(cx, tr_key(self.app_language, "login.status.okay"));
-                        login_status_modal.open(cx);
+                        error_label.set_text(cx, &error_text);
+                        error_label.set_visible(cx, true);
                     } else {
+                        error_label.set_visible(cx, false);
                         proxy_settings_modal.close(cx);
                         login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login.proxy_settings.saved.title"));
                         login_status_modal_inner.set_status(cx, tr_key(self.app_language, "login.proxy_settings.saved.body"));
@@ -1070,13 +1094,11 @@ impl WidgetMatchEvent for LoginScreen {
                     self.redraw(cx);
                 }
                 Err(proxy_validation_error) => {
-                    login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login.status.invalid_proxy.title"));
                     let error_text = tr_fmt(self.app_language, "login.status.invalid_proxy.body", &[
                         ("error", proxy_validation_error.as_str()),
                     ]);
-                    login_status_modal_inner.set_status(cx, &error_text);
-                    login_status_modal_inner.button_ref(cx).set_text(cx, tr_key(self.app_language, "login.status.okay"));
-                    login_status_modal.open(cx);
+                    error_label.set_text(cx, &error_text);
+                    error_label.set_visible(cx, true);
                     self.redraw(cx);
                 }
             }
