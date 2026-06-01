@@ -403,7 +403,8 @@ script_mod! {
                                 margin: Inset{top: (SPACE_SM)}
 
                                 preferences_proxy_save_button := RobrixIconButton {
-                                    width: 160, height: 40
+                                    width: Fit, height: Fit
+                                    padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
                                     align: Align{x: 0.5, y: 0.5}
                                     text: "Save Proxy"
                                 }
@@ -1111,6 +1112,15 @@ impl SettingsScreen {
                     id!(contribute_settings_page)
                 },
             );
+
+        // The preferences page is lazy-init: its widgets don't exist until the
+        // user first switches to it, so the saved proxy populated during
+        // SettingsScreen::populate misses the input refs. Re-load here once the
+        // page's widget tree is live so the proxy form reflects whatever was
+        // saved from the login modal.
+        if show_preferences {
+            self.load_saved_proxy_to_preferences_form(cx);
+        }
 
         let mut category_account_button = self.view.button(cx, ids!(category_account_button));
         let mut category_preferences_button = self.view.button(cx, ids!(category_preferences_button));
