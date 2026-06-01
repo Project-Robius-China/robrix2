@@ -287,11 +287,6 @@ script_mod! {
                                 flow: Down
                                 spacing: 0
 
-                                LineH {
-                                    draw_bg.color: #DDDDDD
-                                    margin: Inset{top: (SPACE_SM), bottom: 0}
-                                }
-
                                 preferences_proxy_address_row := View {
                                 width: Fill, height: Fit,
                                 flow: Right
