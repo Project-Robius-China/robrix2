@@ -456,7 +456,7 @@ script_mod! {
                             show_bg: true
                             draw_bg +: {
                                 color: (COLOR_PRIMARY)
-                                border_radius: 12.0
+                                border_radius: 10.0
                                 border_size: 1.0
                                 border_color: #D8D8D8
                             }
@@ -464,91 +464,62 @@ script_mod! {
                             proxy_settings_header := View {
                                 width: Fill, height: Fit,
                                 flow: Right,
-                                align: Align{x: 1.0, y: 0.5}
-                                spacing: 8.0
+                                align: Align{y: 0.5}
 
-                                proxy_settings_title := Label {
+                                proxy_settings_title := TitleLabel {
                                     width: Fill, height: Fit
-                                    draw_text +: {
-                                        color: (COLOR_ACTIVE_PRIMARY)
-                                        text_style: TITLE_TEXT {font_size: 15}
-                                    }
+                                    margin: Inset{top: 0}
                                     text: "Network proxy settings"
-                                }
-
-                                proxy_settings_close_button := RobrixNeutralIconButton {
-                                    width: Fit, height: Fit
-                                    padding: Inset{left: 6, right: 6, top: 6, bottom: 6}
-                                    text: ""
-                                    icon_walk: Walk{width: 14, height: 14, margin: 0}
-                                    draw_icon.svg: (ICON_CLOSE)
                                 }
                             }
 
                             proxy_use_card := RoundedView {
                                 width: Fill, height: Fit,
-                                flow: Right,
-                                align: Align{x: 1.0, y: 0.5}
-                                show_bg: true
-                                draw_bg +: {
-                                    color: #F5F5F5
-                                    border_radius: 10.0
-                                    border_size: 1.0
-                                    border_color: #DADADA
-                                }
-                                padding: Inset{top: 12, bottom: 12, left: 14, right: 14}
-
-                                proxy_use_label := Label {
-                                    width: Fill, height: Fit
-                                    draw_text +: {
-                                        color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
-                                    }
-                                    text: "Use proxy"
-                                }
-
-                                proxy_use_toggle := Toggle {
-                                    width: 52, height: 28
-                                    text: ""
-                                    active: false
-                                    icon_walk: Walk{width: 0, height: 0, margin: 0}
-                                    label_walk: Walk{width: 0, height: 0, margin: 0}
-                                    draw_bg +: {
-                                        size: 18.0
-                                        color: #E3E7EF
-                                        color_hover: #E3E7EF
-                                        color_down: #D5DBE6
-                                        color_active: (COLOR_ACTIVE_PRIMARY)
-                                        border_radius: 14.0
-                                        border_size: 1.5
-                                        border_color: #7E879A
-                                        border_color_hover: #7E879A
-                                        border_color_down: #6F788D
-                                        border_color_active: (COLOR_ACTIVE_PRIMARY_DARKER)
-                                        mark_color: #2D3A57
-                                        mark_color_hover: #2D3A57
-                                        mark_color_down: #2D3A57
-                                        mark_color_active: #FFFFFF
-                                        mark_color_active_hover: #FFFFFF
-                                    }
-                                }
-                            }
-
-                            proxy_fields_section := RoundedView {
-                                visible: false
-                                width: Fill, height: Fit,
                                 flow: Down
-                                spacing: 0
                                 show_bg: true
                                 draw_bg +: {
-                                    color: #F5F5F5
-                                    border_radius: 10.0
-                                    border_size: 1.0
-                                    border_color: #DADADA
+                                    color: #F8F8FA
+                                    border_radius: (RADIUS_LG)
                                 }
-                                padding: Inset{top: 4, left: 14, right: 14, bottom: 8}
+                                padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
 
-                                proxy_address_row := View {
+                                View {
+                                    width: Fill, height: Fit
+                                    flow: Right
+                                    align: Align{x: 1.0, y: 0.5}
+
+                                    proxy_use_label := SubsectionLabel {
+                                        margin: Inset{top: 0, bottom: 0}
+                                        text: "Use proxy"
+                                    }
+
+                                    proxy_use_toggle := Toggle {
+                                        width: Fit
+                                        height: Fit
+                                        padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
+                                        text: ""
+                                        active: false
+                                        draw_bg +: {
+                                            size: 20.0
+                                            color_active: (COLOR_ACTIVE_PRIMARY)
+                                            border_color_active: (COLOR_ACTIVE_PRIMARY)
+                                            mark_color_active: #fff
+                                        }
+                                    }
+                                }
+
+                                proxy_fields_section := View {
+                                    visible: false
+                                    width: Fill, height: Fit,
+                                    flow: Down
+                                    spacing: 0
+
+                                    LineH {
+                                        draw_bg.color: #DDDDDD
+                                        margin: Inset{top: (SPACE_SM), bottom: 0}
+                                    }
+
+                                    proxy_address_row := View {
                                     width: Fill, height: Fit,
                                     flow: Right
                                     align: Align{y: 0.5}
@@ -651,6 +622,7 @@ script_mod! {
                                     }
                                 }
                             }
+                            }
 
                             proxy_settings_error_label := Label {
                                 visible: false
@@ -664,14 +636,21 @@ script_mod! {
                                 text: ""
                             }
 
-                            proxy_settings_save_button_row := View {
+                            proxy_settings_action_row := View {
                                 width: Fill, height: Fit
                                 flow: Right
                                 align: Align{x: 0.5, y: 0.5}
+                                spacing: 12.0
                                 margin: Inset{top: 2}
 
+                                proxy_settings_dismiss_button := RobrixNeutralIconButton {
+                                    width: 120, height: 42
+                                    align: Align{x: 0.5, y: 0.5}
+                                    text: "Dismiss"
+                                }
+
                                 proxy_settings_save_button := RobrixIconButton {
-                                    width: 160, height: 42
+                                    width: 120, height: 42
                                     align: Align{x: 0.5, y: 0.5}
                                     text: "Save"
                                 }
@@ -1055,7 +1034,7 @@ impl WidgetMatchEvent for LoginScreen {
             self.redraw(cx);
         }
 
-        if self.view.button(cx, ids!(proxy_settings_close_button)).clicked(actions) {
+        if self.view.button(cx, ids!(proxy_settings_dismiss_button)).clicked(actions) {
             self.view.label(cx, ids!(proxy_settings_error_label)).set_visible(cx, false);
             proxy_settings_modal.close(cx);
             self.redraw(cx);
