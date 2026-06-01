@@ -358,6 +358,7 @@ async fn reset_runtime_state_for_relogin() {
     if let Some(sync_service) = sync_service {
         sync_service.stop().await;
     }
+    SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
 
     CLIENT.lock().unwrap().take();
     DEFAULT_SSO_CLIENT.lock().unwrap().take();
@@ -1138,7 +1139,17 @@ pub enum MatrixRequest {
     DownloadAndSaveFile {
         mxc_uri: OwnedMxcUri,
         app_language: crate::i18n::AppLanguage,
+        update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
     },
+    /// Fetches a media attachment in full and writes it to the given path.
+    DownloadMediaToFile {
+        media_source: MediaSource,
+        save_path: PathBuf,
+        filename: String,
+        update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
+    },
+    /// Request to cancel an in-progress download.
+    CancelDownload(OwnedMxcUri),
     /// Request to send a message to the given room.
     SendMessage {
         timeline_kind: TimelineKind,
@@ -1812,6 +1823,17 @@ pub fn submit_async_request(req: MatrixRequest) {
     }
 }
 
+/// Spawns a one-off async task on the backend Tokio runtime.
+pub fn spawn_async_task<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let rt_handle = TOKIO_RUNTIME.lock().unwrap().get_or_insert_with(|| {
+        tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime")
+    }).handle().clone();
+    rt_handle.spawn(future);
+}
+
 fn forward_success_feedback_text(destination_room_id: &RoomId) -> String {
     format!("Forwarded message to {destination_room_id}.")
 }
@@ -1925,6 +1947,8 @@ async fn matrix_worker_task(
     let mut subscribers_own_user_read_receipts: HashMap<TimelineKind, JoinHandle<()>> = HashMap::new();
     // The async tasks that are spawned to subscribe to changes in the pinned events for each room.
     let mut subscribers_pinned_events: HashMap<OwnedRoomId, JoinHandle<()>> = HashMap::new();
+    // In-flight attachment-download tasks keyed by MXC URI, for cancel support.
+    let download_tasks: Arc<Mutex<HashMap<OwnedMxcUri, futures_util::future::AbortHandle>>> = Arc::new(Mutex::new(HashMap::new()));
 
     while let Some(request) = request_receiver.recv().await {
         match request {
@@ -3557,12 +3581,27 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::DownloadAndSaveFile { mxc_uri, app_language } => {
-                let Some(client) = get_client() else { continue };
+            MatrixRequest::DownloadAndSaveFile { mxc_uri, app_language, update_sender } => {
+                let Some(client) = get_client() else {
+                    if let Some(sender) = update_sender.as_ref() {
+                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(
+                            mxc_uri.clone(),
+                            Err("Client unavailable".to_string()),
+                        ));
+                        SignalToUI::set_ui_signal();
+                    }
+                    continue;
+                };
 
                 let _download_task = Handle::current().spawn(async move {
                     use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
                     use crate::i18n::{tr_key, tr_fmt};
+                    let notify_download_finished = |update_sender: &Option<crossbeam_channel::Sender<TimelineUpdate>>, mxc_uri: &OwnedMxcUri, result: Result<(), String>| {
+                        if let Some(sender) = update_sender.as_ref() {
+                            let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_uri.clone(), result));
+                            SignalToUI::set_ui_signal();
+                        }
+                    };
 
                     log!("DownloadAndSaveFile: downloading {mxc_uri}");
 
@@ -3584,9 +3623,11 @@ async fn matrix_worker_task(
                         Ok(client) => client,
                         Err(e) => {
                             error!("Failed to build download HTTP client: {e}");
+                            notify_download_finished(&update_sender, &mxc_uri, Err(e.to_string()));
                             return;
                         }
                     };
+                    let mut result = Err("Download failed".to_string());
                     match http_client.get(&download_url).send().await {
                         Ok(resp) if resp.status().is_success() => {
                             // Extract filename from Content-Disposition header or use media_id
@@ -3606,6 +3647,7 @@ async fn matrix_worker_task(
                                     let downloads_dir = crate::app_data_dir().join("downloads");
                                     if let Err(e) = std::fs::create_dir_all(&downloads_dir) {
                                         error!("Failed to create downloads dir: {e:?}");
+                                        notify_download_finished(&update_sender, &mxc_uri, Err(e.to_string()));
                                         return;
                                     }
                                     let dest = downloads_dir.join(&filename);
@@ -3623,6 +3665,7 @@ async fn matrix_worker_task(
                                                 log!("Could not open file: {e:?}");
                                             }
                                             SignalToUI::set_ui_signal();
+                                            result = Ok(());
                                         }
                                         Err(e) => {
                                             error!("DownloadAndSaveFile: write failed: {e:?}");
@@ -3665,12 +3708,100 @@ async fn matrix_worker_task(
                             SignalToUI::set_ui_signal();
                         }
                     }
+                    notify_download_finished(&update_sender, &mxc_uri, result);
                 });
+            }
+
+            MatrixRequest::DownloadMediaToFile { media_source, save_path, filename, update_sender } => {
+                let Some(client) = get_client() else {
+                    if let Some(sender) = update_sender.as_ref() {
+                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(
+                            match &media_source {
+                                MediaSource::Plain(uri) => uri.clone(),
+                                MediaSource::Encrypted(file) => file.url.clone(),
+                            },
+                            Err("Client unavailable".to_string()),
+                        ));
+                        SignalToUI::set_ui_signal();
+                    }
+                    continue;
+                };
+
+                let mxc_uri = match &media_source {
+                    MediaSource::Plain(uri) => uri.clone(),
+                    MediaSource::Encrypted(file) => file.url.clone(),
+                };
+                let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
+                let mxc_for_task = mxc_uri.clone();
+                let mxc_for_finished = mxc_uri.clone();
+                let tasks_for_cleanup = download_tasks.clone();
+                let download_future = async move {
+                    let media_request = MediaRequestParameters {
+                        source: media_source,
+                        format: matrix_sdk::media::MediaFormat::File,
+                    };
+                    let result: Result<(), String> = match client.media().get_media_content(&media_request, true).await {
+                        Ok(bytes) => match tokio::fs::write(&save_path, &bytes).await {
+                            Ok(()) => {
+                                log!("Saved downloaded attachment {filename:?} to {}", save_path.display());
+                                enqueue_popup_notification(
+                                    format!("Saved \"{filename}\" to {}", save_path.display()),
+                                    PopupKind::Success,
+                                    Some(5.0),
+                                );
+                                Ok(())
+                            }
+                            Err(e) => {
+                                error!("Failed to write downloaded attachment {filename:?} to {}: {e}", save_path.display());
+                                enqueue_popup_notification(
+                                    format!("Failed to save \"{filename}\": {e}"),
+                                    PopupKind::Error,
+                                    None,
+                                );
+                                Err(e.to_string())
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to fetch media content for attachment {filename:?}: {e}");
+                            enqueue_popup_notification(
+                                format!("Failed to download \"{filename}\": {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                            Err(e.to_string())
+                        }
+                    };
+                    if let Some(sender) = update_sender {
+                        let _ = sender.send(TimelineUpdate::AttachmentDownloadFinished(mxc_for_finished, result));
+                        SignalToUI::set_ui_signal();
+                        let reset_sender = sender.clone();
+                        Handle::current().spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs_f64(
+                                crate::shared::attachment_download::DOWNLOAD_RESULT_DURATION_SECS,
+                            )).await;
+                            let _ = reset_sender.send(TimelineUpdate::AttachmentDownloadReset(mxc_for_task));
+                            SignalToUI::set_ui_signal();
+                        });
+                    }
+                };
+
+                let mxc_for_cleanup = mxc_uri.clone();
+                download_tasks.lock().unwrap().insert(mxc_uri, abort_handle);
+                Handle::current().spawn(async move {
+                    let _ = futures_util::future::Abortable::new(download_future, abort_registration).await;
+                    tasks_for_cleanup.lock().unwrap().remove(&mxc_for_cleanup);
+                });
+            }
+
+            MatrixRequest::CancelDownload(mxc) => {
+                if let Some(abort) = download_tasks.lock().unwrap().remove(&mxc) {
+                    abort.abort();
+                }
             }
 
             MatrixRequest::FetchMedia { media_request, on_fetched, destination, update_sender } => {
                 let Some(client) = get_client() else { continue };
-                
+
                 let _fetch_task = Handle::current().spawn(async move {
                     // log!("Sending fetch media request for {media_request:?}...");
                     let res = client.media().get_media_content(&media_request, true).await;
@@ -4001,6 +4132,39 @@ async fn matrix_worker_task(
                     continue;
                 };
 
+                let max_upload_size = match get_client() {
+                    Some(client) => match client.load_or_fetch_max_upload_size().await {
+                        Ok(max_upload_size) => Some(max_upload_size),
+                        Err(e) => {
+                            warning!("Could not fetch homeserver max upload size for {timeline_kind}: {e:?}; continuing without local size check.");
+                            None
+                        }
+                    },
+                    None => {
+                        warning!("Could not fetch homeserver max upload size for {timeline_kind}: client unavailable; continuing without local size check.");
+                        None
+                    }
+                };
+                if let Some(max_upload_size) = max_upload_size {
+                    let exceeds_max_upload_size = matrix_sdk::ruma::UInt::try_from(file_data.size)
+                        .map(|upload_size| upload_size > max_upload_size)
+                        .unwrap_or(true);
+                    if exceeds_max_upload_size {
+                        let max_size: u64 = max_upload_size.into();
+                        let _ = sender.send(TimelineUpdate::FileUploadError {
+                            error: format!(
+                                "File size ({}) exceeds homeserver upload limit ({}).",
+                                utils::format_file_size(file_data.size),
+                                utils::format_file_size(max_size),
+                            ),
+                            file_data,
+                            retryable: false,
+                        });
+                        SignalToUI::set_ui_signal();
+                        continue;
+                    }
+                }
+
                 // Spawn a new async task to send the attachment.
                 let _send_attachment_task = Handle::current().spawn(async move {
                     use matrix_sdk::attachment::AttachmentConfig;
@@ -4064,6 +4228,7 @@ async fn matrix_worker_task(
                             let _ = sender.send(TimelineUpdate::FileUploadError {
                                 error: format!("{e}"),
                                 file_data: file_data.clone(),
+                                retryable: true,
                             });
                             enqueue_popup_notification(
                                 format!("Failed to upload file: {e}"),
@@ -4675,6 +4840,10 @@ pub fn current_user_id() -> Option<OwnedUserId> {
 
 /// The singleton sync service.
 static SYNC_SERVICE: Mutex<Option<Arc<SyncService>>> = Mutex::new(None);
+static SYNC_SERVICE_DESIRED_RUNNING: AtomicBool = AtomicBool::new(true);
+static SYNC_SERVICE_ASSUMED_RUNNING: AtomicBool = AtomicBool::new(false);
+static SYNC_SERVICE_LIFECYCLE_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// Flag to indicate an account switch is in progress.
 /// Contains the user_id to switch to, if any.
@@ -4715,6 +4884,73 @@ static TOKEN_EXPIRED_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
 /// Get a reference to the current sync service, if available.
 pub fn get_sync_service() -> Option<Arc<SyncService>> {
     SYNC_SERVICE.lock().ok()?.as_ref().cloned()
+}
+
+pub fn sync_service_desired_running() -> bool {
+    SYNC_SERVICE_DESIRED_RUNNING.load(Ordering::Acquire)
+}
+
+pub fn set_sync_service_desired_running(running: bool, reason: &'static str) {
+    let previous = SYNC_SERVICE_DESIRED_RUNNING.swap(running, Ordering::AcqRel);
+    if previous == running && SYNC_SERVICE_ASSUMED_RUNNING.load(Ordering::Acquire) == running {
+        log!(
+            "Matrix sync service already desired {}; skipping lifecycle request ({reason}).",
+            if running { "running" } else { "stopped" }
+        );
+        return;
+    }
+
+    let rt_handle = TOKIO_RUNTIME.lock().unwrap().as_ref().map(|rt| rt.handle().clone());
+    let Some(rt_handle) = rt_handle else {
+        log!(
+            "Stored Matrix sync desired state as {}; Tokio runtime is not running yet ({reason}).",
+            if running { "running" } else { "stopped" }
+        );
+        return;
+    };
+
+    rt_handle.spawn(apply_sync_service_desired_state(reason));
+}
+
+async fn apply_sync_service_desired_state(reason: &'static str) {
+    let _guard = SYNC_SERVICE_LIFECYCLE_LOCK.lock().await;
+    loop {
+        let desired = SYNC_SERVICE_DESIRED_RUNNING.load(Ordering::Acquire);
+        if SYNC_SERVICE_ASSUMED_RUNNING.load(Ordering::Acquire) == desired {
+            break;
+        }
+
+        let Some(sync_service) = get_sync_service() else {
+            log!("Matrix sync service is not available while applying lifecycle request ({reason}).");
+            break;
+        };
+
+        if desired {
+            log!("Starting Matrix sync service after lifecycle request ({reason}).");
+            sync_service.start().await;
+        } else {
+            log!("Stopping Matrix sync service after lifecycle request ({reason}).");
+            sync_service.stop().await;
+        }
+        SYNC_SERVICE_ASSUMED_RUNNING.store(desired, Ordering::Release);
+    }
+}
+
+pub fn stop_sync_service_for_shutdown(timeout: Duration) -> Result<(), Elapsed> {
+    SYNC_SERVICE_DESIRED_RUNNING.store(false, Ordering::Release);
+    let Some(sync_service) = get_sync_service() else {
+        SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
+        return Ok(());
+    };
+
+    let result = block_on_async_with_timeout(Some(timeout), async move {
+        let _guard = SYNC_SERVICE_LIFECYCLE_LOCK.lock().await;
+        sync_service.stop().await;
+    });
+    if result.is_ok() {
+        SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
+    }
+    result
 }
 
 /// The list of users that the current user has chosen to ignore.
@@ -5086,13 +5322,14 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
         handle_load_app_state(logged_in_user_id.to_owned());
         handle_sync_indicator_subscriber(&sync_service);
         handle_sync_service_state_subscriber(sync_service.state());
-        sync_service.start().await;
 
         let room_list_service = sync_service.room_list_service();
+        let sync_service = Arc::new(sync_service);
 
-        if let Some(_existing) = SYNC_SERVICE.lock().unwrap().replace(Arc::new(sync_service)) {
+        if let Some(_existing) = SYNC_SERVICE.lock().unwrap().replace(sync_service) {
             error!("BUG: unexpectedly replaced an existing sync service when initializing the matrix client.");
         }
+        apply_sync_service_desired_state("initial Matrix sync startup").await;
 
         let mut room_list_service_task = rt.spawn(room_list_service_loop(room_list_service));
         let mut space_service_task = rt.spawn(space_service_loop(client));
@@ -5134,14 +5371,6 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                                 log!("matrix worker task ended with error due to account switch: {e:?}");
                             } else {
                                 error!("Error: matrix worker task ended:\n\t{e:?}");
-                                rooms_list::enqueue_rooms_list_update(RoomsListUpdate::Status {
-                                    status: e.to_string(),
-                                });
-                                enqueue_popup_notification(
-                                    format!("Matrix worker error: {e}"),
-                                    PopupKind::Error,
-                                    None,
-                                );
                             }
                         },
                         Err(e) => {
@@ -5163,14 +5392,6 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                         Ok(Err(e)) => {
                             if !is_logout_in_progress() && !is_account_switch_pending() {
                                 error!("Error: room list service loop task ended:\n\t{e:?}");
-                                rooms_list::enqueue_rooms_list_update(RoomsListUpdate::Status {
-                                    status: e.to_string(),
-                                });
-                                enqueue_popup_notification(
-                                    format!("Room list service error: {e}"),
-                                    PopupKind::Error,
-                                    None,
-                                );
                             }
                         },
                         Err(e) => {
@@ -5192,14 +5413,6 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                         Ok(Err(e)) => {
                             if !is_logout_in_progress() && !is_account_switch_pending() {
                                 error!("Error: space service loop task ended:\n\t{e:?}");
-                                rooms_list::enqueue_rooms_list_update(RoomsListUpdate::Status {
-                                    status: e.to_string(),
-                                });
-                                enqueue_popup_notification(
-                                    format!("Space service error: {e}"),
-                                    PopupKind::Error,
-                                    None,
-                                );
                             }
                         },
                         Err(e) => {
@@ -5216,6 +5429,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             // Clear all backend state
             CLIENT.lock().unwrap().take();
             SYNC_SERVICE.lock().unwrap().take();
+            SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
             ALL_JOINED_ROOMS.lock().unwrap().clear();
             IGNORED_USERS.lock().unwrap().clear();
 
@@ -5259,10 +5473,11 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                     handle_load_app_state(switch_user_id.clone());
                     handle_sync_indicator_subscriber(&sync_service);
                     handle_sync_service_state_subscriber(sync_service.state());
-                    sync_service.start().await;
                     let room_list_service = sync_service.room_list_service();
+                    let sync_service = Arc::new(sync_service);
 
-                    SYNC_SERVICE.lock().unwrap().replace(Arc::new(sync_service));
+                    SYNC_SERVICE.lock().unwrap().replace(sync_service);
+                    apply_sync_service_desired_state("Matrix sync startup after account switch").await;
                     
                     let (login_sender, _login_receiver) = tokio::sync::mpsc::channel(1);
 
@@ -6259,6 +6474,7 @@ fn handle_sync_service_state_subscriber(mut subscriber: Subscriber<sync_service:
             log!("Received a sync service state update: {state:?}");
             match state {
                 sync_service::State::Error(e) => {
+                    SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
                     if is_invalid_token_error(&e) {
                         // The access token is invalid; `handle_session_changes` will have
                         // already posted a LoginAction::LoginFailure, so just log here.
@@ -6272,12 +6488,17 @@ fn handle_sync_service_state_subscriber(mut subscriber: Subscriber<sync_service:
                         TOKEN_EXPIRED_NOTIFY.notify_one();
                         if let Some(ss) = get_sync_service() {
                             ss.stop().await;
+                            SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
                         }
                         break;
                     } else {
+                        if !sync_service_desired_running() {
+                            log!("Not restarting sync service after error because lifecycle currently wants it stopped: {e}.");
+                            continue;
+                        }
                         log!("Restarting sync service due to error: {e}.");
-                        if let Some(ss) = get_sync_service() {
-                            ss.start().await;
+                        if get_sync_service().is_some() {
+                            apply_sync_service_desired_state("sync service error restart").await;
                         } else {
                             enqueue_popup_notification(
                                 "Unable to restart the Matrix sync service.\n\nPlease quit and restart Robrix.",
@@ -7362,6 +7583,7 @@ pub async fn clear_app_state(config: &LogoutConfig) -> Result<()> {
     cancel_active_oidc_flow();
     CLIENT.lock().unwrap().take();
     SYNC_SERVICE.lock().unwrap().take();
+    SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
     REQUEST_SENDER.lock().unwrap().take();
     IGNORED_USERS.lock().unwrap().clear();
     ALL_JOINED_ROOMS.lock().unwrap().clear();
