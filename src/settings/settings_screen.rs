@@ -452,7 +452,7 @@ script_mod! {
                         }
 
                         // --- TSP card ---
-                        RoundedView {
+                        tsp_settings_card := RoundedView {
                             width: Fill, height: Fit
                             flow: Down
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
@@ -875,6 +875,12 @@ impl SettingsScreen {
         self.sync_app_language(cx);
     }
 
+    fn sync_tsp_settings_card_visibility(&mut self, cx: &mut Cx) {
+        self.view
+            .view(cx, ids!(tsp_settings_card))
+            .set_visible(cx, cfg!(feature = "tsp"));
+    }
+
     fn sync_app_language(&mut self, cx: &mut Cx) {
         self.view
             .label(cx, ids!(settings_header_title))
@@ -943,6 +949,7 @@ impl SettingsScreen {
         self.view
             .translation_settings(cx, ids!(translation_settings))
             .set_app_language(cx, self.app_language);
+        self.sync_tsp_settings_card_visibility(cx);
         self.view
             .label(cx, ids!(contribute_title))
             .set_text(cx, tr_key(self.app_language, "settings.contribute.title"));
@@ -1114,6 +1121,7 @@ impl SettingsScreen {
                     id!(contribute_settings_page)
                 },
             );
+        self.sync_tsp_settings_card_visibility(cx);
 
         let mut category_account_button = self.view.button(cx, ids!(category_account_button));
         let mut category_preferences_button = self.view.button(cx, ids!(category_preferences_button));
