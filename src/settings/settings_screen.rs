@@ -412,7 +412,7 @@ script_mod! {
                         preferences_proxy_save_button_row := View {
                             width: Fill, height: Fit
                             flow: Right
-                            align: Align{x: 0.5, y: 0.5}
+                            align: Align{x: 0.0, y: 0.5}
                             margin: Inset{top: (SPACE_SM), bottom: (SPACE_XS)}
 
                             preferences_proxy_save_button := RobrixIconButton {
