@@ -464,12 +464,21 @@ script_mod! {
                             proxy_settings_header := View {
                                 width: Fill, height: Fit,
                                 flow: Right,
-                                align: Align{y: 0.5}
+                                align: Align{x: 1.0, y: 0.5}
+                                spacing: 8.0
 
                                 proxy_settings_title := TitleLabel {
                                     width: Fill, height: Fit
                                     margin: Inset{top: 0}
                                     text: "Network proxy settings"
+                                }
+
+                                proxy_settings_close_button := RobrixNeutralIconButton {
+                                    width: Fit, height: Fit
+                                    padding: Inset{left: 6, right: 6, top: 6, bottom: 6}
+                                    text: ""
+                                    icon_walk: Walk{width: 14, height: 14, margin: 0}
+                                    draw_icon.svg: (ICON_CLOSE)
                                 }
                             }
 
@@ -636,21 +645,14 @@ script_mod! {
                                 text: ""
                             }
 
-                            proxy_settings_action_row := View {
+                            proxy_settings_save_button_row := View {
                                 width: Fill, height: Fit
                                 flow: Right
                                 align: Align{x: 0.5, y: 0.5}
-                                spacing: 12.0
                                 margin: Inset{top: 2}
 
-                                proxy_settings_dismiss_button := RobrixNeutralIconButton {
-                                    width: 120, height: 42
-                                    align: Align{x: 0.5, y: 0.5}
-                                    text: "Dismiss"
-                                }
-
                                 proxy_settings_save_button := RobrixIconButton {
-                                    width: 120, height: 42
+                                    width: 160, height: 42
                                     align: Align{x: 0.5, y: 0.5}
                                     text: "Save"
                                 }
@@ -1034,7 +1036,7 @@ impl WidgetMatchEvent for LoginScreen {
             self.redraw(cx);
         }
 
-        if self.view.button(cx, ids!(proxy_settings_dismiss_button)).clicked(actions) {
+        if self.view.button(cx, ids!(proxy_settings_close_button)).clicked(actions) {
             self.view.label(cx, ids!(proxy_settings_error_label)).set_visible(cx, false);
             proxy_settings_modal.close(cx);
             self.redraw(cx);
