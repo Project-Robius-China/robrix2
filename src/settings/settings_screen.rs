@@ -383,6 +383,7 @@ script_mod! {
                                     padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                 }
                             }
+                            }
 
                             preferences_proxy_error_label := Label {
                                 visible: false
@@ -408,7 +409,6 @@ script_mod! {
                                     align: Align{x: 0.5, y: 0.5}
                                     text: "Save Proxy"
                                 }
-                            }
                             }
                         }
                     }
