@@ -3659,6 +3659,20 @@ script_mod! {
                     flow: Overlay
                     align: Align{x: 0, y: 0}
 
+                    translation_lang_backdrop := Button {
+                        width: Fill
+                        height: Fill
+                        text: ""
+                        draw_bg +: {
+                            color: #00000000
+                            color_hover: #00000000
+                            color_down: #00000000
+                        }
+                        draw_text +: {
+                            color: #00000000
+                        }
+                    }
+
                     translation_lang_popup := RoundedView {
                         width: 220
                         height: Fit
@@ -4607,6 +4621,13 @@ impl Widget for RoomScreen {
         let room_info_sliding_pane = self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane));
         let room_info_sliding_pane_widget_uid = room_info_sliding_pane.widget_uid();
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
+        let translation_lang_modal = self.view.modal(cx, ids!(translation_lang_modal));
+        if translation_lang_modal.is_open()
+            && !translation::get_global_config().as_ref().is_some_and(|config| config.enabled)
+        {
+            translation_lang_modal.close(cx);
+        }
+        let translation_lang_modal_open = translation_lang_modal.is_open();
         set_room_info_action_modal_open(
             self.view.modal(cx, ids!(report_room_modal)).is_open()
                 || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open()
@@ -5164,7 +5185,10 @@ impl Widget for RoomScreen {
             || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open();
         let is_interactive_hit = utils::is_interactive_hit_event(event);
         let is_pane_shown: bool;
-        if room_info_action_modal_open {
+        if translation_lang_modal_open {
+            is_pane_shown = true;
+        }
+        else if room_info_action_modal_open {
             is_pane_shown = true;
         }
         else if loading_pane.is_currently_shown(cx) {
@@ -5200,7 +5224,7 @@ impl Widget for RoomScreen {
         //       Makepad already delivers most events to all views regardless of visibility,
         //       so the only thing we'd need here is the conditional below.
 
-        if room_info_action_modal_open || !is_pane_shown || !is_interactive_hit {
+        if translation_lang_modal_open || room_info_action_modal_open || !is_pane_shown || !is_interactive_hit {
             let Some(room_props) = self.build_room_screen_props(cx, scope, room_screen_widget_uid) else {
                 if !is_pane_shown || !is_interactive_hit {
                     return;
@@ -5221,9 +5245,13 @@ impl Widget for RoomScreen {
             // Forward the event to the inner timeline view, but capture any actions it produces
             // such that we can handle the ones relevant to only THIS RoomScreen widget right here and now,
             // ensuring they are not mistakenly handled by other RoomScreen widget instances.
-            let mut actions_generated_within_this_room_screen = cx.capture_actions(|cx|
-                self.view.handle_event(cx, event, &mut room_scope)
-            );
+            let mut actions_generated_within_this_room_screen = cx.capture_actions(|cx| {
+                if translation_lang_modal_open && is_interactive_hit {
+                    translation_lang_modal.handle_event(cx, event, &mut room_scope);
+                } else {
+                    self.view.handle_event(cx, event, &mut room_scope);
+                }
+            });
             // Here, we handle and remove any general actions that are relevant to only this RoomScreen.
             // Removing the handled actions ensures they are not mistakenly handled by other RoomScreen widget instances.
             actions_generated_within_this_room_screen.retain(|action| {
@@ -7798,6 +7826,14 @@ impl RoomScreen {
     fn handle_translation_lang_popup_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         let translation_lang_modal = self.view.modal(cx, ids!(translation_lang_modal));
         if !translation_lang_modal.is_open() {
+            return;
+        }
+        if self
+            .button(cx, ids!(translation_lang_modal.content.translation_lang_backdrop))
+            .clicked(actions)
+            || actions.iter().any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed)))
+        {
+            translation_lang_modal.close(cx);
             return;
         }
 
