@@ -476,8 +476,10 @@ script_mod! {
                                 proxy_settings_close_button := RobrixNeutralIconButton {
                                     width: Fit, height: Fit
                                     padding: Inset{left: 6, right: 6, top: 6, bottom: 6}
+                                    spacing: 0
                                     text: ""
                                     icon_walk: Walk{width: 14, height: 14, margin: 0}
+                                    label_walk: Walk{width: 0, height: 0, margin: 0}
                                     draw_icon.svg: (ICON_CLOSE)
                                 }
                             }
