@@ -241,8 +241,6 @@ script_mod! {
                             }
                         }
 
-                        LineH { width: 400, padding: 10, margin: Inset{top: 12, bottom: 5} }
-
                         preferences_proxy_title := TitleLabel {
                             text: "Proxy"
                         }
@@ -303,7 +301,7 @@ script_mod! {
                                     width: 90, height: Fit
                                     draw_text +: {
                                         color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
+                                        text_style: REGULAR_TEXT {font_size: 12}
                                     }
                                     text: "Address"
                                 }
@@ -329,7 +327,7 @@ script_mod! {
                                     width: 90, height: Fit
                                     draw_text +: {
                                         color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
+                                        text_style: REGULAR_TEXT {font_size: 12}
                                     }
                                     text: "Port"
                                 }
@@ -355,7 +353,7 @@ script_mod! {
                                     width: 90, height: Fit
                                     draw_text +: {
                                         color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
+                                        text_style: REGULAR_TEXT {font_size: 12}
                                     }
                                     text: "Account"
                                 }
@@ -381,7 +379,7 @@ script_mod! {
                                     width: 90, height: Fit
                                     draw_text +: {
                                         color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
+                                        text_style: REGULAR_TEXT {font_size: 12}
                                     }
                                     text: "Password"
                                 }
