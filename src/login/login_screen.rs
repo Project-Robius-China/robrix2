@@ -456,7 +456,7 @@ script_mod! {
                             show_bg: true
                             draw_bg +: {
                                 color: (COLOR_PRIMARY)
-                                border_radius: 10.0
+                                border_radius: 8.0
                                 border_size: 1.0
                                 border_color: #D8D8D8
                             }
@@ -525,11 +525,6 @@ script_mod! {
                                     flow: Down
                                     spacing: 0
 
-                                    LineH {
-                                        draw_bg.color: #DDDDDD
-                                        margin: Inset{top: (SPACE_SM), bottom: 0}
-                                    }
-
                                     proxy_address_row := View {
                                     width: Fill, height: Fit,
                                     flow: Right
@@ -553,8 +548,6 @@ script_mod! {
                                         padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
-
-                                LineH { draw_bg.color: #DDDDDD }
 
                                 proxy_port_row := View {
                                     width: Fill, height: Fit,
@@ -580,8 +573,6 @@ script_mod! {
                                     }
                                 }
 
-                                LineH { draw_bg.color: #DDDDDD }
-
                                 proxy_account_row := View {
                                     width: Fill, height: Fit,
                                     flow: Right
@@ -605,8 +596,6 @@ script_mod! {
                                         padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
-
-                                LineH { draw_bg.color: #DDDDDD }
 
                                 proxy_password_row := View {
                                     width: Fill, height: Fit,
