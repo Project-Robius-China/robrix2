@@ -1071,7 +1071,7 @@ impl SettingsScreen {
         }
 
         let proxy_url = proxy_url.to_string();
-        crate::proxy_config::validate_proxy_url(&proxy_url)?;
+        crate::proxy_config::validate_proxy_url_for_user_input(&proxy_url)?;
         Ok(Some(proxy_url))
     }
 
