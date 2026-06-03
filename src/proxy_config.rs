@@ -66,38 +66,74 @@ pub fn normalize_proxy_url(proxy_url: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Why a user-entered proxy URL was rejected.
+///
+/// Returned by [`validate_proxy_url_for_user_input`] so UI callers can localize
+/// the message via the i18n layer. `Display` renders the English fallback used
+/// by non-UI paths (load/build/CLI) where no user is present to localize for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxyInputError {
+    /// The string is not a parseable URL. Carries the parser detail.
+    InvalidUrl(String),
+    /// Scheme is not http/https. Carries the offending scheme.
+    UnsupportedScheme(String),
+    /// Host is not an IP / `localhost` / dotted domain — almost always a typo.
+    /// Carries the rejected host.
+    InvalidHost(String),
+    /// The URL has no host component.
+    MissingHost,
+}
+
+impl std::fmt::Display for ProxyInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProxyInputError::InvalidUrl(detail) => write!(f, "Invalid proxy URL: {detail}"),
+            ProxyInputError::UnsupportedScheme(scheme) => {
+                write!(f, "Unsupported proxy URL scheme `{scheme}`. Use http or https.")
+            }
+            ProxyInputError::InvalidHost(host) => write!(
+                f,
+                "Invalid proxy host `{host}`. Use an IP address, `localhost`, or a domain name like `proxy.example.com`."
+            ),
+            ProxyInputError::MissingHost => write!(f, "Proxy URL must include a host."),
+        }
+    }
+}
+
 pub fn validate_proxy_url(proxy_url: &str) -> Result<(), String> {
+    validate_proxy_url_typed(proxy_url).map_err(|e| e.to_string())
+}
+
+fn validate_proxy_url_typed(proxy_url: &str) -> Result<(), ProxyInputError> {
     let Some(parsed_url) = parse_supported_proxy_url(proxy_url)? else {
         return Ok(());
     };
 
     if parsed_url.host().is_none() {
-        return Err("Proxy URL must include a host.".to_string());
+        return Err(ProxyInputError::MissingHost);
     }
 
     Ok(())
 }
 
-fn parse_supported_proxy_url(proxy_url: &str) -> Result<Option<Url>, String> {
+fn parse_supported_proxy_url(proxy_url: &str) -> Result<Option<Url>, ProxyInputError> {
     let proxy_url = proxy_url.trim();
     if proxy_url.is_empty() {
         return Ok(None);
     }
 
     let parsed_url = Url::parse(proxy_url)
-        .map_err(|e| format!("Invalid proxy URL: {e}"))?;
+        .map_err(|e| ProxyInputError::InvalidUrl(e.to_string()))?;
 
     match parsed_url.scheme() {
         "http" | "https" => {}
-        scheme => return Err(format!(
-            "Unsupported proxy URL scheme `{scheme}`. Use http or https."
-        )),
+        scheme => return Err(ProxyInputError::UnsupportedScheme(scheme.to_string())),
     }
 
     Ok(Some(parsed_url))
 }
 
-pub fn validate_proxy_url_for_user_input(proxy_url: &str) -> Result<(), String> {
+pub fn validate_proxy_url_for_user_input(proxy_url: &str) -> Result<(), ProxyInputError> {
     let Some(parsed_url) = parse_supported_proxy_url(proxy_url)? else {
         return Ok(());
     };
@@ -110,10 +146,8 @@ pub fn validate_proxy_url_for_user_input(proxy_url: &str) -> Result<(), String> 
         Some(Host::Ipv4(_) | Host::Ipv6(_)) => Ok(()),
         Some(Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost") => Ok(()),
         Some(Host::Domain(domain)) if domain.contains('.') => Ok(()),
-        Some(Host::Domain(domain)) => Err(format!(
-            "Invalid proxy host `{domain}`. Use an IP address, `localhost`, or a domain name like `proxy.example.com`."
-        )),
-        None => Err("Proxy URL must include a host.".to_string()),
+        Some(Host::Domain(domain)) => Err(ProxyInputError::InvalidHost(domain.to_string())),
+        None => Err(ProxyInputError::MissingHost),
     }
 }
 
@@ -324,10 +358,7 @@ mod tests {
     fn validate_proxy_url_for_user_input_rejects_bare_single_label_host() {
         let err = validate_proxy_url_for_user_input("http://qweqwe:8080")
             .expect_err("bare single-label hosts should be rejected without DNS lookup");
-        assert!(
-            err.contains("Invalid proxy host"),
-            "expected host-shape rejection message, got {err:?}"
-        );
+        assert_eq!(err, ProxyInputError::InvalidHost("qweqwe".to_string()));
     }
 
     #[test]
