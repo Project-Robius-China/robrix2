@@ -491,6 +491,15 @@ impl Widget for NavigationTabBar {
                                 }
                             }
                         }
+                        SelectedTab::VoIP => {
+                            // VoIP doesn't have a dedicated button in the tab bar,
+                            // so just deselect all buttons
+                            for rb in radio_button_set.iter() {
+                                if let Some(mut rb_inner) = rb.borrow_mut() {
+                                    rb_inner.animator_play(cx, ids!(active.off));
+                                }
+                            }
+                        }
                         SelectedTab::Space { .. } => {
                             for rb in radio_button_set.iter() {
                                 if let Some(mut rb_inner) = rb.borrow_mut() {
@@ -536,6 +545,7 @@ pub enum SelectedTab {
     Home,
     AddRoom,
     Settings,
+    VoIP,
     // AlertsInbox,
     Space { space_name_id: RoomNameId },
 }
@@ -581,11 +591,13 @@ pub enum NavigationBarAction {
     CloseSettings,
     /// Go the space screen for the given space.
     GoToSpace { space_name_id: RoomNameId },
+    // /// Go to the VoIP call screen.
+    // GoToVoip,
 
     // TODO: add GoToAlertsInbox, once we add that button/screen
 
     /// The given tab was selected as the active top-level view.
-    /// This is needed to ensure that the proper tab is marked as selected. 
+    /// This is needed to ensure that the proper tab is marked as selected.
     TabSelected(SelectedTab),
     /// Toggle whether the SpacesBar is shown, i.e., show/hide it.
     /// This is only applicable in the Mobile view mode, because the SpacesBar

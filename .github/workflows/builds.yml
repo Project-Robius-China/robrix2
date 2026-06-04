@@ -125,6 +125,9 @@ jobs:
         with:
           key: macos-${{ matrix.arch }}-build-${{ hashFiles('Cargo.lock') }}
 
+      - name: Install LLVM
+        run: brew install llvm
+
       - name: Build
         run: |
           cargo build --profile fast

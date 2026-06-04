@@ -47,6 +47,22 @@ script_mod! {
         }
     }
 
+    // A video call icon to be displayed when there's an active call in the room.
+    mod.widgets.ActiveCallIcon = View {
+        width: Fit, height: Fit,
+        visible: false,
+
+        Icon {
+            width: 19, height: 19,
+            align: Align{x: 0.5, y: 0.5}
+            draw_icon +: {
+                svg: (ICON_VIDEO)
+                color: #4CAF50  // Green color for active call
+            }
+            icon_walk: Walk{ width: 15, height: 15 }
+        }
+    }
+
     mod.widgets.RoomName = Label {
         width: Fill, height: Fit
         flow: Flow.Right{wrap: false},
@@ -201,6 +217,7 @@ script_mod! {
                     unread_badge := UnreadBadge {}
                     encryption_icon := mod.widgets.EncryptionIcon {}
                     tombstone_icon := mod.widgets.TombstoneIcon {}
+                    active_call_icon := mod.widgets.ActiveCallIcon {}
                 }
             }
             IconAndName := mod.widgets.RoomsListEntryContent {
@@ -211,6 +228,7 @@ script_mod! {
                 unread_badge := UnreadBadge {}
                 encryption_icon := mod.widgets.EncryptionIcon {}
                 tombstone_icon := mod.widgets.TombstoneIcon {}
+                active_call_icon := mod.widgets.ActiveCallIcon {}
             }
             FullPreview := mod.widgets.RoomsListEntryContent {
                 padding: 10
@@ -236,6 +254,7 @@ script_mod! {
                         View {
                             width: Fit, height: Fit
                             align: Align{ x: 1.0 }
+                            active_call_icon := mod.widgets.ActiveCallIcon {}
                             unread_badge := UnreadBadge {}
                             encryption_icon := mod.widgets.EncryptionIcon {}
                             tombstone_icon := mod.widgets.TombstoneIcon {}
@@ -406,6 +425,8 @@ impl RoomsListEntryContent {
             should_show_encryption_icon(room_info.is_encrypted, room_info.is_tombstoned),
         );
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, room_info.is_tombstoned);
+        // Show active call icon if there's an active call in this room
+        self.view.view(cx, ids!(active_call_icon)).set_visible(cx, room_info.has_active_call);
     }
 
     /// Populates this RoomsListEntry with info about an invited room.

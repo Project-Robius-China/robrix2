@@ -557,6 +557,7 @@ impl HomeScreen {
                     | SelectedTab::Home => id!(home_page),
                     SelectedTab::Settings => id!(settings_page),
                     SelectedTab::AddRoom => id!(add_room_page),
+                    SelectedTab::VoIP => id!(voip_page),
                 },
             )
     }
