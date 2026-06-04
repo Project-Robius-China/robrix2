@@ -190,9 +190,15 @@ impl MainDesktopUI {
                     space_name_id,
                 );
             }
-            SelectedRoom::Voip { room_name_id } => {
-                // VoIP tabs use VoipScreen directly, not RoomScreen
-                widget.as_voip_screen().initialize(cx, room_name_id.room_id().clone());
+            SelectedRoom::Voip { room_name_id, voice_only } => {
+                // VoIP tabs use VoipScreen directly, not RoomScreen.
+                // `voice_only` switches the screen into voice-only mode
+                // (avatar instead of camera preview, no video publish).
+                widget.as_voip_screen().initialize(
+                    cx,
+                    room_name_id.room_id().clone(),
+                    *voice_only,
+                );
             }
         }
     }
@@ -526,7 +532,7 @@ impl WidgetMatchEvent for MainDesktopUI {
                         cx.action(VoipAction::HidePip);
                     }
                     // Detect switch FROM VoIP tab with active call -> show PiP
-                    else if let Some(SelectedRoom::Voip { room_name_id }) = &prev_room {
+                    else if let Some(SelectedRoom::Voip { room_name_id, .. }) = &prev_room {
                         let room_id = room_name_id.room_id();
                         if VoipGlobalState::is_call_active(cx, room_id) {
                             log!("MainDesktopUI: Switching FROM VoIP tab with active call, showing PiP");

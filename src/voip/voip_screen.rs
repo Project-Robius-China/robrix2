@@ -611,6 +611,10 @@ pub struct VoipScreen {
     #[rust] from_notification: bool,
     #[rust] show_participants: bool,
     #[rust] show_debug: bool,
+    /// Whether this is a voice-only call. When true, the camera is
+    /// never started, the lobby hides the camera preview, and remote
+    /// video tracks are ignored — only the avatar is shown.
+    #[rust] voice_only: bool,
 
     // LiveKit client
     #[rust] livekit_client: Option<LiveKitClient>,
@@ -1008,14 +1012,23 @@ impl Widget for VoipScreen {
 }
 
 impl VoipScreen {
-    /// Initialize the VoIP screen
-    pub fn initialize(&mut self, cx: &mut Cx, room_id: OwnedRoomId) {
-        log!("VoipScreen: Initializing for room {}", room_id);
+    /// Initialize the VoIP screen.
+    ///
+    /// `voice_only`: when `true`, opens in voice-call mode — no
+    /// camera preview in the lobby, no local video publish, and
+    /// remote video tracks are not subscribed. The lobby still
+    /// shows the mic toggle so the user can choose to start muted.
+    pub fn initialize(&mut self, cx: &mut Cx, room_id: OwnedRoomId, voice_only: bool) {
+        log!("VoipScreen: Initializing for room {} (voice_only={})", room_id, voice_only);
+        self.voice_only = voice_only;
         self.in_lobby = true;
         self.lobby_mic_enabled = true;
-        self.lobby_camera_enabled = true;
+        // In voice-only mode the lobby camera preview is suppressed
+        // and the call's local video track starts muted.
+        self.lobby_camera_enabled = !voice_only;
         self.show_participants = true;
         self.call = Call::default();
+        self.call.local_video_muted = voice_only;
         self.speaking_detector = SpeakingDetector::new();
 
         // Initialize LiveKit client
@@ -1037,8 +1050,13 @@ impl VoipScreen {
         self.camera_permission = VoipGlobalState::get_camera_permission(cx);
         self.camera_choice = VoipGlobalState::get_camera_choice(cx);
 
-        // Try to start camera if we already have permission and camera choice
-        self.try_start_camera(cx);
+        // Try to start camera if we already have permission and camera
+        // choice — but only when this is a video call. Voice-only
+        // calls deliberately leave the camera off to keep the lobby
+        // and the in-call view avatar-only.
+        if !self.voice_only {
+            self.try_start_camera(cx);
+        }
 
         // Set default room
         self.set_room(cx, room_id.clone());
@@ -1927,10 +1945,11 @@ impl VoipScreen {
 }
 
 impl VoipScreenRef {
-    /// Initialize the VoIP screen
-    pub fn initialize(&self, cx: &mut Cx, room_id: OwnedRoomId) {
+    /// Initialize the VoIP screen. `voice_only`: when true, opens in
+    /// voice-call mode (no camera preview, avatar tiles, mic-only).
+    pub fn initialize(&self, cx: &mut Cx, room_id: OwnedRoomId, voice_only: bool) {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.initialize(cx, room_id);
+            inner.initialize(cx, room_id, voice_only);
         }
     }
 
