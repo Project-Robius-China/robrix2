@@ -47,6 +47,10 @@ pub mod i18n;
 
 /// Login screen
 pub mod login;
+/// Shared homeserver capability discovery state.
+pub mod homeserver;
+/// Account registration flow
+pub mod register;
 /// Logout confirmation and state management
 pub mod logout;
 /// Core UI content: the main home screen (rooms list), room screen.
@@ -79,6 +83,7 @@ pub mod cpu_worker;
 pub mod sliding_sync;
 pub mod space_service_sync;
 pub mod avatar_cache;
+pub mod room_preview_cache;
 pub mod media_cache;
 pub mod verification;
 pub mod updater;
@@ -87,6 +92,7 @@ pub mod utils;
 /// Multi-account management for supporting multiple Matrix accounts simultaneously.
 pub mod account_manager;
 pub mod temp_storage;
+pub mod proxy_config;
 pub mod location;
 pub mod image_utils;
 

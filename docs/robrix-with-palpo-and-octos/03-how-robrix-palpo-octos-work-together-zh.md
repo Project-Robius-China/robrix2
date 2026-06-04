@@ -116,7 +116,7 @@ namespaces:
 | 字段 | 用途 |
 |------|------|
 | `id` | 此应用服务的唯一名称。Palpo 用它来跟踪事件投递状态。 |
-| `url` | Palpo 发送事件的 HTTP 端点。这是 Octos 在 Docker 网络内的地址。 |
+| `url` | Palpo 发送事件的 HTTP 端点。Octos 作为 Docker 容器，与 Palpo 在同一个内部网络，所以 Palpo 通过服务名 `octos` 直接访问它。 |
 | `as_token` | Octos 调用 Palpo API 时出示的令牌。证明"我是已注册的应用服务"。 |
 | `hs_token` | Palpo 向 Octos 推送事件时出示的令牌。证明"我是你注册时对应的主服务器"。 |
 | `sender_localpart` | 主机器人的用户名。与 `server_name` 组合后变成 `@octosbot:127.0.0.1:8128`。 |
@@ -177,7 +177,7 @@ namespaces:
          v
 +-----------------+
 | 3. Palpo 推送   |  PUT /transactions/{txnId} -> http://octos:8009
-|    到 Octos     |  (Appservice API，Docker 内部网络)
+|    到 Octos     |  (Appservice API；Octos 在同一个 Docker 网络中)
 +--------+--------+
          |
          v
@@ -189,7 +189,7 @@ namespaces:
          v
 +-----------------+
 | 5. Octos 发送   |  PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message
-|    回复         |  -> http://palpo:8008 (Docker 内部网络)
+|    回复         |  -> http://palpo:8008 (内部 Docker 网络中的 Palpo 服务)
 |    (CS API)     |  Auth: Bearer {as_token}
 +--------+--------+
          |
@@ -209,11 +209,11 @@ namespaces:
 
 **步骤 2 -- Palpo 存储事件。** Palpo 接收消息，分配一个事件 ID，并将其持久化到 PostgreSQL。房间状态更新以反映新消息。
 
-**步骤 3 -- Palpo 将事件推送给 Octos。** Palpo 检查其应用服务注册表，发现 `@octosbot:127.0.0.1:8128` 是该房间的成员。它通过 HTTP PUT 请求将事件发送到 Octos 的应用服务端点（`http://octos:8009`），路径为 `/transactions/{txnId}`。这使用 Docker 内部网络——流量不会离开主机。
+**步骤 3 -- Palpo 将事件推送给 Octos。** Palpo 检查其应用服务注册表，发现 `@octosbot:127.0.0.1:8128` 是该房间的成员。它通过 HTTP PUT 请求将事件发送到 Octos 的应用服务端点（`http://octos:8009`），路径为 `/transactions/{txnId}`。Octos 作为 Docker 容器，与 Palpo 在同一个内部网络，所以 Palpo 通过服务名 `octos` 解析到它——流量不会离开 Docker 网络。
 
 **步骤 4 -- Octos 调用 LLM。** Octos 接收事件，提取消息内容，并调用配置的 LLM 提供商（例如 DeepSeek 的 `/v1/chat/completions` 端点）。它会包含对话历史作为上下文。
 
-**步骤 5 -- Octos 发送回复。** LLM 响应后，Octos 以机器人用户（`@octosbot:127.0.0.1:8128`）的身份，通过 Palpo 的 Client-Server API 发送回复。它使用 `as_token` 进行认证。注意 Octos 连接的是 `http://palpo:8008`（Docker 内部），而不是 `127.0.0.1:8128`（主机）。
+**步骤 5 -- Octos 发送回复。** LLM 响应后，Octos 以机器人用户（`@octosbot:127.0.0.1:8128`）的身份，通过 Palpo 的 Client-Server API 发送回复。它使用 `as_token` 进行认证。Octos 通过内部 Docker 网络连接 Palpo 的地址是 `http://palpo:8008`——服务名 `palpo` 直接解析到 Palpo 容器的 8008 端口。
 
 **步骤 6 -- Palpo 将回复投递给 Robrix。** Palpo 存储机器人的回复事件，并将其包含在 Robrix 的下一次 Sliding Sync 响应中。Robrix 接收事件并在对话中显示 AI 机器人的消息。
 
@@ -232,7 +232,7 @@ namespaces:
 
 - **Robrix 从不直接与 Octos 通信。** 所有通信都通过 Palpo 中转。Robrix 甚至不知道 Octos 的存在——它只看到房间中的机器人用户。
 - **两条不同的路径，同一个 API。** Robrix 和 Octos 都使用 Client-Server API 与 Palpo 通信，但 Octos 使用 `as_token`（应用服务凭证）而非普通用户会话进行认证。
-- **内部流量与外部流量。** Robrix 通过主机端口（8128）连接。Palpo 和 Octos 在 Docker 内部网络上通信（使用服务名 `palpo:8008` 和 `octos:8009`）。只有 LLM API 调用会访问互联网。
+- **内部流量与外部流量。** Robrix 通过主机端口（`127.0.0.1:8128`）连接到 Palpo。Palpo 和 Octos 都作为 Docker 容器运行在同一个内部网络：Palpo 通过 `octos:8009` 调用 Octos，Octos 反向通过 `palpo:8008` 调用 Palpo。只有 LLM API 调用走公网。
 
 ---
 
@@ -241,12 +241,12 @@ namespaces:
 | 连接 | 协议 | 默认端口 | 方向 | 说明 |
 |------|------|----------|------|------|
 | Robrix -> Palpo | Client-Server API (Sliding Sync) | 8128 (主机) -> 8008 (容器) | 双向 | Robrix 唯一需要的端口。暴露在主机上。 |
-| Palpo -> Octos | Appservice API | 8009 (主机) -> 8009 (容器) | Palpo 推送事件 | 同时暴露到主机用于调试。内部使用 Docker 服务名 `octos`。 |
-| Octos -> Palpo | Client-Server API | 8008 (Docker 内部网络) | Octos 发送回复 | 使用 Docker 服务名 `palpo`。通过 `as_token` 认证。 |
-| Octos 管理面板 | HTTP | 8010 (主机) -> 8080 (容器) | 入站 | 可选的管理 UI，用于监控 Octos。 |
+| Palpo -> Octos | Appservice API | 8009 (内部) | Palpo 推送事件 | Octos 监听在 Docker 网络内；Palpo 通过 `octos:8009` 访问。 |
+| Octos -> Palpo | Client-Server API | 8008 (内部) | Octos 发送回复 | Octos 通过 `palpo:8008` 经由内部 Docker 网络连接 Palpo。通过 `as_token` 认证。 |
+| Octos 管理面板 | HTTP | 8080 (主机) | 入站 | 可选的管理 UI，用于监控 Octos（暴露到主机以便浏览器访问）。 |
 | Octos -> LLM | HTTPS | 443 (出站) | 出站 | 对 LLM 提供商的外部 API 调用。 |
 
-**为什么 Palpo 有两个不同的端口（8008 vs. 8128）？** 在 Docker 网络内部，Palpo 监听 8008 端口（容器端口）。Docker 将主机端口 8128 映射到容器端口 8008。Octos 运行在同一 Docker 网络中，直接连接 `palpo:8008`。Robrix 运行在主机上，连接 `127.0.0.1:8128`。
+**为什么 Palpo 有两个不同的端口（8008 vs. 8128）？** Palpo 在容器内监听 8008 端口。Docker 将宿主机端口 8128 映射到容器端口 8008，这样在宿主机上原生运行的 Robrix 就能连接 `127.0.0.1:8128`。Octos 也运行在 Docker 内，直接在内部网络通过 `palpo:8008` 连接 Palpo——不需要端口映射。反过来，Palpo 通过 `octos:8009` 访问 Octos，利用 Docker 的服务名解析机制。
 
 ---
 

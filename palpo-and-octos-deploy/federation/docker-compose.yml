@@ -1,0 +1,138 @@
+# ============================================================
+# Local Matrix Federation + Octos AI Bot — INDEPENDENT SETUP
+# ============================================================
+# This compose builds its OWN images from source; it does NOT
+# reuse the parent single-node deployment's images.
+#
+# Two Palpo homeservers (palpo-1 and palpo-2) federate with each
+# other through a Docker network. Octos runs as an AppService on
+# palpo-1.
+#
+# Before first run:
+#   1. Ensure ../repos/palpo and ../repos/octos exist (run the
+#      parent ./setup.sh once, or clone them manually)
+#   2. ./gen-certs.sh             # generate self-signed TLS certs
+#   3. cp .env.example .env       # set DEEPSEEK_API_KEY
+#
+# Then:
+#   docker compose up -d --build
+# ============================================================
+
+services:
+
+  # ------ Node 1: hosts Octos AppService ----------------------
+  palpo-1:
+    build:
+      context: ..                         # palpo-and-octos-deploy/
+      dockerfile: federation/palpo.Dockerfile
+    image: palpo-federation:local-dev     # shared tag; palpo-2 reuses
+    container_name: palpo-1
+    restart: unless-stopped
+    depends_on:
+      palpo-pg-1:
+        condition: service_healthy
+    volumes:
+      - ./nodes/node1/palpo.toml:/var/palpo/palpo.toml:ro
+      - ./nodes/node1/appservices:/var/palpo/appservices:ro
+      - ./nodes/node1/media:/var/palpo/media
+      - ./certs/node1.crt:/var/palpo/certs/node1.crt:ro
+      - ./certs/node1.key:/var/palpo/certs/node1.key:ro
+    environment:
+      PALPO_CONFIG: /var/palpo/palpo.toml
+      RUST_LOG: palpo=debug,palpo_core=info
+    ports:
+      - "6001:8008"                       # Client-Server API
+      - "6401:8448"                       # Federation API (TLS)
+    networks:
+      federation:
+        aliases: [palpo-1]
+
+  palpo-pg-1:
+    image: postgres:16-alpine
+    container_name: palpo-pg-1
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: palpo_node_1
+      POSTGRES_USER: palpo
+      POSTGRES_PASSWORD: palpo
+    volumes:
+      - ./data/pg-1:/var/lib/postgresql/data
+    networks: [federation]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U palpo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ------ Node 2: regular user (alice) ------------------------
+  # Identical build spec to palpo-1 so both services can be built
+  # independently; Docker's layer cache makes the second build a no-op.
+  palpo-2:
+    build:
+      context: ..
+      dockerfile: federation/palpo.Dockerfile
+    image: palpo-federation:local-dev     # same tag as palpo-1
+    container_name: palpo-2
+    restart: unless-stopped
+    depends_on:
+      palpo-pg-2:
+        condition: service_healthy
+    volumes:
+      - ./nodes/node2/palpo.toml:/var/palpo/palpo.toml:ro
+      - ./nodes/node2/media:/var/palpo/media
+      - ./certs/node2.crt:/var/palpo/certs/node2.crt:ro
+      - ./certs/node2.key:/var/palpo/certs/node2.key:ro
+    environment:
+      PALPO_CONFIG: /var/palpo/palpo.toml
+      RUST_LOG: palpo=debug,palpo_core=info
+    ports:
+      - "6002:8008"
+      - "6402:8448"
+    networks:
+      federation:
+        aliases: [palpo-2]
+
+  palpo-pg-2:
+    image: postgres:16-alpine
+    container_name: palpo-pg-2
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: palpo_node_2
+      POSTGRES_USER: palpo
+      POSTGRES_PASSWORD: palpo
+    volumes:
+      - ./data/pg-2:/var/lib/postgresql/data
+    networks: [federation]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U palpo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ------ Octos AI Bot (AppService on palpo-1) ----------------
+  octos:
+    build:
+      context: ../repos/octos
+      dockerfile: Dockerfile
+    image: octos-federation:local-dev
+    container_name: octos
+    restart: unless-stopped
+    depends_on: [palpo-1]
+    volumes:
+      - ./data/octos:/root/.octos
+      - ./config/botfather.json:/root/.octos/profiles/botfather.json:ro
+      - ./config/octos.json:/config/octos.json:ro
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      RUST_LOG: ${RUST_LOG:-octos=debug,info}
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080", "--config", "/config/octos.json"]
+    ports:
+      - "8009:8009"                       # AppService transaction receiver
+      - "8010:8080"                       # Octos dashboard / admin API
+    networks:
+      federation:
+        aliases: [octos]
+
+networks:
+  federation:
+    name: palpo-federation

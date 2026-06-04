@@ -19,6 +19,7 @@ script_mod! {
     mod.widgets.ICON_ROTATE_CW        = crate_resource("self://resources/icons/rotate_right_fa.svg")
     mod.widgets.ICON_ROTATE_CCW       = crate_resource("self://resources/icons/rotate_left_fa.svg")
     mod.widgets.ICON_COPY             = crate_resource("self://resources/icons/copy.svg")
+    mod.widgets.ICON_DOWNLOAD         = crate_resource("self://resources/icons/download.svg")
     mod.widgets.ICON_EDIT             = crate_resource("self://resources/icons/edit.svg")
     mod.widgets.ICON_EXTERNAL_LINK    = crate_resource("self://resources/icons/external_link.svg")
     mod.widgets.ICON_IMPORT           = crate_resource("self://resources/icons/import.svg") // TODO: FIX
@@ -29,6 +30,8 @@ script_mod! {
     mod.widgets.ICON_INVITE           = crate_resource("self://resources/icons/invite.svg")
     mod.widgets.ICON_JOIN_ROOM        = crate_resource("self://resources/icons/join_room.svg")
     mod.widgets.ICON_JUMP             = crate_resource("self://resources/icons/go_back.svg")
+    mod.widgets.ICON_LOCK_FILLED      = crate_resource("self://resources/icons/lock_filled.svg")
+    mod.widgets.ICON_LOCK_OPEN        = crate_resource("self://resources/icons/lock_open.svg")
     mod.widgets.ICON_LOGOUT           = crate_resource("self://resources/icons/logout.svg")
     mod.widgets.ICON_LINK             = crate_resource("self://resources/icons/link.svg")
     mod.widgets.ICON_PIN              = crate_resource("self://resources/icons/pin.svg")
@@ -55,6 +58,10 @@ script_mod! {
 
     mod.widgets.REGULAR_TEXT = theme.font_regular {
         font_size: (10),
+    }
+
+    mod.widgets.BOLD_TEXT = theme.font_bold {
+        font_size: (13),
     }
 
     mod.widgets.TEXT_SUB = theme.font_regular {
@@ -87,6 +94,56 @@ script_mod! {
     mod.widgets.MESSAGE_TEXT_STYLE = theme.font_regular {
         font_size: (mod.widgets.MESSAGE_FONT_SIZE),
         line_spacing: (mod.widgets.MESSAGE_TEXT_LINE_SPACING),
+    }
+
+    // Code blocks need a real monospace latin font for CodeView layout,
+    // plus a Chinese fallback so mixed CJK comments remain readable.
+    mod.widgets.MESSAGE_CODE_TEXT_STYLE = TextStyle {
+        font_family: FontFamily{
+            latin := FontMember{
+                res: crate_resource("self://resources/fonts/LiberationMono-Regular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            chinese := FontMember{
+                res: crate_resource("self://resources/fonts/LXGWWenKaiRegular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            emoji := FontMember{
+                res: crate_resource("self://resources/fonts/NotoColorEmoji.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+        }
+        font_size: (mod.widgets.MESSAGE_FONT_SIZE),
+        line_spacing: (mod.widgets.MESSAGE_TEXT_LINE_SPACING),
+        top_drop: 0.21,
+    }
+
+    // Event source JSON benefits from a slightly looser code style than
+    // bot markdown blocks, especially when CJK glyph fallback is involved.
+    mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE = TextStyle {
+        font_family: FontFamily{
+            latin := FontMember{
+                res: crate_resource("self://resources/fonts/LiberationMono-Regular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            chinese := FontMember{
+                res: crate_resource("self://resources/fonts/LXGWWenKaiRegular.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+            emoji := FontMember{
+                res: crate_resource("self://resources/fonts/NotoColorEmoji.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+        }
+        font_size: 11.0,
+        line_spacing: 1.58,
+        top_drop: 0.18,
     }
 
     mod.widgets.MESSAGE_REPLY_PREVIEW_FONT_SIZE = 9.5
@@ -214,6 +271,19 @@ script_mod! {
     // Settings screen layout
     mod.widgets.SETTINGS_CONTENT_PADDING = 16
     mod.widgets.SETTINGS_BUTTON_HEIGHT = 36
+
+    // The font size used for regular (non-title, non-subsection) text
+    // within any settings screen (e.g., dropdown labels, radio/toggle
+    // labels, inline helper text inside a control).
+    mod.widgets.SETTINGS_REGULAR_FONT_SIZE = 11
+    mod.widgets.SETTINGS_REGULAR_TEXT_STYLE = theme.font_regular {
+        font_size: (mod.widgets.SETTINGS_REGULAR_FONT_SIZE),
+    }
+
+    // Text alignment compensation for non-Label widgets (LinkLabel, IconButton)
+    // whose internal rendering origin differs from plain Label.
+    mod.widgets.LINK_LABEL_LEFT_PAD = 6
+    mod.widgets.ICON_BUTTON_LEFT_PAD = 4
 
     mod.widgets.COLOR_IMAGE_VIEWER_BACKGROUND = #333333CC // 80% Opacity
 

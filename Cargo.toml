@@ -10,22 +10,19 @@ license = "MIT"
 readme = "README.md"
 categories = ["gui"]
 repository = "https://github.com/Project-Robius-China/robrix2"
-version = "0.0.1-pre-alpha-4"
+version = "1.0.0-alpha.1"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
 [dependencies]
-# makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
-# makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
-
-makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "cargo_makepad_ndk_fix", features = ["serde"] }
-makepad-code-editor = { git = "https://github.com/kevinaboos/makepad", branch = "cargo_makepad_ndk_fix" }
+makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
+makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
 
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
 robius-use-makepad = "0.1.1"
-robius-open = { git = "https://github.com/project-robius/robius" }
-robius-directories = { git = "https://github.com/project-robius/robius" }
-robius-location = { git = "https://github.com/project-robius/robius" }
+robius-open = { git = "https://github.com/Project-Robius-China/robius2.git" }
+robius-directories = { git = "https://github.com/Project-Robius-China/robius2.git" }
+robius-location = { git = "https://github.com/Project-Robius-China/robius2.git" }
 
 
 anyhow = "1.0"
@@ -107,7 +104,7 @@ quinn = { version = "0.11", default-features = false, optional = true }
 ## We only include this such that we can specify the prebuilt-nasm feature,
 ## which is required to build this on Windows x86_64 without having to install NASM separately.
 aws-lc-rs = { version = "1.13", optional = true, features = ["prebuilt-nasm"] }
-percent-encoding = { version = "2.3", optional = true }
+percent-encoding = "2.3"
 ## The following reqwest 0.12 features were taken from the tsp_sdk's `Cargo.toml` file.
 ## This is only needed for the optional TSP feature; the matrix-sdk uses reqwest 0.13 internally,
 ## which is re-exported as `matrix_sdk::reqwest` and used by regular (non-TSP) Robrix code.
@@ -124,7 +121,7 @@ reqwest = { version = "0.12", default-features = false, optional = true, feature
 [features]
 default = []
 ## Enables experimental support for using TSP wallets.
-tsp = ["dep:tsp_sdk", "dep:quinn", "dep:aws-lc-rs", "dep:percent-encoding", "dep:reqwest"]
+tsp = ["dep:tsp_sdk", "dep:quinn", "dep:aws-lc-rs", "dep:reqwest"]
 
 ## Hides the command prompt console on Windows.
 hide_windows_console = []
@@ -175,9 +172,20 @@ askar-storage = { git = "https://github.com/openwallet-foundation/askar.git" }
 [patch."https://github.com/ruma/ruma"]
 ruma = { git = "https://github.com/project-robius/ruma.git", branch = "tsp" }
 
+[build-dependencies]
+toml = "1"
+
+## On Windows, use the `winresource` crate to embed the app's icon and metadata into the executable.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 
 [package.metadata.docs.rs]
 all-features = true
+
+[profile.release]
+debug = false
+strip = "symbols"
 
 
 ## An optimized profile for development, with full debug info and assertions.
@@ -207,18 +215,26 @@ strip = true
 debug-assertions = false
 
 
+## Configuration for cargo makepad (`cargo makepad android build-aab`).
+## The `[package.metadata.packager]` section below already sets the package ID
+## and product name, so we just need a version code for Google Play Store builds.
+[package.metadata.makepad.android]
+## Specifying "auto" will set it to a format like 'YYYYMMDDHH'.
+version_code = "auto"
+
+
 ## Configuration for `cargo packager`
 [package.metadata.packager]
 product_name = "Robrix"
-identifier = "org.robius.robrix"
+identifier = "rs.robius.robrix"
 category = "SocialNetworking"
 authors = [
     "Project Robius <contact@robius.rs>",
     "Kevin Boos <kevinaboos@gmail.com>",
 ]
-publisher = "robius"
+publisher = "GOSIM Foundation"
 license_file = "LICENSE-MIT"
-copyright = "Copyright 2023-202, Project Robius"
+copyright = "Copyright 2023-2026, Project Robius"
 homepage = "https://github.com/project-robius"
 ### Note: there is an 80-character max for each line of the `long_description`.
 long_description = """
@@ -229,7 +245,15 @@ and the Project Robius app dev framework and platform abstractions
 Robrix runs on all major desktop and mobile platforms:
 macOS, Windows, Linux, Android, and iOS.
 """
-icons = ["./packaging/robrix_logo_alpha.png"]
+icons = [
+    "./resources/icon_32.png",
+    "./resources/icon_48.png",
+    "./resources/icon_64.png",
+    "./resources/icon_128.png",
+    "./resources/icon_256.png",
+    "./resources/icon_512.png",
+    "./resources/icon.ico",
+]
 out_dir = "./dist"
 
 ## Here, we define the list of resource directories for both Makepad and Robrix.
@@ -275,8 +299,7 @@ minimum_system_version = "11.0"
 frameworks = []
 info_plist_path = "./packaging/Info.plist"
 entitlements = "./packaging/Entitlements.plist"
-# signing_identity = "Developer ID Application: GOSIM FOUNDATION LTD. (HMX6XGJZ3R)"
-signing_identity = "="
+signing_identity = "Developer ID Application: GOSIM FOUNDATION LTD. (HMX6XGJZ3R)"
 
 
 ## Configuration for `cargo packager`'s generation of a macOS `.dmg`.
@@ -302,6 +325,8 @@ non_local_definitions = "forbid"
 unsafe_op_in_unsafe_fn = "forbid"
 unnameable_types = "warn"
 unused_import_braces = "warn"
+unused = { level = "deny", priority = -1 }
+dead_code = "deny"
 
 ## Configuration for clippy lints.
 [lints.clippy]

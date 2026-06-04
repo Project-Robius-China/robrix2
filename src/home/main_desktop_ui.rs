@@ -1,9 +1,16 @@
 use makepad_widgets::*;
-use ruma::OwnedRoomId;
+use ruma::{OwnedRoomId, RoomId};
 use tokio::sync::Notify;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{app::{AppState, AppStateAction, SavedDockState, SelectedRoom}, home::{navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef, space_lobby::SpaceLobbyScreenWidgetRefExt}, logout::logout_confirm_modal::LogoutAction, sliding_sync::AccountSwitchAction, utils::RoomNameId, voip::{VoipAction, VoipGlobalState, VoipScreenWidgetRefExt}};
+use crate::{
+    app::{AppState, AppStateAction, SavedDockState, SelectedRoom},
+    home::{navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef, space_lobby::SpaceLobbyScreenWidgetRefExt},
+    logout::logout_confirm_modal::LogoutAction,
+    persistence,
+    sliding_sync::{AccountSwitchAction, current_user_id, get_client},
+    utils::RoomNameId,
+};
 use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::RoomScreenWidgetRefExt, rooms_list::RoomsListAction};
 
 script_mod! {
@@ -149,6 +156,11 @@ impl Widget for MainDesktopUI {
 }
 
 impl MainDesktopUI {
+    fn prune_unavailable_rooms_from_saved_state(saved: &mut SavedDockState) -> usize {
+        let Some(client) = get_client() else { return 0; };
+        saved.remove_room_ids_where(|room_id| client.get_room(room_id).is_none())
+    }
+
     fn sync_tab_widget(cx: &mut Cx, widget: &WidgetRef, room: &SelectedRoom) {
         match room {
             SelectedRoom::JoinedRoom { room_name_id } => {
@@ -284,6 +296,38 @@ impl MainDesktopUI {
         log!("Tab closed, open_rooms now has {} tabs", self.open_rooms.len());
     }
 
+    /// Closes every open tab belonging to the given room, including thread tabs.
+    fn close_room_tabs(&mut self, cx: &mut Cx, room_id: &RoomId) -> bool {
+        let tab_ids_to_close: Vec<LiveId> = self.open_rooms.iter()
+            .filter_map(|(tab_id, selected_room)| (selected_room.room_id() == room_id).then_some(*tab_id))
+            .collect();
+
+        if tab_ids_to_close.is_empty() {
+            return false;
+        }
+
+        for tab_id in tab_ids_to_close {
+            self.close_tab(cx, tab_id);
+        }
+        true
+    }
+
+    /// Closes every open tab belonging to the given room, including thread tabs.
+    fn close_room_tabs(&mut self, cx: &mut Cx, room_id: &RoomId) -> bool {
+        let tab_ids_to_close: Vec<LiveId> = self.open_rooms.iter()
+            .filter_map(|(tab_id, selected_room)| (selected_room.room_id() == room_id).then_some(*tab_id))
+            .collect();
+
+        if tab_ids_to_close.is_empty() {
+            return false;
+        }
+
+        for tab_id in tab_ids_to_close {
+            self.close_tab(cx, tab_id);
+        }
+        true
+    }
+
     /// Closes all tabs
     pub fn close_all_tabs(&mut self, cx: &mut Cx) {
         let dock = self.view.dock(cx, ids!(dock));
@@ -394,10 +438,23 @@ impl MainDesktopUI {
     /// internal DrawList references and cause blank rendering), we recreate each tab
     /// programmatically via `focus_or_create_tab()`.
     fn load_dock_state_from(&mut self, cx: &mut Cx, app_state: &mut AppState) {
-        let to_restore_opt = if let Some(ss) = self.selected_space.as_ref() {
-            app_state.saved_dock_state_per_space.get(ss)
+        let (to_restore_opt, removed_tabs) = if let Some(ss) = self.selected_space.as_ref() {
+            let removed = app_state.saved_dock_state_per_space
+                .get_mut(ss)
+                .map(Self::prune_unavailable_rooms_from_saved_state)
+                .unwrap_or(0);
+            (app_state.saved_dock_state_per_space.get(ss), removed)
         } else {
-            Some(&app_state.saved_dock_state_home)
+            let removed = Self::prune_unavailable_rooms_from_saved_state(&mut app_state.saved_dock_state_home);
+            (Some(&app_state.saved_dock_state_home), removed)
+        };
+
+        if removed_tabs > 0 {
+            if let Some(user_id) = current_user_id() {
+                if let Err(e) = persistence::save_app_state(app_state.clone(), user_id) {
+                    error!("Failed to persist app state after pruning unavailable room tabs. Error: {e}");
+                }
+            }
         };
         let to_restore = match to_restore_opt {
             None => &self.default_layout,
@@ -534,11 +591,10 @@ impl WidgetMatchEvent for MainDesktopUI {
                     );
                 }
                 // When dragging a tab, allow it to be dragged
-                DockAction::Drag(drag_event) => {
-                    if drag_event.items.len() == 1 {
-                        self.view.dock(cx, ids!(dock)).accept_drag(cx, drag_event, DragResponse::Move);
-                    }
+                DockAction::Drag(drag_event) if drag_event.items.len() == 1 => {
+                    self.view.dock(cx, ids!(dock)).accept_drag(cx, drag_event, DragResponse::Move);
                 }
+                DockAction::Drag(_) => {}
                 // When dropping a tab, move it to the new position
                 DockAction::Drop(drop_event) => {
                     // from inside the dock, otherwise it's an external file
@@ -600,6 +656,11 @@ impl WidgetMatchEvent for MainDesktopUI {
                     let app_state = scope.data.get_mut::<AppState>().unwrap();
                     self.save_dock_state_to(cx, app_state);
                 }
+                Some(MainDesktopUiAction::CloseRoomTabs { room_id }) if self.close_room_tabs(cx, room_id) => {
+                    self.redraw(cx);
+                    should_save_dock_action = true;
+                }
+                Some(MainDesktopUiAction::CloseRoomTabs { .. }) => {}
                 _ => {}
             }
         }
@@ -617,6 +678,10 @@ pub enum MainDesktopUiAction {
     SaveDockIntoAppState,
     /// Load the room panel state from the AppState to the dock.
     LoadDockFromAppState,
+    /// Close every currently-open tab belonging to the given room.
+    CloseRoomTabs {
+        room_id: OwnedRoomId,
+    },
     /// Close all tabs; see [`MainDesktopUI::close_all_tabs()`]
     CloseAllTabs {
         on_close_all: Arc<Notify>,

@@ -32,6 +32,21 @@ script_mod! {
         }
     }
 
+    mod.widgets.EncryptionIcon = View {
+        width: Fit, height: Fit,
+        visible: false,
+
+        Icon {
+            width: 19, height: 19,
+            align: Align{x: 0.5, y: 0.5}
+            draw_icon +: {
+                svg: (ICON_LOCK_FILLED)
+                color: #888888
+            }
+            icon_walk: Walk{ width: 15, height: 15 }
+        }
+    }
+
     // A video call icon to be displayed when there's an active call in the room.
     mod.widgets.ActiveCallIcon = View {
         width: Fit, height: Fit,
@@ -74,16 +89,43 @@ script_mod! {
     mod.widgets.MessagePreview = View {
         width: Fill, height: Fit
         latest_message := HtmlOrPlaintext {
-            html_view +: {
-                html +: {
+                html_view +: {
+                    html +: {
                     font_size: 9.3
                     max_lines: 2
                     text_overflow: Ellipsis
-                    text_style_normal +: { font_size: 9.3 }
-                    text_style_italic +: { font_size: 9.3 }
-                    text_style_bold +: { font_size: 9.3 }
-                    text_style_bold_italic +: { font_size: 9.3 }
-                    text_style_fixed +: { font_size: 9.3 }
+                    text_style_normal +: { font_size: 9.3, line_spacing: 1.32 }
+                    text_style_italic +: { font_size: 9.3, line_spacing: 1.32 }
+                    text_style_bold +: { font_size: 9.3, line_spacing: 1.32 }
+                    text_style_bold_italic +: { font_size: 9.3, line_spacing: 1.32 }
+                    text_style_fixed +: { font_size: 9.3, line_spacing: 1.32 }
+                    // Scale down the pill (title font, avatar size, avatar text) to fit.
+                    a +: {
+                        matrix_link_view +: {
+                            matrix_link +: {
+                                pill_bg +: {
+                                    margin: Inset{top: 1}
+                                    padding: Inset{ left: 4.5, right: 3.0, bottom: -3.5, top: -3.5 }
+                                    draw_bg +: { border_radius: 4.5 }
+                                    avatar +: {
+                                        width: 13.0, height: 13.0,
+                                        text_view +: {
+                                            text +: {
+                                                draw_text +: {
+                                                    text_style +: { font_size: 6 }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    title +: {
+                                        draw_text +: {
+                                            text_style +: { font_size: 8.5 }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             plaintext_view +: {
@@ -91,7 +133,7 @@ script_mod! {
                     max_lines: 2
                     text_overflow: Ellipsis
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: 9.5 },
+                        text_style: theme.font_regular { font_size: 9.3, line_spacing: 1.32 },
                     }
                     text: "[No recent messages]"
                 }
@@ -173,6 +215,7 @@ script_mod! {
                     align: Align{ x: 1.0 }
                     avatar := Avatar {}
                     unread_badge := UnreadBadge {}
+                    encryption_icon := mod.widgets.EncryptionIcon {}
                     tombstone_icon := mod.widgets.TombstoneIcon {}
                     active_call_icon := mod.widgets.ActiveCallIcon {}
                 }
@@ -183,6 +226,7 @@ script_mod! {
                 avatar := Avatar {}
                 room_name := mod.widgets.RoomName {}
                 unread_badge := UnreadBadge {}
+                encryption_icon := mod.widgets.EncryptionIcon {}
                 tombstone_icon := mod.widgets.TombstoneIcon {}
                 active_call_icon := mod.widgets.ActiveCallIcon {}
             }
@@ -212,6 +256,7 @@ script_mod! {
                             align: Align{ x: 1.0 }
                             active_call_icon := mod.widgets.ActiveCallIcon {}
                             unread_badge := UnreadBadge {}
+                            encryption_icon := mod.widgets.EncryptionIcon {}
                             tombstone_icon := mod.widgets.TombstoneIcon {}
                         }
                     }
@@ -375,7 +420,10 @@ impl RoomsListEntryContent {
             room_info.num_unread_messages,
         );
         self.draw_common(cx, &room_info.room_avatar, room_info.is_selected);
-        // Show tombstone icon if the room is tombstoned
+        self.view.view(cx, ids!(encryption_icon)).set_visible(
+            cx,
+            should_show_encryption_icon(room_info.is_encrypted, room_info.is_tombstoned),
+        );
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, room_info.is_tombstoned);
         // Show active call icon if there's an active call in this room
         self.view.view(cx, ids!(active_call_icon)).set_visible(cx, room_info.has_active_call);
@@ -430,6 +478,8 @@ impl RoomsListEntryContent {
             .unread_badge(cx, ids!(unread_badge))
             .update_counts(false, 1, 0);
 
+        self.view.view(cx, ids!(encryption_icon)).set_visible(cx, false);
+        self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, false);
         self.draw_common(cx, &room_info.room_avatar, room_info.is_selected);
     }
 
@@ -530,5 +580,34 @@ impl RoomsListEntryContent {
                 color: #(message_text_color)
             }
         });
+    }
+}
+
+pub fn should_show_encryption_icon(is_encrypted: Option<bool>, is_tombstoned: bool) -> bool {
+    matches!(is_encrypted, Some(true)) && !is_tombstoned
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_room_list_icon_visible_when_encrypted() {
+        assert!(should_show_encryption_icon(Some(true), false));
+    }
+
+    #[test]
+    fn test_room_list_icon_hidden_when_unencrypted() {
+        assert!(!should_show_encryption_icon(Some(false), false));
+    }
+
+    #[test]
+    fn test_room_list_icon_hidden_when_unknown() {
+        assert!(!should_show_encryption_icon(None, false));
+    }
+
+    #[test]
+    fn test_room_list_icon_yields_to_tombstone() {
+        assert!(!should_show_encryption_icon(Some(true), true));
     }
 }

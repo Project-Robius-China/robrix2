@@ -4,9 +4,9 @@ use std::cell::RefCell;
 use makepad_widgets::{text::selection::Cursor, *};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use rfd::FileDialog;
-use matrix_sdk::ruma::OwnedUserId;
+use matrix_sdk::{encryption::VerificationState, ruma::OwnedUserId};
 
-use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{AccountDataAction, AccountSwitchAction, MatrixRequest, submit_async_request}, utils};
+use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{get_client, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, submit_async_request}, utils, verification::VerificationStateAction};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use crate::{app::ConfirmDeleteAction, shared::confirmation_modal::ConfirmationModalContent};
 
@@ -22,6 +22,79 @@ script_mod! {
 
         account_settings_title := TitleLabel {
             text: "Account Settings"
+        }
+
+        verification_banner_verified := RoundedView {
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Right
+            align: Align{y: 0.5}
+            margin: Inset{top: (SPACE_SM)}
+            padding: Inset{top: 10, bottom: 9, left: 12, right: 12}
+            show_bg: true
+            draw_bg +: {
+                color: (COLOR_BG_ACCEPT_GREEN)
+                border_color: (COLOR_FG_ACCEPT_GREEN)
+                border_size: 1.0
+                border_radius: 4.0
+            }
+            verification_verified_label := Label {
+                width: Fill, height: Fit
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (COLOR_FG_ACCEPT_GREEN),
+                    text_style: theme.font_bold { font_size: 11.5 },
+                }
+                text: "This device is verified and can access encrypted messages."
+            }
+        }
+
+        verification_banner_unverified := RoundedView {
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down,
+            align: Align{y: 0.5}
+            spacing: 0,
+            margin: Inset{top: (SPACE_SM)}
+            padding: Inset{top: 10, bottom: 13, left: 12, right: 12}
+            show_bg: true
+            draw_bg +: {
+                color: (COLOR_BG_DANGER_RED)
+                border_color: (COLOR_FG_DANGER_RED)
+                border_size: 1.0
+                border_radius: 4.0
+            }
+            verification_unverified_label := Label {
+                width: Fill, height: Fit
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (COLOR_FG_DANGER_RED),
+                    text_style: theme.font_bold { font_size: 11.5 },
+                }
+                text: "This device is not verified and can't view encrypted messages."
+            }
+            verification_unverified_hint_label := Label {
+                width: Fill, height: Fit
+                flow: Flow.Right{wrap: true}
+                margin: Inset{top: 4, bottom: 1}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR),
+                    text_style: theme.font_regular { font_size: 11.5 },
+                }
+                text: "Verify it from another client using this info:"
+            }
+            unverified_device_info_label := Label {
+                width: Fill, height: Fit
+                padding: Inset{left: 8}
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR),
+                    text_style: theme.font_regular { font_size: 11.5 },
+                }
+                text: ""
+            }
         }
 
         // --- Avatar card ---
@@ -43,9 +116,7 @@ script_mod! {
 
             View {
                 width: Fill, height: Fit
-                // TODO: I'd like to use RightWrap here, but Makepad doesn't yet
-                //       support RightWrap with align: Align{y: 0.5}.
-                flow: Right,
+                flow: Right { wrap: true },
                 align: Align{y: 0.5}
 
                 our_own_avatar := Avatar {
@@ -138,7 +209,8 @@ script_mod! {
 
             display_name_input := RobrixTextInput {
                 margin: Inset{top: 3, left: (SPACE_XS), right: (SPACE_XS), bottom: (SPACE_SM)},
-                width: 216, height: Fit
+                width: Fill { max: 226}, // to match the button width
+                height: Fit
                 empty_text: "Add a display name..."
             }
 
@@ -182,34 +254,47 @@ script_mod! {
             }
         }
 
-        user_id_section_label := SubsectionLabel {
-            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
-            text: "Your User ID:"
-        }
-
-        View {
+        // --- User ID card ---
+        RoundedView {
             width: Fill, height: Fit
-            flow: Right,
-            spacing: (SPACE_SM)
-
-            copy_user_id_button := RobrixNeutralIconButton {
-                enable_long_press: true,
-                margin: Inset{left: (SPACE_XS)}
-                padding: (SPACE_MD),
-                spacing: 0,
-                draw_icon.svg: (ICON_COPY)
-                icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
             }
 
-            user_id := Label {
+            user_id_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Your User ID:"
+            }
+
+            View {
                 width: Fill, height: Fit
-                flow: Flow.Right{wrap: true},
-                margin: Inset{top: (SPACE_SM)}
-                draw_text +: {
-                    color: (MESSAGE_TEXT_COLOR),
-                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                flow: Right,
+                align: Align{y: 0.5}
+                spacing: (SPACE_SM)
+
+                copy_user_id_button := RobrixNeutralIconButton {
+                    enable_long_press: true,
+                    padding: (SPACE_MD),
+                    spacing: 0,
+                    draw_icon.svg: (ICON_COPY)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
                 }
-                text: "You are not logged in."
+
+                user_id := Label {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true},
+                    margin: Inset{top: 9}
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11.5 },
+                    }
+                    text: "You are not logged in."
+                }
             }
         }
 
@@ -348,34 +433,52 @@ script_mod! {
             }
         } // end Multiple Accounts card
 
-        other_actions_section_label := SubsectionLabel {
-            margin: Inset{top: (SPACE_MD), bottom: (SPACE_XS)}
-            text: "Other actions:"
-        }
-
-        View {
+        // --- Other actions card ---
+        RoundedView {
             width: Fill, height: Fit
-            flow: Flow.Right{wrap: true},
-            align: Align{y: 0.5},
-            spacing: (SPACE_SM)
-            margin: Inset{bottom: (SPACE_LG)}
-
-            manage_account_button := RobrixIconButton {
-                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
-                margin: Inset{left: (SPACE_XS)}
-                draw_bg +: { border_radius: (RADIUS_MD) }
-                draw_icon.svg: (ICON_EXTERNAL_LINK)
-                icon_walk: Walk{width: 16, height: 16}
-                text: "Manage Account"
+            flow: Down
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            margin: Inset{top: (SPACE_SM), bottom: (SPACE_LG)}
+            show_bg: true
+            draw_bg +: {
+                color: #F8F8FA
+                border_radius: (RADIUS_LG)
             }
 
-            logout_button := RobrixNegativeIconButton {
-                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
-                margin: Inset{left: (SPACE_XS)}
-                draw_bg +: { border_radius: (RADIUS_MD) }
-                draw_icon.svg: (ICON_LOGOUT)
-                icon_walk: Walk{ width: 16, height: 16, margin: Inset{right: -2} }
-                text: "Log out"
+            other_actions_section_label := SubsectionLabel {
+                margin: Inset{top: 0, bottom: (SPACE_XS)}
+                text: "Other actions:"
+            }
+
+            View {
+                width: Fill, height: Fit
+                flow: Flow.Right{wrap: true},
+                align: Align{y: 0.5},
+                spacing: (SPACE_SM)
+
+                manage_account_button := RobrixIconButton {
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_icon.svg: (ICON_EXTERNAL_LINK)
+                    icon_walk: Walk{width: 16, height: 16}
+                    text: "Manage Account"
+                }
+
+                copy_access_token_button := RobrixNeutralIconButton {
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_icon.svg: (ICON_COPY)
+                    icon_walk: Walk{width: 16, height: 16}
+                    text: "Copy Access Token"
+                }
+
+                logout_button := RobrixNegativeIconButton {
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_icon.svg: (ICON_LOGOUT)
+                    icon_walk: Walk{ width: 16, height: 16, margin: Inset{right: -2} }
+                    text: "Log out"
+                }
             }
         }
     }
@@ -387,6 +490,8 @@ pub struct AccountSettings {
     #[deref] view: View,
 
     #[rust] own_profile: Option<UserProfile>,
+    #[rust(VerificationState::Unknown)] verification_state: VerificationState,
+    #[rust] own_device: Option<OwnDeviceInfo>,
     #[rust] app_language: AppLanguage,
     /// List of other account user IDs (not the currently active one)
     #[rust] other_accounts: Vec<OwnedUserId>,
@@ -448,12 +553,14 @@ impl MatchEvent for AccountSettings {
             user_profile_cache::process_user_profile_updates(cx);
             if let Some(new_profile) = get_own_profile(cx) {
                 self.own_profile = Some(new_profile.clone());
+                self.own_device = None;
                 self.view.label(cx, ids!(user_id))
                     .set_text(cx, new_profile.user_id.as_str());
                 self.view.text_input(cx, ids!(display_name_input))
                     .set_text(cx, new_profile.username.as_deref().unwrap_or_default());
                 self.populate_avatar_views(cx);
                 self.populate_account_list(cx);
+                self.refresh_verification_state(cx);
                 self.view.redraw(cx);
             }
             return;
@@ -481,6 +588,12 @@ impl MatchEvent for AccountSettings {
         let upload_avatar_button = self.view.button(cx, ids!(upload_avatar_button));
 
         for action in actions {
+            if let Some(VerificationStateAction::Update(state)) = action.downcast_ref() {
+                self.verification_state = *state;
+                self.update_verification_banner(cx);
+                continue;
+            }
+
             // Handle LogoutAction::InProgress to update button state
             if let Some(LogoutAction::InProgress(is_in_progress)) = action.downcast_ref() {
                 let logout_button = self.view.button(cx, ids!(logout_button));
@@ -492,6 +605,31 @@ impl MatchEvent for AccountSettings {
                 logout_button.set_enabled(cx, !*is_in_progress);
                 logout_button.reset_hover(cx);
                 continue;
+            }
+
+            match action.downcast_ref() {
+                Some(AccessTokenCopyAction::Ready { access_token }) => {
+                    cx.copy_to_clipboard(access_token);
+                    enqueue_popup_notification(
+                        tr_key(self.app_language, "settings.account.popup.copied_access_token"),
+                        PopupKind::Success,
+                        Some(3.0),
+                    );
+                    continue;
+                }
+                Some(AccessTokenCopyAction::Failed { reason }) => {
+                    let error_key = match reason {
+                        AccessTokenCopyError::NoSession => "settings.account.popup.access_token_no_session",
+                        AccessTokenCopyError::Unavailable => "settings.account.popup.access_token_unavailable",
+                    };
+                    enqueue_popup_notification(
+                        tr_key(self.app_language, error_key),
+                        PopupKind::Error,
+                        Some(4.0),
+                    );
+                    continue;
+                }
+                _ => {}
             }
 
             // Handle account data changes.
@@ -572,6 +710,11 @@ impl MatchEvent for AccountSettings {
                     );
                     continue;
                 }
+                Some(AccountDataAction::OwnDeviceFetched(device)) => {
+                    self.own_device = device.clone();
+                    self.update_verification_banner(cx);
+                    continue;
+                }
                 _ => {}
             }
 
@@ -595,6 +738,10 @@ impl MatchEvent for AccountSettings {
         if self.view.button(cx, ids!(logout_button)).clicked(actions) {
             cx.action(LogoutConfirmModalAction::Open);
             return;
+        }
+
+        if self.view.button(cx, ids!(copy_access_token_button)).clicked(actions) {
+            submit_async_request(MatrixRequest::GetAccessTokenForCopy);
         }
 
         let Some(own_profile) = &self.own_profile else { return };
@@ -652,7 +799,7 @@ impl MatchEvent for AccountSettings {
             #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
             {
                 enqueue_popup_notification(
-                    "Deleting avatar is not yet supported on this platform.",
+                    tr_key(self.app_language, "settings.account.popup.avatar_delete_not_supported"),
                     PopupKind::Warning,
                     Some(4.0),
                 );
@@ -735,6 +882,8 @@ impl MatchEvent for AccountSettings {
         for action in actions {
             if let Some(AccountSwitchAction::Switched(new_user_id)) = action.downcast_ref() {
                 log!("Account switched to: {}, refreshing profile and account list", new_user_id);
+                self.own_device = None;
+                self.refresh_verification_state(cx);
                 // Refresh the profile with new account's data
                 if let Some(new_profile) = get_own_profile(cx) {
                     self.own_profile = Some(new_profile.clone());
@@ -766,6 +915,8 @@ impl MatchEvent for AccountSettings {
             // Refresh profile and account list after login success
             if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
                 log!("Login success, refreshing profile and account list");
+                self.own_device = None;
+                self.refresh_verification_state(cx);
                 if let Some(new_profile) = get_own_profile(cx) {
                     self.own_profile = Some(new_profile.clone());
                     self.view.label(cx, ids!(user_id))
@@ -842,9 +993,59 @@ impl AccountSettings {
             .button(cx, ids!(manage_account_button))
             .set_text(cx, tr_key(self.app_language, "settings.account.button.manage_account"));
         self.view
+            .button(cx, ids!(copy_access_token_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.copy_access_token"));
+        self.view
             .button(cx, ids!(logout_button))
             .set_text(cx, tr_key(self.app_language, "settings.account.button.log_out"));
+        self.view
+            .label(cx, ids!(verification_verified_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.verification.verified"));
+        self.view
+            .label(cx, ids!(verification_unverified_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.verification.unverified"));
+        self.view
+            .label(cx, ids!(verification_unverified_hint_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.verification.unverified_hint"));
         self.populate_account_list(cx);
+        self.view.redraw(cx);
+    }
+
+    fn refresh_verification_state(&mut self, cx: &mut Cx) {
+        if let Some(client) = get_client() {
+            self.verification_state = client.encryption().verification_state().get();
+        } else {
+            self.verification_state = VerificationState::Unknown;
+        }
+        submit_async_request(MatrixRequest::GetOwnDevice);
+        self.update_verification_banner(cx);
+    }
+
+    fn update_verification_banner(&mut self, cx: &mut Cx) {
+        let (verified, unverified) = match self.verification_state {
+            VerificationState::Verified => (true, false),
+            VerificationState::Unverified => (false, true),
+            VerificationState::Unknown => (false, false),
+        };
+        self.view.view(cx, ids!(verification_banner_verified)).set_visible(cx, verified);
+        self.view.view(cx, ids!(verification_banner_unverified)).set_visible(cx, unverified);
+
+        let info_text = match self.own_device.as_ref() {
+            Some(device) => match device.display_name.as_ref() {
+                Some(name) => tr_fmt(
+                    self.app_language,
+                    "settings.account.verification.device_info.with_session",
+                    &[("session_name", name), ("device_id", device.device_id.as_str())],
+                ),
+                None => tr_fmt(
+                    self.app_language,
+                    "settings.account.verification.device_info.device_only",
+                    &[("device_id", device.device_id.as_str())],
+                ),
+            },
+            None => String::new(),
+        };
+        self.view.label(cx, ids!(unverified_device_info_label)).set_text(cx, &info_text);
         self.view.redraw(cx);
     }
 
@@ -902,6 +1103,7 @@ impl AccountSettings {
 
         self.own_profile = Some(own_profile);
         self.populate_avatar_views(cx);
+        self.refresh_verification_state(cx);
         self.sync_app_language(cx);
 
         self.view.button(cx, ids!(upload_avatar_button)).reset_hover(cx);

@@ -1,11 +1,15 @@
 //! Handles app persistence by saving and restoring client session data to/from the filesystem.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use anyhow::{anyhow, bail};
 use makepad_widgets::{log, warning, Cx};
 use matrix_sdk::{
-    authentication::matrix::MatrixSession,
-    ruma::{OwnedUserId, UserId},
+    authentication::{AuthSession, matrix::MatrixSession, oauth::{ClientId, OAuthSession, UserSession}},
+    ruma::{OwnedUserId, UserId, api::client::error::ErrorKind},
     sliding_sync,
     Client,
 };
@@ -14,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     app_data_dir,
     login::login_screen::LoginAction,
+    proxy_config::{build_policy_reqwest_client, resolve_effective_proxy_url},
 };
 
 /// The data needed to re-build a client.
@@ -45,8 +50,8 @@ pub struct FullSessionPersisted {
     /// The data to re-build the client.
     pub client_session: ClientSessionPersisted,
 
-    /// The Matrix user session.
-    pub user_session: MatrixSession,
+    /// The persisted auth session.
+    pub user_session: PersistedAuthSession,
 
     /// The latest sync token.
     ///
@@ -66,6 +71,40 @@ pub struct FullSessionPersisted {
     /// when rebuilding the session from persistent storage.
     #[serde(default)]
     pub sliding_sync_version: SlidingSyncVersion,
+}
+
+/// Persisted OAuth session payload.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PersistedOAuthSession {
+    pub client_id: String,
+    pub user_session: UserSession,
+}
+
+/// Persisted auth session, backward-compatible with old matrix-only files.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PersistedAuthSession {
+    Matrix(MatrixSession),
+    OAuth(PersistedOAuthSession),
+}
+
+impl PersistedAuthSession {
+    fn user_id(&self) -> &UserId {
+        match self {
+            PersistedAuthSession::Matrix(session) => session.meta.user_id.as_ref(),
+            PersistedAuthSession::OAuth(session) => session.user_session.meta.user_id.as_ref(),
+        }
+    }
+
+    fn into_auth_session(self) -> AuthSession {
+        match self {
+            PersistedAuthSession::Matrix(session) => AuthSession::Matrix(session),
+            PersistedAuthSession::OAuth(session) => AuthSession::OAuth(Box::new(OAuthSession {
+                client_id: ClientId::new(session.client_id),
+                user: session.user_session,
+            })),
+        }
+    }
 }
 
 /// A serializable duplicate of [`sliding_sync::Version`].
@@ -112,6 +151,86 @@ pub fn session_file_path(user_id: &UserId) -> PathBuf {
 
 const LATEST_USER_ID_FILE_NAME: &str = "latest_user_id.txt";
 
+#[derive(Debug)]
+pub enum RestoreSessionError {
+    NoLatestUserId,
+    MissingSessionFile {
+        user_id: OwnedUserId,
+    },
+    ReadSessionFile {
+        user_id: OwnedUserId,
+        path: PathBuf,
+        message: String,
+    },
+    CorruptSessionFile {
+        user_id: OwnedUserId,
+        path: PathBuf,
+        message: String,
+    },
+    ClientBuild {
+        user_id: OwnedUserId,
+        message: String,
+    },
+    RestoreAuth {
+        user_id: OwnedUserId,
+        message: String,
+    },
+    InvalidToken {
+        user_id: OwnedUserId,
+        message: String,
+    },
+    SaveLatestUserId {
+        user_id: OwnedUserId,
+        message: String,
+    },
+}
+
+impl RestoreSessionError {
+    pub fn user_id(&self) -> Option<&UserId> {
+        match self {
+            RestoreSessionError::NoLatestUserId => None,
+            RestoreSessionError::MissingSessionFile { user_id }
+            | RestoreSessionError::ReadSessionFile { user_id, .. }
+            | RestoreSessionError::CorruptSessionFile { user_id, .. }
+            | RestoreSessionError::ClientBuild { user_id, .. }
+            | RestoreSessionError::RestoreAuth { user_id, .. }
+            | RestoreSessionError::InvalidToken { user_id, .. }
+            | RestoreSessionError::SaveLatestUserId { user_id, .. } => Some(user_id.as_ref()),
+        }
+    }
+}
+
+impl fmt::Display for RestoreSessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RestoreSessionError::NoLatestUserId => write!(f, "could not find previous latest User ID"),
+            RestoreSessionError::MissingSessionFile { user_id } => {
+                write!(f, "could not find previous session file for {user_id}")
+            }
+            RestoreSessionError::ReadSessionFile { path, message, .. } => {
+                write!(f, "failed to read session file {}: {message}", path.display())
+            }
+            RestoreSessionError::CorruptSessionFile { path, message, .. } => {
+                write!(f, "failed to parse session file {}: {message}", path.display())
+            }
+            RestoreSessionError::ClientBuild { user_id, message } => {
+                write!(f, "failed to build Matrix client for {user_id}: {message}")
+            }
+            RestoreSessionError::RestoreAuth { user_id, message } => {
+                write!(f, "failed to restore Matrix auth session for {user_id}: {message}")
+            }
+            RestoreSessionError::InvalidToken { user_id, message } => {
+                write!(f, "saved Matrix token for {user_id} is invalid: {message}")
+            }
+            RestoreSessionError::SaveLatestUserId { user_id, message } => {
+                write!(f, "failed to save latest user id for {user_id}: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RestoreSessionError {}
+
 /// Returns the user ID of the most recently-logged in user session.
 pub async fn most_recent_user_id() -> Option<OwnedUserId> {
     tokio::fs::read_to_string(
@@ -133,6 +252,52 @@ async fn save_latest_user_id(user_id: &UserId) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn delete_latest_user_id_if_matches(user_id: &UserId) -> anyhow::Result<bool> {
+    delete_latest_user_id_if_matches_path(
+        &app_data_dir().join(LATEST_USER_ID_FILE_NAME),
+        user_id,
+    )
+    .await
+}
+
+pub async fn delete_latest_user_id_if_matches_path(
+    latest_user_id_path: &Path,
+    user_id: &UserId,
+) -> anyhow::Result<bool> {
+    let latest_user_id = match tokio::fs::read_to_string(latest_user_id_path).await {
+        Ok(latest_user_id) => latest_user_id,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(anyhow!("Failed to read latest user file: {e}")),
+    };
+
+    let latest_user_id: Result<OwnedUserId, _> = latest_user_id.trim().try_into();
+    let Ok(latest_user_id) = latest_user_id else {
+        return Ok(false);
+    };
+    if latest_user_id.as_str() != user_id.as_str() {
+        return Ok(false);
+    }
+
+    tokio::fs::remove_file(latest_user_id_path).await
+        .map_err(|e| anyhow!("Failed to remove latest user file: {e}"))?;
+    Ok(true)
+}
+
+pub async fn archive_bad_session_file(session_file: &Path) -> anyhow::Result<PathBuf> {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let file_name = session_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("session");
+    let archive_path = session_file.with_file_name(format!("{file_name}.bad.{suffix}"));
+    tokio::fs::rename(session_file, &archive_path).await
+        .map_err(|e| anyhow!("Failed to archive corrupt session file {}: {e}", session_file.display()))?;
+    Ok(archive_path)
+}
+
 
 /// Restores the given user's previous session from the filesystem.
 ///
@@ -140,7 +305,7 @@ async fn save_latest_user_id(user_id: &UserId) -> anyhow::Result<()> {
 /// is retrieved from the filesystem.
 pub async fn restore_session(
     user_id: Option<OwnedUserId>
-) -> anyhow::Result<(Client, Option<String>, ClientSessionPersisted)> {
+) -> Result<(Client, Option<String>, ClientSessionPersisted), RestoreSessionError> {
     let user_id = if let Some(user_id) = user_id {
         Some(user_id)
     } else {
@@ -149,12 +314,19 @@ pub async fn restore_session(
 
     let Some(user_id) = user_id else {
         log!("Could not find previous latest User ID");
-        bail!("Could not find previous latest User ID");
+        return Err(RestoreSessionError::NoLatestUserId);
     };
     let session_file = session_file_path(&user_id);
-    if !session_file.exists() {
-        log!("Could not find previous session file for user {user_id}");
-        bail!("Could not find previous session file");
+    if let Err(e) = tokio::fs::metadata(&session_file).await {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            log!("Could not find previous session file for user {user_id}");
+            return Err(RestoreSessionError::MissingSessionFile { user_id });
+        }
+        return Err(RestoreSessionError::ReadSessionFile {
+            user_id,
+            path: session_file,
+            message: e.to_string(),
+        });
     }
     let status_str = format!("Loading previous session file for {user_id}...");
     log!("{status_str}: '{}'", session_file.display());
@@ -164,9 +336,27 @@ pub async fn restore_session(
     });
 
     // The session was serialized as JSON in a file.
-    let serialized_session = tokio::fs::read_to_string(session_file).await?;
+    let serialized_session = match tokio::fs::read_to_string(&session_file).await {
+        Ok(serialized_session) => serialized_session,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            log!("Could not find previous session file for user {user_id}");
+            return Err(RestoreSessionError::MissingSessionFile { user_id });
+        }
+        Err(e) => {
+            return Err(RestoreSessionError::ReadSessionFile {
+                user_id,
+                path: session_file,
+                message: e.to_string(),
+            });
+        }
+    };
     let FullSessionPersisted { client_session, user_session, sync_token, sliding_sync_version } =
-        serde_json::from_str(&serialized_session)?;
+        serde_json::from_str(&serialized_session)
+            .map_err(|e| RestoreSessionError::CorruptSessionFile {
+                user_id: user_id.clone(),
+                path: session_file.clone(),
+                message: e.to_string(),
+            })?;
 
     let status_str = format!(
         "Loaded session file for:\n{user_id}\n\nTrying to connect to homeserver...\n{}",
@@ -178,27 +368,64 @@ pub async fn restore_session(
         status: status_str,
     });
     // Build the client with the previous settings from the session.
-    let client = Client::builder()
+    // Use the same resolver as build_client so a CLI `--proxy` override at
+    // startup is honored on session restore. Match build_client's 60s reqwest
+    // timeout so restored sessions don't hang indefinitely on slow homeservers.
+    let effective_proxy = resolve_effective_proxy_url(None);
+    let http_client = build_policy_reqwest_client(
+        effective_proxy.as_deref(),
+        Some(std::time::Duration::from_secs(60)),
+    )
+        .map_err(|e| RestoreSessionError::ClientBuild {
+            user_id: user_id.clone(),
+            message: format!("Failed to build Matrix HTTP client with proxy policy: {e}"),
+        })?;
+    let client_builder = Client::builder()
         .homeserver_url(client_session.homeserver.clone())
         .sqlite_store(client_session.db_path.clone(), Some(&client_session.passphrase))
         .with_threading_support(matrix_sdk::ThreadingSupport::Enabled {
             with_subscriptions: true,
         })
-        .handle_refresh_tokens()
-        .build()
-        .await?;
+        .http_client(http_client)
+        .handle_refresh_tokens();
+    let client = client_builder.build().await
+        .map_err(|e| RestoreSessionError::ClientBuild {
+            user_id: user_id.clone(),
+            message: e.to_string(),
+        })?;
     let sliding_sync_version = sliding_sync_version.into();
     client.set_sliding_sync_version(sliding_sync_version);
-    let status_str = format!("Authenticating previous login session for {}...", user_session.meta.user_id);
+    let restored_user_id = user_session.user_id().to_owned();
+    let status_str = format!("Authenticating previous login session for {}...", restored_user_id);
     log!("{status_str}");
     Cx::post_action(LoginAction::Status {
         title: "Authenticating session".into(),
         status: status_str,
     });
 
-    // Restore the Matrix user session.
-    client.restore_session(user_session).await?;
-    save_latest_user_id(&user_id).await?;
+    client.restore_session(user_session.into_auth_session()).await
+        .map_err(|e| {
+            let message = e.to_string();
+            if matches!(
+                e.client_api_error_kind(),
+                Some(ErrorKind::UnknownToken { .. } | ErrorKind::MissingToken)
+            ) {
+                RestoreSessionError::InvalidToken {
+                    user_id: restored_user_id.clone(),
+                    message,
+                }
+            } else {
+                RestoreSessionError::RestoreAuth {
+                    user_id: restored_user_id.clone(),
+                    message,
+                }
+            }
+        })?;
+    save_latest_user_id(&restored_user_id).await
+        .map_err(|e| RestoreSessionError::SaveLatestUserId {
+            user_id: restored_user_id.clone(),
+            message: e.to_string(),
+        })?;
 
     Ok((client, sync_token, client_session))
 }
@@ -214,14 +441,23 @@ pub async fn save_session(
     client_session: ClientSessionPersisted,
 ) -> anyhow::Result<()> {
     let user_session = client
-        .matrix_auth()
         .session()
         .ok_or_else(|| anyhow!("A logged-in client should have a session"))?;
 
-    save_latest_user_id(&user_session.meta.user_id).await?;
+    let user_session = match user_session {
+        AuthSession::Matrix(session) => PersistedAuthSession::Matrix(session),
+        AuthSession::OAuth(session) => PersistedAuthSession::OAuth(PersistedOAuthSession {
+            client_id: session.client_id.to_string(),
+            user_session: session.user,
+        }),
+        other => bail!("Unsupported auth session variant for persistence: {other:?}"),
+    };
+
+    let persisted_user_id = user_session.user_id().to_owned();
+    save_latest_user_id(&persisted_user_id).await?;
     let sliding_sync_version = client.sliding_sync_version().into();
     // Save that user's session.
-    let session_file = session_file_path(&user_session.meta.user_id);
+    let session_file = session_file_path(&persisted_user_id);
     let serialized_session = serde_json::to_string(&FullSessionPersisted {
         client_session,
         user_session,
@@ -322,5 +558,98 @@ pub async fn delete_session(user_id: &UserId) -> anyhow::Result<bool> {
             .map(|_| true)
     } else {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use matrix_sdk::{
+        SessionMeta, SessionTokens,
+        authentication::oauth::UserSession,
+        ruma::{device_id, user_id},
+    };
+
+    use super::{
+        PersistedAuthSession, PersistedOAuthSession, archive_bad_session_file,
+        delete_latest_user_id_if_matches_path,
+    };
+
+    #[test]
+    fn persisted_auth_session_round_trips_oauth_variant() {
+        let persisted = PersistedAuthSession::OAuth(PersistedOAuthSession {
+            client_id: "client-id".into(),
+            user_session: UserSession {
+                meta: SessionMeta {
+                    user_id: user_id!("@alice:example.org").to_owned(),
+                    device_id: device_id!("DEVICEID").to_owned(),
+                },
+                tokens: SessionTokens {
+                    access_token: "access".into(),
+                    refresh_token: Some("refresh".into()),
+                },
+            },
+        });
+
+        let json = serde_json::to_string(&persisted).unwrap();
+        let restored: PersistedAuthSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.user_id().as_str(), "@alice:example.org");
+    }
+
+    fn temp_restore_policy_dir(test_name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!("robrix_restore_policy_{test_name}_{}_{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn restore_session_policy_clears_latest_user_for_missing_session_file() {
+        let dir = temp_restore_policy_dir("missing_session");
+        let latest_user_id_path = dir.join("latest_user_id.txt");
+        tokio::fs::write(&latest_user_id_path, "@alice:example.org").await.unwrap();
+
+        let deleted = delete_latest_user_id_if_matches_path(
+            &latest_user_id_path,
+            user_id!("@alice:example.org"),
+        )
+        .await
+        .unwrap();
+
+        assert!(deleted);
+        assert!(!latest_user_id_path.exists());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn corrupt_session_file_is_archived_and_latest_user_is_cleared() {
+        let dir = temp_restore_policy_dir("corrupt_session");
+        let latest_user_id_path = dir.join("latest_user_id.txt");
+        let session_file = dir.join("session");
+        tokio::fs::write(&latest_user_id_path, "@alice:example.org").await.unwrap();
+        tokio::fs::write(&session_file, "{not json").await.unwrap();
+
+        let archive_path = archive_bad_session_file(&session_file).await.unwrap();
+        let deleted = delete_latest_user_id_if_matches_path(
+            &latest_user_id_path,
+            user_id!("@alice:example.org"),
+        )
+        .await
+        .unwrap();
+
+        assert!(deleted);
+        assert!(!session_file.exists());
+        assert!(archive_path.exists());
+        assert!(archive_path.file_name().unwrap().to_string_lossy().contains(".bad"));
+        assert!(!latest_user_id_path.exists());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }

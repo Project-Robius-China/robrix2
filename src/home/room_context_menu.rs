@@ -158,7 +158,12 @@ impl Widget for RoomContextMenu {
         if self.details.is_none() {
             self.visible = false;
         };
-        self.view.draw_walk(cx, scope, walk)
+        let step = self.view.draw_walk(cx, scope, walk);
+        if self.visible {
+            let main_content_area = self.view(cx, ids!(main_content)).area();
+            cx.block_scrolling_except_within(main_content_area);
+        }
+        step
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
@@ -186,9 +191,6 @@ impl Widget for RoomContextMenu {
                         !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
                     }
                 }
-                // Ignore zero-scroll events: macOS trackpad generates FingerScroll(0,0)
-                // on two-finger press (right-click), which would incorrectly dismiss the menu.
-                Hit::FingerScroll(fse) => fse.scroll.x != 0.0 || fse.scroll.y != 0.0,
                 _ => false,
             }
         };
@@ -238,12 +240,9 @@ impl WidgetMatchEvent for RoomContextMenu {
             close_menu = true;
         }
         else if self.button(cx, ids!(room_settings_button)).clicked(actions) {
-            // TODO: handle/implement this
-            enqueue_popup_notification(
-                tr_key(self.app_language, "room_context_menu.popup.settings_not_implemented"),
-                PopupKind::Warning,
-                Some(5.0),
-            );
+            if let Some(details) = &self.details {
+                cx.action(RoomContextMenuAction::OpenRoomSettings(details.room_name_id.room_id().clone()));
+            }
             close_menu = true;
         }
         else if self.button(cx, ids!(notifications_button)).clicked(actions) {
@@ -355,6 +354,7 @@ impl RoomContextMenu {
         self.details = None;
         self.pending_open_gesture = None;
         cx.revert_key_focus();
+        cx.unblock_scrolling();
         self.redraw(cx);
     }
 }

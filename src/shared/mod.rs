@@ -1,10 +1,12 @@
 use makepad_widgets::ScriptVm;
 
+pub mod attachment_download;
 pub mod avatar;
 pub mod collapsible_header;
 pub mod expand_arrow;
 pub mod confirmation_modal;
 pub mod file_upload_modal;
+pub mod forward_modal;
 pub mod helpers;
 pub mod html_or_plaintext;
 pub mod icon_button;
@@ -13,6 +15,7 @@ pub mod mentionable_text_input;
 pub mod popup_list;
 pub mod progress_bar;
 pub mod room_filter_input_bar;
+pub mod room_filter_search_results;
 pub mod styles;
 pub mod text_or_image;
 pub mod timestamp;
@@ -22,7 +25,8 @@ pub mod unread_badge;
 pub mod verification_badge;
 pub mod restore_status_view;
 pub mod image_viewer;
-pub mod webcam_capture;
+pub mod video_message_player;
+pub mod video_message_player_modal;pub mod webcam_capture;
 pub mod webrtc_video;
 
 pub fn script_mod(vm: &mut ScriptVm) {
@@ -36,6 +40,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     timestamp::script_mod(vm);
     room_filter_input_bar::script_mod(vm);
     avatar::script_mod(vm);
+    room_filter_search_results::script_mod(vm);
     text_or_image::script_mod(vm);
     html_or_plaintext::script_mod(vm);
     bouncing_dots::script_mod(vm);
@@ -49,6 +54,9 @@ pub fn script_mod(vm: &mut ScriptVm) {
     image_viewer::script_mod(vm);
     progress_bar::script_mod(vm);
     file_upload_modal::script_mod(vm);
+    forward_modal::script_mod(vm);
+    video_message_player::script_mod(vm);
+    video_message_player_modal::script_mod(vm);
     webrtc_video::script_mod(vm);
     webcam_capture::script_mod(vm);
 }

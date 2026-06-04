@@ -85,7 +85,9 @@ jobs:
             libwayland-dev libxkbcommon-dev
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -93,8 +95,6 @@ jobs:
           key: ubuntu-build-${{ hashFiles('Cargo.lock') }}
 
       - name: Build
-        env:
-          RUSTFLAGS: "-D warnings"
         run: |
           cargo build --profile fast
 
@@ -116,7 +116,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -127,12 +129,6 @@ jobs:
         run: brew install llvm
 
       - name: Build
-        env:
-          RUSTFLAGS: "-D warnings"
-          # Use Homebrew LLVM for C++ compilation to avoid cxx contiguous_range
-          # static_assert issue with Apple's libc++
-          CXX: ${{ matrix.arch == 'arm64' && '/opt/homebrew/opt/llvm/bin/clang++' || '/usr/local/opt/llvm/bin/clang++' }}
-          CC: ${{ matrix.arch == 'arm64' && '/opt/homebrew/opt/llvm/bin/clang' || '/usr/local/opt/llvm/bin/clang' }}
         run: |
           cargo build --profile fast
 
@@ -147,7 +143,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -155,8 +153,6 @@ jobs:
           key: windows-build-${{ hashFiles('Cargo.lock') }}
 
       - name: Build
-        env:
-          RUSTFLAGS: "-D warnings"
         run: |
           cargo build --profile fast
 
@@ -172,10 +168,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable and nightly
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned via rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
+          rustflags: ""
 
       - name: Install Rust nightly
         run: |
@@ -199,7 +195,6 @@ jobs:
 
       - name: Build for iOS targets
         env:
-          RUSTFLAGS: "-D warnings"
           AWS_LC_SYS_CMAKE_BUILDER: 1
         run: |
           # Install iOS targets
@@ -224,7 +219,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Setup cargo-makepad
         uses: ./.github/actions/setup-cargo-makepad
@@ -240,7 +237,6 @@ jobs:
 
       - name: Build Android APK
         env:
-          RUSTFLAGS: "-D warnings"
           AWS_LC_SYS_CMAKE_BUILDER: 1
         run: |
           cargo makepad android build -p robrix \
@@ -258,7 +254,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Setup cargo-makepad
         uses: ./.github/actions/setup-cargo-makepad
@@ -274,7 +272,6 @@ jobs:
 
       - name: Build Android APK
         env:
-          RUSTFLAGS: "-D warnings"
           AWS_LC_SYS_CMAKE_BUILDER: 1
         run: |
           cargo makepad android build -p robrix \
@@ -295,7 +292,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -315,7 +314,6 @@ jobs:
 
       - name: Build Android APK
         env:
-          RUSTFLAGS: "-D warnings"
           AWS_LC_SYS_CMAKE_BUILDER: 1
           CMAKE_GENERATOR: Ninja
         run: |

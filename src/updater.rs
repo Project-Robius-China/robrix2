@@ -13,7 +13,54 @@ pub enum UpdateCheckOutcome {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use crate::proxy_config::{build_policy_reqwest_client, resolve_effective_proxy_url};
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 const DEFAULT_UPDATER_ENDPOINT: &str = "https://github.com/Project-Robius-China/robrix2/releases/latest/download/latest.json";
+const RELEASES_BASE_URL: &str = "https://github.com/Project-Robius-China/robrix2/releases";
+const SKIPPED_UPDATE_VERSION_FILE_NAME: &str = "skipped_update_version";
+
+pub fn update_release_page_url(version: &str) -> String {
+    let version = version.trim();
+    if version.is_empty() {
+        return format!("{RELEASES_BASE_URL}/latest");
+    }
+    format!("{RELEASES_BASE_URL}/tag/v{version}")
+}
+
+pub fn load_skipped_update_version() -> Option<String> {
+    let value = std::fs::read_to_string(
+        crate::app_data_dir().join(SKIPPED_UPDATE_VERSION_FILE_NAME),
+    ).ok()?;
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
+pub fn save_skipped_update_version(skipped_version: Option<&str>) -> Result<(), String> {
+    let path = crate::app_data_dir().join(SKIPPED_UPDATE_VERSION_FILE_NAME);
+    let version = skipped_version
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match version {
+        Some(version) => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|error| format!("Failed to create updater state directory: {error}"))?;
+            }
+            std::fs::write(path, version)
+                .map_err(|error| format!("Failed to save skipped update version: {error}"))
+        }
+        None => match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("Failed to clear skipped update version: {error}")),
+        }
+    }
+}
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn parse_latest_version_payload(payload_text: &str) -> Result<Option<String>, String> {
@@ -43,7 +90,11 @@ fn check_latest_version_without_signature(endpoint: &str, current_version: &str)
 
     let runtime = Runtime::new().map_err(|error| format!("Failed to create async runtime: {error}"))?;
     runtime.block_on(async move {
-        let response = matrix_sdk::reqwest::get(endpoint)
+        let proxy = resolve_effective_proxy_url(None);
+        let client = build_updater_http_client(proxy.as_deref())?;
+        let response = client
+            .get(endpoint)
+            .send()
             .await
             .map_err(|error| format!("Failed to fetch updater metadata: {error}"))?;
         if response.status().is_success() {
@@ -56,7 +107,9 @@ fn check_latest_version_without_signature(endpoint: &str, current_version: &str)
 
         if response.status() == StatusCode::NOT_FOUND && current_version.contains('-') {
             if let Some(fallback_endpoint) = endpoint_with_current_tag(endpoint, current_version) {
-                let fallback_response = matrix_sdk::reqwest::get(&fallback_endpoint)
+                let fallback_response = client
+                    .get(&fallback_endpoint)
+                    .send()
                     .await
                     .map_err(|error| format!("Failed to fetch updater metadata: {error}"))?;
                 if fallback_response.status().is_success() {
@@ -72,6 +125,17 @@ fn check_latest_version_without_signature(endpoint: &str, current_version: &str)
 
         Err(format!("Updater metadata request failed with status {}", response.status()))
     })
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn build_updater_http_client(
+    proxy_url: Option<&str>,
+) -> Result<matrix_sdk::reqwest::Client, String> {
+    build_policy_reqwest_client(
+        proxy_url,
+        Some(std::time::Duration::from_secs(10)),
+    )
+        .map_err(|error| format!("Failed to build updater HTTP client: {error}"))
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -168,4 +232,16 @@ pub fn check_for_updates() -> UpdateCheckOutcome {
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn check_for_updates() -> UpdateCheckOutcome {
     UpdateCheckOutcome::UnsupportedPlatform
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn updater_http_client_disables_system_proxy_when_proxy_is_none() {
+        let client = build_updater_http_client(None).unwrap();
+
+        drop(client);
+    }
 }

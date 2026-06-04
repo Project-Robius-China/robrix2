@@ -26,6 +26,10 @@ pub struct StreamingAnimState {
     pub display_buffer: String,
     /// Whether the message currently carries the MSC4357 `live` field.
     pub is_live: bool,
+    /// Whether this message should render the full current snapshot directly
+    /// instead of the local typewriter prefix. Useful for markdown-rich bot replies
+    /// where partial prefixes degrade rendering quality and cost.
+    pub render_full_target: bool,
     pub timeline_index: Option<usize>,
 }
 
@@ -44,6 +48,7 @@ impl StreamingAnimState {
             animation_start_time: now,
             display_buffer: String::with_capacity(initial_text.len() + 4),
             is_live,
+            render_full_target: false,
             timeline_index: None,
         }
     }
@@ -56,6 +61,7 @@ impl StreamingAnimState {
         restored.displayed_char_count = common_chars;
         restored.displayed_byte_offset = common_bytes;
         restored.animation_start_time = previous.animation_start_time;
+        restored.render_full_target = previous.render_full_target;
         restored.timeline_index = previous.timeline_index;
         restored
     }
@@ -101,6 +107,12 @@ impl StreamingAnimState {
         let needed = new_text.len() + 4;
         if self.display_buffer.capacity() < needed {
             self.display_buffer.reserve(needed - self.display_buffer.len());
+        }
+
+        if self.render_full_target {
+            self.displayed_char_count = self.target_char_count;
+            self.displayed_byte_offset = self.target_text.len();
+            self.fractional_chunks = 0.0;
         }
     }
 
@@ -156,7 +168,7 @@ impl StreamingAnimState {
     }
 
     pub fn needs_frame(&self) -> bool {
-        self.displayed_char_count < self.target_char_count
+        !self.render_full_target && self.displayed_char_count < self.target_char_count
     }
 
     /// Streaming is complete when the live field is absent and all text has been revealed.
@@ -174,6 +186,15 @@ impl StreamingAnimState {
 
     pub fn is_timed_out(&self) -> bool {
         self.last_update_time.elapsed() > self.timeout_after()
+    }
+
+    pub fn set_render_full_target(&mut self, render_full_target: bool) {
+        self.render_full_target = render_full_target;
+        if render_full_target {
+            self.displayed_char_count = self.target_char_count;
+            self.displayed_byte_offset = self.target_text.len();
+            self.fractional_chunks = 0.0;
+        }
     }
 }
 
@@ -317,6 +338,16 @@ mod tests {
         s.fill_display_buffer();
         assert!(s.display_buffer.starts_with("He"));
         assert!(s.display_buffer.contains('\u{25CF}') || s.display_buffer.contains('●'));
+    }
+
+    #[test]
+    fn test_render_full_target_disables_typewriter_frames() {
+        let mut s = make_state("## Heading\n\n**bold**");
+        s.set_render_full_target(true);
+
+        assert!(!s.needs_frame());
+        assert_eq!(s.displayed_char_count, s.target_char_count);
+        assert_eq!(s.displayed_byte_offset, s.target_text.len());
     }
 
     #[test]

@@ -25,7 +25,7 @@ use crate::{
     app::{AppState, AppStateAction},
     avatar_cache::{self, AvatarCacheEntry},
     home::{
-        add_room::{CreateRoomAction, CreateRoomModalAction},
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomModalAction},
         invite_modal::InviteModalAction,
         rooms_list::RoomsListRef,
     },
@@ -36,6 +36,7 @@ use crate::{
         avatar::{AvatarWidgetExt, AvatarWidgetRefExt},
         room_filter_input_bar::RoomFilterInputBarWidgetExt,
     },
+    sliding_sync::{MatrixRequest, submit_async_request},
     space_service_sync::{SpaceRequest, SpaceRoomExt, SpaceRoomListAction},
     utils::{self, RoomNameId},
 };
@@ -187,6 +188,25 @@ script_mod! {
                         draw_bg: {down: [{time: 0.0, value: 1.0}], hover: 1.0,}
                         space_lobby_label: { draw_text: {down: [{time: 0.0, value: 1.0}], hover: 1.0,} }
                         icon: { draw_icon: {down: [{time: 0.0, value: 1.0}], hover: 1.0,} }
+                    }
+                }
+            }
+            active: {
+                default: @off
+                off: AnimatorState{
+                    from: {all: Snap}
+                    apply: {
+                        draw_bg: {active: 0.0}
+                        space_lobby_label: { draw_text: {active: 0.0} }
+                        icon: { draw_icon: {active: 0.0} }
+                    }
+                }
+                on: AnimatorState{
+                    from: {all: Snap}
+                    apply: {
+                        draw_bg: {active: 1.0}
+                        space_lobby_label: { draw_text: {active: 1.0} }
+                        icon: { draw_icon: {active: 1.0} }
                     }
                 }
             }
@@ -556,7 +576,6 @@ script_mod! {
                         empty_text: "Filter this space..."
                     }
                 }
-                text: ""
             }
             
             parent_space_row := View {
@@ -694,6 +713,18 @@ impl Widget for SpaceLobbyEntry {
     }
 }
 
+impl SpaceLobbyEntry {
+    fn set_selected(&mut self, cx: &mut Cx, is_selected: bool) {
+        self.animator_toggle(cx, is_selected, Animate::No, ids!(active.on), ids!(active.off));
+    }
+}
+impl SpaceLobbyEntryRef {
+    pub fn set_selected(&self, cx: &mut Cx, is_selected: bool) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_selected(cx, is_selected);
+    }
+}
+
 
 #[derive(Debug)]
 pub enum SpaceLobbyAction {
@@ -750,6 +781,10 @@ pub struct SubspaceEntry {
     #[rust] room_id: Option<OwnedRoomId>,
     #[rust] is_space: bool,
     #[rust] show_buttons_view: bool,
+    /// Whether `show_buttons_view` was set by a tap (touch) rather than mouse hover.
+    /// On mobile (no hover events), tapping toggles button visibility;
+    /// on desktop, hover handles it and taps fire the normal action.
+    #[rust] buttons_shown_by_tap: bool,
     #[rust] is_expanded: bool,
 }
 
@@ -793,6 +828,7 @@ impl Widget for SubspaceEntry {
                 self.animator_play(cx, ids!(hover.on));
                 if !self.show_buttons_view {
                     self.show_buttons_view = true;
+                    self.buttons_shown_by_tap = false;
                     self.view.child_by_path(ids!(buttons_view)).set_visible(cx, true);
                     self.redraw(cx);
                 }
@@ -802,6 +838,7 @@ impl Widget for SubspaceEntry {
             Hit::FingerHoverOver(_) if !self.show_buttons_view => {
                 self.animator_play(cx, ids!(hover.on));
                 self.show_buttons_view = true;
+                self.buttons_shown_by_tap = false;
                 self.view.child_by_path(ids!(buttons_view)).set_visible(cx, true);
                 self.redraw(cx);
             }
@@ -814,6 +851,7 @@ impl Widget for SubspaceEntry {
                 if !entry_rect.contains(fe.abs) && !is_over_buttons_view {
                     self.animator_play(cx, ids!(hover.off));
                     self.show_buttons_view = false;
+                    self.buttons_shown_by_tap = false;
                     self.view.child_by_path(ids!(buttons_view)).set_visible(cx, false);
                     self.redraw(cx);
                 }
@@ -824,24 +862,51 @@ impl Widget for SubspaceEntry {
             Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
                 let is_within_buttons_view = self.show_buttons_view
                     && self.view.child_by_path(ids!(buttons_view)).area().rect(cx).contains(fe.abs);
-                if !is_within_buttons_view {
-                    if let Some(room_id) = self.room_id.as_ref() {
-                        if self.is_space {
-                            // Toggle expansion and animate the arrow
-                            self.is_expanded = !self.is_expanded;
-                            if let Some(mut arrow) = self.view.child_by_path(ids!(main_entry.expand_icon)).borrow_mut::<ExpandArrow>() {
-                                arrow.set_is_open(cx, self.is_expanded, Animate::Yes);
-                            }
+                if is_within_buttons_view {
+                    // Let individual button handlers deal with taps on the buttons.
+                }
+                // On touch devices, tapping on the avatar or to its left
+                // always expands/collapses a space (bypasses button toggle).
+                else if fe.is_touch() && self.is_space {
+                    let avatar_rect = self.view.child_by_path(ids!(main_entry.avatar)).area().rect(cx);
+                    let tap_in_expand_region = fe.abs.x <= avatar_rect.pos.x + avatar_rect.size.x;
+                    if tap_in_expand_region {
+                        self.is_expanded = !self.is_expanded;
+                        if let Some(mut arrow) = self.view.child_by_path(ids!(main_entry.expand_icon)).borrow_mut::<ExpandArrow>() {
+                            arrow.set_is_open(cx, self.is_expanded, Animate::Yes);
+                        }
+                        if let Some(room_id) = self.room_id.as_ref() {
                             cx.widget_action(
                                 self.widget_uid(),
                                 SubspaceEntryAction::SpaceClicked { space_id: room_id.clone() },
                             );
-                        } else {
-                            cx.widget_action(
-                                self.widget_uid(),
-                                SubspaceEntryAction::RoomClicked { room_id: room_id.clone() },
-                            );
                         }
+                    } else {
+                        // Touch tap on the text area: toggle buttons visibility.
+                        self.toggle_buttons_for_tap(cx);
+                    }
+                }
+                // On touch devices for rooms (not spaces): tap toggles buttons.
+                else if fe.is_touch() {
+                    self.toggle_buttons_for_tap(cx);
+                }
+                // Non-touch (desktop): fire the normal entry action,
+                // since hover already handles button visibility.
+                else if let Some(room_id) = self.room_id.as_ref() {
+                    if self.is_space {
+                        self.is_expanded = !self.is_expanded;
+                        if let Some(mut arrow) = self.view.child_by_path(ids!(main_entry.expand_icon)).borrow_mut::<ExpandArrow>() {
+                            arrow.set_is_open(cx, self.is_expanded, Animate::Yes);
+                        }
+                        cx.widget_action(
+                            self.widget_uid(),
+                            SubspaceEntryAction::SpaceClicked { space_id: room_id.clone() },
+                        );
+                    } else {
+                        cx.widget_action(
+                            self.widget_uid(),
+                            SubspaceEntryAction::RoomClicked { room_id: room_id.clone() },
+                        );
                     }
                 }
             }
@@ -887,6 +952,24 @@ impl Widget for SubspaceEntry {
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl SubspaceEntry {
+    /// Toggles the buttons_view visibility for a touch tap.
+    fn toggle_buttons_for_tap(&mut self, cx: &mut Cx) {
+        if self.show_buttons_view {
+            self.animator_play(cx, ids!(hover.off));
+            self.show_buttons_view = false;
+            self.buttons_shown_by_tap = false;
+            self.view.child_by_path(ids!(buttons_view)).set_visible(cx, false);
+        } else {
+            self.animator_play(cx, ids!(hover.on));
+            self.show_buttons_view = true;
+            self.buttons_shown_by_tap = true;
+            self.view.child_by_path(ids!(buttons_view)).set_visible(cx, true);
+        }
+        self.redraw(cx);
     }
 }
 
@@ -1006,6 +1089,7 @@ pub struct SpaceLobbyScreen {
 
     /// The current filter keywords entered by the user, if any.
     #[rust] filter_keywords: String,
+    #[rust] creatable_spaces: HashSet<OwnedRoomId>,
 }
 
 impl Widget for SpaceLobbyScreen {
@@ -1029,37 +1113,45 @@ impl Widget for SpaceLobbyScreen {
 
         if let Event::Actions(actions) = event {
             for action in actions {
+                if let Some(CreatableSpacesAction::Loaded { spaces }) = action.downcast_ref() {
+                    self.creatable_spaces = spaces.iter()
+                        .map(|space| space.room_id().clone())
+                        .collect();
+                    self.sync_header_action_buttons(cx);
+                    self.redraw(cx);
+                }
+
                 match action.downcast_ref() {
                     Some(SpaceRoomListAction::DetailedChildren { space_id, children, .. }) => {
                         self.update_children_in_space(cx, space_id, children);
                     }
 
                     // Handle receiving top-level space details (join rule, member count).
-                    Some(SpaceRoomListAction::TopLevelSpaceDetails(sr)) => {
-                        if self.space_name_id.as_ref().is_some_and(|sni| sni.room_id() == &sr.room_id) {
-                            self.space_avatar_state = AvatarState::Known(sr.avatar_url.clone());
-                            self.space_avatar_state.update_from_cache(cx); // prefetch the avatar image
-                            self.top_level_join_rule = sr.join_rule.clone();
-                            self.top_level_member_count = Some(sr.num_joined_members);
-                            self.update_space_info_label(cx, app_language);
-                            self.redraw(cx);
-                        }
+                    Some(SpaceRoomListAction::TopLevelSpaceDetails(sr))
+                        if self.space_name_id.as_ref().is_some_and(|sni| sni.room_id() == &sr.room_id) => {
+                        self.space_avatar_state = AvatarState::Known(sr.avatar_url.clone());
+                        self.space_avatar_state.update_from_cache(cx); // prefetch the avatar image
+                        self.top_level_join_rule = sr.join_rule.clone();
+                        self.top_level_member_count = Some(sr.num_joined_members);
+                        self.update_space_info_label(cx, app_language);
+                        self.redraw(cx);
                     }
+                    Some(SpaceRoomListAction::TopLevelSpaceDetails(..)) => {}
 
                     // Handle a change to the set of children in this space or any of its child subspaces.
-                    Some(SpaceRoomListAction::UpdatedChildren { space_id, parent_chain, .. }) => {
+                    Some(SpaceRoomListAction::UpdatedChildren { space_id, parent_chain, .. })
                         if self.space_name_id.as_ref().is_some_and(|sni|
                             sni.room_id() == space_id
                             || parent_chain.iter().any(|ancestor_id| sni.room_id() == ancestor_id)
-                        ) {
-                            if let Some(sender) = &self.space_request_sender {
-                                let _ = sender.send(SpaceRequest::GetDetailedChildren {
-                                    space_id: space_id.clone(),
-                                    parent_chain: parent_chain.clone(),
-                                });
-                            }
+                        ) => {
+                        if let Some(sender) = &self.space_request_sender {
+                            let _ = sender.send(SpaceRequest::GetDetailedChildren {
+                                space_id: space_id.clone(),
+                                parent_chain: parent_chain.clone(),
+                            });
                         }
                     }
+                    Some(SpaceRoomListAction::UpdatedChildren { .. }) => {}
                     _ => { }
                 }
 
@@ -1120,7 +1212,9 @@ impl Widget for SpaceLobbyScreen {
             }
 
             if self.view.button(cx, ids!(header.parent_space_row.create_room_button)).clicked(actions) {
-                if let Some(space_name_id) = self.space_name_id.as_ref() {
+                if self.can_create_room_in_current_space()
+                    && let Some(space_name_id) = self.space_name_id.as_ref()
+                {
                     cx.action(CreateRoomModalAction::Open {
                         parent_space_id: Some(space_name_id.room_id().clone()),
                     });
@@ -1167,6 +1261,7 @@ impl Widget for SpaceLobbyScreen {
         }
 
         self.update_space_info_label(cx, app_language);
+        self.sync_header_action_buttons(cx);
         self.view.button(cx, ids!(header.parent_space_row.create_room_button))
             .set_text(cx, tr_key(app_language, "space_lobby.header.button.new_room"));
         self.view.button(cx, ids!(header.parent_space_row.invite_button))
@@ -1232,6 +1327,7 @@ impl Widget for SpaceLobbyScreen {
                                     inner.is_expanded = is_expanded;
                                     if id_changed {
                                         inner.show_buttons_view = false;
+                                        inner.buttons_shown_by_tap = false;
                                     }
                                     show_buttons_view = inner.show_buttons_view;
                                 }
@@ -1253,6 +1349,7 @@ impl Widget for SpaceLobbyScreen {
                                     inner.is_space = false;
                                     if id_changed {
                                         inner.show_buttons_view = false;
+                                        inner.buttons_shown_by_tap = false;
                                     }
                                     show_buttons_view = inner.show_buttons_view;
                                 }
@@ -1449,6 +1546,16 @@ impl SpaceLobbyScreen {
             String::new()
         };
         self.view.label(cx, ids!(header.space_info_row.space_info_label)).set_text(cx, &text);
+    }
+
+    fn can_create_room_in_current_space(&self) -> bool {
+        self.space_name_id.as_ref()
+            .is_some_and(|space_name_id| self.creatable_spaces.contains(space_name_id.room_id()))
+    }
+
+    fn sync_header_action_buttons(&mut self, cx: &mut Cx) {
+        self.view.button(cx, ids!(header.parent_space_row.create_room_button))
+            .set_visible(cx, self.can_create_room_in_current_space());
     }
 
     fn insert_created_room_placeholder(&mut self, cx: &mut Cx, room_name_id: &RoomNameId) {
@@ -1846,6 +1953,7 @@ impl SpaceLobbyScreen {
         self.save_current_state();
 
         self.space_name_id = Some(space_name_id.clone());
+        self.sync_header_action_buttons(cx);
         let rooms_list_ref = cx.get_global::<RoomsListRef>();
         if let Some(sender) = rooms_list_ref.get_space_request_sender() {
             // Request detailed children for this space so we can start populating it.
@@ -1859,6 +1967,7 @@ impl SpaceLobbyScreen {
             });
             self.space_request_sender = Some(sender);
         }
+        submit_async_request(MatrixRequest::GetCreatableSpaces);
 
         // Clear the main content until we receive the async space info responses.
         self.tree_entries.clear();

@@ -24,7 +24,7 @@ use ruma::events::tag::TagName;
 use tokio::sync::mpsc::UnboundedSender;
 use matrix_sdk::{RoomState, ruma::{events::tag::Tags, MilliSecondsSinceUnixEpoch, OwnedRoomAliasId, OwnedRoomId, OwnedUserId}};
 use crate::{
-    app::{AppState, SelectedRoom},
+    app::{AppState, AppStateAction, SelectedRoom},
     home::{
         ContextMenuOpenGesture,
         add_room::CreateRoomAction,
@@ -190,6 +190,11 @@ pub enum RoomsListUpdate {
         room_id: OwnedRoomId,
         is_direct: bool,
     },
+    /// Update whether the given room is end-to-end encrypted.
+    UpdateIsEncrypted {
+        room_id: OwnedRoomId,
+        is_encrypted: bool,
+    },
     /// Remove the given room from the rooms list
     RemoveRoom {
         room_id: OwnedRoomId,
@@ -220,6 +225,16 @@ pub enum RoomsListUpdate {
     /// e.g., after a room has been left but before the homeserver has registered
     /// that we left it and removed it via the RoomListService.
     HideRoom {
+        room_id: OwnedRoomId,
+    },
+    /// Clear the hidden flag for the given room and restore it into the
+    /// appropriate displayed list if it is now eligible.
+    ///
+    /// Semantic dual of [`RoomsListUpdate::HideRoom`]. Used by sliding-sync
+    /// `update_room` when a still-Joined room's display eligibility flips
+    /// from hidden back to displayable (e.g., a freshly-created DM whose
+    /// `display_name` finally transitions from `Empty` to `Calculated`).
+    UnhideRoom {
         room_id: OwnedRoomId,
     },
     /// Scroll to the given room.
@@ -310,6 +325,10 @@ pub struct JoinedRoomInfo {
     pub is_selected: bool,
     /// Whether this a direct room.
     pub is_direct: bool,
+    /// Whether this room is end-to-end encrypted.
+    ///
+    /// `None` means the encryption state is not known yet or failed to load.
+    pub is_encrypted: Option<bool>,
     /// Whether this room is tombstoned (shut down and replaced with a successor room).
     pub is_tombstoned: bool,
     /// Whether this room has an active video/voice call.
@@ -378,6 +397,15 @@ pub fn build_room_search_text(
         search_text.push_str(&alias.as_str().to_lowercase());
     }
     search_text
+}
+
+pub fn merge_encryption_state(current: Option<bool>, incoming: bool) -> Option<bool> {
+    match (current, incoming) {
+        (Some(true), _) => Some(true),
+        (Some(false), true) => Some(true),
+        (Some(false), false) => Some(false),
+        (None, value) => Some(value),
+    }
 }
 impl std::fmt::Debug for InviterInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -532,6 +560,21 @@ macro_rules! should_display_room {
     };
 }
 
+fn for_each_room_id_in_display_order<'a, I, F>(room_ids: I, mut f: F)
+where
+    I: IntoIterator<Item = &'a OwnedRoomId>,
+    F: FnMut(&'a OwnedRoomId),
+{
+    let mut seen_room_ids = HashSet::new();
+    for room_id in room_ids {
+        if !seen_room_ids.insert(room_id.clone()) {
+            warning!("Ignoring duplicate room ID {room_id} in all_known_rooms_order");
+            continue;
+        }
+        f(room_id);
+    }
+}
+
 
 impl RoomsList {
     /// Returns whether the homeserver has finished syncing all of the rooms
@@ -552,6 +595,16 @@ impl RoomsList {
             return Some(RoomState::Invited);
         }
         None
+    }
+
+    /// Returns whether the given joined room is marked as a direct room.
+    pub fn is_direct_room(&self, room_id: &OwnedRoomId) -> Option<bool> {
+        self.all_joined_rooms.get(room_id).map(|jr| jr.is_direct)
+    }
+
+    /// Returns whether the given joined room is end-to-end encrypted.
+    pub fn joined_room_is_encrypted(&self, room_id: &OwnedRoomId) -> Option<Option<bool>> {
+        self.all_joined_rooms.get(room_id).map(|jr| jr.is_encrypted)
     }
 
     fn upsert_created_room_placeholder(
@@ -586,6 +639,7 @@ impl RoomsList {
                     has_been_paginated: false,
                     is_selected: false,
                     is_direct: false,
+                    is_encrypted: None,
                     is_tombstoned: false,
                     has_active_call: false,
                 });
@@ -614,6 +668,12 @@ impl RoomsList {
         }
 
         self.update_displayed_rooms(cx, false);
+    }
+
+    fn set_current_active_room(&mut self, cx: &mut Cx, selected_room: Option<SelectedRoom>) {
+        if self.current_active_room == selected_room { return; }
+        self.current_active_room = selected_room;
+        self.redraw(cx);
     }
 
     /// Handle all pending updates to the list of all rooms.
@@ -791,6 +851,18 @@ impl RoomsList {
                         error!("Error: couldn't find room {room_id} to update is_direct");
                     }
                 }
+                RoomsListUpdate::UpdateIsEncrypted { room_id, is_encrypted } => {
+                    if let Some(room) = self.all_joined_rooms.get_mut(&room_id) {
+                        let next = merge_encryption_state(room.is_encrypted, is_encrypted);
+                        if room.is_encrypted == next {
+                            continue;
+                        }
+                        room.is_encrypted = next;
+                        SignalToUI::set_ui_signal();
+                    } else {
+                        error!("Error: couldn't find room {room_id} to update is_encrypted");
+                    }
+                }
                 RoomsListUpdate::RemoveRoom { room_id, new_state } => {
                     // TODO: once we have a dedicated LoadingScreen widget, we should emit an action
                     // to replace this room (if it's currently open) with the LoadingScreen widget,
@@ -891,6 +963,26 @@ impl RoomsList {
                     }
                     else if let Some(i) = self.displayed_invited_rooms.iter().position(|r| r == &room_id) {
                         self.displayed_invited_rooms.remove(i);
+                    }
+                }
+                RoomsListUpdate::UnhideRoom { room_id } => {
+                    let was_hidden = self.hidden_rooms.remove(&room_id);
+                    if !was_hidden {
+                        continue;
+                    }
+                    if let Some(room) = self.all_joined_rooms.get(&room_id) {
+                        let is_direct = room.is_direct;
+                        let should_display = should_display_room!(self, &room_id, room);
+                        if should_display {
+                            let displayed_list = if is_direct {
+                                &mut self.displayed_direct_rooms
+                            } else {
+                                &mut self.displayed_regular_rooms
+                            };
+                            if !displayed_list.contains(&room_id) {
+                                displayed_list.push(room_id);
+                            }
+                        }
                     }
                 }
                 RoomsListUpdate::ScrollToRoom(room_id) => {
@@ -1104,7 +1196,7 @@ impl RoomsList {
         else {
             let mut seen_joined = HashSet::new();
             let mut seen_invited = HashSet::new();
-            for room_id in &self.all_known_rooms_order {
+            for_each_room_id_in_display_order(self.all_known_rooms_order.iter(), |room_id| {
                 if let Some(jr) = self.all_joined_rooms.get(room_id) {
                     if should_display_room!(self, room_id, jr) {
                         seen_joined.insert(room_id.clone());
@@ -1116,7 +1208,7 @@ impl RoomsList {
                         new_displayed_invited_rooms.push(room_id.clone());
                     }
                 }
-            }
+            });
 
             for (room_id, jr) in &self.all_joined_rooms {
                 if !seen_joined.contains(room_id) && should_display_room!(self, room_id, jr) {
@@ -1352,12 +1444,15 @@ impl Widget for RoomsList {
                     continue;
                 };
 
-                self.current_active_room = Some(new_selected_room.clone());
+                if self.current_active_room.as_ref().is_some_and(|current| current == &new_selected_room) {
+                    continue;
+                }
+
+                self.set_current_active_room(cx, Some(new_selected_room.clone()));
                 cx.widget_action(
                     self.widget_uid(), 
                     RoomsListAction::Selected(new_selected_room),
                 );
-                self.redraw(cx);
             }
             // Handle a room being right-clicked or long-pressed by opening the room context menu.
             else if let RoomsListEntryAction::SecondaryClicked(room_id, pos, opening_gesture) = action.as_widget_action().cast() {
@@ -1384,12 +1479,14 @@ impl Widget for RoomsList {
             else if let Some(SpaceLobbyAction::SpaceLobbyEntryClicked) = action.downcast_ref() {
                 let Some(space_name_id) = self.selected_space.clone() else { continue };
                 let new_selected_space = SelectedRoom::Space { space_name_id };
-                self.current_active_room = Some(new_selected_space.clone());
+                if self.current_active_room.as_ref().is_some_and(|current| current == &new_selected_space) {
+                    continue;
+                }
+                self.set_current_active_room(cx, Some(new_selected_space.clone()));
                 cx.widget_action(
                     self.widget_uid(), 
                     RoomsListAction::Selected(new_selected_space),
                 );
-                self.redraw(cx);
             }
             // Handle a collapsible header being clicked.
             else if let CollapsibleHeaderAction::Toggled { category } = action.as_widget_action().cast() {
@@ -1414,6 +1511,17 @@ impl Widget for RoomsList {
         // Second, handle any other actions that came from other widgets/components.
         if let Event::Actions(actions) = event {
             for action in actions {
+                if let Some(AppStateAction::RoomFocused(selected_room)) = action.downcast_ref() {
+                    self.set_current_active_room(cx, Some(selected_room.clone()));
+                    continue;
+                }
+
+                if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
+                    self.set_current_active_room(cx, None);
+                    continue;
+                }
+
+                // Clear widget state upon logout.
                 if let Some(LogoutAction::ClearAppState { .. }) = action.downcast_ref() {
                     while PENDING_ROOM_UPDATES.pop().is_some() {}
                     self.invited_rooms.borrow_mut().clear();
@@ -1554,6 +1662,17 @@ impl Widget for RoomsList {
         let app_state = scope.data.get::<AppState>().unwrap();
         // Update the currently-selected room from the AppState data.
         self.current_active_room = app_state.selected_room.clone();
+        let is_space_lobby_selected = self.selected_space.as_ref()
+            .is_some_and(|selected_space|
+                self.current_active_room.as_ref()
+                    .is_some_and(|active_room|
+                        matches!(active_room, SelectedRoom::Space { space_name_id }
+                            if space_name_id.room_id() == selected_space.room_id()
+                        )
+                    )
+            );
+        self.view.space_lobby_entry(cx, ids!(space_lobby_entry))
+            .set_selected(cx, is_space_lobby_selected);
         let mut app_state_for_item_scope = app_state.clone();
 
         // Based on the various displayed room lists and is_expanded state of each room header,
@@ -1739,6 +1858,16 @@ impl RoomsListRef {
         self.borrow()?.get_room_state(room_id)
     }
 
+    /// Returns whether the given joined room is marked as a direct room.
+    pub fn is_direct_room(&self, room_id: &OwnedRoomId) -> Option<bool> {
+        self.borrow()?.is_direct_room(room_id)
+    }
+
+    /// Returns whether the given joined room is end-to-end encrypted.
+    pub fn joined_room_is_encrypted(&self, room_id: &OwnedRoomId) -> Option<Option<bool>> {
+        self.borrow()?.joined_room_is_encrypted(room_id)
+    }
+
     /// Returns the name of the given room, if it is known and loaded.
     pub fn get_room_name(&self, room_id: &OwnedRoomId) -> Option<RoomNameId> {
         let inner = self.borrow()?;
@@ -1750,6 +1879,20 @@ impl RoomsListRef {
                     .get(room_id)
                     .map(|ir| ir.room_name_id.clone())
             )
+    }
+
+    /// Returns the canonical alias of the given room, if it is known and loaded.
+    pub fn get_room_canonical_alias(&self, room_id: &OwnedRoomId) -> Option<ruma::OwnedRoomAliasId> {
+        let inner = self.borrow()?;
+        inner.all_joined_rooms
+            .get(room_id)
+            .and_then(|jr| jr.canonical_alias.clone())
+    }
+
+    /// Returns the room ID of the first available joined room (useful for testing).
+    pub fn get_first_joined_room_id(&self) -> Option<OwnedRoomId> {
+        let inner = self.borrow()?;
+        inner.all_joined_rooms.keys().next().cloned()
     }
 
     /// Returns the currently-selected space (the one selected in the SpacesBar).
@@ -1829,4 +1972,46 @@ struct RoomCategoryIndexes {
     first_room_index: usize,
     /// The index after the last room in this category, which is where the next category should start.
     after_rooms_index: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matrix_sdk::ruma::owned_room_id;
+
+    #[test]
+    fn room_order_iteration_ignores_duplicate_room_ids() {
+        let first_room_id = owned_room_id!("!first:example.com");
+        let second_room_id = owned_room_id!("!second:example.com");
+        let ordered_room_ids = [
+            first_room_id.clone(),
+            first_room_id.clone(),
+            second_room_id.clone(),
+        ];
+
+        let mut iterated_room_ids = Vec::new();
+        for_each_room_id_in_display_order(ordered_room_ids.iter(), |room_id| {
+            iterated_room_ids.push(room_id.clone());
+        });
+
+        assert_eq!(
+            iterated_room_ids,
+            vec![first_room_id, second_room_id],
+        );
+    }
+
+    #[test]
+    fn test_room_list_icon_live_update() {
+        assert_eq!(merge_encryption_state(Some(false), true), Some(true));
+    }
+
+    #[test]
+    fn test_room_list_icon_resolve_from_unknown() {
+        assert_eq!(merge_encryption_state(None, true), Some(true));
+    }
+
+    #[test]
+    fn encryption_state_does_not_demote_encrypted_room() {
+        assert_eq!(merge_encryption_state(Some(true), false), Some(true));
+    }
 }

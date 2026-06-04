@@ -3,6 +3,7 @@ use makepad_widgets::*;
 use crate::{
     app::AppState,
     home::navigation_tab_bar::{NavigationBarAction, SelectedTab},
+    settings::app_preferences::{AppPreferencesAction, ViewModeOverride},
     settings::settings_screen::SettingsScreenWidgetRefExt,
     shared::room_filter_input_bar::{MainFilterAction, RoomFilterInputBarWidgetExt},
 };
@@ -39,13 +40,13 @@ script_mod! {
                 gradient_fill_horizontal: uniform(0.0)
                 color_2: instance(vec4(-1))
 
-                border_radius: uniform(4.0)
+                border_radius: uniform(0.0)
                 border_size: uniform(0.0)
                 border_color: instance(#0000)
                 border_color_2: instance(vec4(-1))
 
-                shadow_color: instance(#0005)
-                shadow_radius: uniform(12.0)
+                shadow_color: instance(#0002)
+                shadow_radius: uniform(8.0)
                 shadow_offset: uniform(vec2(0.0, 0.0))
 
                 rect_size2: varying(vec2(0))
@@ -111,32 +112,34 @@ script_mod! {
                 }
             }
 
-            padding: Inset{top: 30, bottom: 0}
+            padding: Inset{top: 0, bottom: 0}
             height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT),
 
                 content +: {
                     height: (mod.widgets.STACK_VIEW_HEADER_HEIGHT)
                     button_container +: {
                         width: Fill
-                        flow: Overlay
+                        height: Fill
+                        flow: Right
                         padding: 0,
                         margin: 0
                         left_button +: {
-                            align: Align{x: 0.0, y: 0.5}
-                            width: Fit, height: Fit,
-                            padding: Inset{left: 20, right: 23, top: 10, bottom: 10}
-                            margin: Inset{left: 8, right: 0, top: 0, bottom: 0}
+                            width: 56, height: Fill,
+                            padding: 0,
+                            margin: 0
                             draw_icon +: { color: (ROOM_NAME_TEXT_COLOR) }
-                            icon_walk: Walk{width: 13, height: Fit}
+                            icon_walk: Walk{width: 14, height: Fit}
                             spacing: 0
                             text: ""
                         }
+                        button_spacer := View {
+                            width: Fill, height: Fill
+                        }
                         right_button := ButtonFlatterIcon {
                             visible: false
-                            align: Align{x: 1.0, y: 0.5}
-                            width: Fit, height: Fit,
-                            padding: Inset{left: 23, right: 20, top: 10, bottom: 10}
-                            margin: Inset{left: 0, right: 8, top: 0, bottom: 0}
+                            width: 56, height: Fill,
+                            padding: 0,
+                            margin: 0
                             draw_icon +: {
                                 color: (ROOM_NAME_TEXT_COLOR)
                                 svg: (ICON_INFO)
@@ -147,9 +150,18 @@ script_mod! {
                         }
                     }
                     title_container +: {
-                    padding: Inset{top: 8}
+                    width: Fill
+                    height: Fill
+                    padding: Inset{top: 0, left: 56, right: 56}
+                    align: Align{x: 0.5, y: 0.5}
                     title +: {
+                        width: Fill
+                        margin: 0
+                        flow: Flow.Right{wrap: false}
+                        max_lines: 1
+                        text_overflow: Ellipsis
                         draw_text +: {
+                            text_style: theme.font_bold { font_size: 11.5 }
                             color: (ROOM_NAME_TEXT_COLOR)
                         }
                     }
@@ -203,7 +215,7 @@ script_mod! {
     // rooms list, room screens, and the settings screen as an overlay.
     // It adapts to both desktop and mobile layouts.
     mod.widgets.HomeScreen = #(HomeScreen::register_widget(vm)) {
-        AdaptiveView {
+        main_adaptive_view := AdaptiveView {
             // NOTE: within each of these sub views, we used `CachedWidget` wrappers
             //       to ensure that there is only a single global instance of each
             //       of those widgets, which means they maintain their state
@@ -415,6 +427,7 @@ pub struct HomeScreen {
     /// other widgets can easily access it.
     #[rust] previous_selection: SelectedTab,
     #[rust] is_spaces_bar_shown: bool,
+    #[rust] applied_view_mode: ViewModeOverride,
 }
 
 impl Widget for HomeScreen {
@@ -430,6 +443,14 @@ impl Widget for HomeScreen {
 
             let app_state = scope.data.get_mut::<AppState>().unwrap();
             for action in actions {
+                if let Some(AppPreferencesAction::ViewModeChanged(new_mode)) = action.downcast_ref() {
+                    if *new_mode != self.applied_view_mode {
+                        self.apply_view_mode(cx, *new_mode);
+                        self.view.redraw(cx);
+                    }
+                    continue;
+                }
+
                 match action.downcast_ref() {
                     Some(NavigationBarAction::GoToHome) => {
                         if !matches!(app_state.selected_tab, SelectedTab::Home) {
@@ -468,7 +489,7 @@ impl Widget for HomeScreen {
                             if let Some(settings_page) = self.update_active_page_from_selection(cx, app_state) {
                                 settings_page
                                     .settings_screen(cx, ids!(settings_screen))
-                                    .populate(cx, None, &app_state.bot_settings, &app_state.translation, app_state.app_language);
+                                    .populate(cx, None, &app_state.bot_settings, &app_state.translation, &app_state.app_prefs, app_state.app_language);
                                 self.view.redraw(cx);
                             } else {
                                 error!("BUG: failed to set active page to show settings screen.");
@@ -500,6 +521,10 @@ impl Widget for HomeScreen {
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         let app_state = scope.data.get_mut::<AppState>().unwrap();
+        let mode = app_state.app_prefs.view_mode;
+        if mode != self.applied_view_mode {
+            self.apply_view_mode(cx, mode);
+        }
         // Note: We need to update the active page before drawing,
         // because if we switched between Desktop and Mobile views,
         // the PageFlip widget will have been reset to its default,
@@ -511,6 +536,13 @@ impl Widget for HomeScreen {
 }
 
 impl HomeScreen {
+    fn apply_view_mode(&mut self, cx: &mut Cx, mode: ViewModeOverride) {
+        self.view
+            .adaptive_view(cx, ids!(main_adaptive_view))
+            .set_variant_selector(mode.variant_selector());
+        self.applied_view_mode = mode;
+    }
+
     fn update_active_page_from_selection(
         &mut self,
         cx: &mut Cx,
