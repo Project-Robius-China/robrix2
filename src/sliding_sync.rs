@@ -6698,6 +6698,7 @@ async fn add_new_room(
         is_direct: new_room.is_direct,
         is_encrypted,
         is_tombstoned: new_room.is_tombstoned,
+        has_active_call: false,
     }));
 
     // Keep the entry in `ALL_JOINED_ROOMS`, but hide it from the sidebar until

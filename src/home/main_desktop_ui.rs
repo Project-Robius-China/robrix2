@@ -10,6 +10,7 @@ use crate::{
     persistence,
     sliding_sync::{AccountSwitchAction, current_user_id, get_client},
     utils::RoomNameId,
+    voip::{VoipAction, VoipGlobalState, VoipScreenWidgetRefExt},
 };
 use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::RoomScreenWidgetRefExt, rooms_list::RoomsListAction};
 
@@ -294,22 +295,6 @@ impl MainDesktopUI {
         self.tab_to_close = None;
         self.open_rooms.remove(&tab_id);
         log!("Tab closed, open_rooms now has {} tabs", self.open_rooms.len());
-    }
-
-    /// Closes every open tab belonging to the given room, including thread tabs.
-    fn close_room_tabs(&mut self, cx: &mut Cx, room_id: &RoomId) -> bool {
-        let tab_ids_to_close: Vec<LiveId> = self.open_rooms.iter()
-            .filter_map(|(tab_id, selected_room)| (selected_room.room_id() == room_id).then_some(*tab_id))
-            .collect();
-
-        if tab_ids_to_close.is_empty() {
-            return false;
-        }
-
-        for tab_id in tab_ids_to_close {
-            self.close_tab(cx, tab_id);
-        }
-        true
     }
 
     /// Closes every open tab belonging to the given room, including thread tabs.

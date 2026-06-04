@@ -11,10 +11,10 @@ use std::{
     time::Duration,
 };
 use makepad_widgets::*;
+use makepad_widgets::makepad_platform::permission::Permission;
 use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
 use serde::{Deserialize, Serialize};
 use url::Url;
-use makepad_widgets::makepad_platform::permission::Permission;
 use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
@@ -692,6 +692,13 @@ impl MatchEvent for App {
             log!("App::Startup: initializing TSP (Trust Spanning Protocol) module.");
             crate::tsp::tsp_init(_tokio_rt_handle).unwrap();
         }
+
+        // Initialize VoIP global state and pre-warm camera permission + video input
+        // enumeration at launch. Doing this here (instead of when the VoIP lobby opens)
+        // hides the slow AVFoundation device enumeration — especially with DAL plugins
+        // like the OBS Studio virtual camera — behind the home-screen load rather than
+        // making the user wait at "Waiting for camera permission..." in the lobby.
+        VoipGlobalState::initialize(cx);
     }
 
     fn handle_signal(&mut self, cx: &mut Cx) {
@@ -1892,6 +1899,18 @@ impl AppMain for App {
             }
         }
 
+        // Update VoipGlobalState from camera-related platform events at the App
+        // level so the state is populated even before a VoipScreen widget exists.
+        match event {
+            Event::PermissionResult(result) if result.permission == Permission::Camera => {
+                VoipGlobalState::handle_permission_result(cx, result.status);
+            }
+            Event::VideoInputs(ev) => {
+                VoipGlobalState::handle_video_inputs(cx, ev);
+            }
+            _ => {}
+        }
+
         self.handle_ui_zoom_shortcuts(cx, event);
 
         // Forward events to the MatchEvent trait implementation.
@@ -2938,62 +2957,6 @@ impl SelectedRoom {
             SelectedRoom::Thread { room_name_id, .. } => format!("[Thread] {room_name_id}"),
             SelectedRoom::Voip { room_name_id } => format!("[VoIP] {room_name_id}"),
         }
-    }
-}
-
-impl SavedDockState {
-    /// Removes all tabs and selection state that belong to the given room ID.
-    ///
-    /// Returns the number of removed open tabs, including thread tabs tied to the room.
-    pub fn remove_room_id(&mut self, room_id: &RoomId) -> usize {
-        let tab_ids_to_remove: Vec<LiveId> = self.open_rooms.iter()
-            .filter_map(|(tab_id, selected_room)| (selected_room.room_id() == room_id).then_some(*tab_id))
-            .collect();
-
-        let room_order_matches = self.room_order.iter()
-            .any(|selected_room| selected_room.room_id() == room_id);
-        let selected_room_matches = self.selected_room.as_ref()
-            .is_some_and(|selected_room| selected_room.room_id() == room_id);
-
-        if tab_ids_to_remove.is_empty() && !room_order_matches && !selected_room_matches {
-            return 0;
-        }
-
-        for tab_id in &tab_ids_to_remove {
-            self.open_rooms.remove(tab_id);
-            self.dock_items.remove(tab_id);
-        }
-
-        self.room_order.retain(|selected_room| selected_room.room_id() != room_id);
-
-        if selected_room_matches {
-            self.selected_room = self.room_order.last().cloned();
-        }
-
-        tab_ids_to_remove.len()
-    }
-
-    /// Removes all rooms for which `should_remove` returns `true`.
-    ///
-    /// Returns the number of removed open tabs, including thread tabs tied to removed rooms.
-    pub fn remove_room_ids_where<F>(&mut self, mut should_remove: F) -> usize
-    where
-        F: FnMut(&OwnedRoomId) -> bool,
-    {
-        let mut room_ids: Vec<OwnedRoomId> = self.open_rooms.values()
-            .map(|selected_room| selected_room.room_id().clone())
-            .collect();
-        room_ids.extend(self.room_order.iter().map(|selected_room| selected_room.room_id().clone()));
-        if let Some(selected_room) = self.selected_room.as_ref() {
-            room_ids.push(selected_room.room_id().clone());
-        }
-        room_ids.sort();
-        room_ids.dedup();
-
-        room_ids.into_iter()
-            .filter(|room_id| should_remove(room_id))
-            .map(|room_id| self.remove_room_id(&room_id))
-            .sum()
     }
 }
 

@@ -2533,6 +2533,7 @@ script_mod! {
                     }
                     text: ""
                 }
+            }
 
             avatar_row := mod.widgets.AvatarRow {}
         }
