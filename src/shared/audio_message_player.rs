@@ -740,9 +740,9 @@ impl AudioMessagePlayer {
                 self.show_decode_error(
                     cx,
                     if error.is_empty() {
-                        "Unsupported audio format".to_string()
+                        "Unsupported audio format without error".to_string()
                     } else {
-                        "Unsupported audio format".to_string()
+                        format!("Unsupported audio format {:?}", error)
                     },
                 );
             }
