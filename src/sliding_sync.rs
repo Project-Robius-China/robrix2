@@ -4805,7 +4805,6 @@ async fn matrix_worker_task(
 
                     // Use RoomInfo::active_room_call_participants() for simpler API
                     let participants = room.active_room_call_participants();
-                    log!("Found {} active room call participants", participants.len());
 
                     let mut members = Vec::new();
                     for user_id in participants {

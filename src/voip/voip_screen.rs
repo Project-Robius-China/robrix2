@@ -87,6 +87,12 @@ script_mod! {
                         spacing: 4
                         align: Center
 
+                        // The card shows whichever of these two icons
+                        // matches the participant's current mute state.
+                        // We swap visibility at draw time rather than
+                        // re-binding the SVG at runtime, because
+                        // script_apply_eval cannot reliably re-resolve
+                        // resource references (CLAUDE.md pitfall #41).
                         mute_icon := RobrixIconButton {
                             width: 14
                             height: 14
@@ -99,6 +105,21 @@ script_mod! {
                             }
                             draw_icon +: {
                                 color: #aaa
+                            }
+                        }
+                        mute_off_icon := RobrixIconButton {
+                            width: 14
+                            height: 14
+                            padding: 0
+                            draw_icon.svg: (ICON_MICROPHONE_OFF)
+                            icon_walk: Walk{width: 12, height: 12}
+                            visible: false
+                            draw_bg +: {
+                                color: #00000000
+                                border_radius: 0.0
+                            }
+                            draw_icon +: {
+                                color: #e53935
                             }
                         }
 
@@ -1136,6 +1157,17 @@ impl VoipScreen {
             }
             msgs
         } else {
+            // Only log this once per second to avoid spam — the absence
+            // of `livekit_rx` is the bug we want to surface.
+            static LAST_LOG: std::sync::Mutex<Option<std::time::Instant>> =
+                std::sync::Mutex::new(None);
+            if let Ok(mut last) = LAST_LOG.lock() {
+                let now = std::time::Instant::now();
+                if last.is_none_or(|t| now.duration_since(t).as_secs() >= 1) {
+                    log!("poll_livekit_messages: livekit_rx is None (LiveKit client not initialized?)");
+                    *last = Some(now);
+                }
+            }
             Vec::new()
         };
 
@@ -1222,6 +1254,19 @@ impl VoipScreen {
 
                     if let Some(p) = self.call.participants.get_mut(&participant_id) {
                         p.is_video_on = false;
+                    }
+                    needs_update = true;
+                }
+                LiveKitMessage::ParticipantAudioMuteChanged { participant_id, is_muted } => {
+                    log!("Audio mute changed for {}: muted={}", participant_id, is_muted);
+                    let list = self.view.participants_list(cx, ids!(participants_list));
+                    list.update_participant(cx, &participant_id, |p| {
+                        p.is_muted = is_muted;
+                    });
+                    // Mirror to the internal call-state map so any
+                    // downstream consumers (PiP, status) stay in sync.
+                    if let Some(p) = self.call.participants.get_mut(&participant_id) {
+                        p.is_muted = is_muted;
                     }
                     needs_update = true;
                 }
@@ -1466,7 +1511,7 @@ impl VoipScreen {
         self.view.button(cx, ids!(join_call_button)).set_visible(cx, self.in_lobby);
 
         // Force redraw to ensure all visibility changes take effect
-        self.view.redraw(cx);
+        //self.view.redraw(cx);
 
         // Sync state to global for PiP display
         self.sync_to_global_state(cx);
@@ -1849,6 +1894,22 @@ impl VoipScreen {
         // Get the participants list reference
         let list = self.view.participants_list(cx, ids!(participants_list));
 
+        // Snapshot per-participant runtime state that is owned by
+        // LiveKit (not by Matrix call-member events) before we wipe
+        // the list. Without this snapshot, mute / speaking state would
+        // get reset to `false` on every 5-second Matrix refresh,
+        // overwriting whatever the LiveKit `TrackMuted` handler had
+        // just set. Keyed by participant id — with prefix-match
+        // fallback to handle LiveKit's `@user:server.tld:<session>`
+        // identities vs. our stored bare `@user:server.tld` ids.
+        let previous = list.get_participants();
+        let lookup_prev = |id: &str| -> Option<&Participant> {
+            previous.iter()
+                .find(|p| p.id == id)
+                .or_else(|| previous.iter().find(|p| id.starts_with(&p.id)))
+                .or_else(|| previous.iter().find(|p| p.id.starts_with(id)))
+        };
+
         // Clear existing participants but preserve video textures
         // Video textures are keyed by participant ID (user_id) and will be matched
         // when participants are re-added with the same IDs
@@ -1889,17 +1950,25 @@ impl VoipScreen {
             // Check if this participant already has video texture (from LiveKit video frames)
             let has_video = list.has_video_texture(&participant_id);
 
+            // Restore LiveKit-derived runtime flags (mute, speaking) if
+            // we had them before the wipe. Matrix call-member events
+            // don't carry this state, so without the snapshot we'd
+            // reset it to false on every refresh.
+            let prev = lookup_prev(&participant_id);
+            let is_muted = prev.map(|p| p.is_muted).unwrap_or(false);
+            let is_speaking = prev.map(|p| p.is_speaking).unwrap_or(false);
+
             let participant = Participant {
                 id: participant_id.clone(),
                 name,
                 avatar_letter: letter,
-                is_muted: false,  // We don't have this info from state events
-                is_speaking: false,
+                is_muted,
+                is_speaking,
                 is_video_on: has_video,  // Preserve video state from LiveKit
             };
 
-            log!("Adding call member: {} (id={}, video={})",
-                participant.name, participant_id, has_video);
+            log!("Adding call member: {} (id={}, video={}, muted={})",
+                participant.name, participant_id, has_video, is_muted);
             list.add_participant(cx, participant);
         }
 

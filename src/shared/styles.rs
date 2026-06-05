@@ -7,6 +7,7 @@ script_mod! {
 
     mod.widgets.ICON_ADD              = crate_resource("self://resources/icons/add.svg")
     mod.widgets.ICON_MICROPHONE       = crate_resource("self://resources/icons/microphone.svg")
+    mod.widgets.ICON_MICROPHONE_OFF   = crate_resource("self://resources/icons/microphone_off.svg")
     mod.widgets.ICON_VIDEO            = crate_resource("self://resources/icons/video.svg")
     mod.widgets.ICON_PHONE            = crate_resource("self://resources/icons/phone.svg")
     mod.widgets.ICON_ADD_REACTION     = crate_resource("self://resources/icons/add_reaction.svg")

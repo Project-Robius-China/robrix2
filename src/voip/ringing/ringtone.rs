@@ -112,11 +112,11 @@ fn run_audio_worker(cmd_rx: std_mpsc::Receiver<RingtoneCmd>) {
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
             RingtoneCmd::Stop => {
-                current_sink.take().map(|s| s.stop());
+                if let Some(s) = current_sink.take() { s.stop() }
             }
             RingtoneCmd::PlayIncoming | RingtoneCmd::PlayOutgoing => {
                 // Stop any in-flight tone before starting the next one.
-                current_sink.take().map(|s| s.stop());
+                if let Some(s) = current_sink.take() { s.stop() }
 
                 if stream_pair.is_none() {
                     stream_pair = try_open();

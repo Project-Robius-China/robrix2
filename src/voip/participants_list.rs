@@ -60,31 +60,51 @@ impl Widget for ParticipantsList {
                         widget.label(cx, ids!(avatar_letter)).set_text(cx, &participant.avatar_letter);
                         widget.label(cx, ids!(name_label)).set_text(cx, &participant.name);
 
-                        // Update mute icon color based on mute status
-                        let mut mute_btn = widget.button(cx, ids!(mute_icon));
-                        if participant.is_muted {
-                            script_apply_eval!(cx, mute_btn, {
-                                draw_icon +: { color: #e53935 }
-                            });
-                        } else {
-                            script_apply_eval!(cx, mute_btn, {
-                                draw_icon +: { color: #aaa }
-                            });
-                        }
+                        // Swap which microphone icon is shown based on
+                        // the participant's mute state. The two button
+                        // templates `mute_icon` (regular mic) and
+                        // `mute_off_icon` (slashed mic) are declared
+                        // side-by-side in the DSL; we toggle visibility
+                        // rather than re-binding the SVG at runtime so
+                        // we don't hit the script_apply_eval resource
+                        // re-resolve limitation.
+                        widget.button(cx, ids!(mute_icon))
+                            .set_visible(cx, !participant.is_muted);
+                        widget.button(cx, ids!(mute_off_icon))
+                            .set_visible(cx, participant.is_muted);
 
                         widget.label(cx, ids!(status_label)).set_text(cx, if participant.is_speaking { "Speaking" } else { "" });
 
-                        // Toggle video/avatar visibility based on is_video_on
-                        let has_frame = self.video_frames.contains_key(&participant.id);
-                        let has_video = participant.is_video_on && has_frame;
+                        // Toggle video/avatar visibility.
+                        //
+                        // The frame lookup must use prefix matching:
+                        // LiveKit identities arrive as
+                        // `@user:server.tld:<session>`, but the
+                        // participant id is the bare Matrix user id
+                        // `@user:server.tld`. Exact `contains_key`
+                        // misses; the helper handles the prefix case.
+                        let matched_frame_key = if self.video_frames.contains_key(&participant.id) {
+                            Some(participant.id.clone())
+                        } else {
+                            self.video_frames
+                                .keys()
+                                .find(|k| k.starts_with(&participant.id))
+                                .cloned()
+                        };
+                        let has_frame = matched_frame_key.is_some();
+                        // Display the camera as soon as frames are
+                        // arriving — `is_video_on` is a coarser flag
+                        // and can lag behind LiveKit's actual track
+                        // state.
+                        let has_video = has_frame;
 
                         let video_widget = widget.web_rtc_video(cx, ids!(participant_video));
                         video_widget.set_visible(cx, has_video);
                         widget.view(cx, ids!(avatar_container)).set_visible(cx, !has_video);
 
                         // If video is on and we have frame data, set it on the WebRtcVideo widget
-                        if has_video {
-                            if let Some(video_frame) = self.video_frames.get(&participant.id) {
+                        if let Some(key) = matched_frame_key {
+                            if let Some(video_frame) = self.video_frames.get(&key) {
                                 let webrtc_frame = WebRtcVideoFrame {
                                     data: video_frame.data.clone(),
                                     width: video_frame.width,
@@ -122,11 +142,43 @@ impl ParticipantsList {
         self.redraw(cx);
     }
 
-    /// Update a participant's properties
+    /// Update a participant's properties.
+    ///
+    /// Matches in three stages:
+    /// 1. Exact `id == participant.id`.
+    /// 2. Stored id is a prefix of `id` (LiveKit appended a session
+    ///    suffix to the bare Matrix user id we stored).
+    /// 3. `id` is a prefix of stored id (we stored a longer LiveKit
+    ///    identity earlier, the new event arrived with the shorter
+    ///    bare form).
+    ///
+    /// The bidirectional prefix match makes the call resilient to
+    /// either side carrying the session suffix.
     pub fn update_participant(&mut self, cx: &mut Cx, id: &str, updater: impl FnOnce(&mut Participant)) {
-        if let Some(participant) = self.participants.iter_mut().find(|p| p.id == id) {
-            updater(participant);
-            self.redraw(cx);
+        let target_idx = self.participants
+            .iter()
+            .position(|p| p.id == id)
+            .or_else(|| self.participants.iter().position(|p| id.starts_with(&p.id)))
+            .or_else(|| self.participants.iter().position(|p| p.id.starts_with(id)));
+        match target_idx {
+            Some(i) => {
+                let before_id = self.participants[i].id.clone();
+                let before_muted = self.participants[i].is_muted;
+                updater(&mut self.participants[i]);
+                let after_muted = self.participants[i].is_muted;
+                log!(
+                    "update_participant: matched id='{}' against stored '{}' (idx {}); is_muted {} -> {}",
+                    id, before_id, i, before_muted, after_muted
+                );
+                self.redraw(cx);
+            }
+            None => {
+                let known: Vec<&str> = self.participants.iter().map(|p| p.id.as_str()).collect();
+                log!(
+                    "update_participant: no match for id='{}'; known participants: {:?}",
+                    id, known
+                );
+            }
         }
     }
 

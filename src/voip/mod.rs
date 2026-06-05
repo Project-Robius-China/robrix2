@@ -195,8 +195,10 @@ impl VoipGlobalState {
         // Set global state with a ringtone player. The audio thread spins
         // up lazily on the first play, so this is cheap if no call ever
         // happens.
-        let mut state = VoipGlobalState::default();
-        state.ringtone_player = Some(ringing::RingtonePlayer::spawn());
+        let state = VoipGlobalState {
+            ringtone_player: Some(ringing::RingtonePlayer::spawn()),
+            ..Default::default()
+        };
         cx.set_global(state);
 
         // Request camera permission
@@ -384,8 +386,6 @@ impl VoipGlobalState {
     pub fn update_active_call(cx: &mut Cx, call: ActiveCallState) {
         if cx.has_global::<VoipGlobalState>() {
             let state = cx.get_global::<VoipGlobalState>();
-            log!("VoipGlobalState: Updating active call state for room {:?}, in_call={}",
-                call.room_id, call.in_call);
             state.active_call = Some(call);
         }
     }

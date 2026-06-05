@@ -6925,6 +6925,7 @@ dependencies = [
  "robius-use-makepad",
  "rodio",
  "ruma",
+ "rustls",
  "sanitize-filename",
  "semver",
  "serde",

@@ -372,8 +372,12 @@ enum TspReceiveLoopRequest {
 }
 
 pub fn tsp_init(rt_handle: tokio::runtime::Handle) -> anyhow::Result<()> {
-    CryptoProvider::install_default(aws_lc_rs::default_provider())
-        .map_err(|_| anyhow!("BUG: default CryptoProvider was already set."))?;
+    // The default rustls CryptoProvider is now installed unconditionally
+    // in `App::handle_startup`, so this call typically returns Err
+    // ("already installed"). That's fine — we just want some provider
+    // present before TSP's TLS work runs, and the startup install
+    // guarantees it. Ignore the error to keep TSP init idempotent.
+    let _ = CryptoProvider::install_default(aws_lc_rs::default_provider());
 
     // Create a channel to be used between UI thread(s) and the TSP async worker thread.
     // We do this early on in order to allow TSP init routines to submit requests.

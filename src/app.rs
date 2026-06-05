@@ -697,6 +697,15 @@ impl MatchEvent for App {
         self.skipped_update_version = load_skipped_update_version();
         self.start_auto_update_check(cx);
 
+        // Install the process-level rustls CryptoProvider before any
+        // TLS connection is attempted. matrix-sdk + livekit both pull
+        // in rustls 0.23 without selecting a provider; the first
+        // rustls user that hits a `get_default()` call (LiveKit's
+        // webrtc-sys handshake) panics if we skip this. Calling
+        // install_default twice returns Err — we ignore it because
+        // multiple modules may try (e.g. TSP init also installs).
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         log!("App::Startup: starting matrix sdk loop");
         let _tokio_rt_handle = crate::sliding_sync::start_matrix_tokio().unwrap();
 

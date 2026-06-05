@@ -124,7 +124,7 @@ pub fn dispatch_action(cx: &mut Cx, action: OneOnOneAction) {
             // released.
             let timer = if cx.has_global::<super::VoipGlobalState>() {
                 let state = cx.get_global::<super::VoipGlobalState>();
-                std::mem::replace(&mut state.ring_timer, Timer::default())
+                std::mem::take(&mut state.ring_timer)
             } else {
                 Timer::default()
             };

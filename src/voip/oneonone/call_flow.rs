@@ -55,9 +55,10 @@ pub enum CallOutcome {
 }
 
 /// The state of the (single) 1:1 voice call across the whole app.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum OneOnOneCallState {
     /// No call in progress.
+    #[default]
     Idle,
     /// We are the caller; ring sent; waiting for the callee to join
     /// the MatrixRTC session in this room.
@@ -134,12 +135,6 @@ impl OneOnOneCallState {
             | Self::InCall { call_id, .. }
             | Self::Ended { call_id, .. } => Some(call_id.as_str()),
         }
-    }
-}
-
-impl Default for OneOnOneCallState {
-    fn default() -> Self {
-        Self::Idle
     }
 }
 
