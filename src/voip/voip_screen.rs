@@ -641,9 +641,6 @@ pub struct VoipScreen {
     // Flag to start call camera after lobby camera releases
     #[rust] pending_call_camera_start: bool,
 
-    // Participant counter
-    #[rust] participant_counter: usize,
-
     // Timer for refreshing call members from Matrix
     #[rust] call_members_refresh_timer: Timer,
 
@@ -1358,9 +1355,11 @@ impl VoipScreen {
         };
         self.view.label(cx, ids!(call_status)).set_text(cx, status);
 
-        let count = self.call.participants.len() + 1;
-        self.view.label(cx, ids!(participant_count))
-            .set_text(cx, &format!("{} participant{}", count, if count == 1 { "" } else { "s" }));
+        // NOTE: participant_count label is owned by
+        // `update_participants_from_call_members` (Matrix call-member
+        // state is authoritative for "who joined"). Writing it here
+        // too caused the Matrix-driven count to be overwritten on the
+        // next LiveKit poll tick.
 
         // Update call control icon button styles based on state
         let mut mic_btn = self.view.button(cx, ids!(mic_button));
@@ -1722,7 +1721,6 @@ impl VoipScreen {
     /// Add a test participant (with optional video on)
     /// Returns the participant ID for use with push_test_video_frame
     pub fn add_participant(&mut self, cx: &mut Cx, name: &str, is_video_on: bool) -> String {
-        self.participant_counter += 1;
         let letter = name.chars().next().unwrap_or('?').to_uppercase().to_string();
         // Use a predictable ID format: "test_<name>" for easy testing
         let participant_id = format!("test_{}", name.to_lowercase().replace(' ', "_"));
@@ -1763,7 +1761,6 @@ impl VoipScreen {
         log!("Clearing all participants");
         let list = self.view.participants_list(cx, ids!(participants_list));
         list.clear_all(cx);  // Use clear_all to also remove video textures
-        self.participant_counter = 0;
     }
 
     /// Start continuous test video frames to a participant (~30fps)
@@ -1856,14 +1853,16 @@ impl VoipScreen {
         // Video textures are keyed by participant ID (user_id) and will be matched
         // when participants are re-added with the same IDs
         list.clear(cx);
-        self.participant_counter = 0;
 
         // Get current user to exclude self from participants list
         let current_user_id = get_client()
             .and_then(|c| c.session_meta().map(|m| m.user_id.to_string()));
         log!("Current user ID: {:?}", current_user_id);
 
-        // Track added user_ids to avoid duplicates (multiple devices same user)
+        // Track added user_ids to avoid duplicates (multiple devices same
+        // user). The size of this set is the count of "other" participants
+        // — total participants displayed in the header is `len() + 1`
+        // (the +1 is self), matching the formula in `update_ui`.
         let mut added_user_ids = std::collections::HashSet::new();
 
         for member in members {
@@ -1879,7 +1878,6 @@ impl VoipScreen {
             }
             added_user_ids.insert(member.user_id.clone());
 
-            self.participant_counter += 1;
             let name = member.display_name.clone()
                 .unwrap_or_else(|| member.user_id.clone());
             let letter = name.chars().next().unwrap_or('?').to_uppercase().to_string();
@@ -1905,12 +1903,21 @@ impl VoipScreen {
             list.add_participant(cx, participant);
         }
 
-        // Update participant count display
-        let count = self.participant_counter;
+        // Update participant count display. `+ 1` accounts for self,
+        // who was excluded from `added_user_ids` above.
+        let count = added_user_ids.len() + 1;
         self.view.label(cx, ids!(participant_count))
             .set_text(cx, &format!("{} participant{}", count, if count == 1 { "" } else { "s" }));
 
-        log!("Updated participants panel with {} other participants", self.participant_counter);
+        // Force redraw so the new label text actually paints. `update_ui`
+        // (the LiveKit-driven sibling) already calls redraw at its end;
+        // this function needs its own redraw because it's invoked from
+        // a separate action arm and won't be followed by `update_ui` in
+        // general.
+        self.view.redraw(cx);
+
+        log!("Updated participants panel: {} total ({} others)",
+            count, added_user_ids.len());
     }
 
     /// Connect to LiveKit with the given URL and JWT token
