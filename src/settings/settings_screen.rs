@@ -1165,6 +1165,8 @@ impl SettingsScreen {
             self.load_saved_proxy_to_preferences_form(cx);
         }
 
+        self.sync_app_language(cx);
+
         let mut category_account_button = self.view.button(cx, ids!(category_account_button));
         let mut category_preferences_button = self.view.button(cx, ids!(category_preferences_button));
         let mut category_devices_button = self.view.button(cx, ids!(category_devices_button));
