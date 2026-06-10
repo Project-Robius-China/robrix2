@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, media_source_mxc, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, media_source_mxc, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, room_input_popup_menu::{RoomInputPopupMenuAction, RoomInputPopupMenuWidgetExt}, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -3893,6 +3893,9 @@ script_mod! {
             // to finish loading, e.g., when loading an older replied-to message.
             loading_pane := LoadingPane { }
 
+            // Popup menu for sending attachments or location, shown when the + button is clicked.
+            room_input_popup_menu := RoomInputPopupMenu { }
+
             create_bot_modal := Modal {
                 content +: {
                     create_bot_modal_inner := mod.widgets.CreateBotModal {}
@@ -4877,6 +4880,8 @@ impl Widget for RoomScreen {
         let room_info_sliding_pane = self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane));
         let room_info_sliding_pane_widget_uid = room_info_sliding_pane.widget_uid();
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
+        let room_input_popup_menu = self.room_input_popup_menu(cx, ids!(room_input_popup_menu));
+        let popup_menu_widget_uid = room_input_popup_menu.widget_uid();
         set_room_info_action_modal_open(
             self.view.modal(cx, ids!(report_room_modal)).is_open()
                 || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open()
@@ -5513,6 +5518,14 @@ impl Widget for RoomScreen {
                 .widget_uid();
 
 
+            // Dismiss the popup menu if a click/touch happens outside it.
+            let mut close_popup_after_event = false;
+            if room_input_popup_menu.is_open() {
+                if !room_input_popup_menu.is_event_within_popup_menu(cx, event) {
+                    close_popup_after_event = room_input_popup_menu.should_dismiss_for_outside_event(cx, event);
+                }
+            }
+
             // Forward the event to the inner timeline view, but capture any actions it produces
             // such that we can handle the ones relevant to only THIS RoomScreen widget right here and now,
             // ensuring they are not mistakenly handled by other RoomScreen widget instances.
@@ -5524,6 +5537,29 @@ impl Widget for RoomScreen {
             actions_generated_within_this_room_screen.retain(|action| {
                 if self.handle_link_clicked(cx, action, &user_profile_sliding_pane) {
                     return false;
+                }
+
+                // Handle popup menu item actions (UploadPhotoOrVideo, UploadFile, SendCurrentLocation).
+                match action.as_widget_action().widget_uid_eq(popup_menu_widget_uid).cast() {
+                    RoomInputPopupMenuAction::None => {}
+                    popup_action => {
+                        self.handle_room_input_popup_menu_action(cx, popup_action);
+                        return false;
+                    }
+                }
+
+                match action
+                    .as_widget_action()
+                    .widget_uid_eq(room_screen_widget_uid)
+                    .cast()
+                {
+                    // Handle the popup menu Show action (emitted by the + button in RoomInputBar).
+                    RoomInputPopupMenuAction::Show { button_rect } => {
+                        self.show_room_input_popup_menu(cx, button_rect);
+                        return false;
+                    }
+                    RoomInputPopupMenuAction::None => {}
+                    _ => {}
                 }
 
                 match action
@@ -5844,6 +5880,10 @@ impl Widget for RoomScreen {
             self.handle_translation_lang_popup_actions(cx, &actions_generated_within_this_room_screen);
             // Add back any unhandled actions to the global action list.
             cx.extend_actions(actions_generated_within_this_room_screen);
+
+            if close_popup_after_event {
+                self.room_input_popup_menu(cx, ids!(room_input_popup_menu)).close(cx);
+            }
         }
     }
 
@@ -8088,6 +8128,51 @@ impl RoomScreen {
             translation_lang_popup.walk.margin.bottom = 0.0;
         }
         translation_lang_modal.open(cx);
+    }
+
+    fn show_room_input_popup_menu(&mut self, cx: &mut Cx, button_rect: Rect) {
+        let popup_menu = self.room_input_popup_menu(cx, ids!(room_input_popup_menu));
+        let room_screen_rect = self.view(cx, ids!(room_screen_wrapper)).area().rect(cx);
+        let margin = Inset {
+            left: button_rect.pos.x - room_screen_rect.pos.x,
+            top: 0.0,
+            right: 0.0,
+            bottom: room_screen_rect.pos.y + room_screen_rect.size.y
+                - button_rect.pos.y
+                + 9.0,
+        };
+        let mut main_content = popup_menu.view(cx, ids!(main_content));
+        script_apply_eval!(cx, main_content, {
+            margin: #(margin)
+        });
+        popup_menu.show(cx);
+        self.view.redraw(cx);
+    }
+
+    fn handle_room_input_popup_menu_action(
+        &mut self,
+        cx: &mut Cx,
+        action: RoomInputPopupMenuAction,
+    ) {
+        let room_input_bar = self.view.room_input_bar(cx, ids!(room_input_bar));
+        match action {
+            RoomInputPopupMenuAction::Show { button_rect } => {
+                self.show_room_input_popup_menu(cx, button_rect);
+            }
+            RoomInputPopupMenuAction::UploadPhotoOrVideo => {
+                room_input_bar.open_file_picker(cx);
+            }
+            RoomInputPopupMenuAction::UploadFile => {
+                room_input_bar.open_file_picker(cx);
+            }
+            RoomInputPopupMenuAction::SendCurrentLocation => {
+                room_input_bar.show_current_location_preview(cx);
+            }
+            RoomInputPopupMenuAction::OpenStickers => {
+                cx.action(crate::home::sticker_modal::StickerModalAction::Open);
+            }
+            RoomInputPopupMenuAction::None => {}
+        }
     }
 
     fn handle_translation_lang_popup_actions(&mut self, cx: &mut Cx, actions: &Actions) {
