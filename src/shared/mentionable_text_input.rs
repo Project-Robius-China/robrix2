@@ -1459,18 +1459,21 @@ impl Widget for MentionableTextInput {
         // finger_up events might steal focus after our initial restoration attempt.
         if self.pending_draw_focus_restore {
             let text_input_ref = self.cmd_text_input.text_input_ref();
-            text_input_ref.set_key_focus(cx);
-            if let Some(mut ti) = text_input_ref.borrow_mut() {
-                ti.reset_blink_timer(cx);
-            }
-            // Check if we successfully got focus
+            // Check focus BEFORE requesting it: calling set_key_focus() while the
+            // input is already focused resets the Android IME-dismissed guard and
+            // can turn one hide request into a hide/show loop (same pattern as the
+            // removed popup-path re-requests above).
             let area = text_input_ref.area();
             if cx.has_key_focus(area) {
                 // Successfully restored focus, clear the flag
                 self.pending_draw_focus_restore = false;
             } else {
                 // Focus restoration failed (likely due to finger_up event stealing focus)
-                // Keep the flag true and request another frame to retry
+                // Request focus and retry on the next frame.
+                text_input_ref.set_key_focus(cx);
+                if let Some(mut ti) = text_input_ref.borrow_mut() {
+                    ti.reset_blink_timer(cx);
+                }
                 cx.new_next_frame();
             }
         }
