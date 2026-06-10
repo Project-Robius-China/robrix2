@@ -21,7 +21,7 @@ use matrix_sdk::room::reply::{EnforceThread, Reply};
 use ruma::events::room::message::AddMentions;
 use matrix_sdk_ui::timeline::{EmbeddedEvent, EventTimelineItem, TimelineEventItemId};
 use ruma::{events::room::message::{LocationMessageEventContent, MessageType, ReplyWithinThread, RoomMessageEventContent}, OwnedRoomId, OwnedUserId, UserId};
-use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, classify_known_slash_command_for_submission, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
+use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, classify_known_slash_command_for_submission, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::shared::file_upload_modal::{FilePreviewerMetaData, ThumbnailData};
 
@@ -2071,31 +2071,26 @@ impl RoomInputBar {
         }
     }
 
-    /// Sets the send_message_button to be shown/enabled and green, or hidden/disabled and gray.
+    /// Sets the send_message_button to be shown/enabled, or hidden/disabled.
     ///
     /// This should be called to update the button state when the message TextInput content changes.
     fn enable_send_message_button(&mut self, cx: &mut Cx, enable: bool) {
-        // Skip the expensive `script_apply_eval!` below if the button is already
-        // in the requested state. This function is called unconditionally from
-        // `handle_actions()`, which runs on every actions batch — including every
-        // frame of a scroll — and re-evaluating script source each time was
-        // profiled as the single largest CPU cost during timeline scrolling.
+        // Skip the work below if the button is already in the requested state.
+        // This function is called unconditionally from `handle_actions()`, which
+        // runs on every actions batch — including every frame of a scroll — so
+        // it must be cheap when nothing has changed.
         if self.send_button_enabled == Some(enable) {
             return;
         }
         self.send_button_enabled = Some(enable);
-        let mut send_message_button = self.view.button(cx, ids!(send_message_button));
-        let (fg_color, bg_color) = if enable {
-            (COLOR_FG_ACCEPT_GREEN, COLOR_BG_ACCEPT_GREEN)
-        } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
-        };
-        script_apply_eval!(cx, send_message_button, {
-            visible: #(enable),
-            enabled: #(enable),
-            draw_icon.color: #(fg_color),
-            draw_bg.color: #(bg_color),
-        });
+        // The green enabled-state styling is already baked into the
+        // `RobrixPositiveIconButton` template, and the disabled state is hidden
+        // entirely, so toggling visibility/enabled-ness is all that's needed.
+        // (The previous `script_apply_eval!` here re-compiled script source on
+        // every call, which was the dominant CPU cost during scrolling.)
+        let send_message_button = self.view.button(cx, ids!(send_message_button));
+        send_message_button.set_visible(cx, enable);
+        send_message_button.set_enabled(cx, enable);
     }
 
     fn try_handle_bot_shortcut(
