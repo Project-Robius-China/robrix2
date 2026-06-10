@@ -15,6 +15,7 @@ pub mod icon_button;
 pub mod jump_to_bottom_button;
 pub mod mentionable_text_input;
 pub mod popup_list;
+pub mod room_input_popup_menu;
 pub mod progress_bar;
 pub mod room_filter_input_bar;
 pub mod room_filter_search_results;
@@ -49,6 +50,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     bouncing_dots::script_mod(vm);
     jump_to_bottom_button::script_mod(vm);
     popup_list::script_mod(vm);
+    room_input_popup_menu::script_mod(vm);
     verification_badge::script_mod(vm);
     command_text_input::script_mod(vm);
     mentionable_text_input::script_mod(vm);

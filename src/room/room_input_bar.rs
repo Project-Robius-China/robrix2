@@ -21,7 +21,7 @@ use matrix_sdk::room::reply::{EnforceThread, Reply};
 use ruma::events::room::message::AddMentions;
 use matrix_sdk_ui::timeline::{EmbeddedEvent, EventTimelineItem, TimelineEventItemId};
 use ruma::{events::room::message::{LocationMessageEventContent, MessageType, ReplyWithinThread, RoomMessageEventContent}, OwnedRoomId, OwnedUserId, UserId};
-use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, classify_known_slash_command_for_submission, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
+use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, classify_known_slash_command_for_submission, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification}, room_input_popup_menu::RoomInputPopupMenuAction, styles::*}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::shared::file_upload_modal::{FilePreviewerMetaData, ThumbnailData};
 
@@ -1025,44 +1025,6 @@ script_mod! {
                     }
                 }
 
-                // Drawer that floats above the input bar. Currently only
-                // contains a "Sticker" button; the layout matches
-                // `more_actions_popup` so additional drawer entries can
-                // slot in later without restructuring.
-                sticker_drawer_popup := View {
-                    visible: false
-                    width: Fit
-                    height: Fit
-                    flow: Right{wrap: true}
-                    align: Align{x: 0.0, y: 0.5}
-                    margin: Inset{left: 5, top: 1, bottom: 1}
-                    padding: Inset{left: 0, right: 0, top: 0, bottom: 0}
-                    spacing: 6
-
-                    sticker_drawer_button := RobrixIconButton {
-                        width: Fit
-                        align: Align{x: 0.0, y: 0.5}
-                        margin: Inset{top: 1, bottom: 1}
-                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                        spacing: 0
-                        draw_bg +: {
-                            color: (COLOR_BG_PREVIEW)
-                            color_hover: #E0E8F0
-                            color_down: #D0D8E8
-                            border_size: 1.0
-                            border_color: (COLOR_SECONDARY)
-                        }
-                        draw_text +: {
-                            color: (COLOR_TEXT)
-                            color_hover: (COLOR_TEXT)
-                            color_down: (COLOR_TEXT)
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
-                        }
-                        icon_walk: Walk{width: 0, height: 0}
-                        text: "Sticker",
-                    }
-                }
-
                 emoji_picker_popup := View {
                     visible: false
                     width: Fit
@@ -1085,31 +1047,125 @@ script_mod! {
 
                 input_row := View {
                     width: Fill,
-                    height: Fit
-                    flow: Down
-                    spacing: 4
+                    height: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.75}}
+                    flow: Right
+                    // Bottom-align everything to ensure that buttons always stick to the bottom
+                    // even when the mentionable_text_input box is very tall.
+                    align: Align{y: 1.0},
 
-                    // Toolbar ABOVE the composer. The composer is the focused
-                    // IME field, and keyboard avoidance only keeps the focused
-                    // field above the on-screen keyboard — anything below it is
-                    // covered. So the composer must be the bottom-most row; the
-                    // toolbar sits above it and stays visible. (Input-at-bottom
-                    // is also the conventional mobile chat layout.)
-                    button_row := View {
-                        width: Fill, height: Fit
-                        flow: Right
-                        align: Align{y: 0.5}
-                        LeftActionButtons {}
-                        Filler { height: Fit }
-                        RightActionButtons {}
+                    // A checkbox that enables TSP signing for the outgoing message.
+                    // If TSP is not enabled, this will be an empty invisible view.
+                    tsp_sign_checkbox := TspSignAnycastCheckbox {
+                        margin: Inset{bottom: 9, left: 6, right: 0}
                     }
 
-                    // Composer on its own full-width row so the toolbar can't
-                    // squeeze the placeholder into a tall, narrow column.
-                    message_row := View {
-                        width: Fill, height: Fit
-                        flow: Right
-                        mentionable_text_input := MessageInputField {}
+                    // Opens the popup menu for attachments and location sharing.
+                    open_popup_menu_button := RobrixIconButton {
+                        margin: Inset{left: 3, right: 1, top: 4, bottom: 4}
+                        spacing: 0,
+                        draw_icon +: {
+                            svg: (ICON_ADD)
+                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
+                        },
+                        draw_bg +: {
+                            color: (COLOR_BG_PREVIEW)
+                            color_hover: #E0E8F0
+                            color_down: #D0D8E8
+                        }
+                        icon_walk: Walk{width: 21, height: 21}
+                        text: "",
+                    }
+
+                    emoji_picker_button := RobrixIconButton {
+                        margin: Inset{left: 3, right: 1, top: 4, bottom: 4}
+                        spacing: 0,
+                        draw_icon +: {
+                            svg: (ICON_ADD_REACTION)
+                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
+                        },
+                        draw_bg +: {
+                            color: (COLOR_BG_PREVIEW)
+                            color_hover: #E0E8F0
+                            color_down: #D0D8E8
+                        }
+                        icon_walk: Walk{width: 19, height: 19}
+                        text: "",
+                    }
+
+                    translate_button := RobrixIconButton {
+                        margin: Inset{left: 1, right: 1, top: 4, bottom: 4}
+                        spacing: 0,
+                        draw_icon +: {
+                            svg: (mod.widgets.ICO_TRANSLATE)
+                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
+                        },
+                        draw_bg +: {
+                            color: (COLOR_BG_PREVIEW)
+                            color_hover: #xE0E8F0
+                            color_down: #xD0D8E8
+                        }
+                        icon_walk: Walk{width: 19, height: 19}
+                        text: "",
+                    }
+
+                    bot_menu_button := RobrixIconButton {
+                        visible: false,
+                        margin: Inset{left: 1, right: 1, top: 4, bottom: 4}
+                        spacing: 0,
+                        draw_icon +: {
+                            svg: (ICON_LINK)
+                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
+                        },
+                        draw_bg +: {
+                            color: (COLOR_BG_PREVIEW)
+                            color_hover: #xE0E8F0
+                            color_down: #xD0D8E8
+                        }
+                        icon_walk: Walk{width: 18, height: 18}
+                        text: "",
+                    }
+
+                    mentionable_text_input := MentionableTextInput {
+                        width: Fill,
+                        height: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.75}}
+                        margin: Inset {
+                            top: 3, // add some space between the top border of the text input and the top border of this row
+                            bottom: 5.75, // to line up the middle of the text input with the middle of the buttons
+                            left: 3, right: 3 // to give a bit of breathing room between the text input and the buttons on the sides
+                        },
+
+                        persistent +: {
+                            center +: {
+                                text_input := RobrixTextInput {
+                                    empty_text: "Write a message (in Markdown) ..."
+                                    is_multiline: true,
+                                }
+                            }
+                        }
+                    }
+
+                    send_message_button := RobrixPositiveIconButton {
+                        visible: false,
+                        // Disabled by default; enabled when text is inputted
+                        enabled: false,
+                        spacing: 0,
+                        text: "",
+                        margin: 4
+                        draw_icon +: { svg: (ICON_SEND) }
+                        icon_walk: Walk{width: 21, height: 21},
+                    }
+
+                    more_actions_button := RobrixIconButton {
+                        spacing: 0,
+                        text: "",
+                        margin: 4
+                        draw_icon +: { svg: (mod.widgets.ICO_MENU) }
+                        draw_bg +: {
+                            color: (COLOR_ACTIVE_PRIMARY)
+                            color_hover: (COLOR_ACTIVE_PRIMARY_DARKER)
+                            color_down: #0C5DAA
+                        }
+                        icon_walk: Walk{width: 19, height: 19},
                     }
                 }
             }
@@ -1203,8 +1259,6 @@ pub struct RoomInputBar {
     #[rust] is_location_card_expanded: bool,
     /// Whether the emoji picker popup is currently expanded.
     #[rust] is_emoji_picker_expanded: bool,
-    /// Whether the sticker drawer popup (above the input bar) is open.
-    #[rust] is_sticker_drawer_open: bool,
     /// Cached natural Fit height of the input_bar, used as the animation
     /// target when the editing pane is being hidden.
     #[rust] input_bar_natural_height: f64,
@@ -1539,15 +1593,12 @@ impl RoomInputBar {
             self.redraw(cx);
         }
 
-        // Handle the add attachment button being clicked.
-        if self.button(cx, ids!(send_attachment_button)).clicked(actions) {
-            log!("Add attachment button clicked; opening file picker...");
-            self.open_file_picker(cx);
-        }
-
-        // Open the sticker modal showing only the user's added stickers.
-        if self.button(cx, ids!(my_stickers_button)).clicked(actions) {
-            cx.action(crate::home::sticker_modal::StickerModalAction::OpenStickersOnly);
+        // Handle the open popup menu button being clicked.
+        if self.button(cx, ids!(open_popup_menu_button)).clicked(actions) {
+            let button_rect = self.button(cx, ids!(open_popup_menu_button)).area().rect(cx);
+            if let Some(props) = scope.props.get::<RoomScreenProps>() {
+                cx.widget_action(props.room_screen_widget_uid, RoomInputPopupMenuAction::Show { button_rect });
+            }
         }
 
         // Send a sticker selected from the sticker modal to the current room.
@@ -1571,25 +1622,6 @@ impl RoomInputBar {
                 );
                 break;
             }
-        }
-
-        // Toggle the sticker drawer popup that floats above the input bar.
-        if self.button(cx, ids!(sticker_drawer_toggle_button)).clicked(actions) {
-            self.is_sticker_drawer_open = !self.is_sticker_drawer_open;
-            self.view
-                .view(cx, ids!(sticker_drawer_popup))
-                .set_visible(cx, self.is_sticker_drawer_open);
-            self.redraw(cx);
-        }
-
-        // Open the sticker modal from the drawer.
-        if self.button(cx, ids!(sticker_drawer_button)).clicked(actions) {
-            self.is_sticker_drawer_open = false;
-            self.view
-                .view(cx, ids!(sticker_drawer_popup))
-                .set_visible(cx, false);
-            cx.action(crate::home::sticker_modal::StickerModalAction::Open);
-            self.redraw(cx);
         }
 
         if self.button(cx, ids!(bot_menu_button)).clicked(actions) {
@@ -1705,16 +1737,7 @@ impl RoomInputBar {
             log!("Location card clicked; requesting current location...");
             self.is_location_card_expanded = false;
             self.view.view(cx, ids!(more_actions_popup)).set_visible(cx, false);
-            if let Err(_e) = init_location_subscriber(cx) {
-                error!("Failed to initialize location subscriber");
-                enqueue_popup_notification(
-                    "Failed to initialize location services.",
-                    PopupKind::Error,
-                    None,
-                );
-            }
-            self.view.location_preview(cx, ids!(location_preview)).show();
-            self.redraw(cx);
+            self.show_location_preview(cx);
         }
 
         if self.button(cx, ids!(threads_card_button)).clicked(actions) {
@@ -2169,6 +2192,19 @@ impl RoomInputBar {
         );
     }
 
+    fn show_location_preview(&mut self, cx: &mut Cx) {
+        if let Err(_e) = init_location_subscriber(cx) {
+            error!("Failed to initialize location subscriber");
+            enqueue_popup_notification(
+                "Failed to initialize location services.",
+                PopupKind::Error,
+                None,
+            );
+        }
+        self.view.location_preview(cx, ids!(location_preview)).show();
+        self.redraw(cx);
+    }
+
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     fn handle_file_drag_drop(&mut self, cx: &mut Cx, event: &Event) {
         match event.drag_hits(cx, self.view.area()) {
@@ -2272,6 +2308,16 @@ impl RoomInputBar {
 }
 
 impl RoomInputBarRef {
+    pub fn open_file_picker(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.open_file_picker(cx);
+    }
+
+    pub fn show_current_location_preview(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show_location_preview(cx);
+    }
+
     pub fn activate_translation_language(&self, cx: &mut Cx, code: &str) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.on_language_selected(cx, code);
