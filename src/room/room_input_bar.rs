@@ -1211,6 +1211,13 @@ pub struct RoomInputBar {
     /// The pending file load operation, if any. Contains the receiver channel
     /// for receiving the loaded file data from a background thread.
     #[rust] pending_file_load: Option<crate::shared::file_upload_modal::FileLoadReceiver>,
+    /// The last `enable` state applied to the send button, used to skip the
+    /// expensive `script_apply_eval!` in `enable_send_message_button()` when
+    /// the state hasn't changed. `handle_actions()` calls it on every actions
+    /// batch (i.e., every frame during a scroll), and each `script_apply_eval!`
+    /// re-tokenizes, re-parses, and re-evaluates the script source.
+    /// `None` forces the next call to apply unconditionally.
+    #[rust] send_button_enabled: Option<bool>,
 
     // --- Translation state ---
     /// Whether real-time translation is currently active.
@@ -2068,6 +2075,15 @@ impl RoomInputBar {
     ///
     /// This should be called to update the button state when the message TextInput content changes.
     fn enable_send_message_button(&mut self, cx: &mut Cx, enable: bool) {
+        // Skip the expensive `script_apply_eval!` below if the button is already
+        // in the requested state. This function is called unconditionally from
+        // `handle_actions()`, which runs on every actions batch — including every
+        // frame of a scroll — and re-evaluating script source each time was
+        // profiled as the single largest CPU cost during timeline scrolling.
+        if self.send_button_enabled == Some(enable) {
+            return;
+        }
+        self.send_button_enabled = Some(enable);
         let mut send_message_button = self.view.button(cx, ids!(send_message_button));
         let (fg_color, bg_color) = if enable {
             (COLOR_FG_ACCEPT_GREEN, COLOR_BG_ACCEPT_GREEN)
@@ -2389,6 +2405,9 @@ impl RoomInputBarRef {
         let is_text_input_empty = inner.text_input(cx, ids!(mentionable_text_input.text_input))
             .text()
             .is_empty();
+        // Force a re-apply: this `RoomInputBar` instance is reused across rooms,
+        // so the cached send-button state may not match the newly-restored room.
+        inner.send_button_enabled = None;
         inner.enable_send_message_button(cx, !is_text_input_empty);
         inner.is_location_card_expanded = false;
         inner.view.view(cx, ids!(more_actions_popup)).set_visible(cx, false);
