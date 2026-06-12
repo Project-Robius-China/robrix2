@@ -5,6 +5,7 @@ pub mod audio_message_player;
 pub mod animated_image;
 pub mod avatar;
 pub mod collapsible_header;
+pub mod design_tokens;
 pub mod expand_arrow;
 pub mod confirmation_modal;
 pub mod file_upload_modal;
@@ -33,6 +34,9 @@ pub mod video_message_player_modal;
 pub fn script_mod(vm: &mut ScriptVm) {
     // Order matters here, as some widget definitions depend on others.
     styles::script_mod(vm);
+    // Semantic design tokens (RBX_*) build on theme.* + styles; register right
+    // after styles so every later module can read them.
+    design_tokens::script_mod(vm);
     helpers::script_mod(vm);
     icon_button::script_mod(vm);
     expand_arrow::script_mod(vm);

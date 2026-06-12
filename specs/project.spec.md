@@ -20,6 +20,7 @@ Robrix is a multi-platform Matrix chat client built with Makepad 2.0 and matrix-
 - Widget state changes on dynamically-created widgets (via `widget_ref_from_live_ptr()`) must use Animator + shader instance variables, NOT `script_apply_eval!` (which silently fails due to `ScriptObject::ZERO`)
 - `script_apply_eval!` must NOT use DSL constants (`Right`, `Down`, `Fit`, `Fill`, `Align`, `Inset`, `MouseCursor`) — these are not available at runtime scope
 - All `draw_bg` property modifications must use `+:` merge syntax, NOT `:` replace syntax, to avoid losing shader/border/animation properties
+- All UI color / radius / typography must use the `RBX_*` design tokens (`src/shared/design_tokens.rs`) or existing `styles.rs` tokens — do NOT hardcode hex colors in screens. Follow the visual spec `docs/ui-visual-spec-zh.md` (component contracts §4, hard constraints §0.1, build order §8)
 
 ## Decisions
 
@@ -44,3 +45,5 @@ Robrix is a multi-platform Matrix chat client built with Makepad 2.0 and matrix-
 - Do NOT call `Dock.load_state()` during event handling (causes DrawList corruption)
 - Do NOT commit code that doesn't pass `cargo build`
 - Do NOT create PRs without user testing and approval first
+- Do NOT hardcode hex colors in UI screens — reference `RBX_*` / `styles.rs` tokens, adding a new token to `design_tokens.rs` if needed
+- Do NOT reinvent card / badge / row styles ad hoc — implement them per the visual spec's contracts / recipes (`docs/ui-visual-spec-zh.md` §4)
