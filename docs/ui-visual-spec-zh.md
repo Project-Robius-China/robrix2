@@ -36,7 +36,23 @@
 
 > 一句话方向：Robrix2 是**「可协作的 AI 工作空间」**，不是「给 bot 加了入口的聊天工具」。复杂对象卡片化、普通对话保持轻量。
 
-本轮范围（来自 8 张稿）：移动端 Login / Settings / Room Detail / Timeline，桌面端 Login / Workbench（三~四栏）。
+本轮范围（来自 8 张参考稿，见 §0.2）：移动端 Login / Settings / Room Detail / Timeline，桌面端 Login / Workbench（三~四栏）。
+
+### 0.2 参考设计稿（8 张 · source of truth）
+
+来源（飞书 wiki，需登录）：<https://my.feishu.cn/wiki/B5aMwGr39iHcfdkAnVHc5g0un3c>
+本地副本：[`docs/ui-reference/`](ui-reference/)。本文件的线框 / 目标结构均以这 8 张为准；§5 各界面会内嵌对应原图。
+
+| # | 预览 | 界面 | 内嵌于 |
+|---|------|------|--------|
+| 01 | <img src="ui-reference/01-desktop-login.png" width="170"> | 桌面登录（浅色，品牌卡 + teal CTA + SSO 行） | §5.6 |
+| 02 | <img src="ui-reference/02-desktop-workbench.png" width="170"> | 桌面工作台（深色导航 + 房列表 + 时间线 + 右信息栏） | §5.6 |
+| 03 | <img src="ui-reference/03-room-detail.png" width="120"> | 房间/任务详情总览（对象集合卡 + Quick actions） | §5.2 / §5.6 |
+| 04 | <img src="ui-reference/04-desktop-workbench-activity.png" width="170"> | 工作台 Activity 变体（分析卡 + 审批卡 + 代码块） | §5.3 / §5.6 |
+| 05 | <img src="ui-reference/05-mobile-login.png" width="85"> | 移动登录（深色） | §5.6 |
+| 06 | <img src="ui-reference/06-mobile-timeline.png" width="85"> | 移动时间线（goal banner + 步骤 chips + 审批 + 代码） | §5.3 |
+| 07 | <img src="ui-reference/07-mobile-settings.png" width="85"> | 移动设置（分组卡 + 状态徽章 + sticky 底栏 + tab bar） | §5.1 |
+| 08 | <img src="ui-reference/08-mobile-room-detail.png" width="85"> | 移动房间详情（hero + 对象集合卡） | §5.2 |
 
 ---
 
@@ -203,7 +219,10 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 
 ## 5. 各界面 Spec（参考图 → 线框 → 目标 → 现状/差距 → 落地）
 
-### 5.1 Settings（移动端，参考图 7）
+### 5.1 Settings（移动端）
+
+<img src="ui-reference/07-mobile-settings.png" width="260" alt="移动设置参考稿">
+
 
 ```
 ┌─────────────────────────────┐
@@ -246,7 +265,10 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
   5. 分区改名/重组到目标 4 组。
 - **这是首个落地界面**（风险低、密度高，验证卡片+badge+tab 体系）。
 
-### 5.2 Room / Mission Detail（移动端，参考图 8）
+### 5.2 Room / Mission Detail（移动端）
+
+<img src="ui-reference/08-mobile-room-detail.png" width="260" alt="移动房间详情参考稿">
+
 
 ```
 ┌─────────────────────────────┐
@@ -270,7 +292,10 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 - **现状**：robrix2 现有 room info / space lobby 偏「房间设置」而非「对象总览」。无 Linked Agents / Knowledge / Goals / Automations 卡。
 - **落地**：用卡片 recipe（§4.1）+ `SettingRow`(进入式，右 chevron) 拼总览；角色/状态用 StatusBadge / CapabilityChip（§4.2 / §4.4）。桌面端复用同卡，见 5.6 右栏。
 
-### 5.3 Timeline（移动端，参考图 6）—— **最后做，风险最高**
+### 5.3 Timeline（移动端）—— **最后做，风险最高**
+
+<img src="ui-reference/06-mobile-timeline.png" width="260" alt="移动时间线参考稿">
+
 
 ```
 ‹ # ai-ops-mission           🔍 ⚙ ⋯
@@ -307,7 +332,14 @@ Room goal: Reduce API latency 20% (Q2)  [View details]   ← goal banner
 - **现状**：`RoundedView`(radius 5) 容器，上排工具条（attach/emoji/translate/bot-menu）+ 下排 `MentionableTextInput`，右侧 `RobrixPositiveIconButton`(矩形) 发送。无 `Run agent` 模式。
 - **落地**：①发送键改 teal 圆形（`border_radius` 调大 + accent 色）；②`button_row` 的 `LeftActionButtons` 与 `Filler` 之间插 `run_agent_toggle`（带边/高亮，读作"模式切换器"）；③`RoomInputBar` 加 `run_agent_mode: bool`，`clicked()` 切换，发送时按 flag 派发不同请求；④不动 mention/slash 检测。
 
-### 5.6 Login + Desktop Workbench（参考图 1/5/2/4）
+### 5.6 Login + Desktop Workbench
+
+桌面 / 移动登录：<img src="ui-reference/01-desktop-login.png" width="300" alt="桌面登录"> <img src="ui-reference/05-mobile-login.png" width="105" alt="移动登录">
+
+桌面工作台（常规 + Activity 变体）：<img src="ui-reference/02-desktop-workbench.png" width="300" alt="桌面工作台"> <img src="ui-reference/04-desktop-workbench-activity.png" width="300" alt="工作台 Activity 变体">
+
+房间详情总览（桌面）：<img src="ui-reference/03-room-detail.png" width="220" alt="房间详情总览">
+
 
 - **Login**（`src/login/login_screen.rs`）：品牌卡（cube logo + `Robrix2` + `Agent-native collaboration client`）→ `User ID / Password(👁) / Homeserver URL` → teal **Sign in securely** → `Or continue with` → `SSO/Google/GitHub/Microsoft/More` → `Create an account` → 状态 footer（Secure session · Self-host ready · Matrix connected）。两变体：桌面浅色（`RBX_BG_CANVAS`）/ 移动深色（`RBX_LOGIN_BG` + `RBX_LOGIN_SURFACE`）。
 - **Desktop Workbench**（`src/home/main_desktop_ui.rs` + `home_screen.rs`）：`[深色 NAV 栏 | 房间列表 | Timeline 主区 | 右侧 Info 面板]`。NAV 用 `RBX_NAV_*`（深色锚点）；右侧 Info 面板（Active agents / Pending approvals / Linked agents / Tools / Knowledge / Recent automations）目前**缺失**，需新建，并复用 5.2 的对象集合卡。
