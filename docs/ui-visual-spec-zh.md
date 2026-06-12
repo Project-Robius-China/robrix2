@@ -9,6 +9,8 @@
 **不预置成品组件**：卡片 / 徽章 / 行等一律由 agent 按第 4 节的合同 / recipe 实现。
 **agent 行为约束**：见第 0 节「硬约束」，并已写入 `CLAUDE.md` / `AGENTS.md` / `specs/project.spec.md`。
 
+**目录**：§0 用法 / 硬约束 / 参考稿 · §1 原则 · §2 视觉总览 · §3 Tokens（颜色 / 圆角 / 间距 / 尺寸 / 阴影 / 字号）· §4 组件合同（4.1–4.16）· §5 各界面 · §6 响应式 · §7 状态 & 交互 & 无障碍 · §8 Roadmap · §9 本地验证 · §10 DSL gotchas · §11 非目标 · §12 结论
+
 ---
 
 ## 0. 这份文档怎么用（给 agent / 实现者）
@@ -100,6 +102,9 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 | `RBX_BG_SURFACE_SUBTLE` | `#F4F7FB` | 次级面板 / 分组底 |
 | `RBX_BG_SUNKEN` | `#EEF2F8` | 浅色代码 / 预览内嵌 |
 | `RBX_BG_HOVER` | `#EFF4FB` | 行 / 列表 hover |
+| `RBX_BG_SELECTED` | `#E4F5F7` | 选中行 / 项（teal 微染） |
+| `RBX_BG_PRESSED` | `#E7ECF3` | 按下态表面 |
+| `RBX_BG_DISABLED` | `#F0F2F6` | 禁用控件表面 |
 | `RBX_FG_PRIMARY` | `#16233B` | 主文字（非纯黑） |
 | `RBX_FG_SECONDARY` | `#5A6B86` | 副文字 / meta |
 | `RBX_FG_TERTIARY` | `#8A98AE` | 时间戳 / 极弱字 |
@@ -112,6 +117,7 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 | `RBX_LINK` | `#1887C9` | 链接 |
 | `RBX_BRAND_PURPLE` | `#572DCC` | 仅品牌入口 |
 | `RBX_BRAND_CYAN` | `#05CDC7` | 仅品牌 |
+| `RBX_BRAND_BLUE` | `#2D7CFF` | 仅品牌（立方 logo 蓝面） |
 | `RBX_IDENTITY_TEAL` | `#14B8A6` | 房间 / 空间头像 |
 | `RBX_STROKE_SOFT` | `#E6EBF2` | 卡片 / 控件默认描边 |
 | `RBX_STROKE_STRONG` | `#D5DEEA` | 强调 / 聚焦描边 |
@@ -124,9 +130,15 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 | `RBX_NAV_BG` | `#1A2336` | 桌面导航栏底 |
 | `RBX_NAV_FG` / `_FG_ACTIVE` | `#AEBAD0` / `#FFFFFF` | 导航项字 |
 | `RBX_NAV_ITEM_ACTIVE_BG` | `#2A3650` | 导航选中底 |
+| `RBX_NAV_ITEM_HOVER_BG` | `#222D43` | 导航 hover 底 |
 | `RBX_NAV_DIVIDER` | `#2C384F` | 导航分隔 |
 | `RBX_LOGIN_BG` | `#0E1626` | 移动登录底 |
 | `RBX_LOGIN_SURFACE` | `#16213A` | 移动登录卡 / 输入框 |
+| `RBX_LEGACY_BLUE` | `#0F88FE` | **DEPRECATED** 旧主色蓝（迁移时引用，新 UI 用 `RBX_ACCENT`） |
+
+**代码面板（深色，Timeline `CodeOutputCard` §4.7）**：`RBX_CODE_BG`=`#1B2433` 底 · `RBX_CODE_FG`=`#D7DEE8` 正文 · `RBX_CODE_KEYWORD`=`#7CC4FF` · `RBX_CODE_STRING`=`#8FD19A` · `RBX_CODE_COMMENT`=`#7F8B9B`。
+
+> **Primary 迁移**：旧代码主色是 `styles.rs` 的 `COLOR_ACTIVE_PRIMARY`（亮蓝 `#0F88FE`，~80 处）。新视觉唯一主色是 teal `RBX_ACCENT`（`#119FB3`）。新 UI **必须**用 `RBX_ACCENT`；旧蓝随 §5 各界面重构逐步替换，不在本轮一次性改。
 
 ### 3.2 圆角
 
@@ -155,7 +167,32 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 | `RBX_TEXT_META` | 9.5 regular | meta / caption |
 | `RBX_TEXT_BADGE` | 9 bold | badge / chip |
 
-> 注：Makepad 字号偏小（项目现有 8.5–18），上表已对齐。一张卡片内字号层级 ≤ 3，密度靠**颜色变浅**而非字号变小。
+> 注：Makepad 字号偏小（项目现有 8.5–17），上表 token 范围 9–17 已对齐，并带 `line_spacing`（body 1.35 / title 1.25）。一张卡片内字号层级 ≤ 3，密度靠**颜色变浅**而非字号变小。
+
+### 3.5 尺寸（控件 / 行 / 图标 / 头像）
+
+| Token | 值 | 用途 |
+|-------|----|----|
+| `RBX_CONTROL_H_SM/MD/LG` | 32 / 36 / 44 | 紧凑 / 标准 / 大 控件高（按钮、输入、分段 tab） |
+| `RBX_ROW_H_DESKTOP/MOBILE` | 48 / 52 | 列表 / SettingRow 最小行高 |
+| `RBX_TAP_MIN` | 44 | 最小触控目标 |
+| `RBX_BOTTOM_TAB_H` | 56 | 移动底部 tab 栏高 |
+| `RBX_ICON_XS/SM/MD/LG` | 12 / 16 / 20 / 24 | 图标 |
+| `RBX_AVATAR_SM/MD/LG` | 28 / 40 / 48 | 头像（行 / 消息 / hero） |
+
+> 不再各页 hardcode 32/36/40/48/52，统一用上表。
+
+### 3.6 阴影 / 浮层 / 焦点
+
+| Token | 值 | 用途 |
+|-------|----|----|
+| `RBX_SCRIM` | `#16233B` @50% | modal / sheet 后的遮罩 |
+| `RBX_SHADOW` | `#16233B` @15% | 卡 / dropdown / popup 投影色 |
+| `RBX_SHADOW_STRONG` | `#16233B` @25% | sheet / modal 投影色 |
+| `RBX_FOCUS_RING` | `#119FB3`（=accent） | 键盘焦点环色 |
+| `RBX_FOCUS_WIDTH` | 2 | 焦点环宽 |
+
+> 卡片靠圆角 + 描边，不用阴影；阴影只给浮层（sheet / modal / dropdown / composer）。blur/offset 在 recipe 里，token 只给颜色。
 
 ---
 
@@ -170,7 +207,7 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
   ```
   RoundedView {
       width: Fill, height: Fit, flow: Down
-      padding: Inset{left:(SPACE_LG), right:(SPACE_LG), top:(SPACE_MD), bottom:(SPACE_LG)}
+      padding: Inset{left:(SPACE_LG), right:(SPACE_LG), top:(SPACE_LG), bottom:(SPACE_LG)}
       show_bg: true
       draw_bg +: {
           color: (RBX_BG_SURFACE)
@@ -183,37 +220,86 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
   ```
 
 ### 4.2 StatusBadge（状态徽章）⛏ 按合同实现
-- 变体语义：success / warning / danger / info / accent / neutral（映射见 3.1，**严禁**同语义换色）。
-- 解剖：胶囊（`RBX_RADIUS_PILL`），浅底 `RBX_<STATE>_BG` + 同色系深字 `RBX_<STATE>_FG`，字 `RBX_TEXT_BADGE`，padding ≈ 9/3。
+- 变体语义：success / warning / danger / info / neutral 五个**状态对**（`RBX_<STATE>_BG` + `RBX_<STATE>_FG`）；外加 **accent**（非状态，用 `RBX_ACCENT_SOFT` 底 + `RBX_ACCENT` 字，给 "Agent-enabled" 这类品牌强调）。映射见 3.1，**严禁**同语义换色。
+- 解剖：胶囊（`RBX_RADIUS_PILL`），浅底 + 同色系深字，字 `RBX_TEXT_BADGE`，padding ≈ 9/3，高在 `RBX_CONTROL_H_SM`(32) 以内。
 - 推荐实现：派生 `RobrixNeutralIconButton`（继承 focus-off），把 `draw_bg` / `draw_text` 重塑为对应状态色 + pill 半径，`text:` 即标签——这样 `XxxBadge { text: "Connected" }` 一行即用。
 - 或内联 recipe：`RoundedView`(pill `draw_bg`) + `Label`。
 
-### 4.3 `SettingRow` ⛏ 待建（合同已在预览里示范）
+### 4.3 `SettingRow` ⛏ 待建
 - 解剖：`[左图标/小头像] [标题 + 副标题(Fill)] [右值 / StatusBadge / chevron]`，`flow: Right, align y:0.5`。
-- token：标题 `RBX_TEXT_BODY_STRONG`，副标题 `RBX_TEXT_META/FG_SECONDARY`，行高 ≥ 48（移动 ≥ 52），底部 `RBX_DIVIDER` 1px。
-- 状态：default / hover(`RBX_BG_HOVER`) / disabled(`RBX_FG_DISABLED`)。
+- 尺寸：行高 `RBX_ROW_H_DESKTOP`(48) / `RBX_ROW_H_MOBILE`(52)；左图标 `RBX_ICON_MD`(20) 或头像 `RBX_AVATAR_SM`(28)；左右 padding `SPACE_MD`(12)、上下 `SPACE_SM`(8)；图标–标题、标题–右值间距 `SPACE_MD`(12)；chevron `RBX_ICON_SM`(16)；右值/badge 区 min-width ≈ 60。
+- token：标题 `RBX_TEXT_BODY_STRONG`，副标题 `RBX_TEXT_META`/`RBX_FG_SECONDARY`，底部 `RBX_DIVIDER` 1px。
+- 状态：default / hover(`RBX_BG_HOVER`) / pressed(`RBX_BG_PRESSED`) / selected(`RBX_BG_SELECTED`) / disabled(`RBX_FG_DISABLED` + `RBX_BG_DISABLED`)。
+- 截断：标题 `Fill` 可换行或 ellipsis；右值 max-width ~100 + ellipsis，禁止静默截断。
 - 落点：先在 `src/settings/` 内提炼，稳定后移到 `src/shared/setting_row.rs`。
 
 ### 4.4 `CapabilityChip` ⛏ 待建
 - 与 badge 同形，但语义=能力/标签/角色（Admin / Mod / Agent / Vision / Tool calls）。用 info / accent 徽章变体（§4.2）起步即可。
 
 ### 4.5 `AgentMessageCard` ⛏ 待建（Timeline 核心，高风险）
-- 解剖：`头像(带绿点) + [名字][APP] + 时间` → 步骤 chips 行 → 分析卡（左 accent 边）→ footer meta。
-- token：卡 `RBX_BG_SURFACE` + `RBX_STROKE_SOFT`；分析卡左边 4px `RBX_ACCENT`；`Recommended action` 用 `RBX_TEXT_BODY_STRONG`。
+- 解剖：`头像(带绿点) + [名字][APP] + 时间` → 步骤 chips 行（§4.10 StepChip）→ 分析卡（左 accent 边）→ footer meta。
+- 尺寸：头像 `RBX_AVATAR_MD`(40)，绿点 6×6 右下内缩 2；`APP` 标 = accent 徽章（§4.2）；分析卡左边 **4px** `RBX_ACCENT` 边 + 内 padding `SPACE_MD`(12)；chips 行间距 `SPACE_XS`(4)、高在 `RBX_CONTROL_H_SM`(32) 内；卡内各区竖向间距 `SPACE_SM`(8)。
+- token：卡 `RBX_BG_SURFACE` + `RBX_STROKE_SOFT` + `RBX_RADIUS_MD`；`Recommended action` 用 `RBX_TEXT_BODY_STRONG`；footer `RBX_TEXT_META`/`RBX_FG_TERTIARY`。
 - 落点：`src/home/room_screen.rs`，作为 `bot_message_card`（行 ~2044）的兄弟节点，插在 `username_view` 之后（见 5.4）。
 
 ### 4.6 `ApprovalCard` ⛏ 待建（Robrix2 标志性组件）
-- 解剖：琥珀底（`RBX_WARNING_BG` + `RBX_WARNING_FG` 边）→ 标题 + `Pending` badge → 待决动作正文 → 请求者/时间 meta →`[Approve(success)] [Reject(danger)]`。
-- 现状：`approval_request_view`（room_screen.rs ~2139）已存在，但用的是**浅蓝** `COLOR_BOT_STATUS_BG`，需改为琥珀；缺 `Pending` badge。
-- 预览里 Card 2 的「mini approval card」即此合同的视觉样板。
+- 解剖：琥珀底（`RBX_WARNING_BG` 底 + `RBX_WARNING_FG` 1px 边 + `RBX_RADIUS_SM`）→ `[标题(RBX_TEXT_CARD_TITLE, warning 色)] [Pending badge]` → 待决动作正文(`RBX_TEXT_BODY`) → 请求者/时间 meta(`RBX_TEXT_META`) → `[Approve(success)] [Reject(danger)]`。
+- 尺寸：内 padding 上 `SPACE_MD`(12) / 左右下 `SPACE_LG`(16)；行间 `SPACE_SM`(8)；按钮高 `RBX_CONTROL_H_MD`(36)、padding `SPACE_MD`、radius `RBX_RADIUS_MD`、间距 `SPACE_SM`。
+- 状态：pending（默认）/ approved（success 收尾）/ rejected（danger 收尾）/ expired（neutral）。
+- 现状：`approval_request_view`（room_screen.rs ~2139）已存在，但用**浅蓝** `COLOR_BOT_STATUS_BG`，需改为琥珀并补 `Pending` badge。
+- 实现策略：**不要**原地 patch `approval_request_view`；新建 `src/shared/approval_card.rs`，在 §5.4 的 `agent_render_state` 里分发。
 
 ### 4.7 `CodeOutputCard` ⛏ 待建
-- 解剖：深底面板（深 navy）+ 语法高亮 + 底部「Translated from Chinese / Show original」。
-- 现状：bot markdown 代码块已渲染，缺翻译 footer 与统一深底。
+- 解剖：深底面板（`RBX_CODE_BG` + `RBX_RADIUS_SM`）+ 语法高亮（`RBX_CODE_FG`/`_KEYWORD`/`_STRING`/`_COMMENT`）+ footer「↺ Translated from Chinese · Show original」。
+- 尺寸：面板内 padding `SPACE_MD`(12)、min-height ~120；footer 单行在面板**下方**，`RBX_TEXT_META`，上 1px `RBX_DIVIDER` 分隔，链接 `RBX_LINK`。
+- 字体：用 `styles.rs` 的 `MESSAGE_CODE_TEXT_STYLE`（等宽 + CJK fallback）。
+- 现状：bot markdown 代码块已渲染但为**浅底**（`COLOR_BOT_CODE_BG`），缺统一深底与翻译 footer。
 
 ### 4.8 `Composer`（房间输入区）⛏ 改造
 - 目标：单一圆角容器；左 cluster（attach/emoji/slash）；显眼 `Run agent` 模式切换（比普通图标按钮重）；右 teal 圆形发送。
 - 现状与落点见 5.5。
+
+### 4.9 SegmentedTabs（分段标签）⛏ 待建
+- 用途：Settings 主分类 / Timeline 二级 tab（Chat/Tasks/…）。**注意**与 §6 底部全局 tab 栏（§4.14）是两套独立系统（见 §5.1 说明）。
+- 解剖：`flow: Right` 紧密按钮行；选中=`RBX_ACCENT` 实底 + `RBX_FG_ON_ACCENT` 字 + `RBX_TEXT_BODY_STRONG`；未选=透明底 + `RBX_FG_SECONDARY` + `RBX_TEXT_BODY`。
+- 尺寸：高 `RBX_CONTROL_H_MD`(36)，左右 padding `SPACE_MD`，外侧段 `RBX_RADIUS_SM` 圆角；窄屏 `Flow.Right{wrap:true}` 或横向滚动。
+- 状态：selected / unselected / disabled；落点 `src/shared/segment_tabs.rs`。
+
+### 4.10 StepChip（步骤 chip）⛏ 待建
+- 用途：Agent 进度（Collecting / Committing / Analyzing / Proposing）。与 CapabilityChip 同形。
+- 状态色：待开始 `RBX_BG_SURFACE_SUBTLE` + `RBX_FG_SECONDARY`；进行中 `RBX_ACCENT_SOFT` + `RBX_ACCENT`；完成 success；失败 danger。
+- 尺寸：pill，高 ≤ `RBX_CONTROL_H_SM`(32)，行间 `SPACE_SM`；落点 `AgentMessageCard`(§4.5) 内。
+
+### 4.11 ToggleSwitch（开关）⛏ 待建
+- 解剖：轨道 + 滑块，瞬间 snap；off=`RBX_STROKE_STRONG` 轨；on=`RBX_ACCENT` 轨 + 白滑块。
+- 尺寸：轨 44×24，滑块 ⌀18，内缩 3；落点 `src/shared/toggle_switch.rs`。
+- 状态：on / off / disabled(`RBX_FG_DISABLED`)；a11y role=switch。
+
+### 4.12 Dropdown（下拉，Settings 变体）⛏ 待建 / 迁移
+- 触发：`RBX_TEXT_BODY` + 右侧 chevron `RBX_ICON_SM`，padding `SPACE_MD`，无边或 `RBX_STROKE_SOFT` 边。
+- 弹层：`RBX_BG_SURFACE` + `RBX_STROKE_SOFT` + `RBX_RADIUS_MD` + `RBX_SHADOW`；项高 `RBX_CONTROL_H_MD`，hover `RBX_BG_HOVER`，选中 `RBX_BG_SELECTED` + `RBX_ACCENT` 字。
+- 迁移：现用 `styles.rs` 的 `COLOR_DROPDOWN_*`，重构时换 `RBX_*`。
+
+### 4.13 StickyActionBar（底部动作条）⛏ 待建
+- 用途：Settings 底部 `Reset to defaults`(次) + `Save changes`(主)。
+- 解剖：贴底，上 1px `RBX_DIVIDER`，底色 `RBX_BG_CANVAS`，padding `SPACE_MD`（移动端含 safe-area）。
+- 尺寸：高 ~60（按钮 `RBX_CONTROL_H_LG`(44) + padding）；主按钮 `RBX_ACCENT` 实底 + `RBX_FG_ON_ACCENT`；次按钮幽灵（透明 + `RBX_ACCENT` 字 / `RBX_STROKE_SOFT` 边）。
+
+### 4.14 BottomTabBar（移动底部导航）⛏ 改造
+- 5 tab：Home / Rooms / Agents / Search / Settings（图标 `RBX_ICON_LG`(24) + 下方 `RBX_TEXT_META` 标签）。
+- 尺寸：高 `RBX_BOTTOM_TAB_H`(56)，等宽，上 1px `RBX_STROKE_SOFT`，底 `RBX_BG_SURFACE`（**非**深色），含 safe-area，触控 ≥ `RBX_TAP_MIN`。
+- 状态：active=`RBX_ACCENT`，inactive=`RBX_FG_SECONDARY`。
+- 现状：现为 Home/Add Room/Spaces/Profile（4 项），缺 Rooms/Agents/Search；落点 `src/home/navigation_tab_bar.rs` Mobile 变体。
+
+### 4.15 GoalBanner（房间目标条）⛏ 待建
+- 用途：Timeline 顶、二级 tab 之上。左 accent 4px 边 + 目标文 + 时间范围，右 `[View details]`(`RBX_LINK`)。
+- token：底 `RBX_ACCENT_SOFT`，左边 `RBX_ACCENT`，文 `RBX_TEXT_BODY_STRONG` / `RBX_TEXT_META`；padding `SPACE_MD`。
+- 状态：default / loading(skeleton) / empty(隐藏)；落点 `room_screen.rs` Timeline 顶。
+
+### 4.16 RoomHero（房间详情头）⛏ 待建
+- 解剖：返回行 → `[头像 RBX_AVATAR_LG(48) RBX_IDENTITY_TEAL] [名 RBX_TEXT_PAGE_TITLE] [收藏/更多]` → `[人数 + Encrypted/Synced badges]` → `[Admin/Mod/Agent CapabilityChip 群]`。
+- 尺寸：行间 `SPACE_SM`，badge 间 `SPACE_XS`；名超长 2 行 ellipsis；padding `SPACE_LG`。
+- 状态：default / loading(skeleton) / empty(fallback 身份色)；落点 §5.2 / §5.6 右栏。
 
 ---
 
@@ -255,7 +341,8 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 └─────────────────────────────┘
 ```
 
-- **目标结构**：page title + search → segmented tabs → 多张卡片（recipe §4.1，每张含若干 `SettingRow`，右侧状态用 StatusBadge §4.2）→ sticky 底栏 `Reset to defaults`(次) + `Save changes`(主 accent)。分区：`Homeserver & Account / AI & Models / Automation & Policies / Sync & Preferences`。
+- **目标结构**：page title + search → segmented tabs（§4.9）→ 多张卡片（recipe §4.1，每张含若干 `SettingRow`，右侧状态用 StatusBadge §4.2）→ sticky 底栏（§4.13）`Reset to defaults`(次) + `Save changes`(主 accent)。分区：`Homeserver & Account / AI & Models / Automation & Policies / Sync & Preferences`。
+- **两套 tab 别混**：页内 **segmented tabs**（§4.9，切 Account/Security/Agents 分类）与 **底部全局 tab 栏**（§4.14，Home/Rooms/Agents/Search/Settings，全 App 常驻）是独立系统，共存不冲突。
 - **现状**（`src/settings/settings_screen.rs`）：用 `PageFlip` + 5 个**横排按钮 tab**（Account/Preferences/Devices/Labs/Contribute）；卡是 `RoundedView` 底色 `#F8F8FA`；无 search、无 segmented tab、无 SettingRow 抽象、无 sticky 底栏、状态用彩色 label 而非 badge。
 - **差距 → 落地**：
   1. 把横排按钮换成 segmented tabs 视觉（选中 `apply_primary_button_style` 已在，改成 accent token）。
@@ -359,7 +446,7 @@ Room goal: Reduce API latency 20% (Q2)  [View details]   ← goal banner
 
 ---
 
-## 7. 状态矩阵（每个新组件都要补齐）
+## 7. 状态 / 交互 / 动效 / 无障碍
 
 | 状态 | 视觉 |
 |------|------|
@@ -371,6 +458,14 @@ Room goal: Reduce API latency 20% (Q2)  [View details]   ← goal banner
 | warning | StatusBadge·warning |
 | danger/error | StatusBadge·danger + 错误说明 + 重试 |
 | stale/offline | 灰中性 + 离线提示，不伪装在线 |
+
+### 7.1 交互 / 动效 / 无障碍（每个交互组件都要覆盖）
+
+- **焦点**：键盘可达控件用 `RBX_FOCUS_WIDTH`(2px) `RBX_FOCUS_RING`(=accent) 焦点环。注意现有 `RobrixIconButton` 关了 focus 视觉；新交互组件应显式开焦点环。
+- **触控**：移动端命中区 ≥ `RBX_TAP_MIN`(44)。
+- **动效**：按下=瞬时变色（无弹跳）；menu / sheet 开合 ~150ms 淡入；列表项进出不强求动画，性能优先。
+- **无障碍**：交互元素给语义标签（"Approve this action" 而非 "Button"）；toggle role=switch；tab 顺序：表单字段 → 动作按钮。
+- **截断 / i18n**：所有用户文案可换行或 word-break，**禁止静默截断**；badge / tab / 行在中英文 + 长名下都要验（§8 Phase 6）。
 
 ---
 
