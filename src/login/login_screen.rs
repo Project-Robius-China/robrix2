@@ -36,29 +36,56 @@ script_mod! {
     mod.widgets.ICON_EYE_CLOSED = crate_resource("self://resources/icons/eye_closed.svg")
 
     mod.widgets.SsoButton = RoundedView {
-        width: Fit,
-        height: Fit,
+        width: 46,
+        height: 40,
+        new_batch: true,
         cursor: MouseCursor.Hand,
         visible: true,
-        padding: 10,
-        margin: Inset{ left: 16.6, right: 16.6, top: 10, bottom: 10}
+        padding: 8,
+        margin: Inset{ left: 3, right: 3, top: 0, bottom: 0}
+        align: Align{x: 0.5, y: 0.5}
+        show_bg: true,
         draw_bg +: {
-            border_size: 0.5
-            border_color: #6c6c6c
-            color: (COLOR_PRIMARY)
+            border_size: 1.0
+            border_color: (RBX_STROKE_SOFT)
+            color: (RBX_BG_SURFACE)
+            border_radius: (RBX_RADIUS_SM)
         }
     }
 
     mod.widgets.SsoImage = Image {
-        width: 30, height: 30,
+        width: 22, height: 22,
         draw_bg +: {
             mask: instance(0.0)
             pixel: fn() {
-                let color = mix(self.get_color(), #3, self.async_load)
+                let color = self.get_color()
                 let gray = dot(color.rgb, vec3(0.299, 0.587, 0.114))
                 let grayed = mix(color, vec4(gray, gray, gray, color.a), self.mask)
                 return Pal.premul(vec4(grayed.xyz, grayed.w * self.opacity))
             }
+        }
+    }
+
+    mod.widgets.LoginTextInput = RobrixTextInput {
+        height: (RBX_CONTROL_H_LG)
+        clip_x: true
+        clip_y: true
+        padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
+        draw_bg +: {
+            color: (RBX_BG_SURFACE)
+            color_hover: (RBX_BG_SURFACE)
+            color_focus: (RBX_BG_SURFACE)
+            color_down: (RBX_BG_SURFACE)
+            color_empty: (RBX_BG_SURFACE)
+            border_radius: (RBX_RADIUS_SM)
+            border_color: (RBX_STROKE_SOFT)
+            border_color_hover: (RBX_STROKE_STRONG)
+            border_color_focus: (RBX_ACCENT)
+            border_color_down: (RBX_STROKE_STRONG)
+            border_color_empty: (RBX_STROKE_SOFT)
+        }
+        draw_cursor +: {
+            color: (RBX_ACCENT)
         }
     }
 
@@ -71,7 +98,7 @@ script_mod! {
         align: Align{x: 0.5, y: 0.5}
         show_bg: true,
         draw_bg +: {
-            color: COLOR_SECONDARY
+            color: (RBX_BG_CANVAS)
         }
 
         ScrollYView {
@@ -79,7 +106,7 @@ script_mod! {
             flow: Down, // Required for vertical scrolling to work.
             align: Align{x: 0.5, y: 0.5}
             show_bg: true,
-            draw_bg.color: (COLOR_SECONDARY)
+            draw_bg.color: (RBX_BG_CANVAS)
 
             // allow the view to be scrollable but hide the actual scroll bar
             scroll_bars: {
@@ -98,46 +125,96 @@ script_mod! {
                 align: Align{x: 0.5, y: 0.5}
                 flow: Overlay,
 
-                View {
-                    width: Fill
+                login_card := RoundedView {
+                    width: 494
                     height: Fit
+                    new_batch: true
                     flow: Down
                     align: Align{x: 0.5, y: 0.5}
-                    spacing: 15.0
+                    padding: Inset{top: 24, bottom: 24, left: 36, right: 36}
+                    show_bg: true,
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        border_size: 1.0
+                        border_color: (RBX_STROKE_SOFT)
+                        border_radius: (RBX_RADIUS_LG)
+                    }
+
+                    // Top-right brand badge in normal card flow; avoid card-level
+                    // overlay around the input stack.
+                    View {
+                        width: Fill, height: Fit
+                        align: Align{x: 1.0, y: 0.0}
+                        agent_badge := RoundedView {
+                            width: Fit, height: Fit
+                            new_batch: true
+                            padding: Inset{left: 9, right: 9, top: 4, bottom: 4}
+                            show_bg: true,
+                            draw_bg +: {
+                                color: (RBX_ACCENT_SOFT)
+                                border_radius: (RBX_RADIUS_PILL)
+                            }
+                            agent_badge_label := Label {
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_ACCENT)
+                                    text_style: RBX_TEXT_BADGE {}
+                                }
+                                text: "Agent-ready workspace"
+                            }
+                        }
+                    }
+
+                    // Centered content column.
+                    form_column := View {
+                    width: Fill, height: Fit
+                    flow: Down
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 10.0
 
                     logo_image := Image {
                         fit: ImageFit.Smallest,
-                        width: 80
+                        width: 60
                         src: (mod.widgets.IMG_APP_LOGO),
+                    }
+
+                    brand_wordmark := Label {
+                        width: Fit, height: Fit
+                        padding: 0,
+                        draw_text +: {
+                            color: (RBX_FG_PRIMARY)
+                            text_style: RBX_TEXT_PAGE_TITLE {font_size: 22.0}
+                        }
+                        text: "Robrix2"
                     }
 
                     title := Label {
                         width: Fit, height: Fit
-                        margin: Inset{ bottom: 5 }
+                        margin: Inset{ bottom: 6 }
                         padding: 0,
                         draw_text +: {
-                            color: (COLOR_TEXT)
-                            text_style: TITLE_TEXT {font_size: 16.0}
+                            color: (RBX_FG_SECONDARY)
+                            text_style: REGULAR_TEXT {font_size: 10.5}
                         }
-                        text: "Login to Robrix"
+                        text: "Agent-native collaboration client"
                     }
 
-                    user_id_input := RobrixTextInput {
-                        width: 275, height: Fit
+                    user_id_input := mod.widgets.LoginTextInput {
+                        width: 422, height: (RBX_CONTROL_H_LG)
                         flow: Right, // do not wrap
-                        padding: 10,
+                        padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
                         empty_text: "User ID"
                     }
 
                     View {
-                        width: 275, height: Fit
+                        width: 422, height: (RBX_CONTROL_H_LG)
                         flow: Overlay
                         align: Align{x: 1.0, y: 0.5}
 
-                        password_input := RobrixTextInput {
-                            width: Fill, height: Fit
+                        password_input := mod.widgets.LoginTextInput {
+                            width: Fill, height: (RBX_CONTROL_H_LG)
                             flow: Right, // do not wrap
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 38}
+                            padding: Inset{top: 10, bottom: 10, left: 14, right: 42}
                             empty_text: "Password"
                             is_password: true,
                         }
@@ -153,11 +230,11 @@ script_mod! {
                                 spacing: 0
                                 margin: 0
                                 draw_bg +: {
-                                    color: (COLOR_SECONDARY * 1.05)
+                                    color: (RBX_BG_SURFACE)
                                 }
                                 draw_icon +: {
                                     svg: (mod.widgets.ICON_EYE_CLOSED),
-                                    color: #8C8C8C,
+                                    color: (RBX_FG_TERTIARY),
                                 }
                                 icon_walk: Walk{width: 18, height: 18, margin: 0}
                                 text: ""
@@ -171,11 +248,11 @@ script_mod! {
                                 spacing: 0
                                 margin: 0
                                 draw_bg +: {
-                                    color: (COLOR_SECONDARY * 1.05)
+                                    color: (RBX_BG_SURFACE)
                                 }
                                 draw_icon +: {
                                     svg: (mod.widgets.ICON_EYE_OPEN),
-                                    color: #8C8C8C,
+                                    color: (RBX_FG_TERTIARY),
                                 }
                                 icon_walk: Walk{width: 18, height: 18, margin: 0}
                                 text: ""
@@ -184,14 +261,14 @@ script_mod! {
                     }
 
                     confirm_password_wrapper := View {
-                        width: 275, height: Fit,
+                        width: 422, height: (RBX_CONTROL_H_LG),
                         visible: false,
                         flow: Overlay,
 
-                        confirm_password_input := RobrixTextInput {
-                            width: Fill, height: Fit
+                        confirm_password_input := mod.widgets.LoginTextInput {
+                            width: Fill, height: (RBX_CONTROL_H_LG)
                             flow: Right, // do not wrap
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 40}
+                            padding: Inset{top: 10, bottom: 10, left: 14, right: 42}
                             empty_text: "Confirm password"
                             is_password: true,
                         }
@@ -204,14 +281,14 @@ script_mod! {
                                 width: 36, height: 36,
                                 padding: 6,
                                 draw_bg +: {
-                                    color: #0000
-                                    color_hover: #0000
-                                    color_down: #0000
+                                    color: (COLOR_TRANSPARENT)
+                                    color_hover: (COLOR_TRANSPARENT)
+                                    color_down: (COLOR_TRANSPARENT)
                                     border_size: 0.0
                                 }
                                 draw_icon +: {
                                     svg: (mod.widgets.ICON_EYE_CLOSED),
-                                    color: #8C8C8C,
+                                    color: (RBX_FG_TERTIARY),
                                 }
                                 icon_walk: Walk{width: 20, height: 20}
                                 text: ""
@@ -222,14 +299,14 @@ script_mod! {
                                 width: 36, height: 36,
                                 padding: 6,
                                 draw_bg +: {
-                                    color: #0000
-                                    color_hover: #0000
-                                    color_down: #0000
+                                    color: (COLOR_TRANSPARENT)
+                                    color_hover: (COLOR_TRANSPARENT)
+                                    color_down: (COLOR_TRANSPARENT)
                                     border_size: 0.0
                                 }
                                 draw_icon +: {
                                     svg: (mod.widgets.ICON_EYE_OPEN),
-                                    color: #8C8C8C,
+                                    color: (RBX_FG_TERTIARY),
                                 }
                                 icon_walk: Walk{width: 20, height: 20}
                                 text: ""
@@ -238,50 +315,70 @@ script_mod! {
                     }
 
                     View {
-                        width: 275, height: Fit,
+                        width: 422, height: Fit,
                         flow: Down,
+                        spacing: 5.0
 
-                        homeserver_input := RobrixTextInput {
-                            width: 275, height: Fit,
+                        homeserver_input := mod.widgets.LoginTextInput {
+                            width: 422, height: (RBX_CONTROL_H_LG),
                             flow: Right, // do not wrap
-                            padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
+                            padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
                             empty_text: "matrix.org"
                             draw_text +: {
                                 text_style: TITLE_TEXT {font_size: 10.0}
                             }
                         }
 
-                        View {
-                            width: 275,
-                            height: Fit,
+                        homeserver_hint_row := View {
+                            width: 422,
+                            height: 16,
                             flow: Right,
-                            padding: Inset{top: 3, left: 2, right: 2}
-                            spacing: 0.0,
+                            padding: 0
+                            spacing: 0.0
                             align: Align{x: 0.5, y: 0.5} // center horizontally and vertically
-
-                            LineH { draw_bg.color: #C8C8C8 }
 
                             homeserver_hint_label := Label {
                                 width: Fit, height: Fit
                                 padding: 0
                                 draw_text +: {
-                                    color: #8C8C8C
+                                    color: (RBX_FG_TERTIARY)
                                     text_style: REGULAR_TEXT {font_size: 9}
                                 }
                                 text: "Homeserver URL (optional)"
                             }
-
-                            LineH { draw_bg.color: #C8C8C8 }
                         }
                     }
 
                     login_button := RobrixIconButton {
-                        width: 275,
-                        height: 40
+                        width: 422,
+                        height: (RBX_CONTROL_H_LG)
                         padding: 10
-                        margin: Inset{top: 5, bottom: 10}
+                        margin: Inset{top: 8, bottom: 8}
                         align: Align{x: 0.5, y: 0.5}
-                        text: "Login"
+                        draw_bg +: {
+                            color: (RBX_ACCENT)
+                            color_hover: (RBX_ACCENT_HOVER)
+                            color_down: (RBX_ACCENT_PRESSED)
+                            border_radius: (RBX_RADIUS_SM)
+                            // Same-color 1px border smooths the rounded outer edge
+                            // (a fill-only SDF edge aliases against the white card).
+                            border_size: 1.0
+                            border_color: (RBX_ACCENT)
+                            border_color_hover: (RBX_ACCENT_HOVER)
+                            border_color_down: (RBX_ACCENT_PRESSED)
+                        }
+                        draw_icon +: {
+                            svg: (ICON_LOCK)
+                            color: (RBX_FG_ON_ACCENT)
+                        }
+                        icon_walk: Walk{width: 15, height: 15, margin: Inset{right: 5}}
+                        draw_text +: {
+                            color: (RBX_FG_ON_ACCENT)
+                            color_hover: (RBX_FG_ON_ACCENT)
+                            color_down: (RBX_FG_ON_ACCENT)
+                            text_style: TITLE_TEXT {font_size: 12.0}
+                        }
+                        text: "Sign in securely"
                     }
 
                     // MAS (OIDC) login branch. Hidden by default; the Rust
@@ -291,7 +388,7 @@ script_mod! {
                     // points feel consistent.
                     oidc_card := View {
                         visible: false
-                        width: 275, height: Fit,
+                        width: 422, height: Fit,
                         flow: Down,
                         spacing: 8,
                         margin: Inset{top: 5, bottom: 10}
@@ -308,15 +405,15 @@ script_mod! {
                         oidc_info_body := Label {
                             width: Fill, height: Fit
                             draw_text +: {
-                                color: #8C8C8C
+                                color: (RBX_FG_TERTIARY)
                                 text_style: REGULAR_TEXT {font_size: 10.0}
                             }
                             text: ""
                         }
 
                         oidc_continue_button := RobrixIconButton {
-                            width: 275,
-                            height: 40
+                            width: 422,
+                            height: (RBX_CONTROL_H_LG)
                             padding: 10
                             align: Align{x: 0.5, y: 0.5}
                             text: "Continue in browser"
@@ -334,34 +431,42 @@ script_mod! {
 
                         oidc_cancel_button := RobrixIconButton {
                             visible: false
-                            width: 275,
-                            height: 40
+                            width: 422,
+                            height: (RBX_CONTROL_H_LG)
                             padding: 10
                             align: Align{x: 0.5, y: 0.5}
                             text: "Cancel sign-in"
                         }
                     }
 
-                    LineH {
-                        width: 275
-                        margin: Inset{bottom: -5}
-                        draw_bg.color: #C8C8C8
-                    }
+                    View {
+                        width: 422, height: Fit,
+                        flow: Right,
+                        spacing: 8.0,
+                        margin: Inset{top: 6}
+                        align: Align{x: 0.5, y: 0.5}
 
-                    sso_prompt_label := Label {
-                        width: Fit, height: Fit
-                        padding: 0,
-                        draw_text +: {
-                            color: (COLOR_TEXT)
-                            text_style: TITLE_TEXT {font_size: 11.0}
+                        LineH { draw_bg.color: (RBX_STROKE_SOFT) }
+
+                        sso_prompt_label := Label {
+                            width: Fit, height: Fit
+                            padding: 0,
+                            draw_text +: {
+                                color: (RBX_FG_SECONDARY)
+                                text_style: REGULAR_TEXT {font_size: 10.0}
+                            }
+                            text: "Or continue with"
                         }
-                        text: "Or, login with an SSO provider:"
+
+                        LineH { draw_bg.color: (RBX_STROKE_SOFT) }
                     }
 
                     sso_view := View {
-                        width: 275, height: Fit,
-                        margin: Inset{left: 30, right: 5} // make the inner view 240 pixels wide
-                        flow: Flow.Right{wrap: true},
+                        width: 322, height: Fit,
+                        margin: Inset{top: 8}
+                        align: Align{x: 0.5, y: 0.5}
+                        flow: Right,
+                        spacing: 0.0,
                         apple_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/apple.png")
@@ -395,34 +500,43 @@ script_mod! {
                     }
 
                     View {
-                        width: 275,
+                        width: 422,
                         height: Fit,
                         flow: Right,
-                        // padding: 3,
-                        spacing: 0.0,
+                        spacing: 4.0,
+                        margin: Inset{top: 8}
                         align: Align{x: 0.5, y: 0.5} // center horizontally and vertically
-
-                        LineH { draw_bg.color: #C8C8C8 }
 
                         account_prompt_label := Label {
                             width: Fit, height: Fit
-                            padding: Inset{left: 1, right: 1, top: 0, bottom: 0}
+                            padding: 0,
                             draw_text +: {
-                                color: #x6c6c6c
-                                text_style: REGULAR_TEXT {}
+                                color: (RBX_FG_SECONDARY)
+                                text_style: REGULAR_TEXT {font_size: 10.0}
                             }
-                            text: "Don't have an account?"
+                            text: "New to Robrix?"
                         }
 
-                        LineH { draw_bg.color: #C8C8C8 }
-                    }
-                    
-                    mode_toggle_button := RobrixIconButton {
-                        width: Fit, height: Fit
-                        padding: Inset{left: 15, right: 15, top: 10, bottom: 10}
-                        margin: Inset{bottom: 5}
-                        align: Align{x: 0.5, y: 0.5}
-                        text: "Sign up here"
+                        mode_toggle_button := RobrixIconButton {
+                            width: Fit, height: Fit
+                            padding: Inset{left: 4, right: 4, top: 4, bottom: 4}
+                            align: Align{x: 0.5, y: 0.5}
+                            draw_bg +: {
+                                color: (COLOR_TRANSPARENT)
+                                color_hover: (COLOR_TRANSPARENT)
+                                color_down: (COLOR_TRANSPARENT)
+                                border_color: (COLOR_TRANSPARENT)
+                                border_color_hover: (COLOR_TRANSPARENT)
+                                border_color_down: (COLOR_TRANSPARENT)
+                            }
+                            draw_text +: {
+                                color: (RBX_ACCENT)
+                                color_hover: (RBX_ACCENT_HOVER)
+                                color_down: (RBX_ACCENT_PRESSED)
+                                text_style: TITLE_TEXT {font_size: 11.0}
+                            }
+                            text: "Create an account"
+                        }
                     }
 
                     // Cancel button for add-account mode (hidden by default)
@@ -434,6 +548,62 @@ script_mod! {
                         text: "Cancel"
                         visible: false
                     }
+
+                    // Reassuring status footer (decorative; mirrors the reference design).
+                    LineH {
+                        width: 422
+                        margin: Inset{top: 12, bottom: 8}
+                        draw_bg.color: (RBX_DIVIDER)
+                    }
+
+                    View {
+                        width: 422, height: Fit
+                        flow: Right
+                        align: Align{x: 0.5, y: 0.5}
+                        spacing: 8.0
+
+                        footer_secure_label := Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "Secure session"
+                        }
+                        Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "·"
+                        }
+                        footer_selfhost_label := Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "Self-host ready"
+                        }
+                        Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "·"
+                        }
+                        footer_matrix_label := Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "Matrix connected"
+                        }
+                    }
+                    } // end centered content column
                 }
 
                 // The modal that pops up to display login status messages,
@@ -458,7 +628,7 @@ script_mod! {
                                 color: (COLOR_PRIMARY)
                                 border_radius: 8.0
                                 border_size: 1.0
-                                border_color: #D8D8D8
+                                border_color: (RBX_STROKE_SOFT)
                             }
 
                             proxy_settings_header := View {
@@ -489,7 +659,7 @@ script_mod! {
                                 flow: Down
                                 show_bg: true
                                 draw_bg +: {
-                                    color: #F8F8FA
+                                    color: (RBX_BG_SURFACE_SUBTLE)
                                     border_radius: (RADIUS_LG)
                                 }
                                 padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
@@ -512,9 +682,9 @@ script_mod! {
                                         active: false
                                         draw_bg +: {
                                             size: 20.0
-                                            color_active: (COLOR_ACTIVE_PRIMARY)
-                                            border_color_active: (COLOR_ACTIVE_PRIMARY)
-                                            mark_color_active: #fff
+                                            color_active: (RBX_ACCENT)
+                                            border_color_active: (RBX_ACCENT)
+                                            mark_color_active: (RBX_FG_ON_ACCENT)
                                         }
                                     }
                                 }
@@ -790,16 +960,26 @@ impl LoginScreen {
         self.view.button(cx, ids!(proxy_settings_save_button))
             .set_text(cx, tr_key(self.app_language, "login.proxy_settings.save"));
         self.view.label(cx, ids!(sso_prompt_label))
-            .set_text(cx, tr_key(self.app_language, "login.sso.prompt"));
+            .set_text(cx, tr_key(self.app_language, "login.divider.or_continue_with"));
         let login_status_modal_inner = self.view.login_status_modal(cx, ids!(login_status_modal_inner));
         login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login_status_modal.title"));
         login_status_modal_inner.button_ref(cx).set_text(cx, tr_key(self.app_language, "login_status_modal.button.cancel"));
         self.view.label(cx, ids!(title))
-            .set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
+            .set_text(cx, tr_key(self.app_language, "login.subtitle.tagline"));
         self.view.button(cx, ids!(login_button))
-            .set_text(cx, tr_key(self.app_language, "login.button.login"));
+            .set_text(cx, tr_key(self.app_language, "login.button.sign_in_securely"));
         self.view.label(cx, ids!(account_prompt_label))
-            .set_text(cx, tr_key(self.app_language, "login.account_prompt.no_account"));
+            .set_text(cx, tr_key(self.app_language, "login.account_prompt.new_to_robrix"));
+        self.view.button(cx, ids!(mode_toggle_button))
+            .set_text(cx, tr_key(self.app_language, "login.mode_toggle.create_account"));
+        self.view.label(cx, ids!(footer_secure_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.secure_session"));
+        self.view.label(cx, ids!(footer_selfhost_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.self_host_ready"));
+        self.view.label(cx, ids!(footer_matrix_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.matrix_connected"));
+        self.view.label(cx, ids!(agent_badge_label))
+            .set_text(cx, tr_key(self.app_language, "login.badge.agent_ready"));
     }
 
     fn set_use_proxy_enabled(&mut self, cx: &mut Cx, enabled: bool) {
@@ -1090,7 +1270,7 @@ impl WidgetMatchEvent for LoginScreen {
             self.reset_sso_state(cx);
             self.reset_oidc_screen_state(cx);
             // Reset the UI back to normal login mode
-            self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
+            self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.subtitle.tagline"));
             cancel_button.set_visible(cx, false);
             mode_toggle_button.set_visible(cx, true);
             cx.action(LoginAction::CancelAddAccount);
@@ -1341,7 +1521,7 @@ impl WidgetMatchEvent for LoginScreen {
                     }
                     self.discovery_pending = false;
                     self.view.button(cx, ids!(login_button))
-                        .set_text(cx, tr_key(self.app_language, "login.button.login"));
+                        .set_text(cx, tr_key(self.app_language, "login.button.sign_in_securely"));
                     let resolved = login_mode(caps.as_ref());
                     self.login_mode = Some(resolved);
                     match resolved {
@@ -1364,7 +1544,7 @@ impl WidgetMatchEvent for LoginScreen {
                     self.clear_homeserver_classification();
                     self.show_password_login_branch(cx);
                     self.view.button(cx, ids!(login_button))
-                        .set_text(cx, tr_key(self.app_language, "login.button.login"));
+                        .set_text(cx, tr_key(self.app_language, "login.button.sign_in_securely"));
                     login_status_modal_inner.set_title(
                         cx,
                         tr_key(self.app_language, "login.status.login_failed"),
@@ -1426,7 +1606,7 @@ impl WidgetMatchEvent for LoginScreen {
                     password_input.set_text(cx, "");
                     homeserver_input.set_text(cx, "");
                     // Reset title and buttons in case we were in add-account mode
-                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.subtitle.tagline"));
                     cancel_button.set_visible(cx, false);
                     mode_toggle_button.set_visible(cx, true);
                     login_status_modal.close(cx);
@@ -1483,7 +1663,7 @@ impl WidgetMatchEvent for LoginScreen {
                     password_input.set_text(cx, "");
                     homeserver_input.set_text(cx, "");
                     // Reset title and buttons
-                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.subtitle.tagline"));
                     cancel_button.set_visible(cx, false);
                     mode_toggle_button.set_visible(cx, true);
                     login_status_modal.close(cx);
@@ -1693,5 +1873,121 @@ mod tests {
     #[test]
     fn capability_probe_is_not_required_while_oidc_login_is_in_flight() {
         assert!(!should_probe_homeserver(None, true));
+    }
+
+    /// User-visible copy keys added by the login redesign. Every key must
+    /// resolve in both dictionaries (see the two tests below).
+    const LOGIN_REDESIGN_KEYS: &[&str] = &[
+        "login.subtitle.tagline",
+        "login.button.sign_in_securely",
+        "login.divider.or_continue_with",
+        "login.account_prompt.new_to_robrix",
+        "login.mode_toggle.create_account",
+        "login.footer.secure_session",
+        "login.footer.self_host_ready",
+        "login.footer.matrix_connected",
+        "login.badge.agent_ready",
+    ];
+
+    #[test]
+    fn test_login_redesign_i18n_keys_exist_en() {
+        use crate::i18n::{tr_key, AppLanguage};
+        for key in LOGIN_REDESIGN_KEYS {
+            let v = tr_key(AppLanguage::English, key);
+            assert!(!v.is_empty(), "missing EN i18n for {key}");
+            // tr_key falls back to the key name when the entry is absent.
+            assert_ne!(v, *key, "EN i18n for {key} is missing (fell back to the key name)");
+        }
+    }
+
+    #[test]
+    fn test_login_redesign_i18n_keys_exist_zh() {
+        use crate::i18n::{tr_key, AppLanguage};
+        for key in LOGIN_REDESIGN_KEYS {
+            let zh = tr_key(AppLanguage::ChineseSimplified, key);
+            let en = tr_key(AppLanguage::English, key);
+            assert!(!zh.is_empty(), "missing ZH i18n for {key}");
+            assert_ne!(zh, *key, "ZH i18n for {key} is missing (fell back to the key name)");
+            // tr_key falls back to EN when the zh-CN entry is missing, so a
+            // distinct zh-CN string is the real proof the key was translated.
+            assert_ne!(zh, en, "ZH i18n for {key} is missing (fell back to the English string)");
+        }
+    }
+
+    #[test]
+    fn test_login_screen_source_wires_accent_token() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("RBX_ACCENT"), "the primary CTA should use the teal RBX_ACCENT token");
+        assert!(src.contains("login_button"), "the login_button widget id must be preserved");
+        // Build the legacy-blue needle from parts so this assertion's own source
+        // text does not contain the contiguous token and self-trip include_str!.
+        let legacy_primary = concat!("COLOR_ACTIVE", "_PRIMARY");
+        assert!(
+            !src.contains(legacy_primary),
+            "login screen must not reference the deprecated legacy primary-blue token",
+        );
+    }
+
+    #[test]
+    fn test_login_screen_source_uses_desktop_card_contract() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("width: 494"), "desktop login card should use the wider reference-card width");
+        assert!(src.contains("border_radius: (RBX_RADIUS_LG)"), "login card should use RBX_RADIUS_LG");
+        assert!(src.contains("login_button := RobrixIconButton"));
+        assert!(src.contains("width: 422"), "primary form controls should align to the desktop content column");
+
+        for forbidden in [
+            concat!("#", "0000"),
+            concat!("#", "x00000000"),
+            concat!("#", "fff"),
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "login screen should not contain bare color literal {forbidden}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_login_inputs_do_not_inherit_legacy_blue_focus_border() {
+        let src = include_str!("login_screen.rs");
+        let input_style = src
+            .split("mod.widgets.LoginTextInput = RobrixTextInput")
+            .nth(1)
+            .expect("LoginTextInput style should exist")
+            .split("mod.widgets.LoginScreen")
+            .next()
+            .expect("LoginTextInput style should precede LoginScreen");
+        assert!(input_style.contains("border_color_hover: (RBX_STROKE_STRONG)"));
+        assert!(input_style.contains("border_color_focus: (RBX_ACCENT)"));
+        assert!(input_style.contains("border_color_down: (RBX_STROKE_STRONG)"));
+        assert!(input_style.contains("clip_y: true"));
+        assert!(input_style.contains("draw_cursor +:"));
+        assert!(src.contains("homeserver_input := mod.widgets.LoginTextInput"));
+        let legacy_homeserver_input = concat!("homeserver_input := ", "RobrixTextInput");
+        assert!(
+            !src.contains(legacy_homeserver_input),
+            "homeserver input should use the login-specific input style, not the legacy-blue global input",
+        );
+    }
+
+    #[test]
+    fn test_login_form_uses_non_overlay_layout_around_inputs() {
+        let src = include_str!("login_screen.rs");
+        let card_needle = concat!("login_card", " := RoundedView");
+        let column_needle = concat!("form_column", " := View");
+        let hint_row_needle = concat!("homeserver_hint_row", " := View");
+        let old_hint_needle = concat!(
+            "LineH { draw_bg.color: (RBX_STROKE_SOFT) }",
+            "\n\n                            ",
+            "homeserver_hint_label",
+        );
+        assert!(src.contains(card_needle));
+        assert!(src.contains(column_needle));
+        assert!(src.contains(hint_row_needle));
+        assert!(
+            !src.contains(old_hint_needle),
+            "homeserver hint should not be sandwiched between divider lines directly under the input",
+        );
     }
 }
