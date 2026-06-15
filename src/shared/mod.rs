@@ -6,6 +6,8 @@ pub mod animated_image;
 pub mod avatar;
 pub mod collapsible_header;
 pub mod design_tokens;
+pub mod status_badge;
+pub mod toggle_switch;
 pub mod expand_arrow;
 pub mod confirmation_modal;
 pub mod file_upload_modal;
@@ -39,6 +41,9 @@ pub fn script_mod(vm: &mut ScriptVm) {
     design_tokens::script_mod(vm);
     helpers::script_mod(vm);
     icon_button::script_mod(vm);
+    // Redesigned settings components (depend on design_tokens + icon_button).
+    status_badge::script_mod(vm);
+    toggle_switch::script_mod(vm);
     expand_arrow::script_mod(vm);
     unread_badge::script_mod(vm);
     collapsible_header::script_mod(vm);

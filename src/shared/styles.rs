@@ -479,3 +479,82 @@ pub fn apply_primary_button_style(cx: &mut Cx, button: &mut ButtonRef) {
         }
     });
 }
+
+// =============================================================================
+// New (RBX_*) button styles for the redesigned settings UI. These mirror the
+// helpers above but use the teal `RBX_ACCENT` family + the semantic token layer
+// (see `design_tokens.rs`). Inside `script_apply_eval!`, DSL tokens are
+// referenced directly as `mod.widgets.RBX_*` (no `#()` wrapping).
+// =============================================================================
+
+/// Applies the teal accent (primary CTA) styling to the given button — solid
+/// `RBX_ACCENT` fill with on-accent (white) text. Use for the mobile settings
+/// primary actions (e.g. a "Save changes" button).
+pub fn apply_accent_button_style(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            color: mod.widgets.RBX_ACCENT,
+            color_hover: mod.widgets.RBX_ACCENT_HOVER,
+            color_down: mod.widgets.RBX_ACCENT_PRESSED,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_FG_ON_ACCENT,
+            color_hover: mod.widgets.RBX_FG_ON_ACCENT,
+            color_down: mod.widgets.RBX_FG_ON_ACCENT,
+        }
+        draw_icon +: {
+            color: mod.widgets.RBX_FG_ON_ACCENT,
+        }
+    });
+}
+
+/// Applies the *selected* segmented-tab styling — text-only: a transparent
+/// background with teal (`RBX_ACCENT`) text marking the active category.
+pub fn apply_segment_selected_style(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            border_size: 0.0,
+            color: #0000,
+            color_hover: #0000,
+            color_down: #0000,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_ACCENT,
+            color_hover: mod.widgets.RBX_ACCENT,
+            color_down: mod.widgets.RBX_ACCENT,
+        }
+        draw_icon +: {
+            color: mod.widgets.RBX_ACCENT,
+        }
+    });
+}
+
+/// Applies the *idle* (unselected) segmented-tab styling — text-only: a
+/// transparent background with secondary-gray text.
+pub fn apply_segment_idle_style(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            border_size: 0.0,
+            color: #0000,
+            color_hover: #0000,
+            color_down: #0000,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_FG_SECONDARY,
+            color_hover: mod.widgets.RBX_FG_SECONDARY,
+            color_down: mod.widgets.RBX_FG_SECONDARY,
+        }
+        draw_icon +: {
+            color: mod.widgets.RBX_FG_SECONDARY,
+        }
+    });
+}

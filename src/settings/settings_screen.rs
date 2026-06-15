@@ -2,7 +2,7 @@
 use makepad_widgets::*;
 use url::Url;
 
-use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}, styles::{apply_neutral_button_style, apply_primary_button_style}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
+use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}, styles::{apply_neutral_button_style, apply_primary_button_style, apply_segment_selected_style, apply_segment_idle_style}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
 
 const CONTRIBUTE_REPO_URL: &str = "https://github.com/Project-Robius-China/robrix2";
 
@@ -18,7 +18,16 @@ script_mod! {
         width: Fill, height: Fill,
         flow: Overlay
 
-        View {
+        // The settings screen is the SAME CachedWidget instance on desktop and
+        // mobile (see home_screen.rs). To redesign ONLY the mobile layout without
+        // touching desktop, the whole screen is wrapped in an AdaptiveView whose
+        // `Desktop` variant is the original layout verbatim and whose `Mobile`
+        // variant is the redesigned one. The variant is chosen by the same
+        // `ViewModeOverride::variant_selector()` the NavigationTabBar uses.
+        settings_adaptive := AdaptiveView {
+            width: Fill, height: Fill
+
+            Desktop := View {
             padding: Inset{top: (SPACE_SM), left: (SETTINGS_CONTENT_PADDING), right: (SETTINGS_CONTENT_PADDING), bottom: (SETTINGS_CONTENT_PADDING)},
             flow: Down
 
@@ -592,6 +601,264 @@ script_mod! {
             }
         }
 
+            // =================================================================
+            // MOBILE variant — the redesigned settings screen (spec §5.1).
+            // Page canvas + page title + segmented category tabs + a body
+            // PageFlip that reuses the SAME page / sub-widget / control ids as
+            // the Desktop variant, so all existing Rust logic drives it
+            // unchanged (only the active AdaptiveView variant is instantiated).
+            // =================================================================
+            Mobile := View {
+                width: Fill, height: Fill
+                flow: Down
+                show_bg: true
+                draw_bg +: { color: (RBX_BG_CANVAS) }
+
+                // ---- Header: page title + close button ----
+                View {
+                    width: Fill, height: Fit
+                    flow: Right
+                    align: Align{y: 0.5}
+                    padding: Inset{top: (SPACE_LG), left: (SPACE_LG), right: (SPACE_MD), bottom: (SPACE_SM)}
+                    spacing: (SPACE_SM)
+
+                    m_settings_title := Label {
+                        width: Fill, height: Fit
+                        draw_text +: {
+                            color: (RBX_FG_PRIMARY)
+                            text_style: RBX_TEXT_PAGE_TITLE {}
+                        }
+                        text: "Settings"
+                    }
+
+                    // Reuses the `close_button` id so the existing close handler
+                    // (click / back / Escape -> CloseSettings) works on mobile too.
+                    close_button := RobrixNeutralIconButton {
+                        width: Fit, height: Fit,
+                        spacing: 0, margin: 0,
+                        padding: (SPACE_SM),
+                        draw_bg +: { border_radius: (RBX_RADIUS_PILL) }
+                        draw_icon.svg: (ICON_CLOSE)
+                        icon_walk: Walk{width: 14, height: 14}
+                    }
+                }
+
+                // ---- Category tabs: text-only (transparent bg; selected = teal
+                //      text, idle = gray text; recolored at runtime after the
+                //      variant swap). Wraps on narrow widths. ----
+                m_tabs_row := View {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true}
+                    align: Align{y: 0.5}
+                    spacing: (SPACE_XS)
+                    padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: 0, bottom: (SPACE_SM)}
+
+                    m_tab_account := RobrixNeutralIconButton {
+                        width: Fit, height: Fit,
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                        spacing: 0, margin: 0,
+                        icon_walk: Walk{width: 0, height: 0, margin: 0}
+                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
+                        draw_text +: { color: (RBX_FG_SECONDARY) }
+                        text: "Account"
+                    }
+                    m_tab_preferences := RobrixNeutralIconButton {
+                        width: Fit, height: Fit,
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                        spacing: 0, margin: 0,
+                        icon_walk: Walk{width: 0, height: 0, margin: 0}
+                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
+                        draw_text +: { color: (RBX_FG_SECONDARY) }
+                        text: "Preferences"
+                    }
+                    m_tab_devices := RobrixNeutralIconButton {
+                        width: Fit, height: Fit,
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                        spacing: 0, margin: 0,
+                        icon_walk: Walk{width: 0, height: 0, margin: 0}
+                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
+                        draw_text +: { color: (RBX_FG_SECONDARY) }
+                        text: "Devices"
+                    }
+                    m_tab_labs := RobrixNeutralIconButton {
+                        width: Fit, height: Fit,
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                        spacing: 0, margin: 0,
+                        icon_walk: Walk{width: 0, height: 0, margin: 0}
+                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
+                        draw_text +: { color: (RBX_FG_SECONDARY) }
+                        text: "Labs"
+                    }
+                    m_tab_contribute := RobrixNeutralIconButton {
+                        width: Fit, height: Fit,
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                        spacing: 0, margin: 0,
+                        icon_walk: Walk{width: 0, height: 0, margin: 0}
+                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
+                        draw_text +: { color: (RBX_FG_SECONDARY) }
+                        text: "Contribute"
+                    }
+                }
+
+                // hairline under the tabs
+                View {
+                    width: Fill, height: 1.0
+                    show_bg: true
+                    draw_bg +: { color: (RBX_STROKE_SOFT) }
+                }
+
+                // ---- Body: one page per category (same ids as Desktop) ----
+                settings_sections := PageFlip {
+                    width: Fill, height: Fill
+                    lazy_init: true,
+                    active_page: @account_settings_page
+
+                    account_settings_page := ScrollXYView {
+                        width: Fill, height: Fill
+                        flow: Down
+                        padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: (SPACE_MD), bottom: (SPACE_XXL)}
+                        account_settings := AccountSettings {}
+                    }
+
+                    preferences_settings_page := ScrollXYView {
+                        width: Fill, height: Fill
+                        flow: Down
+                        spacing: (SPACE_MD)
+                        padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: (SPACE_MD), bottom: (SPACE_XXL)}
+                        app_settings := AppSettings {}
+                    }
+
+                    devices_settings_page := ScrollXYView {
+                        width: Fill, height: Fill
+                        flow: Down
+                        padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: (SPACE_MD), bottom: (SPACE_XXL)}
+                        devices_settings := DevicesScreen {}
+                    }
+
+                    labs_settings_page := ScrollXYView {
+                        width: Fill, height: Fill
+                        flow: Down
+                        spacing: (SPACE_MD)
+                        padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: (SPACE_MD), bottom: (SPACE_XXL)}
+                        bot_settings := BotSettings {}
+                        translation_settings := TranslationSettings {}
+                    }
+
+                    contribute_settings_page := ScrollXYView {
+                        width: Fill, height: Fill
+                        flow: Down
+                        spacing: (SPACE_MD)
+                        padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: (SPACE_MD), bottom: (SPACE_XXL)}
+
+                        // About card (SectionCard recipe, spec §4.1)
+                        RoundedView {
+                            width: Fill, height: Fit
+                            flow: Down
+                            spacing: (SPACE_XS)
+                            padding: (SPACE_LG)
+                            show_bg: true
+                            draw_bg +: {
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_MD)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
+                            }
+
+                            about_title := Label {
+                                width: Fill, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_CARD_TITLE {}
+                                }
+                                text: "About Robrix"
+                            }
+                            about_description := Label {
+                                width: Fill, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_SECONDARY)
+                                    text_style: RBX_TEXT_BODY {}
+                                }
+                                text: "Robrix is a multi-platform Matrix chat client built with Makepad and Robius."
+                            }
+                            contribute_current_version_label := Label {
+                                width: Fill, height: Fit
+                                margin: Inset{top: (SPACE_XS)}
+                                draw_text +: {
+                                    color: (RBX_FG_TERTIARY)
+                                    text_style: RBX_TEXT_META {}
+                                }
+                                text: "Current version: 0.0.0"
+                            }
+                            contribute_check_update_button := RobrixIconButton {
+                                width: Fit, height: Fit,
+                                margin: Inset{top: (SPACE_XS)}
+                                padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                                spacing: 0,
+                                icon_walk: Walk{width: 0, height: 0, margin: 0}
+                                draw_bg +: {
+                                    color: (RBX_ACCENT)
+                                    color_hover: (RBX_ACCENT_HOVER)
+                                    color_down: (RBX_ACCENT_PRESSED)
+                                    border_radius: (RBX_RADIUS_SM)
+                                }
+                                draw_text +: {
+                                    color: (RBX_FG_ON_ACCENT)
+                                    color_hover: (RBX_FG_ON_ACCENT)
+                                    color_down: (RBX_FG_ON_ACCENT)
+                                }
+                                text: "Check for Updates"
+                            }
+                        }
+
+                        // Contribute card
+                        RoundedView {
+                            width: Fill, height: Fit
+                            flow: Down
+                            spacing: (SPACE_XS)
+                            padding: (SPACE_LG)
+                            show_bg: true
+                            draw_bg +: {
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_MD)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
+                            }
+
+                            contribute_title := Label {
+                                width: Fill, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_CARD_TITLE {}
+                                }
+                                text: "Contribute"
+                            }
+                            contribute_description := Label {
+                                width: Fill, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_SECONDARY)
+                                    text_style: RBX_TEXT_BODY {}
+                                }
+                                text: "Contribute to Robrix on GitHub:"
+                            }
+                            contribute_repo_link := LinkLabel {
+                                width: Fit, height: Fit,
+                                margin: Inset{top: (SPACE_XS)}
+                                spacing: 0,
+                                align: Align{x: 0.0}
+                                icon_walk: Walk{width: 0, height: 0}
+                                draw_text +: {
+                                    text_style: RBX_TEXT_BODY {}
+                                    color: (RBX_LINK),
+                                    color_hover: (RBX_ACCENT),
+                                }
+                                text: "https://github.com/Project-Robius-China/robrix2"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // We want all modals to appear in front of the settings screen.
         create_wallet_modal := Modal {
             content +: {
@@ -631,6 +898,10 @@ pub struct SettingsScreen {
 
     #[rust] selected_category: SettingsCategory,
     #[rust] app_language: AppLanguage,
+    /// Fires the frame AFTER the Desktop/Mobile AdaptiveView swaps in its variant,
+    /// so we can (re)apply tab styling + labels onto the now-instantiated widgets
+    /// (set_variant_selector only takes effect on the next draw — see AdaptiveView).
+    #[rust] resync_frame: NextFrame,
     #[rust] preferences_use_proxy_enabled: bool,
     #[rust] preferences_proxy_layout_width: f64,
     #[rust] language_popup_visible: bool,
@@ -648,6 +919,13 @@ impl Widget for SettingsScreen {
         }
         self.sync_update_widgets_text(cx);
         self.view.handle_event(cx, event, scope);
+
+        // After the AdaptiveView swaps Desktop<->Mobile, the new variant's
+        // widgets exist only now — (re)apply their labels and tab styling.
+        if self.resync_frame.is_event(event).is_some() {
+            self.sync_app_language(cx);
+            self.sync_selected_category(cx);
+        }
 
         // Close the pane if:
         // 1. The close button is clicked,
@@ -781,6 +1059,24 @@ impl Widget for SettingsScreen {
                 self.set_selected_category(cx, SettingsCategory::Contribute);
             }
 
+            // Mobile segmented tabs (only the active AdaptiveView variant's
+            // buttons exist, so the desktop & mobile handlers can coexist).
+            if self.view.button(cx, ids!(m_tab_account)).clicked(actions) {
+                self.set_selected_category(cx, SettingsCategory::Account);
+            }
+            else if self.view.button(cx, ids!(m_tab_preferences)).clicked(actions) {
+                self.set_selected_category(cx, SettingsCategory::Preferences);
+            }
+            else if self.view.button(cx, ids!(m_tab_devices)).clicked(actions) {
+                self.set_selected_category(cx, SettingsCategory::Devices);
+            }
+            else if self.view.button(cx, ids!(m_tab_labs)).clicked(actions) {
+                self.set_selected_category(cx, SettingsCategory::Labs);
+            }
+            else if self.view.button(cx, ids!(m_tab_contribute)).clicked(actions) {
+                self.set_selected_category(cx, SettingsCategory::Contribute);
+            }
+
             if !self.is_update_checking && (
                 self.view.button(cx, ids!(contribute_check_update_button)).clicked(actions)
             ) {
@@ -792,6 +1088,9 @@ impl Widget for SettingsScreen {
             }
 
             for action in actions {
+                if let Some(crate::settings::app_preferences::AppPreferencesAction::ViewModeChanged(new_mode)) = action.downcast_ref() {
+                    self.apply_settings_view_mode(cx, *new_mode);
+                }
                 if let HtmlLinkAction::Clicked { url, .. } = action.as_widget_action().cast() {
                     if url == CONTRIBUTE_REPO_URL {
                         if let Err(e) = robius_open::Uri::new(&url).open() {
@@ -916,6 +1215,24 @@ impl SettingsScreen {
             .set_text(cx, tr(self.app_language, I18nKey::SettingsCategoryLabs));
         self.view
             .button(cx, ids!(category_contribute_button))
+            .set_text(cx, tr(self.app_language, I18nKey::SettingsCategoryContribute));
+        // Mobile variant: page title + segmented category tabs (no-ops on the
+        // desktop variant, where these ids don't exist). Devices keeps its
+        // static label, matching the desktop category button.
+        self.view
+            .label(cx, ids!(m_settings_title))
+            .set_text(cx, tr(self.app_language, I18nKey::AllSettingsTitle));
+        self.view
+            .button(cx, ids!(m_tab_account))
+            .set_text(cx, tr(self.app_language, I18nKey::SettingsCategoryAccount));
+        self.view
+            .button(cx, ids!(m_tab_preferences))
+            .set_text(cx, tr(self.app_language, I18nKey::SettingsCategoryPreferences));
+        self.view
+            .button(cx, ids!(m_tab_labs))
+            .set_text(cx, tr(self.app_language, I18nKey::SettingsCategoryLabs));
+        self.view
+            .button(cx, ids!(m_tab_contribute))
             .set_text(cx, tr(self.app_language, I18nKey::SettingsCategoryContribute));
         self.view
             .label(cx, ids!(preferences_language_title))
@@ -1126,6 +1443,22 @@ impl SettingsScreen {
         }
     }
 
+    /// Drives the `settings_adaptive` AdaptiveView's Desktop/Mobile choice from
+    /// the app's view-mode override (mirrors `NavigationTabBar::apply_view_mode`),
+    /// so a forced wide/narrow layout also flips the settings screen.
+    fn apply_settings_view_mode(&mut self, cx: &mut Cx, mode: crate::settings::app_preferences::ViewModeOverride) {
+        if let Some(mut adaptive) = self.view
+            .child_by_path(ids!(settings_adaptive))
+            .borrow_mut::<AdaptiveView>()
+        {
+            adaptive.set_variant_selector(mode.variant_selector());
+        }
+        // The variant only swaps in on the next draw; re-sync labels + tab
+        // styling onto the freshly-instantiated variant on the frame after that.
+        self.resync_frame = cx.new_next_frame();
+        self.view.redraw(cx);
+    }
+
     fn set_selected_category(&mut self, cx: &mut Cx, category: SettingsCategory) {
         self.selected_category = category;
         self.sync_selected_category(cx);
@@ -1173,43 +1506,47 @@ impl SettingsScreen {
             self.view.app_settings(cx, ids!(app_settings)).populate(cx, &prefs, self.app_language);
         }
 
-        let mut category_account_button = self.view.button(cx, ids!(category_account_button));
-        let mut category_preferences_button = self.view.button(cx, ids!(category_preferences_button));
-        let mut category_devices_button = self.view.button(cx, ids!(category_devices_button));
-        let mut category_labs_button = self.view.button(cx, ids!(category_labs_button));
-        let mut category_contribute_button = self.view.button(cx, ids!(category_contribute_button));
+        // Style only the active variant's tabs. effective_is_desktop matches the
+        // AdaptiveView's Desktop/Mobile choice; the inactive variant's buttons
+        // don't exist, so we skip them rather than styling empty refs.
+        let is_desktop = crate::settings::app_preferences::effective_is_desktop(cx);
+        if is_desktop {
+            let mut category_account_button = self.view.button(cx, ids!(category_account_button));
+            let mut category_preferences_button = self.view.button(cx, ids!(category_preferences_button));
+            let mut category_devices_button = self.view.button(cx, ids!(category_devices_button));
+            let mut category_labs_button = self.view.button(cx, ids!(category_labs_button));
+            let mut category_contribute_button = self.view.button(cx, ids!(category_contribute_button));
 
-        if show_account {
-            apply_primary_button_style(cx, &mut category_account_button);
-        } else {
-            apply_neutral_button_style(cx, &mut category_account_button);
-        }
-        if show_preferences {
-            apply_primary_button_style(cx, &mut category_preferences_button);
-        } else {
-            apply_neutral_button_style(cx, &mut category_preferences_button);
-        }
-        if show_devices {
-            apply_primary_button_style(cx, &mut category_devices_button);
-        } else {
-            apply_neutral_button_style(cx, &mut category_devices_button);
-        }
-        if show_labs {
-            apply_primary_button_style(cx, &mut category_labs_button);
-        } else {
-            apply_neutral_button_style(cx, &mut category_labs_button);
-        }
-        if show_contribute {
-            apply_primary_button_style(cx, &mut category_contribute_button);
-        } else {
-            apply_neutral_button_style(cx, &mut category_contribute_button);
-        }
+            if show_account { apply_primary_button_style(cx, &mut category_account_button); } else { apply_neutral_button_style(cx, &mut category_account_button); }
+            if show_preferences { apply_primary_button_style(cx, &mut category_preferences_button); } else { apply_neutral_button_style(cx, &mut category_preferences_button); }
+            if show_devices { apply_primary_button_style(cx, &mut category_devices_button); } else { apply_neutral_button_style(cx, &mut category_devices_button); }
+            if show_labs { apply_primary_button_style(cx, &mut category_labs_button); } else { apply_neutral_button_style(cx, &mut category_labs_button); }
+            if show_contribute { apply_primary_button_style(cx, &mut category_contribute_button); } else { apply_neutral_button_style(cx, &mut category_contribute_button); }
 
-        category_account_button.reset_hover(cx);
-        category_preferences_button.reset_hover(cx);
-        category_devices_button.reset_hover(cx);
-        category_labs_button.reset_hover(cx);
-        category_contribute_button.reset_hover(cx);
+            category_account_button.reset_hover(cx);
+            category_preferences_button.reset_hover(cx);
+            category_devices_button.reset_hover(cx);
+            category_labs_button.reset_hover(cx);
+            category_contribute_button.reset_hover(cx);
+        } else {
+            let mut m_tab_account = self.view.button(cx, ids!(m_tab_account));
+            let mut m_tab_preferences = self.view.button(cx, ids!(m_tab_preferences));
+            let mut m_tab_devices = self.view.button(cx, ids!(m_tab_devices));
+            let mut m_tab_labs = self.view.button(cx, ids!(m_tab_labs));
+            let mut m_tab_contribute = self.view.button(cx, ids!(m_tab_contribute));
+
+            if show_account { apply_segment_selected_style(cx, &mut m_tab_account); } else { apply_segment_idle_style(cx, &mut m_tab_account); }
+            if show_preferences { apply_segment_selected_style(cx, &mut m_tab_preferences); } else { apply_segment_idle_style(cx, &mut m_tab_preferences); }
+            if show_devices { apply_segment_selected_style(cx, &mut m_tab_devices); } else { apply_segment_idle_style(cx, &mut m_tab_devices); }
+            if show_labs { apply_segment_selected_style(cx, &mut m_tab_labs); } else { apply_segment_idle_style(cx, &mut m_tab_labs); }
+            if show_contribute { apply_segment_selected_style(cx, &mut m_tab_contribute); } else { apply_segment_idle_style(cx, &mut m_tab_contribute); }
+
+            m_tab_account.reset_hover(cx);
+            m_tab_preferences.reset_hover(cx);
+            m_tab_devices.reset_hover(cx);
+            m_tab_labs.reset_hover(cx);
+            m_tab_contribute.reset_hover(cx);
+        }
         self.view.redraw(cx);
     }
 
@@ -1282,6 +1619,9 @@ impl SettingsScreen {
 
     /// Fetches the current user's profile and uses it to populate the settings screen.
     pub fn populate(&mut self, cx: &mut Cx, own_profile: Option<UserProfile>, bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_prefs: &AppPreferences, app_language: AppLanguage) {
+        // Ensure the AdaptiveView has selected the right Desktop/Mobile variant
+        // before we populate it, so populate targets the live variant's widgets.
+        self.apply_settings_view_mode(cx, app_prefs.view_mode);
         if let Some(profile) = own_profile.or_else(|| get_own_profile(cx)) {
             self.view.account_settings(cx, ids!(account_settings)).populate(cx, profile);
         } else {
