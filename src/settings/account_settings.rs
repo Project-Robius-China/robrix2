@@ -20,9 +20,18 @@ script_mod! {
         width: Fill, height: Fit
         flow: Down
 
-        account_settings_title := TitleLabel {
-            text: "Account Settings"
-        }
+        // Desktop = original layout (verbatim); Mobile = minimal redesign.
+        // Both variants share the same child ids so the Rust logic is reused.
+        account_adaptive := AdaptiveView {
+            width: Fill, height: Fit
+
+            Desktop := View {
+            width: Fill, height: Fit
+            flow: Down
+
+            account_settings_title := TitleLabel {
+                text: "Account Settings"
+            }
 
         verification_banner_verified := RoundedView {
             visible: false
@@ -481,6 +490,369 @@ script_mod! {
                 }
             }
         }
+            } // end Desktop variant
+
+            // =================================================================
+            // MOBILE — minimal, consolidated account (agent-first: identity is
+            // secondary). Profile + name + user id + accounts live in ONE card;
+            // actions in a second card. Avatar upload/delete is desktop-only, so
+            // those buttons are kept (hidden) only to keep the Rust logic safe.
+            // =================================================================
+            Mobile := View {
+                width: Fill, height: Fit
+                flow: Down
+                spacing: (SPACE_MD)
+
+                // ---- verification banners (compact; same ids, RBX tokens) ----
+                verification_banner_verified := RoundedView {
+                    visible: false
+                    width: Fill, height: Fit
+                    flow: Right, align: Align{y: 0.5}
+                    padding: Inset{top: 9, bottom: 9, left: 12, right: 12}
+                    show_bg: true
+                    draw_bg +: {
+                        color: (RBX_SUCCESS_BG)
+                        border_color: (RBX_SUCCESS_FG)
+                        border_size: 1.0
+                        border_radius: (RBX_RADIUS_SM)
+                    }
+                    verification_verified_label := Label {
+                        width: Fill, height: Fit
+                        flow: Flow.Right{wrap: true}
+                        draw_text +: {
+                            color: (RBX_SUCCESS_FG),
+                            text_style: RBX_TEXT_BODY {},
+                        }
+                        text: "This device is verified and can access encrypted messages."
+                    }
+                }
+                verification_banner_unverified := RoundedView {
+                    visible: false
+                    width: Fill, height: Fit
+                    flow: Down, align: Align{y: 0.5}
+                    padding: Inset{top: 10, bottom: 12, left: 12, right: 12}
+                    show_bg: true
+                    draw_bg +: {
+                        color: (RBX_DANGER_BG)
+                        border_color: (RBX_DANGER_FG)
+                        border_size: 1.0
+                        border_radius: (RBX_RADIUS_SM)
+                    }
+                    verification_unverified_label := Label {
+                        width: Fill, height: Fit
+                        flow: Flow.Right{wrap: true}
+                        draw_text +: {
+                            color: (RBX_DANGER_FG),
+                            text_style: RBX_TEXT_BODY {},
+                        }
+                        text: "This device is not verified and can't view encrypted messages."
+                    }
+                    verification_unverified_hint_label := Label {
+                        width: Fill, height: Fit
+                        flow: Flow.Right{wrap: true}
+                        margin: Inset{top: 4, bottom: 1}
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY),
+                            text_style: RBX_TEXT_META {},
+                        }
+                        text: "Verify it from another client using this info:"
+                    }
+                    unverified_device_info_label := Label {
+                        width: Fill, height: Fit
+                        padding: Inset{left: 8}
+                        flow: Flow.Right{wrap: true}
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY),
+                            text_style: RBX_TEXT_META {},
+                        }
+                        text: ""
+                    }
+                }
+
+                // ---- Card 1: identity + accounts (consolidated) ----
+                RoundedView {
+                    width: Fill, height: Fit
+                    flow: Down
+                    spacing: (SPACE_SM)
+                    padding: (SPACE_LG)
+                    show_bg: true
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        border_radius: (RBX_RADIUS_MD)
+                        border_size: 1.0
+                        border_color: (RBX_STROKE_SOFT)
+                    }
+
+                    // hero: avatar + name + user id
+                    View {
+                        width: Fill, height: Fit
+                        flow: Right
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_MD)
+
+                        our_own_avatar := Avatar {
+                            width: 56, height: 56
+                            text_view +: {
+                                text +: {
+                                    draw_text +: {
+                                        text_style: theme.font_regular { font_size: 22.0 }
+                                    }
+                                }
+                            }
+                        }
+
+                        View {
+                            width: Fill, height: Fit
+                            flow: Down
+                            spacing: (SPACE_XS)
+
+                            display_name_input := RobrixTextInput {
+                                width: Fill, height: Fit
+                                empty_text: "Add a display name..."
+                            }
+
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_XS)
+
+                                user_id := Label {
+                                    width: Fill, height: Fit
+                                    flow: Flow.Right{wrap: true}
+                                    draw_text +: {
+                                        color: (RBX_FG_SECONDARY),
+                                        text_style: RBX_TEXT_META {},
+                                    }
+                                    text: "You are not logged in."
+                                }
+
+                                copy_user_id_button := RobrixNeutralIconButton {
+                                    enable_long_press: true,
+                                    width: Fit, height: Fit,
+                                    padding: (SPACE_XS),
+                                    spacing: 0,
+                                    draw_bg +: { border_radius: (RBX_RADIUS_SM) }
+                                    draw_icon.svg: (ICON_COPY)
+                                    icon_walk: Walk{width: 14, height: 14}
+                                }
+                            }
+                        }
+                    }
+
+                    // display-name edit actions (enabled by Rust when name changes)
+                    View {
+                        width: Fill, height: Fit
+                        flow: Right
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_SM)
+
+                        cancel_display_name_button := RobrixNeutralIconButton {
+                            enabled: false,
+                            width: Fit, height: Fit,
+                            padding: (SPACE_SM),
+                            draw_icon.svg: (ICON_FORBIDDEN)
+                            icon_walk: Walk{width: 14, height: 14, margin: 0}
+                            text: "Cancel"
+                        }
+                        accept_display_name_button := RobrixPositiveIconButton {
+                            enabled: false,
+                            width: Fit, height: Fit,
+                            padding: (SPACE_SM),
+                            draw_bg.border_radius: (RADIUS_MD)
+                            draw_icon.svg: (ICON_CHECKMARK)
+                            icon_walk: Walk{width: 14, height: 14, margin: 0}
+                            text: "Save Name"
+                        }
+                        save_name_spinner := LoadingSpinner {
+                            width: 16, height: 16
+                            margin: Inset{top: 11}
+                            visible: false
+                            draw_bg.color: (RBX_ACCENT)
+                        }
+                    }
+
+                    // avatar editing is desktop-only — kept hidden so the avatar
+                    // enable/spinner logic still has valid widget refs on mobile.
+                    upload_avatar_button := RobrixIconButton {
+                        visible: false
+                        draw_icon.svg: (ICON_UPLOAD)
+                        icon_walk: Walk{width: 0, height: 0}
+                        text: "Upload Avatar"
+                    }
+                    upload_avatar_spinner := LoadingSpinner {
+                        visible: false
+                        width: 16, height: 16
+                        draw_bg.color: (RBX_ACCENT)
+                    }
+                    delete_avatar_button := RobrixNegativeIconButton {
+                        visible: false
+                        draw_icon.svg: (ICON_TRASH)
+                        icon_walk: Walk{width: 0, height: 0}
+                        text: "Delete Avatar"
+                    }
+                    delete_avatar_spinner := LoadingSpinner {
+                        visible: false
+                        width: 16, height: 16
+                        draw_bg.color: (RBX_ACCENT)
+                    }
+
+                    // divider
+                    View {
+                        width: Fill, height: 1.0
+                        margin: Inset{top: (SPACE_XS), bottom: (SPACE_XS)}
+                        show_bg: true
+                        draw_bg +: { color: (RBX_DIVIDER) }
+                    }
+
+                    // accounts
+                    active_account_view := View {
+                        width: Fill, height: Fit
+                        flow: Right
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_SM)
+
+                        View {
+                            width: Fill, height: Fit
+                            flow: Down
+                            spacing: 2
+
+                            active_account_label := Label {
+                                width: Fill, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY),
+                                    text_style: RBX_TEXT_BODY_STRONG {},
+                                }
+                                text: "@user:server"
+                            }
+                            active_account_status_label := Label {
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_SUCCESS_FG),
+                                    text_style: RBX_TEXT_META {},
+                                }
+                                text: "Active"
+                            }
+                        }
+                    }
+
+                    other_accounts_label := Label {
+                        width: Fill, height: Fit
+                        visible: false
+                        margin: Inset{top: (SPACE_XS)}
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY),
+                            text_style: RBX_TEXT_META {},
+                        }
+                        text: "Other accounts:"
+                    }
+
+                    other_account_entry := View {
+                        width: Fill, height: Fit
+                        flow: Right
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_SM)
+                        visible: false
+
+                        other_account_label := Label {
+                            width: Fill, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_PRIMARY),
+                                text_style: RBX_TEXT_BODY {},
+                            }
+                            text: "@other:server"
+                        }
+                        switch_account_button := RobrixIconButton {
+                            width: Fit, height: Fit
+                            padding: Inset{top: (SPACE_XS), bottom: (SPACE_XS), left: (SPACE_SM), right: (SPACE_SM)}
+                            draw_bg +: {
+                                color: (RBX_ACCENT)
+                                color_hover: (RBX_ACCENT_HOVER)
+                                color_down: (RBX_ACCENT_PRESSED)
+                                border_radius: (RBX_RADIUS_SM)
+                            }
+                            draw_text +: {
+                                color: (RBX_FG_ON_ACCENT)
+                                color_hover: (RBX_FG_ON_ACCENT)
+                                color_down: (RBX_FG_ON_ACCENT)
+                            }
+                            draw_icon.svg: (ICON_JUMP)
+                            icon_walk: Walk{width: 14, height: 14}
+                            text: "Switch"
+                        }
+                    }
+
+                    View {
+                        width: Fill, height: Fit
+                        flow: Right
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_SM)
+                        margin: Inset{top: (SPACE_XS)}
+
+                        account_count_label := Label {
+                            width: Fill, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY),
+                                text_style: RBX_TEXT_META {},
+                            }
+                            text: "1 account logged in"
+                        }
+                        add_account_button := RobrixIconButton {
+                            width: Fit, height: Fit
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                            draw_bg +: {
+                                color: (RBX_ACCENT)
+                                color_hover: (RBX_ACCENT_HOVER)
+                                color_down: (RBX_ACCENT_PRESSED)
+                                border_radius: (RBX_RADIUS_SM)
+                            }
+                            draw_text +: {
+                                color: (RBX_FG_ON_ACCENT)
+                                color_hover: (RBX_FG_ON_ACCENT)
+                                color_down: (RBX_FG_ON_ACCENT)
+                            }
+                            draw_icon.svg: (ICON_ADD)
+                            icon_walk: Walk{width: 14, height: 14}
+                            text: "Add Account"
+                        }
+                    }
+                }
+
+                // ---- Card 2: actions ----
+                RoundedView {
+                    width: Fill, height: Fit
+                    flow: Down
+                    spacing: (SPACE_SM)
+                    padding: (SPACE_LG)
+                    show_bg: true
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        border_radius: (RBX_RADIUS_MD)
+                        border_size: 1.0
+                        border_color: (RBX_STROKE_SOFT)
+                    }
+
+                    copy_access_token_button := RobrixNeutralIconButton {
+                        width: Fill, height: Fit,
+                        align: Align{x: 0.0, y: 0.5}
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                        draw_bg +: { border_radius: (RBX_RADIUS_SM) }
+                        draw_icon.svg: (ICON_COPY)
+                        icon_walk: Walk{width: 16, height: 16}
+                        text: "Copy Access Token"
+                    }
+                    logout_button := RobrixNegativeIconButton {
+                        width: Fill, height: Fit,
+                        align: Align{x: 0.0, y: 0.5}
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                        draw_bg +: { border_radius: (RBX_RADIUS_SM) }
+                        draw_icon.svg: (ICON_LOGOUT)
+                        icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2}}
+                        text: "Log out"
+                    }
+                }
+            } // end Mobile variant
+        } // end account_adaptive AdaptiveView
     }
 }
 
@@ -495,6 +867,13 @@ pub struct AccountSettings {
     #[rust] app_language: AppLanguage,
     /// List of other account user IDs (not the currently active one)
     #[rust] other_accounts: Vec<OwnedUserId>,
+    /// Last view-mode applied to the internal Desktop/Mobile AdaptiveView, so we
+    /// only re-set the variant selector when the app's view mode actually changes.
+    #[rust] applied_view_mode: Option<crate::settings::app_preferences::ViewModeOverride>,
+    /// Fires the frame AFTER the internal AdaptiveView swaps in its variant, so we
+    /// can re-populate the freshly-instantiated widgets from our stored profile
+    /// (the swap only happens on the next draw — see AdaptiveView).
+    #[rust] resync_frame: NextFrame,
 }
 
 impl Widget for AccountSettings {
@@ -504,6 +883,10 @@ impl Widget for AccountSettings {
             .unwrap_or_default();
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
+        }
+        self.sync_view_mode(cx);
+        if self.resync_frame.is_event(event).is_some() {
+            self.refresh_ui_after_switch(cx);
         }
         self.match_event(cx, event);
 
@@ -933,6 +1316,55 @@ impl MatchEvent for AccountSettings {
 }
 
 impl AccountSettings {
+    /// Keep the internal Desktop/Mobile `AdaptiveView` in sync with the app's
+    /// view-mode override (so a forced narrow/wide layout flips this sub-widget
+    /// too, not just the parent SettingsScreen). Cheap: only acts on change.
+    fn sync_view_mode(&mut self, cx: &mut Cx) {
+        let view_mode = cx.global::<crate::settings::app_preferences::AppPreferencesGlobal>().0.view_mode;
+        if self.applied_view_mode == Some(view_mode) {
+            return;
+        }
+        self.applied_view_mode = Some(view_mode);
+        if let Some(mut adaptive) = self.view
+            .child_by_path(ids!(account_adaptive))
+            .borrow_mut::<AdaptiveView>()
+        {
+            adaptive.set_variant_selector(view_mode.variant_selector());
+        }
+        // The variant swaps in on the next draw; re-populate it the frame after.
+        self.resync_frame = cx.new_next_frame();
+        self.view.redraw(cx);
+    }
+
+    /// Re-populate the freshly-swapped-in AdaptiveView variant's widgets from our
+    /// stored profile (the variant is a brand-new widget instance, so any data set
+    /// before the swap was on the now-discarded variant).
+    fn refresh_ui_after_switch(&mut self, cx: &mut Cx) {
+        if self.own_profile.is_none() {
+            user_profile_cache::process_user_profile_updates(cx);
+            if let Some(new_profile) = get_own_profile(cx) {
+                self.own_profile = Some(new_profile);
+            }
+        }
+        if let Some(profile) = self.own_profile.clone() {
+            self.view.label(cx, ids!(user_id))
+                .set_text(cx, profile.user_id.as_str());
+            self.view.text_input(cx, ids!(display_name_input))
+                .set_text(cx, profile.username.as_deref().unwrap_or_default());
+            Self::enable_display_name_buttons(
+                cx,
+                false,
+                &self.view.button(cx, ids!(accept_display_name_button)),
+                &self.view.button(cx, ids!(cancel_display_name_button)),
+            );
+            self.populate_avatar_views(cx);
+        }
+        self.populate_account_list(cx);
+        self.refresh_verification_state(cx);
+        self.sync_app_language(cx);
+        self.view.redraw(cx);
+    }
+
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.sync_app_language(cx);
@@ -1090,6 +1522,7 @@ impl AccountSettings {
 
     /// Show and initializes the account settings within the SettingsScreen.
     pub fn populate(&mut self, cx: &mut Cx, own_profile: UserProfile) {
+        self.sync_view_mode(cx);
         self.view.label(cx, ids!(user_id))
             .set_text(cx, own_profile.user_id.as_str());
         self.view.text_input(cx, ids!(display_name_input))
