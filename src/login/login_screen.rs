@@ -270,7 +270,7 @@ script_mod! {
                                     svg: (mod.widgets.ICON_EYE_CLOSED),
                                     color: (RBX_FG_TERTIARY),
                                 }
-                                icon_walk: Walk{width: 18, height: 18, margin: 0}
+                                icon_walk: Walk{width: 14, height: 14, margin: 0}
                                 text: ""
                             }
 
@@ -288,7 +288,7 @@ script_mod! {
                                     svg: (mod.widgets.ICON_EYE_OPEN),
                                     color: (RBX_FG_TERTIARY),
                                 }
-                                icon_walk: Walk{width: 18, height: 18, margin: 0}
+                                icon_walk: Walk{width: 14, height: 14, margin: 0}
                                 text: ""
                             }
                         }
