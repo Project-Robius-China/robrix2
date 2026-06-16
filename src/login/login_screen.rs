@@ -29,8 +29,12 @@ fn should_probe_homeserver(login_mode: Option<LoginMode>, oidc_in_flight: bool) 
 
 const MOBILE_LOGIN_MAX_WIDTH: f64 = 700.0;
 
-fn is_mobile_login_width(width: f64) -> bool {
-    width <= MOBILE_LOGIN_MAX_WIDTH
+fn is_mobile_login_layout(width: f64, mobile_target: bool) -> bool {
+    mobile_target || width <= MOBILE_LOGIN_MAX_WIDTH
+}
+
+fn is_mobile_runtime_target() -> bool {
+    cfg!(any(target_os = "android", target_os = "ios"))
 }
 
 script_mod! {
@@ -502,7 +506,7 @@ script_mod! {
                     }
 
                     sso_view := View {
-                        width: Fill{max: 322}, height: Fit,
+                        width: Fill{max: 170}, height: Fit,
                         margin: Inset{top: 8}
                         align: Align{x: 0.5, y: 0.5}
                         flow: Flow.Right{wrap: true},
@@ -515,8 +519,8 @@ script_mod! {
                                 visible: false
                                 width: Fit, height: Fit
                                 draw_text +: {
-                                    color: (RBX_FG_ON_ACCENT)
-                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
                                 }
                                 text: "Apple"
                             }
@@ -529,8 +533,8 @@ script_mod! {
                                 visible: false
                                 width: Fit, height: Fit
                                 draw_text +: {
-                                    color: (RBX_FG_ON_ACCENT)
-                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
                                 }
                                 text: "Facebook"
                             }
@@ -543,8 +547,8 @@ script_mod! {
                                 visible: false
                                 width: Fit, height: Fit
                                 draw_text +: {
-                                    color: (RBX_FG_ON_ACCENT)
-                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
                                 }
                                 text: "GitHub"
                             }
@@ -557,8 +561,8 @@ script_mod! {
                                 visible: false
                                 width: Fit, height: Fit
                                 draw_text +: {
-                                    color: (RBX_FG_ON_ACCENT)
-                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
                                 }
                                 text: "GitLab"
                             }
@@ -571,8 +575,8 @@ script_mod! {
                                 visible: false
                                 width: Fit, height: Fit
                                 draw_text +: {
-                                    color: (RBX_FG_ON_ACCENT)
-                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
                                 }
                                 text: "Google"
                             }
@@ -585,8 +589,8 @@ script_mod! {
                                 visible: false
                                 width: Fit, height: Fit
                                 draw_text +: {
-                                    color: (RBX_FG_ON_ACCENT)
-                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
                                 }
                                 text: "X"
                             }
@@ -711,7 +715,7 @@ script_mod! {
                     mobile_footer_secure_label := Label {
                         width: Fit, height: Fit
                         draw_text +: {
-                            color: (RBX_NAV_FG)
+                            color: (RBX_FG_TERTIARY)
                             text_style: REGULAR_TEXT {font_size: 9.5}
                         }
                         text: "Secure session"
@@ -719,7 +723,7 @@ script_mod! {
                     Label {
                         width: Fit, height: Fit
                         draw_text +: {
-                            color: (RBX_NAV_FG)
+                            color: (RBX_FG_TERTIARY)
                             text_style: REGULAR_TEXT {font_size: 9.5}
                         }
                         text: "·"
@@ -727,7 +731,7 @@ script_mod! {
                     mobile_footer_selfhost_label := Label {
                         width: Fit, height: Fit
                         draw_text +: {
-                            color: (RBX_NAV_FG)
+                            color: (RBX_FG_TERTIARY)
                             text_style: REGULAR_TEXT {font_size: 9.5}
                         }
                         text: "Self-host ready"
@@ -735,7 +739,7 @@ script_mod! {
                     Label {
                         width: Fit, height: Fit
                         draw_text +: {
-                            color: (RBX_NAV_FG)
+                            color: (RBX_FG_TERTIARY)
                             text_style: REGULAR_TEXT {font_size: 9.5}
                         }
                         text: "·"
@@ -743,7 +747,7 @@ script_mod! {
                     mobile_footer_matrix_label := Label {
                         width: Fit, height: Fit
                         draw_text +: {
-                            color: (RBX_NAV_FG)
+                            color: (RBX_FG_TERTIARY)
                             text_style: REGULAR_TEXT {font_size: 9.5}
                         }
                         text: "Matrix connected"
@@ -755,7 +759,7 @@ script_mod! {
                     width: Fit, height: Fit
                     margin: Inset{top: 20}
                     draw_text +: {
-                        color: (RBX_NAV_FG)
+                        color: (RBX_FG_TERTIARY)
                         text_style: REGULAR_TEXT {font_size: 12.0}
                     }
                     text: "v2.0.0"
@@ -1079,13 +1083,15 @@ impl LoginScreen {
     }
 
     fn sync_login_responsive_layout(&mut self, cx: &mut Cx) {
+        let mobile_runtime_target = is_mobile_runtime_target();
         let rect = self.view.area().rect(cx);
         let width = rect.size.x;
-        if width <= 0.0 {
+        if width <= 0.0 && !mobile_runtime_target {
             return;
         }
-        let mobile = is_mobile_login_width(width);
+        let mobile = is_mobile_login_layout(width, mobile_runtime_target);
         if self.mobile_layout_active == Some(mobile) {
+            self.apply_login_layout(cx, mobile);
             return;
         }
         self.mobile_layout_active = Some(mobile);
@@ -1095,14 +1101,14 @@ impl LoginScreen {
 
     fn apply_login_layout(&mut self, cx: &mut Cx, mobile: bool) {
         self.view.view(cx, ids!(agent_badge)).set_visible(cx, !mobile);
-        self.view.label(cx, ids!(user_id_field_label)).set_visible(cx, mobile);
-        self.view.label(cx, ids!(password_field_label)).set_visible(cx, mobile);
-        self.view.label(cx, ids!(homeserver_field_label)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(user_id_field_label)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(password_field_label)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(homeserver_field_label)).set_visible(cx, mobile);
         self.view.view(cx, ids!(homeserver_hint_row)).set_visible(cx, !mobile);
         self.view.view(cx, ids!(desktop_status_divider)).set_visible(cx, !mobile);
         self.view.view(cx, ids!(desktop_status_footer)).set_visible(cx, !mobile);
         self.view.view(cx, ids!(mobile_status_footer)).set_visible(cx, mobile);
-        self.view.label(cx, ids!(mobile_version_label)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(mobile_version_label)).set_visible(cx, mobile);
 
         self.apply_login_surface_style(cx, mobile);
         self.apply_login_text_style(cx, mobile);
@@ -1116,15 +1122,15 @@ impl LoginScreen {
         if mobile {
             script_apply_eval!(cx, login_scroll, {
                 draw_bg +: {
-                    color: mod.widgets.RBX_LOGIN_BG
+                    color: mod.widgets.RBX_BG_CANVAS
                 }
             });
             script_apply_eval!(cx, login_card, {
                 margin: Inset{left: 28, right: 28}
                 padding: Inset{top: 24, bottom: 24, left: 22, right: 22}
                 draw_bg +: {
-                    color: mod.widgets.RBX_LOGIN_SURFACE
-                    border_color: mod.widgets.RBX_NAV_DIVIDER
+                    color: mod.widgets.RBX_BG_SURFACE
+                    border_color: mod.widgets.RBX_STROKE_SOFT
                     border_radius: mod.widgets.RBX_RADIUS_XL
                 }
             });
@@ -1155,25 +1161,25 @@ impl LoginScreen {
         if mobile {
             script_apply_eval!(cx, brand_wordmark, {
                 draw_text +: {
-                    color: mod.widgets.RBX_FG_ON_ACCENT
+                    color: mod.widgets.RBX_FG_PRIMARY
                     text_style: mod.widgets.RBX_TEXT_PAGE_TITLE {font_size: 34.0}
                 }
             });
             script_apply_eval!(cx, title, {
                 draw_text +: {
-                    color: mod.widgets.RBX_NAV_FG
+                    color: mod.widgets.RBX_FG_SECONDARY
                     text_style: mod.widgets.RBX_TEXT_BODY {font_size: 13.0}
                 }
             });
             script_apply_eval!(cx, sso_prompt_label, {
                 draw_text +: {
-                    color: mod.widgets.RBX_NAV_FG
+                    color: mod.widgets.RBX_FG_SECONDARY
                     text_style: mod.widgets.RBX_TEXT_BODY {font_size: 11.0}
                 }
             });
             script_apply_eval!(cx, account_prompt_label, {
                 draw_text +: {
-                    color: mod.widgets.RBX_NAV_FG
+                    color: mod.widgets.RBX_FG_SECONDARY
                     text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.5}
                 }
             });
@@ -1234,28 +1240,28 @@ impl LoginScreen {
                 script_apply_eval!(cx, input, {
                     padding: Inset{top: 10, bottom: 10, left: 16, right: 16}
                     draw_bg +: {
-                        color: mod.widgets.RBX_LOGIN_SURFACE
-                        color_hover: mod.widgets.RBX_LOGIN_SURFACE
-                        color_focus: mod.widgets.RBX_LOGIN_SURFACE
-                        color_down: mod.widgets.RBX_LOGIN_SURFACE
-                        color_empty: mod.widgets.RBX_LOGIN_SURFACE
-                        border_color: mod.widgets.RBX_NAV_DIVIDER
+                        color: mod.widgets.RBX_BG_SURFACE
+                        color_hover: mod.widgets.RBX_BG_SURFACE
+                        color_focus: mod.widgets.RBX_BG_SURFACE
+                        color_down: mod.widgets.RBX_BG_SURFACE
+                        color_empty: mod.widgets.RBX_BG_SURFACE
+                        border_color: mod.widgets.RBX_STROKE_SOFT
                         border_color_hover: mod.widgets.RBX_STROKE_STRONG
                         border_color_focus: mod.widgets.RBX_ACCENT
                         border_color_down: mod.widgets.RBX_STROKE_STRONG
-                        border_color_empty: mod.widgets.RBX_NAV_DIVIDER
+                        border_color_empty: mod.widgets.RBX_STROKE_SOFT
                     }
                     draw_cursor +: {
                         color: mod.widgets.RBX_ACCENT
                     }
                     draw_text +: {
-                        color: mod.widgets.RBX_FG_ON_ACCENT
-                        color_hover: mod.widgets.RBX_FG_ON_ACCENT
-                        color_focus: mod.widgets.RBX_FG_ON_ACCENT
-                        color_down: mod.widgets.RBX_FG_ON_ACCENT
-                        color_empty: mod.widgets.RBX_NAV_FG
-                        color_empty_hover: mod.widgets.RBX_NAV_FG
-                        color_empty_focus: mod.widgets.RBX_NAV_FG
+                        color: mod.widgets.RBX_FG_PRIMARY
+                        color_hover: mod.widgets.RBX_FG_PRIMARY
+                        color_focus: mod.widgets.RBX_FG_PRIMARY
+                        color_down: mod.widgets.RBX_FG_PRIMARY
+                        color_empty: mod.widgets.RBX_FG_TERTIARY
+                        color_empty_hover: mod.widgets.RBX_FG_TERTIARY
+                        color_empty_focus: mod.widgets.RBX_FG_TERTIARY
                     }
                 });
             } else {
@@ -1291,41 +1297,16 @@ impl LoginScreen {
     }
 
     fn apply_sso_layout_style(&mut self, cx: &mut Cx, mobile: bool) {
-        let button_ids: &[&[LiveId]] = ids_array!(
-            apple_button,
-            facebook_button,
-            github_button,
-            gitlab_button,
-            google_button,
-            twitter_button
-        );
-        for button_ref in self.view_set(cx, button_ids).iter() {
-            let Some(mut button) = button_ref.borrow_mut() else { continue };
-            let label = button.label(cx, ids!(sso_label));
-            label.set_visible(cx, mobile);
-            if mobile {
-                script_apply_eval!(cx, button, {
-                    width: 94
-                    height: 42
-                    padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                    draw_bg +: {
-                        color: mod.widgets.RBX_LOGIN_SURFACE
-                        border_color: mod.widgets.RBX_NAV_DIVIDER
-                        border_radius: mod.widgets.RBX_RADIUS_SM
-                    }
-                });
-            } else {
-                script_apply_eval!(cx, button, {
-                    width: 46
-                    height: 40
-                    padding: 8
-                    draw_bg +: {
-                        color: mod.widgets.RBX_BG_SURFACE
-                        border_color: mod.widgets.RBX_STROKE_SOFT
-                        border_radius: mod.widgets.RBX_RADIUS_SM
-                    }
-                });
-            }
+        let mut sso_view = self.view.view(cx, ids!(sso_view));
+        let sso_width = if mobile { 170.0 } else { 322.0 };
+        if mobile {
+            script_apply_eval!(cx, sso_view, {
+                width: #(sso_width)
+            });
+        } else {
+            script_apply_eval!(cx, sso_view, {
+                width: #(sso_width)
+            });
         }
     }
 
@@ -1607,11 +1588,11 @@ impl Widget for LoginScreen {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        self.view.handle_event(cx, event, scope);
         if matches!(event, Event::WindowGeomChange(_)) {
             self.sync_proxy_settings_modal_layout(cx);
             self.sync_login_responsive_layout(cx);
         }
-        self.view.handle_event(cx, event, scope);
         self.widget_match_event(cx, event, scope);
     }
 
@@ -2273,7 +2254,7 @@ pub enum LoginAction {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_mobile_login_width, should_probe_homeserver, should_show_login_failure_modal};
+    use super::{is_mobile_login_layout, should_probe_homeserver, should_show_login_failure_modal};
     use crate::homeserver::LoginMode;
 
     #[test]
@@ -2424,19 +2405,39 @@ mod tests {
     }
 
     #[test]
-    fn test_mobile_login_width_threshold() {
-        assert!(is_mobile_login_width(700.0));
-        assert!(is_mobile_login_width(390.0));
-        assert!(!is_mobile_login_width(701.0));
+    fn test_mobile_login_layout_target_detection() {
+        assert!(is_mobile_login_layout(700.0, false));
+        assert!(is_mobile_login_layout(390.0, false));
+        assert!(!is_mobile_login_layout(701.0, false));
+        assert!(is_mobile_login_layout(1272.0, true));
     }
 
     #[test]
-    fn test_login_screen_source_contains_mobile_dark_contract() {
+    fn test_mobile_login_reapplies_layout_for_late_bound_children() {
         let src = include_str!("login_screen.rs");
-        assert!(src.contains("RBX_LOGIN_BG"), "mobile login should use the dark login background token");
-        assert!(src.contains("RBX_LOGIN_SURFACE"), "mobile login should use the dark login surface token");
-        assert!(src.contains("RBX_BG_CANVAS"), "desktop light canvas token should remain wired");
-        assert!(src.contains("RBX_BG_SURFACE"), "desktop light surface token should remain wired");
+        let same_mode_branch = concat!(
+            "if self.mobile_layout_active == Some(mobile) {\n",
+            "            self.apply_login_layout(cx, mobile);"
+        );
+        assert!(
+            src.contains(same_mode_branch),
+            "mobile layout must reapply on repeated geometry events so nested controls receive runtime style",
+        );
+    }
+
+    #[test]
+    fn test_login_screen_source_contains_mobile_light_contract() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("RBX_BG_CANVAS"), "mobile and desktop login should use the light canvas token until global theme switching exists");
+        assert!(src.contains("RBX_BG_SURFACE"), "mobile and desktop login should use the light surface token until global theme switching exists");
+        assert!(
+            !src.contains(concat!("RBX_", "LOGIN_BG")),
+            "mobile login should not introduce a standalone dark background before global theme switching",
+        );
+        assert!(
+            !src.contains(concat!("RBX_", "LOGIN_SURFACE")),
+            "mobile login should not introduce a standalone dark surface before global theme switching",
+        );
 
         for forbidden in [
             concat!("#", "0000"),
@@ -2484,7 +2485,14 @@ mod tests {
     #[test]
     fn test_mobile_sso_grid_preserves_provider_ids() {
         let src = include_str!("login_screen.rs");
-        assert!(src.contains("sso_label := Label"), "mobile SSO buttons should expose readable labels");
+        assert!(
+            src.contains(concat!("width: Fill{max: ", "170}")),
+            "mobile SSO grid should use a constrained width so six icon buttons align as 3x2",
+        );
+        assert!(
+            src.contains("let sso_width = if mobile { 170.0 } else { 322.0 };"),
+            "runtime layout should only switch the direct SSO container width",
+        );
         for id in [
             "apple_button",
             "facebook_button",
