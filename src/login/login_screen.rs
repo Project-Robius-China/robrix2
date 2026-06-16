@@ -53,7 +53,7 @@ script_mod! {
         cursor: MouseCursor.Hand,
         visible: true,
         padding: 8,
-        margin: Inset{ left: 3, right: 3, top: 0, bottom: 0}
+        margin: Inset{ left: 3, right: 3, top: 4, bottom: 4}
         align: Align{x: 0.5, y: 0.5}
         flow: Right
         spacing: 8
