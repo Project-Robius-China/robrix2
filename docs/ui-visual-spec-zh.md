@@ -132,8 +132,8 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 | `RBX_NAV_ITEM_ACTIVE_BG` | `#2A3650` | 导航选中底 |
 | `RBX_NAV_ITEM_HOVER_BG` | `#222D43` | 导航 hover 底 |
 | `RBX_NAV_DIVIDER` | `#2C384F` | 导航分隔 |
-| `RBX_LOGIN_BG` | `#0E1626` | 移动登录底 |
-| `RBX_LOGIN_SURFACE` | `#16213A` | 移动登录卡 / 输入框 |
+| `RBX_LOGIN_BG` | `#0E1626` | 预留深色登录 / 主题背景 |
+| `RBX_LOGIN_SURFACE` | `#16213A` | 预留深色登录 / 主题卡片 |
 | `RBX_LEGACY_BLUE` | `#0F88FE` | **DEPRECATED** 旧主色蓝（迁移时引用，新 UI 用 `RBX_ACCENT`） |
 
 **代码面板（深色，Timeline `CodeOutputCard` §4.7）**：`RBX_CODE_BG`=`#1B2433` 底 · `RBX_CODE_FG`=`#D7DEE8` 正文 · `RBX_CODE_KEYWORD`=`#7CC4FF` · `RBX_CODE_STRING`=`#8FD19A` · `RBX_CODE_COMMENT`=`#7F8B9B`。
@@ -428,7 +428,7 @@ Room goal: Reduce API latency 20% (Q2)  [View details]   ← goal banner
 房间详情总览（桌面）：<img src="ui-reference/03-room-detail.png" width="220" alt="房间详情总览">
 
 
-- **Login**（`src/login/login_screen.rs`）：品牌卡（cube logo + `Robrix2` + `Agent-native collaboration client` + `Agent-ready workspace` badge）→ `User ID / Password(👁) / Homeserver URL` → teal **Sign in securely** → `Or continue with` → SSO 行（保持当前 Apple / Facebook / GitHub / GitLab / Google / X provider 集合，不因参考稿新增 Microsoft / More）→ `Create an account` → 状态 footer（Secure session · Self-host ready · Matrix connected）。桌面浅色卡片使用 `RBX_BG_CANVAS` + `RBX_BG_SURFACE`，桌面目标几何为卡片约 494px、内容列约 422px；移动深色变体使用 `RBX_LOGIN_BG` + `RBX_LOGIN_SURFACE`。
+- **Login**（`src/login/login_screen.rs`）：品牌卡（cube logo + `Robrix2` + `Agent-native collaboration client` + `Agent-ready workspace` badge）→ `User ID / Password(👁) / Homeserver URL` → teal **Sign in securely** → `Or continue with` → SSO 行（保持当前 Apple / Facebook / GitHub / GitLab / Google / X provider 集合，不因参考稿新增 Microsoft / More）→ `Create an account` → 状态 footer（Secure session · Self-host ready · Matrix connected）。桌面与移动端当前统一使用浅色体系：`RBX_BG_CANVAS` + `RBX_BG_SURFACE` + `RBX_STROKE_SOFT`，桌面目标几何为卡片约 494px、内容列约 422px；移动端学习 main 分支登录页的稳定宽度策略：外层 `Fill` 居中，内层窄列约束，避免桌面 422px 内容列直接挤进手机屏。深色登录不作为单独移动特例实现，等待全局深色 / 浅色主题切换后统一接入。
 - **Desktop Workbench**（`src/home/main_desktop_ui.rs` + `home_screen.rs`）：`[深色 NAV 栏 | 房间列表 | Timeline 主区 | 右侧 Info 面板]`。NAV 用 `RBX_NAV_*`（深色锚点）；右侧 Info 面板（Active agents / Pending approvals / Linked agents / Tools / Knowledge / Recent automations）目前**缺失**，需新建，并复用 5.2 的对象集合卡。
 
 ---
