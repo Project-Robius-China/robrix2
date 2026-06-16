@@ -428,7 +428,7 @@ Room goal: Reduce API latency 20% (Q2)  [View details]   ← goal banner
 房间详情总览（桌面）：<img src="ui-reference/03-room-detail.png" width="220" alt="房间详情总览">
 
 
-- **Login**（`src/login/login_screen.rs`）：品牌卡（cube logo + `Robrix2` + `Agent-native collaboration client` + `Agent-ready workspace` badge）→ `User ID / Password(👁) / Homeserver URL` → teal **Sign in securely** → `Or continue with` → SSO 行（保持当前 Apple / Facebook / GitHub / GitLab / Google / X provider 集合，不因参考稿新增 Microsoft / More）→ `Create an account` → 状态 footer（Secure session · Self-host ready · Matrix connected）。桌面浅色卡片使用 `RBX_BG_CANVAS` + `RBX_BG_SURFACE`，桌面目标几何为卡片约 494px、内容列约 422px；移动深色变体使用 `RBX_LOGIN_BG` + `RBX_LOGIN_SURFACE`。
+- **Login**（`src/login/login_screen.rs`）：品牌卡（cube logo + `Robrix2` + `Agent-native collaboration client` + `Agent-ready workspace` badge）→ `User ID / Password(👁) / Homeserver URL` → teal **Sign in securely** → `Or continue with` → SSO 行（保持当前 Apple / Facebook / GitHub / GitLab / Google / X provider 集合，不因参考稿新增 Microsoft / More）→ `Create an account` → 状态 footer（Secure session · Self-host ready · Matrix connected）。桌面浅色卡片使用 `RBX_BG_CANVAS` + `RBX_BG_SURFACE`，桌面目标几何为卡片约 494px、内容列约 422px；移动深色变体使用 `RBX_LOGIN_BG` + `RBX_LOGIN_SURFACE`，并学习 main 分支登录页的稳定宽度策略：外层 `Fill` 居中，内层窄列约束，避免桌面 422px 内容列直接挤进手机屏。
 - **Desktop Workbench**（`src/home/main_desktop_ui.rs` + `home_screen.rs`）：`[深色 NAV 栏 | 房间列表 | Timeline 主区 | 右侧 Info 面板]`。NAV 用 `RBX_NAV_*`（深色锚点）；右侧 Info 面板（Active agents / Pending approvals / Linked agents / Tools / Knowledge / Recent automations）目前**缺失**，需新建，并复用 5.2 的对象集合卡。
 
 ---

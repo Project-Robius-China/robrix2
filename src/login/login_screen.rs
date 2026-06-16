@@ -27,6 +27,12 @@ fn should_probe_homeserver(login_mode: Option<LoginMode>, oidc_in_flight: bool) 
     login_mode.is_none() && !oidc_in_flight
 }
 
+const MOBILE_LOGIN_MAX_WIDTH: f64 = 700.0;
+
+fn is_mobile_login_width(width: f64) -> bool {
+    width <= MOBILE_LOGIN_MAX_WIDTH
+}
+
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
@@ -34,6 +40,7 @@ script_mod! {
     mod.widgets.IMG_APP_LOGO = crate_resource("self://resources/robrix_logo_alpha.png")
     mod.widgets.ICON_EYE_OPEN   = crate_resource("self://resources/icons/eye_open.svg")
     mod.widgets.ICON_EYE_CLOSED = crate_resource("self://resources/icons/eye_closed.svg")
+    mod.widgets.ICON_LOGIN_USER = crate_resource("self://resources/icon_user.svg")
 
     mod.widgets.SsoButton = RoundedView {
         width: 46,
@@ -44,6 +51,8 @@ script_mod! {
         padding: 8,
         margin: Inset{ left: 3, right: 3, top: 0, bottom: 0}
         align: Align{x: 0.5, y: 0.5}
+        flow: Right
+        spacing: 8
         show_bg: true,
         draw_bg +: {
             border_size: 1.0
@@ -101,7 +110,7 @@ script_mod! {
             color: (RBX_BG_CANVAS)
         }
 
-        ScrollYView {
+        login_scroll := ScrollYView {
             width: Fill, height: Fill,
             flow: Down, // Required for vertical scrolling to work.
             align: Align{x: 0.5, y: 0.5}
@@ -126,8 +135,9 @@ script_mod! {
                 flow: Overlay,
 
                 login_card := RoundedView {
-                    width: 494
+                    width: Fill{max: 494}
                     height: Fit
+                    margin: Inset{left: 16, right: 16}
                     new_batch: true
                     flow: Down
                     align: Align{x: 0.5, y: 0.5}
@@ -199,15 +209,35 @@ script_mod! {
                         text: "Agent-native collaboration client"
                     }
 
+                    user_id_field_label := Label {
+                        visible: false
+                        width: Fill{max: 422}, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 11.0}
+                        }
+                        text: "User ID"
+                    }
+
                     user_id_input := mod.widgets.LoginTextInput {
-                        width: 422, height: (RBX_CONTROL_H_LG)
+                        width: Fill{max: 422}, height: (RBX_CONTROL_H_LG)
                         flow: Right, // do not wrap
                         padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
                         empty_text: "User ID"
                     }
 
+                    password_field_label := Label {
+                        visible: false
+                        width: Fill{max: 422}, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 11.0}
+                        }
+                        text: "Password"
+                    }
+
                     View {
-                        width: 422, height: (RBX_CONTROL_H_LG)
+                        width: Fill{max: 422}, height: (RBX_CONTROL_H_LG)
                         flow: Overlay
                         align: Align{x: 1.0, y: 0.5}
 
@@ -261,7 +291,7 @@ script_mod! {
                     }
 
                     confirm_password_wrapper := View {
-                        width: 422, height: (RBX_CONTROL_H_LG),
+                        width: Fill{max: 422}, height: (RBX_CONTROL_H_LG),
                         visible: false,
                         flow: Overlay,
 
@@ -314,13 +344,23 @@ script_mod! {
                         }
                     }
 
+                    homeserver_field_label := Label {
+                        visible: false
+                        width: Fill{max: 422}, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 11.0}
+                        }
+                        text: "Homeserver URL"
+                    }
+
                     View {
-                        width: 422, height: Fit,
+                        width: Fill{max: 422}, height: Fit,
                         flow: Down,
                         spacing: 5.0
 
                         homeserver_input := mod.widgets.LoginTextInput {
-                            width: 422, height: (RBX_CONTROL_H_LG),
+                            width: Fill, height: (RBX_CONTROL_H_LG),
                             flow: Right, // do not wrap
                             padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
                             empty_text: "matrix.org"
@@ -350,7 +390,7 @@ script_mod! {
                     }
 
                     login_button := RobrixIconButton {
-                        width: 422,
+                        width: Fill{max: 422},
                         height: (RBX_CONTROL_H_LG)
                         padding: 10
                         margin: Inset{top: 8, bottom: 8}
@@ -388,7 +428,7 @@ script_mod! {
                     // points feel consistent.
                     oidc_card := View {
                         visible: false
-                        width: 422, height: Fit,
+                        width: Fill{max: 422}, height: Fit,
                         flow: Down,
                         spacing: 8,
                         margin: Inset{top: 5, bottom: 10}
@@ -412,7 +452,7 @@ script_mod! {
                         }
 
                         oidc_continue_button := RobrixIconButton {
-                            width: 422,
+                            width: Fill,
                             height: (RBX_CONTROL_H_LG)
                             padding: 10
                             align: Align{x: 0.5, y: 0.5}
@@ -431,7 +471,7 @@ script_mod! {
 
                         oidc_cancel_button := RobrixIconButton {
                             visible: false
-                            width: 422,
+                            width: Fill,
                             height: (RBX_CONTROL_H_LG)
                             padding: 10
                             align: Align{x: 0.5, y: 0.5}
@@ -440,7 +480,7 @@ script_mod! {
                     }
 
                     View {
-                        width: 422, height: Fit,
+                        width: Fill{max: 422}, height: Fit,
                         flow: Right,
                         spacing: 8.0,
                         margin: Inset{top: 6}
@@ -462,45 +502,99 @@ script_mod! {
                     }
 
                     sso_view := View {
-                        width: 322, height: Fit,
+                        width: Fill{max: 322}, height: Fit,
                         margin: Inset{top: 8}
                         align: Align{x: 0.5, y: 0.5}
-                        flow: Right,
+                        flow: Flow.Right{wrap: true},
                         spacing: 0.0,
                         apple_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/apple.png")
+                            }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_ON_ACCENT)
+                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                }
+                                text: "Apple"
                             }
                         }
                         facebook_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/facebook.png")
                             }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_ON_ACCENT)
+                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                }
+                                text: "Facebook"
+                            }
                         }
                         github_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/github.png")
+                            }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_ON_ACCENT)
+                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                }
+                                text: "GitHub"
                             }
                         }
                         gitlab_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/gitlab.png")
                             }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_ON_ACCENT)
+                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                }
+                                text: "GitLab"
+                            }
                         }
                         google_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/google.png")
+                            }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_ON_ACCENT)
+                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                }
+                                text: "Google"
                             }
                         }
                         twitter_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/x.png")
                             }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_ON_ACCENT)
+                                    text_style: RBX_TEXT_BODY_STRONG {}
+                                }
+                                text: "X"
+                            }
                         }
                     }
 
                     View {
-                        width: 422,
+                        width: Fill{max: 422},
                         height: Fit,
                         flow: Right,
                         spacing: 4.0,
@@ -550,14 +644,14 @@ script_mod! {
                     }
 
                     // Reassuring status footer (decorative; mirrors the reference design).
-                    LineH {
-                        width: 422
+                    desktop_status_divider := LineH {
+                        width: Fill{max: 422}
                         margin: Inset{top: 12, bottom: 8}
                         draw_bg.color: (RBX_DIVIDER)
                     }
 
-                    View {
-                        width: 422, height: Fit
+                    desktop_status_footer := View {
+                        width: Fill{max: 422}, height: Fit
                         flow: Right
                         align: Align{x: 0.5, y: 0.5}
                         spacing: 8.0
@@ -604,6 +698,67 @@ script_mod! {
                         }
                     }
                     } // end centered content column
+                }
+
+                mobile_status_footer := View {
+                    visible: false
+                    width: Fill{max: 390}, height: Fit
+                    margin: Inset{top: 18, left: 18, right: 18}
+                    flow: Right
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 8.0
+
+                    mobile_footer_secure_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "Secure session"
+                    }
+                    Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "·"
+                    }
+                    mobile_footer_selfhost_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "Self-host ready"
+                    }
+                    Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "·"
+                    }
+                    mobile_footer_matrix_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "Matrix connected"
+                    }
+                }
+
+                mobile_version_label := Label {
+                    visible: false
+                    width: Fit, height: Fit
+                    margin: Inset{top: 20}
+                    draw_text +: {
+                        color: (RBX_NAV_FG)
+                        text_style: REGULAR_TEXT {font_size: 12.0}
+                    }
+                    text: "v2.0.0"
                 }
 
                 // The modal that pops up to display login status messages,
@@ -887,6 +1042,9 @@ pub struct LoginScreen {
     /// True while the OIDC browser flow is in flight. Blocks re-probes and
     /// re-entry into start_oidc_login from duplicate clicks.
     #[rust] oidc_in_flight: bool,
+    /// Cached responsive layout mode. None means the first window geometry
+    /// event still needs to apply either desktop or mobile styling.
+    #[rust] mobile_layout_active: Option<bool>,
 }
 
 impl LoginScreen {
@@ -898,6 +1056,277 @@ impl LoginScreen {
         script_apply_eval!(cx, proxy_settings_modal_inner, {
             width: #(modal_width)
         });
+    }
+
+    fn set_login_input_copy(&mut self, cx: &mut Cx) {
+        let mobile = self.mobile_layout_active.unwrap_or(false);
+        let user_id_key = if mobile { "login.input.mobile.user_id" } else { "login.input.user_id" };
+        let password_key = if mobile { "login.input.mobile.password" } else { "login.input.password" };
+        let homeserver_key = if mobile { "login.input.mobile.homeserver" } else { "login.input.homeserver" };
+
+        self.view.text_input(cx, ids!(user_id_input))
+            .set_empty_text(cx, tr_key(self.app_language, user_id_key).to_string());
+        self.view.text_input(cx, ids!(password_input))
+            .set_empty_text(cx, tr_key(self.app_language, password_key).to_string());
+        self.view.text_input(cx, ids!(homeserver_input))
+            .set_empty_text(cx, tr_key(self.app_language, homeserver_key).to_string());
+        self.view.label(cx, ids!(user_id_field_label))
+            .set_text(cx, tr_key(self.app_language, "login.input.user_id"));
+        self.view.label(cx, ids!(password_field_label))
+            .set_text(cx, tr_key(self.app_language, "login.input.password"));
+        self.view.label(cx, ids!(homeserver_field_label))
+            .set_text(cx, tr_key(self.app_language, "login.label.homeserver_url"));
+    }
+
+    fn sync_login_responsive_layout(&mut self, cx: &mut Cx) {
+        let rect = self.view.area().rect(cx);
+        let width = rect.size.x;
+        if width <= 0.0 {
+            return;
+        }
+        let mobile = is_mobile_login_width(width);
+        if self.mobile_layout_active == Some(mobile) {
+            return;
+        }
+        self.mobile_layout_active = Some(mobile);
+        self.set_login_input_copy(cx);
+        self.apply_login_layout(cx, mobile);
+    }
+
+    fn apply_login_layout(&mut self, cx: &mut Cx, mobile: bool) {
+        self.view.view(cx, ids!(agent_badge)).set_visible(cx, !mobile);
+        self.view.label(cx, ids!(user_id_field_label)).set_visible(cx, mobile);
+        self.view.label(cx, ids!(password_field_label)).set_visible(cx, mobile);
+        self.view.label(cx, ids!(homeserver_field_label)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(homeserver_hint_row)).set_visible(cx, !mobile);
+        self.view.view(cx, ids!(desktop_status_divider)).set_visible(cx, !mobile);
+        self.view.view(cx, ids!(desktop_status_footer)).set_visible(cx, !mobile);
+        self.view.view(cx, ids!(mobile_status_footer)).set_visible(cx, mobile);
+        self.view.label(cx, ids!(mobile_version_label)).set_visible(cx, mobile);
+
+        self.apply_login_surface_style(cx, mobile);
+        self.apply_login_text_style(cx, mobile);
+        self.apply_login_input_style(cx, mobile);
+        self.apply_sso_layout_style(cx, mobile);
+    }
+
+    fn apply_login_surface_style(&mut self, cx: &mut Cx, mobile: bool) {
+        let mut login_scroll = self.view.view(cx, ids!(login_scroll));
+        let mut login_card = self.view.view(cx, ids!(login_card));
+        if mobile {
+            script_apply_eval!(cx, login_scroll, {
+                draw_bg +: {
+                    color: mod.widgets.RBX_LOGIN_BG
+                }
+            });
+            script_apply_eval!(cx, login_card, {
+                margin: Inset{left: 28, right: 28}
+                padding: Inset{top: 24, bottom: 24, left: 22, right: 22}
+                draw_bg +: {
+                    color: mod.widgets.RBX_LOGIN_SURFACE
+                    border_color: mod.widgets.RBX_NAV_DIVIDER
+                    border_radius: mod.widgets.RBX_RADIUS_XL
+                }
+            });
+        } else {
+            script_apply_eval!(cx, login_scroll, {
+                draw_bg +: {
+                    color: mod.widgets.RBX_BG_CANVAS
+                }
+            });
+            script_apply_eval!(cx, login_card, {
+                margin: Inset{left: 16, right: 16}
+                padding: Inset{top: 24, bottom: 24, left: 36, right: 36}
+                draw_bg +: {
+                    color: mod.widgets.RBX_BG_SURFACE
+                    border_color: mod.widgets.RBX_STROKE_SOFT
+                    border_radius: mod.widgets.RBX_RADIUS_LG
+                }
+            });
+        }
+    }
+
+    fn apply_login_text_style(&mut self, cx: &mut Cx, mobile: bool) {
+        let mut brand_wordmark = self.view.label(cx, ids!(brand_wordmark));
+        let mut title = self.view.label(cx, ids!(title));
+        let mut sso_prompt_label = self.view.label(cx, ids!(sso_prompt_label));
+        let mut account_prompt_label = self.view.label(cx, ids!(account_prompt_label));
+        let mut mode_toggle_button = self.view.button(cx, ids!(mode_toggle_button));
+        if mobile {
+            script_apply_eval!(cx, brand_wordmark, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_ON_ACCENT
+                    text_style: mod.widgets.RBX_TEXT_PAGE_TITLE {font_size: 34.0}
+                }
+            });
+            script_apply_eval!(cx, title, {
+                draw_text +: {
+                    color: mod.widgets.RBX_NAV_FG
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 13.0}
+                }
+            });
+            script_apply_eval!(cx, sso_prompt_label, {
+                draw_text +: {
+                    color: mod.widgets.RBX_NAV_FG
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 11.0}
+                }
+            });
+            script_apply_eval!(cx, account_prompt_label, {
+                draw_text +: {
+                    color: mod.widgets.RBX_NAV_FG
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.5}
+                }
+            });
+            script_apply_eval!(cx, mode_toggle_button, {
+                draw_text +: {
+                    color: mod.widgets.RBX_ACCENT
+                    color_hover: mod.widgets.RBX_ACCENT_HOVER
+                    color_down: mod.widgets.RBX_ACCENT_PRESSED
+                    text_style: mod.widgets.RBX_TEXT_BODY_STRONG {font_size: 14.0}
+                }
+            });
+        } else {
+            script_apply_eval!(cx, brand_wordmark, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_PRIMARY
+                    text_style: mod.widgets.RBX_TEXT_PAGE_TITLE {font_size: 22.0}
+                }
+            });
+            script_apply_eval!(cx, title, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.5}
+                }
+            });
+            script_apply_eval!(cx, sso_prompt_label, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.0}
+                }
+            });
+            script_apply_eval!(cx, account_prompt_label, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.0}
+                }
+            });
+            script_apply_eval!(cx, mode_toggle_button, {
+                draw_text +: {
+                    color: mod.widgets.RBX_ACCENT
+                    color_hover: mod.widgets.RBX_ACCENT_HOVER
+                    color_down: mod.widgets.RBX_ACCENT_PRESSED
+                    text_style: mod.widgets.RBX_TEXT_BODY_STRONG {font_size: 11.0}
+                }
+            });
+        }
+    }
+
+    fn apply_login_input_style(&mut self, cx: &mut Cx, mobile: bool) {
+        let input_ids: &[&[LiveId]] = ids_array!(
+            user_id_input,
+            password_input,
+            confirm_password_input,
+            homeserver_input
+        );
+        for input_ref in self.view_set(cx, input_ids).iter() {
+            let Some(mut input) = input_ref.borrow_mut() else { continue };
+            if mobile {
+                script_apply_eval!(cx, input, {
+                    padding: Inset{top: 10, bottom: 10, left: 16, right: 16}
+                    draw_bg +: {
+                        color: mod.widgets.RBX_LOGIN_SURFACE
+                        color_hover: mod.widgets.RBX_LOGIN_SURFACE
+                        color_focus: mod.widgets.RBX_LOGIN_SURFACE
+                        color_down: mod.widgets.RBX_LOGIN_SURFACE
+                        color_empty: mod.widgets.RBX_LOGIN_SURFACE
+                        border_color: mod.widgets.RBX_NAV_DIVIDER
+                        border_color_hover: mod.widgets.RBX_STROKE_STRONG
+                        border_color_focus: mod.widgets.RBX_ACCENT
+                        border_color_down: mod.widgets.RBX_STROKE_STRONG
+                        border_color_empty: mod.widgets.RBX_NAV_DIVIDER
+                    }
+                    draw_cursor +: {
+                        color: mod.widgets.RBX_ACCENT
+                    }
+                    draw_text +: {
+                        color: mod.widgets.RBX_FG_ON_ACCENT
+                        color_hover: mod.widgets.RBX_FG_ON_ACCENT
+                        color_focus: mod.widgets.RBX_FG_ON_ACCENT
+                        color_down: mod.widgets.RBX_FG_ON_ACCENT
+                        color_empty: mod.widgets.RBX_NAV_FG
+                        color_empty_hover: mod.widgets.RBX_NAV_FG
+                        color_empty_focus: mod.widgets.RBX_NAV_FG
+                    }
+                });
+            } else {
+                script_apply_eval!(cx, input, {
+                    padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
+                    draw_bg +: {
+                        color: mod.widgets.RBX_BG_SURFACE
+                        color_hover: mod.widgets.RBX_BG_SURFACE
+                        color_focus: mod.widgets.RBX_BG_SURFACE
+                        color_down: mod.widgets.RBX_BG_SURFACE
+                        color_empty: mod.widgets.RBX_BG_SURFACE
+                        border_color: mod.widgets.RBX_STROKE_SOFT
+                        border_color_hover: mod.widgets.RBX_STROKE_STRONG
+                        border_color_focus: mod.widgets.RBX_ACCENT
+                        border_color_down: mod.widgets.RBX_STROKE_STRONG
+                        border_color_empty: mod.widgets.RBX_STROKE_SOFT
+                    }
+                    draw_cursor +: {
+                        color: mod.widgets.RBX_ACCENT
+                    }
+                    draw_text +: {
+                        color: mod.widgets.RBX_FG_PRIMARY
+                        color_hover: mod.widgets.RBX_FG_PRIMARY
+                        color_focus: mod.widgets.RBX_FG_PRIMARY
+                        color_down: mod.widgets.RBX_FG_PRIMARY
+                        color_empty: mod.widgets.RBX_FG_TERTIARY
+                        color_empty_hover: mod.widgets.RBX_FG_TERTIARY
+                        color_empty_focus: mod.widgets.RBX_FG_TERTIARY
+                    }
+                });
+            }
+        }
+    }
+
+    fn apply_sso_layout_style(&mut self, cx: &mut Cx, mobile: bool) {
+        let button_ids: &[&[LiveId]] = ids_array!(
+            apple_button,
+            facebook_button,
+            github_button,
+            gitlab_button,
+            google_button,
+            twitter_button
+        );
+        for button_ref in self.view_set(cx, button_ids).iter() {
+            let Some(mut button) = button_ref.borrow_mut() else { continue };
+            let label = button.label(cx, ids!(sso_label));
+            label.set_visible(cx, mobile);
+            if mobile {
+                script_apply_eval!(cx, button, {
+                    width: 94
+                    height: 42
+                    padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
+                    draw_bg +: {
+                        color: mod.widgets.RBX_LOGIN_SURFACE
+                        border_color: mod.widgets.RBX_NAV_DIVIDER
+                        border_radius: mod.widgets.RBX_RADIUS_SM
+                    }
+                });
+            } else {
+                script_apply_eval!(cx, button, {
+                    width: 46
+                    height: 40
+                    padding: 8
+                    draw_bg +: {
+                        color: mod.widgets.RBX_BG_SURFACE
+                        border_color: mod.widgets.RBX_STROKE_SOFT
+                        border_radius: mod.widgets.RBX_RADIUS_SM
+                    }
+                });
+            }
+        }
     }
 
     fn set_sso_pending_state(&mut self, cx: &mut Cx, pending: bool) {
@@ -929,12 +1358,7 @@ impl LoginScreen {
 
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
-        self.view.text_input(cx, ids!(user_id_input))
-            .set_empty_text(cx, tr_key(self.app_language, "login.input.user_id").to_string());
-        self.view.text_input(cx, ids!(password_input))
-            .set_empty_text(cx, tr_key(self.app_language, "login.input.password").to_string());
-        self.view.text_input(cx, ids!(homeserver_input))
-            .set_empty_text(cx, tr_key(self.app_language, "login.input.homeserver").to_string());
+        self.set_login_input_copy(cx);
         self.view.text_input(cx, ids!(proxy_address_input))
             .set_empty_text(cx, tr_key(self.app_language, "login.proxy_settings.input.address").to_string());
         self.view.text_input(cx, ids!(proxy_port_input))
@@ -977,6 +1401,12 @@ impl LoginScreen {
         self.view.label(cx, ids!(footer_selfhost_label))
             .set_text(cx, tr_key(self.app_language, "login.footer.self_host_ready"));
         self.view.label(cx, ids!(footer_matrix_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.matrix_connected"));
+        self.view.label(cx, ids!(mobile_footer_secure_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.secure_session"));
+        self.view.label(cx, ids!(mobile_footer_selfhost_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.self_host_ready"));
+        self.view.label(cx, ids!(mobile_footer_matrix_label))
             .set_text(cx, tr_key(self.app_language, "login.footer.matrix_connected"));
         self.view.label(cx, ids!(agent_badge_label))
             .set_text(cx, tr_key(self.app_language, "login.badge.agent_ready"));
@@ -1163,6 +1593,7 @@ impl ScriptHook for LoginScreen {
             self.load_saved_proxy_to_form(cx);
             self.set_app_language(cx, self.app_language);
             self.sync_proxy_settings_modal_layout(cx);
+            self.sync_login_responsive_layout(cx);
         });
     }
 }
@@ -1178,6 +1609,7 @@ impl Widget for LoginScreen {
         }
         if matches!(event, Event::WindowGeomChange(_)) {
             self.sync_proxy_settings_modal_layout(cx);
+            self.sync_login_responsive_layout(cx);
         }
         self.view.handle_event(cx, event, scope);
         self.widget_match_event(cx, event, scope);
@@ -1841,7 +2273,7 @@ pub enum LoginAction {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_probe_homeserver, should_show_login_failure_modal};
+    use super::{is_mobile_login_width, should_probe_homeserver, should_show_login_failure_modal};
     use crate::homeserver::LoginMode;
 
     #[test]
@@ -1931,10 +2363,10 @@ mod tests {
     #[test]
     fn test_login_screen_source_uses_desktop_card_contract() {
         let src = include_str!("login_screen.rs");
-        assert!(src.contains("width: 494"), "desktop login card should use the wider reference-card width");
+        assert!(src.contains("max: 494"), "desktop login card should keep the wider reference-card max width");
         assert!(src.contains("border_radius: (RBX_RADIUS_LG)"), "login card should use RBX_RADIUS_LG");
         assert!(src.contains("login_button := RobrixIconButton"));
-        assert!(src.contains("width: 422"), "primary form controls should align to the desktop content column");
+        assert!(src.contains("max: 422"), "primary form controls should align to the desktop content column max width");
 
         for forbidden in [
             concat!("#", "0000"),
@@ -1989,5 +2421,89 @@ mod tests {
             !src.contains(old_hint_needle),
             "homeserver hint should not be sandwiched between divider lines directly under the input",
         );
+    }
+
+    #[test]
+    fn test_mobile_login_width_threshold() {
+        assert!(is_mobile_login_width(700.0));
+        assert!(is_mobile_login_width(390.0));
+        assert!(!is_mobile_login_width(701.0));
+    }
+
+    #[test]
+    fn test_login_screen_source_contains_mobile_dark_contract() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("RBX_LOGIN_BG"), "mobile login should use the dark login background token");
+        assert!(src.contains("RBX_LOGIN_SURFACE"), "mobile login should use the dark login surface token");
+        assert!(src.contains("RBX_BG_CANVAS"), "desktop light canvas token should remain wired");
+        assert!(src.contains("RBX_BG_SURFACE"), "desktop light surface token should remain wired");
+
+        for forbidden in [
+            concat!("#", "0000"),
+            concat!("#", "x00000000"),
+            concat!("#", "fff"),
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "login screen should not contain bare color literal {forbidden}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_mobile_login_form_labels_and_placeholders_are_i18n_bound() {
+        use crate::i18n::{tr_key, AppLanguage};
+
+        let src = include_str!("login_screen.rs");
+        for needle in [
+            "user_id_field_label",
+            "password_field_label",
+            "homeserver_field_label",
+            "login.input.mobile.user_id",
+            "login.input.mobile.password",
+            "login.input.mobile.homeserver",
+        ] {
+            assert!(src.contains(needle), "missing mobile login source contract: {needle}");
+        }
+
+        for key in [
+            "login.input.mobile.user_id",
+            "login.input.mobile.password",
+            "login.input.mobile.homeserver",
+        ] {
+            let en = tr_key(AppLanguage::English, key);
+            let zh = tr_key(AppLanguage::ChineseSimplified, key);
+            assert_ne!(en, key, "missing EN i18n for {key}");
+            assert_ne!(zh, key, "missing ZH i18n for {key}");
+            if key != "login.input.mobile.homeserver" {
+                assert_ne!(zh, en, "ZH i18n for {key} fell back to English");
+            }
+        }
+    }
+
+    #[test]
+    fn test_mobile_sso_grid_preserves_provider_ids() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("sso_label := Label"), "mobile SSO buttons should expose readable labels");
+        for id in [
+            "apple_button",
+            "facebook_button",
+            "github_button",
+            "gitlab_button",
+            "google_button",
+            "twitter_button",
+        ] {
+            assert!(src.contains(id), "missing existing SSO provider id {id}");
+        }
+        assert!(!src.contains(concat!("microsoft", "_button")));
+        assert!(!src.contains(concat!("more", "_button")));
+    }
+
+    #[test]
+    fn test_mobile_login_footer_contract() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("mobile_status_footer"));
+        assert!(src.contains("mobile_version_label"));
+        assert!(src.contains("desktop_status_footer"));
     }
 }
