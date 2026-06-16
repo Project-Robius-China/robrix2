@@ -428,7 +428,7 @@ Room goal: Reduce API latency 20% (Q2)  [View details]   ← goal banner
 房间详情总览（桌面）：<img src="ui-reference/03-room-detail.png" width="220" alt="房间详情总览">
 
 
-- **Login**（`src/login/login_screen.rs`）：品牌卡（cube logo + `Robrix2` + `Agent-native collaboration client`）→ `User ID / Password(👁) / Homeserver URL` → teal **Sign in securely** → `Or continue with` → `SSO/Google/GitHub/Microsoft/More` → `Create an account` → 状态 footer（Secure session · Self-host ready · Matrix connected）。两变体：桌面浅色（`RBX_BG_CANVAS`）/ 移动深色（`RBX_LOGIN_BG` + `RBX_LOGIN_SURFACE`）。
+- **Login**（`src/login/login_screen.rs`）：品牌卡（cube logo + `Robrix2` + `Agent-native collaboration client` + `Agent-ready workspace` badge）→ `User ID / Password(👁) / Homeserver URL` → teal **Sign in securely** → `Or continue with` → SSO 行（保持当前 Apple / Facebook / GitHub / GitLab / Google / X provider 集合，不因参考稿新增 Microsoft / More）→ `Create an account` → 状态 footer（Secure session · Self-host ready · Matrix connected）。桌面浅色卡片使用 `RBX_BG_CANVAS` + `RBX_BG_SURFACE`，桌面目标几何为卡片约 494px、内容列约 422px；移动深色变体使用 `RBX_LOGIN_BG` + `RBX_LOGIN_SURFACE`。
 - **Desktop Workbench**（`src/home/main_desktop_ui.rs` + `home_screen.rs`）：`[深色 NAV 栏 | 房间列表 | Timeline 主区 | 右侧 Info 面板]`。NAV 用 `RBX_NAV_*`（深色锚点）；右侧 Info 面板（Active agents / Pending approvals / Linked agents / Tools / Knowledge / Recent automations）目前**缺失**，需新建，并复用 5.2 的对象集合卡。
 
 ---
@@ -461,7 +461,7 @@ Room goal: Reduce API latency 20% (Q2)  [View details]   ← goal banner
 
 ### 7.1 交互 / 动效 / 无障碍（每个交互组件都要覆盖）
 
-- **焦点**：键盘可达控件用 `RBX_FOCUS_WIDTH`(2px) `RBX_FOCUS_RING`(=accent) 焦点环。注意现有 `RobrixIconButton` 关了 focus 视觉；新交互组件应显式开焦点环。
+- **焦点**：键盘可达控件用 `RBX_FOCUS_WIDTH`(2px) `RBX_FOCUS_RING`(=accent) 焦点环。注意现有 `RobrixIconButton` 关了 focus 视觉；新交互组件应显式开焦点环。登录输入框例外：用局部 `LoginTextInput` 做克制 focus，只把描边与光标切到 `RBX_ACCENT`，hover / down 仍用中性描边，并开启裁剪避免输入框绘制溢出。
 - **触控**：移动端命中区 ≥ `RBX_TAP_MIN`(44)。
 - **动效**：按下=瞬时变色（无弹跳）；menu / sheet 开合 ~150ms 淡入；列表项进出不强求动画，性能优先。
 - **无障碍**：交互元素给语义标签（"Approve this action" 而非 "Button"）；toggle role=switch；tab 顺序：表单字段 → 动作按钮。
