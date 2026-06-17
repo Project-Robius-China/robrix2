@@ -180,6 +180,9 @@ script_mod! {
         width: Fill,
         height: (NAVIGATION_TAB_BAR_SIZE)
         margin: Inset{left: 4, right: 4}
+        // Clip the SpacesBar to this wrapper's animated height so its content
+        // does not bleed over the bottom tab bar while collapsed (height 0).
+        clip_y: true,
         show_bg: true
         draw_bg +: {
             color: (COLOR_PRIMARY_DARKER)
