@@ -101,6 +101,11 @@ script_mod! {
                     open_room_filter_modal_button +: {
                         visible: true
                     }
+                    // Mobile reaches the SpacesBar via this header toggle (the
+                    // bottom tab bar no longer carries a Spaces button).
+                    toggle_spaces_bar_button +: {
+                        visible: true
+                    }
                 }
 
                 View {
