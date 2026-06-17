@@ -6,12 +6,12 @@
 use std::{fs::{File, OpenOptions}, io::Write, sync::Mutex};
 use std::{
     cell::RefCell,
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, BTreeMap, HashMap},
     hash::{Hash, Hasher},
     time::Duration,
 };
 use makepad_widgets::*;
-use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
+use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
 use serde::{Deserialize, Serialize};
 use url::Url;
 use crate::{
@@ -2573,9 +2573,136 @@ pub struct AppState {
     pub adding_account: bool,
     /// Local configuration and UI state for bot-assisted room binding.
     pub bot_settings: BotSettingsState,
+    /// Global source of truth for agent identities, keyed by agent MXID.
+    ///
+    /// Persisted per Matrix account. Old saved states that predate this field
+    /// deserialize to an empty registry via `#[serde(default)]`.
+    #[serde(default)]
+    pub agent_registry: AgentRegistry,
     /// Translation API configuration.
     #[serde(default)]
     pub translation: crate::room::translation::TranslationConfig,
+}
+
+/// The framework / runtime an agent is built on.
+///
+/// Agents migrated from the legacy known-bot list start as `Unknown`; the
+/// binding and BotFather-creation slices set a concrete framework when known.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AgentFramework {
+    /// Framework not yet identified.
+    #[default]
+    Unknown,
+    /// Octos app-service backed agent.
+    Octos,
+    /// Hermes external client integration.
+    Hermes,
+    /// OpenClaw external client integration.
+    OpenClaw,
+}
+
+/// How much the local user trusts an agent. The lowest tier is the default;
+/// higher tiers are added by the slice that lets the user grant trust.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TrustTier {
+    /// Default, least-privileged tier.
+    #[default]
+    Untrusted,
+}
+
+/// A single capability an agent advertises (free-form tag).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentCapability(pub String);
+
+/// A registered agent's metadata, keyed in [`AgentRegistry`] by its Matrix user ID.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AgentEntry {
+    /// Human-readable name, if known.
+    pub display_name: Option<String>,
+    /// The framework / runtime backing this agent.
+    pub framework: AgentFramework,
+    /// Avatar MXC URI, if known.
+    pub avatar: Option<OwnedMxcUri>,
+    /// Capabilities the agent advertises.
+    pub capabilities: Vec<AgentCapability>,
+    /// Local trust level for this agent.
+    pub trust_tier: TrustTier,
+}
+
+/// Global source of truth for agent identities, persisted per Matrix account
+/// as part of [`AppState`]. Keyed by agent MXID for dedup and deterministic order.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct AgentRegistry {
+    agents: BTreeMap<OwnedUserId, AgentEntry>,
+}
+
+impl AgentRegistry {
+    /// Returns `true` if no agents are registered.
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty()
+    }
+
+    /// Returns the number of registered agents.
+    pub fn len(&self) -> usize {
+        self.agents.len()
+    }
+
+    /// Returns `true` if an agent with the given MXID is registered.
+    pub fn contains(&self, user_id: &UserId) -> bool {
+        self.agents
+            .keys()
+            .any(|registered| registered.as_str() == user_id.as_str())
+    }
+
+    /// Returns the entry for the given MXID, if registered.
+    pub fn get(&self, user_id: &UserId) -> Option<&AgentEntry> {
+        self.agents
+            .iter()
+            .find(|(registered, _)| registered.as_str() == user_id.as_str())
+            .map(|(_, entry)| entry)
+    }
+
+    /// Registers an agent, keeping any existing entry for the same MXID (idempotent).
+    ///
+    /// Returns `true` if a new entry was inserted, `false` if one already existed.
+    pub fn register(&mut self, user_id: OwnedUserId, entry: AgentEntry) -> bool {
+        use std::collections::btree_map::Entry;
+        match self.agents.entry(user_id) {
+            Entry::Vacant(vacant) => {
+                vacant.insert(entry);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
+    }
+
+    /// All registered agent MXIDs, in deterministic (sorted) order.
+    pub fn agent_user_ids(&self) -> Vec<OwnedUserId> {
+        self.agents.keys().cloned().collect()
+    }
+}
+
+impl AppState {
+    /// Migration: if the agent registry is empty, seed it from the legacy
+    /// per-account known-bot list so upgraded users keep bot identification.
+    ///
+    /// Existing registry entries are never overwritten, and the legacy
+    /// `known_bot_user_ids` list is left intact (other flows still rely on it).
+    pub fn seed_agent_registry_from_known_bots(&mut self) {
+        if self.agent_registry.is_empty() {
+            for bot_user_id in self.bot_settings.known_bot_user_ids() {
+                self.agent_registry.register(
+                    bot_user_id,
+                    AgentEntry {
+                        framework: AgentFramework::Unknown,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
 }
 
 /// Local bot integration settings persisted per Matrix account.
@@ -3124,9 +3251,106 @@ impl Eq for SelectedRoom {}
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, BotSettingsState, RoomBotBindingState, SavedDockState, SelectedRoom};
+    use super::{
+        AgentCapability, AgentEntry, AgentFramework, AgentRegistry, AppState, BotSettingsState,
+        RoomBotBindingState, SavedDockState, SelectedRoom, TrustTier,
+    };
     use crate::utils::RoomNameId;
     use matrix_sdk::{RoomDisplayName, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, UserId}};
+
+    #[test]
+    fn test_agent_registry_serde_roundtrip() {
+        let id_a: OwnedUserId = "@octosbot:example.org".try_into().unwrap();
+        let id_b: OwnedUserId = "@helper:example.org".try_into().unwrap();
+        let mut registry = AgentRegistry::default();
+        registry.register(id_a.clone(), AgentEntry {
+            display_name: Some("Octos".into()),
+            framework: AgentFramework::Octos,
+            avatar: Some("mxc://example.org/abc".try_into().unwrap()),
+            capabilities: vec![AgentCapability("translate".into())],
+            trust_tier: TrustTier::Untrusted,
+        });
+        registry.register(id_b.clone(), AgentEntry {
+            display_name: None,
+            framework: AgentFramework::Unknown,
+            trust_tier: TrustTier::Untrusted,
+            ..Default::default()
+        });
+
+        let json = serde_json::to_vec(&registry).unwrap();
+        let restored: AgentRegistry = serde_json::from_slice(&json).unwrap();
+
+        assert_eq!(restored, registry);
+        let entry_a = restored.get(id_a.as_ref()).unwrap();
+        assert_eq!(entry_a.display_name.as_deref(), Some("Octos"));
+        assert_eq!(entry_a.capabilities, vec![AgentCapability("translate".into())]);
+        assert_eq!(entry_a.framework, AgentFramework::Octos);
+        assert_eq!(entry_a.trust_tier, TrustTier::Untrusted);
+        assert_eq!(restored.get(id_b.as_ref()).unwrap().display_name, None);
+    }
+
+    #[test]
+    fn test_migrate_known_bots_into_registry_as_unknown_framework() {
+        let mut app_state = AppState::default();
+        app_state.bot_settings.record_known_bot_user_ids(vec![
+            "@botA:example.org".try_into().unwrap(),
+            "@botB:example.org".try_into().unwrap(),
+        ]);
+
+        app_state.seed_agent_registry_from_known_bots();
+
+        let bot_a: OwnedUserId = "@botA:example.org".try_into().unwrap();
+        let bot_b: OwnedUserId = "@botB:example.org".try_into().unwrap();
+        assert!(app_state.agent_registry.contains(bot_a.as_ref()));
+        assert_eq!(
+            app_state.agent_registry.get(bot_a.as_ref()).unwrap().framework,
+            AgentFramework::Unknown,
+        );
+        assert!(app_state.agent_registry.contains(bot_b.as_ref()));
+        assert_eq!(
+            app_state.agent_registry.get(bot_b.as_ref()).unwrap().framework,
+            AgentFramework::Unknown,
+        );
+        assert_eq!(app_state.agent_registry.len(), 2);
+    }
+
+    #[test]
+    fn test_migration_preserves_known_bot_user_ids() {
+        let mut app_state = AppState::default();
+        app_state.bot_settings.record_known_bot_user_ids(vec![
+            "@botA:example.org".try_into().unwrap(),
+        ]);
+
+        app_state.seed_agent_registry_from_known_bots();
+
+        let known = app_state.bot_settings.known_bot_user_ids();
+        assert!(known.iter().any(|id| id.as_str() == "@botA:example.org"));
+        assert!(!known.is_empty());
+    }
+
+    #[test]
+    fn test_load_legacy_app_state_without_registry_field_defaults_empty() {
+        // A previously-saved AppState JSON that predates the agent_registry field.
+        let legacy_json =
+            r#"{"logged_in":true,"bot_settings":{"enabled":true,"known_bot_user_ids":["@botA:example.org"]}}"#;
+        let app_state: AppState = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(app_state.agent_registry.len(), 0);
+        assert!(app_state.logged_in);
+    }
+
+    #[test]
+    fn test_register_duplicate_mxid_is_idempotent() {
+        let id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut registry = AgentRegistry::default();
+        assert!(registry.register(id.clone(), AgentEntry::default()));
+        assert!(!registry.register(id.clone(), AgentEntry {
+            display_name: Some("changed".into()),
+            ..Default::default()
+        }));
+        assert_eq!(registry.len(), 1);
+        // The first entry is preserved, not overwritten by the duplicate register.
+        assert_eq!(registry.get(id.as_ref()).unwrap().display_name, None);
+    }
 
     fn joined_room(room_id_str: &str, name: &str) -> SelectedRoom {
         SelectedRoom::JoinedRoom {
