@@ -1307,6 +1307,11 @@ impl Widget for RoomInputBar {
         // Always read the latest translation config from global state.
         // Settings may update it at any time via set_global_config().
         self.translation_config = translation::get_global_config();
+        if !self.translation_config.as_ref().is_some_and(|config| config.enabled)
+            && (self.translation_active || self.translation_preview_text.is_some() || self.is_lang_popup_visible)
+        {
+            self.deactivate_translation(cx);
+        }
 
         if let Event::Actions(actions) = event {
             self.handle_actions(cx, scope, actions);
@@ -1443,8 +1448,11 @@ impl Widget for RoomInputBar {
         }
 
         let width = self.view.area().rect(cx).size.x as f32;
+        self.translation_config = translation::get_global_config();
         let show_room_info_card = !(width > 1.0 && width < ROOM_INFO_CARD_MOBILE_BREAKPOINT);
+        let show_translate_button = self.translation_config.as_ref().is_some_and(|config| config.enabled);
         self.button(cx, ids!(room_info_card_button)).set_visible(cx, show_room_info_card);
+        self.button(cx, ids!(translate_button)).set_visible(cx, show_translate_button);
         self.button(cx, ids!(bot_menu_button))
             .set_visible(cx, room_screen_props.is_some_and(is_management_bot_room));
 
@@ -1487,6 +1495,17 @@ impl RoomInputBar {
             }
         }
         self.view.redraw(cx);
+    }
+
+    fn deactivate_translation(&mut self, cx: &mut Cx) {
+        self.translation_active = false;
+        self.translation_preview_text = None;
+        self.translation_request_pending = false;
+        self.translation_last_source.clear();
+        self.view.view(cx, ids!(translation_preview)).set_visible(cx, false);
+        self.view.view(cx, ids!(translation_lang_wrapper)).set_visible(cx, false);
+        self.is_lang_popup_visible = false;
+        self.redraw(cx);
     }
 
     /// Handles a language being selected from the popup.
@@ -1659,14 +1678,7 @@ impl RoomInputBar {
         if self.button(cx, ids!(translate_button)).clicked(actions) {
             if self.translation_active {
                 // Turn off translation
-                self.translation_active = false;
-                self.translation_preview_text = None;
-                self.translation_request_pending = false;
-                self.translation_last_source.clear();
-                self.view.view(cx, ids!(translation_preview)).set_visible(cx, false);
-                self.view.view(cx, ids!(translation_lang_wrapper)).set_visible(cx, false);
-                self.is_lang_popup_visible = false;
-                self.redraw(cx);
+                self.deactivate_translation(cx);
             } else {
                 self.view.view(cx, ids!(translation_lang_wrapper)).set_visible(cx, false);
                 self.is_lang_popup_visible = false;
@@ -1697,14 +1709,7 @@ impl RoomInputBar {
 
         // Handle close button on translation preview.
         if self.button(cx, ids!(translation_close_button)).clicked(actions) {
-            self.translation_active = false;
-            self.translation_preview_text = None;
-            self.translation_request_pending = false;
-            self.translation_last_source.clear();
-            self.view.view(cx, ids!(translation_preview)).set_visible(cx, false);
-            self.view.view(cx, ids!(translation_lang_wrapper)).set_visible(cx, false);
-            self.is_lang_popup_visible = false;
-            self.redraw(cx);
+            self.deactivate_translation(cx);
         }
 
         // Handle the location card being clicked.
