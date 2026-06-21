@@ -191,6 +191,13 @@ pub(crate) struct SlashCommand {
     needs_args: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SlashCommandDiscoveryContext {
+    ManagementDm,
+    ManagementRoom,
+    None,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedSlashCommand {
     pub command: String,
@@ -206,7 +213,7 @@ struct TrackedVisibleMention {
 }
 
 const MENTION_POPUP_HEADER_TEXT: &str = "Users in this Room";
-const SLASH_COMMANDS: &[SlashCommand] = &[
+const MANAGEMENT_DM_SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         command: "/createbot",
         description_key: "slash_command.createbot.description",
@@ -226,6 +233,64 @@ const SLASH_COMMANDS: &[SlashCommand] = &[
         command: "/bothelp",
         description_key: "slash_command.bothelp.description",
         needs_args: false,
+    },
+    SlashCommand {
+        command: "/schedule",
+        description_key: "slash_command.schedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/schedules",
+        description_key: "slash_command.schedules.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/unschedule",
+        description_key: "slash_command.unschedule.description",
+        needs_args: true,
+    },
+];
+
+const MANAGEMENT_ROOM_SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        command: "/createbot",
+        description_key: "slash_command.createbot.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/deletebot",
+        description_key: "slash_command.deletebot.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/listbots",
+        description_key: "slash_command.listbots.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/bothelp",
+        description_key: "slash_command.bothelp.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/schedule",
+        description_key: "slash_command.schedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/schedules",
+        description_key: "slash_command.schedules.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/unschedule",
+        description_key: "slash_command.unschedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/allbots",
+        description_key: "slash_command.allbots.description",
+        needs_args: true,
     },
 ];
 
@@ -287,6 +352,40 @@ pub(crate) fn is_management_bot_room(
     )
 }
 
+pub(crate) fn slash_command_discovery_context(
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&OwnedUserId>,
+    resolved_parent_bot_user_id: Option<&OwnedUserId>,
+    known_bot_user_ids: &[OwnedUserId],
+) -> SlashCommandDiscoveryContext {
+    if !is_management_bot_room(
+        app_service_enabled,
+        is_direct_room,
+        has_persisted_management_binding,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+    ) {
+        return SlashCommandDiscoveryContext::None;
+    }
+
+    if is_direct_room {
+        SlashCommandDiscoveryContext::ManagementDm
+    } else {
+        SlashCommandDiscoveryContext::ManagementRoom
+    }
+}
+
+fn slash_command_catalog(context: SlashCommandDiscoveryContext) -> &'static [SlashCommand] {
+    match context {
+        SlashCommandDiscoveryContext::ManagementDm => MANAGEMENT_DM_SLASH_COMMANDS,
+        SlashCommandDiscoveryContext::ManagementRoom => MANAGEMENT_ROOM_SLASH_COMMANDS,
+        SlashCommandDiscoveryContext::None => &[],
+    }
+}
+
 /// True if `name` looks like a workflow **coordinator** agent — bare `coordinator`
 /// or `<team>_coordinator` (e.g. `wf_coordinator`, `alpha_coordinator`). Used to detect
 /// agent-chat workflow rooms for ANY parallel team, regardless of team prefix. Matched
@@ -297,6 +396,7 @@ fn name_is_workflow_coordinator(name: &str) -> bool {
     name == "coordinator" || name.ends_with("_coordinator")
 }
 
+#[cfg(test)]
 fn bot_command_popup_enabled(
     app_service_enabled: bool,
     is_direct_room: bool,
@@ -362,9 +462,26 @@ fn matching_slash_commands_in(commands: &[SlashCommand], search_text: &str) -> V
         .collect()
 }
 
+fn matching_slash_commands_for_context(
+    context: SlashCommandDiscoveryContext,
+    search_text: &str,
+) -> Vec<SlashCommand> {
+    matching_slash_commands_in(slash_command_catalog(context), search_text)
+}
+
 pub(crate) fn classify_known_slash_command_for_submission(text: &str) -> Option<SlashCommand> {
+    classify_known_slash_command_for_submission_in_context(
+        text,
+        SlashCommandDiscoveryContext::ManagementRoom,
+    )
+}
+
+pub(crate) fn classify_known_slash_command_for_submission_in_context(
+    text: &str,
+    context: SlashCommandDiscoveryContext,
+) -> Option<SlashCommand> {
     let first_token = text.split_whitespace().next()?;
-    SLASH_COMMANDS
+    slash_command_catalog(context)
         .iter()
         .copied()
         .find(|command| command.command == first_token)
@@ -435,6 +552,33 @@ fn primary_submit_modifiers() -> KeyModifiers {
             ..Default::default()
         }
     }
+}
+
+fn primary_submit_modifier_pressed(modifiers: &KeyModifiers) -> bool {
+    #[cfg(any(target_os = "ios", target_os = "macos", target_os = "tvos"))]
+    {
+        modifiers.logo
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "tvos")))]
+    {
+        modifiers.control
+    }
+}
+
+fn return_key_should_submit_message(
+    modifiers: KeyModifiers,
+    popup_selecting: bool,
+    send_on_enter: bool,
+) -> bool {
+    if modifiers.shift || modifiers.alt {
+        return false;
+    }
+
+    if primary_submit_modifier_pressed(&modifiers) {
+        return true;
+    }
+
+    send_on_enter && !popup_selecting
 }
 
 fn member_list_ready_for_mentions(member_count: usize, sync_pending: bool) -> bool {
@@ -1185,31 +1329,22 @@ impl Widget for MentionableTextInput {
             modifiers,
             ..
         }) = event {
-            // When the autocomplete popup (mention OR slash command) is open AND a row
-            // is focused, a plain Enter must SELECT that row — which cmd_text_input
-            // .handle_event does below — instead of sending the message. Without this
-            // guard the send intercept fires first and the popup item can never be picked
-            // with Enter. We also require a focused selectable item so that a popup that
-            // is merely open-but-empty (loading / no matches) still lets Enter send.
-            // A Cmd/Ctrl modifier always force-sends, even with the popup open.
+            // Popup row selection owns plain Enter when a selectable item is focused.
+            // Otherwise the user's send shortcut preference decides whether plain Enter
+            // submits, while the platform primary modifier always force-sends.
             let popup_selecting = self.cmd_text_input.view(cx, ids!(popup)).visible()
                 && self.cmd_text_input.keyboard_focus_index().is_some();
-            let force_send = modifiers.logo || modifiers.control;
-            if !popup_selecting || force_send {
-                let send_on_enter = scope
-                    .data
-                    .get::<crate::app::AppState>()
-                    .map(|app_state| app_state.app_prefs.send_on_enter)
-                    .unwrap_or(true);
-                let should_submit = force_send
-                    || send_on_enter && !modifiers.shift && !modifiers.alt;
-                if should_submit {
-                    let text_input = self.cmd_text_input.text_input(cx, ids!(text_input));
-                    let uid = text_input.widget_uid();
-                    let text = text_input.text();
-                    cx.widget_action(uid, makepad_widgets::text_input::TextInputAction::Returned(text, *modifiers));
-                    return;
-                }
+            let send_on_enter = scope
+                .data
+                .get::<crate::app::AppState>()
+                .map(|app_state| app_state.app_prefs.send_on_enter)
+                .unwrap_or(false);
+            if return_key_should_submit_message(*modifiers, popup_selecting, send_on_enter) {
+                let text_input = self.cmd_text_input.text_input(cx, ids!(text_input));
+                let uid = text_input.widget_uid();
+                let text = text_input.text();
+                cx.widget_action(uid, makepad_widgets::text_input::TextInputAction::Returned(text, *modifiers));
+                return;
             }
         }
 
@@ -1826,7 +1961,7 @@ impl MentionableTextInput {
             .get::<RoomScreenProps>()
             .expect("RoomScreenProps should be available in scope for MentionableTextInput");
 
-        let bot_enabled = bot_command_popup_enabled(
+        let bot_context = slash_command_discovery_context(
             room_props.app_service_enabled,
             room_props.is_direct_room,
             room_props.has_persisted_management_binding,
@@ -1834,6 +1969,7 @@ impl MentionableTextInput {
             room_props.resolved_parent_bot_user_id.as_ref(),
             &room_props.known_bot_user_ids,
         );
+        let bot_enabled = bot_context != SlashCommandDiscoveryContext::None;
         // agent-chat demo: offer the workflow `/` commands when a coordinator agent is
         // in the room (robrix2 has no built-in "agent-chat room" concept). Match ANY
         // team's coordinator — `wf_coordinator`, `alpha_coordinator`, … — on display name
@@ -1876,7 +2012,7 @@ impl MentionableTextInput {
         // visually-separated sections (a room like octos-public has BOTH Octos bots and
         // the wf_coordinator agent, so both sets are active).
         let bot_matches = if bot_enabled {
-            matching_slash_commands_in(SLASH_COMMANDS, search_text)
+            matching_slash_commands_for_context(bot_context, search_text)
         } else {
             Vec::new()
         };
@@ -3010,6 +3146,10 @@ mod tests {
     use super::*;
     use matrix_sdk::ruma::events::room::message::MessageType;
 
+    fn slash_command_names(commands: &[SlashCommand]) -> Vec<&'static str> {
+        commands.iter().map(|command| command.command).collect()
+    }
+
     #[test]
     fn popup_status_items_are_never_selectable() {
         assert!(!popup_status_item_is_selectable(PopupStatusItemKind::Loading));
@@ -3021,6 +3161,39 @@ mod tests {
         assert!(!member_list_ready_for_mentions(1, true));
         assert!(!member_list_ready_for_mentions(0, false));
         assert!(member_list_ready_for_mentions(3, false));
+    }
+
+    #[test]
+    fn return_key_submission_respects_send_on_enter_preference() {
+        assert!(return_key_should_submit_message(
+            KeyModifiers::default(),
+            false,
+            true,
+        ));
+        assert!(!return_key_should_submit_message(
+            KeyModifiers::default(),
+            false,
+            false,
+        ));
+        assert!(return_key_should_submit_message(
+            primary_submit_modifiers(),
+            false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn return_key_submission_keeps_bare_enter_for_popup_selection() {
+        assert!(!return_key_should_submit_message(
+            KeyModifiers::default(),
+            true,
+            true,
+        ));
+        assert!(return_key_should_submit_message(
+            primary_submit_modifiers(),
+            true,
+            true,
+        ));
     }
 
     #[test]
@@ -3152,6 +3325,30 @@ mod tests {
     }
 
     #[test]
+    fn test_management_dm_command_catalog_excludes_allbots() {
+        let command_names = slash_command_names(slash_command_catalog(
+            SlashCommandDiscoveryContext::ManagementDm,
+        ));
+
+        assert!(command_names.contains(&"/schedule"));
+        assert!(command_names.contains(&"/schedules"));
+        assert!(command_names.contains(&"/unschedule"));
+        assert!(!command_names.contains(&"/allbots"));
+    }
+
+    #[test]
+    fn test_management_room_command_catalog_includes_allbots() {
+        let command_names = slash_command_names(slash_command_catalog(
+            SlashCommandDiscoveryContext::ManagementRoom,
+        ));
+
+        assert!(command_names.contains(&"/schedule"));
+        assert!(command_names.contains(&"/schedules"));
+        assert!(command_names.contains(&"/unschedule"));
+        assert!(command_names.contains(&"/allbots"));
+    }
+
+    #[test]
     fn slash_command_trigger_is_found_at_input_start() {
         assert_eq!(find_slash_command_trigger_position("/li", "/li".len()), Some(0));
     }
@@ -3208,7 +3405,10 @@ mod tests {
 
     #[test]
     fn slash_commands_filter_by_prefix_without_leading_slash() {
-        let commands = matching_slash_commands_in(SLASH_COMMANDS, "li");
+        let commands = matching_slash_commands_for_context(
+            SlashCommandDiscoveryContext::ManagementRoom,
+            "li",
+        );
         assert_eq!(commands, vec![SlashCommand {
             command: "/listbots",
             description_key: "slash_command.listbots.description",
@@ -3218,7 +3418,11 @@ mod tests {
 
     #[test]
     fn slash_commands_return_empty_for_unknown_prefix() {
-        assert!(matching_slash_commands_in(SLASH_COMMANDS, "zzzznotacommand").is_empty());
+        assert!(matching_slash_commands_for_context(
+            SlashCommandDiscoveryContext::ManagementRoom,
+            "zzzznotacommand",
+        )
+        .is_empty());
     }
 
     #[test]

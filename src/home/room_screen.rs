@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, media_source_mxc, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -6322,6 +6322,7 @@ impl RoomScreen {
                 has_persisted_management_binding,
                 bound_bot_user_id,
                 resolved_parent_bot_user_id,
+                persisted_bound_bot_user_ids,
                 room_bot_user_ids,
                 known_bot_user_ids,
             ) = scope
@@ -6336,6 +6337,7 @@ impl RoomScreen {
                     } else {
                         Vec::new()
                     };
+                    let persisted_bound_bot_user_ids = persisted_room_bot_user_ids.clone();
                     let resolved_parent_bot_user_id = if app_service_enabled {
                         app_state
                             .bot_settings
@@ -6388,11 +6390,12 @@ impl RoomScreen {
                         has_persisted_management_binding,
                         bound_bot_user_id,
                         resolved_parent_bot_user_id,
+                        persisted_bound_bot_user_ids,
                         room_bot_user_ids,
                         known_bot_user_ids,
                     )
                 })
-                .unwrap_or((false, false, false, None, None, Vec::new(), Vec::new()));
+                .unwrap_or((false, false, false, None, None, Vec::new(), Vec::new(), Vec::new()));
 
             Some(RoomScreenProps {
                 room_screen_widget_uid,
@@ -6410,6 +6413,7 @@ impl RoomScreen {
                 has_persisted_management_binding,
                 bound_bot_user_id,
                 resolved_parent_bot_user_id,
+                persisted_bound_bot_user_ids,
                 known_bot_user_ids,
             })
         } else {
@@ -6430,6 +6434,7 @@ impl RoomScreen {
                 has_persisted_management_binding: false,
                 bound_bot_user_id: None,
                 resolved_parent_bot_user_id: None,
+                persisted_bound_bot_user_ids: Vec::new(),
                 known_bot_user_ids: Vec::new(),
             })
         }
@@ -6629,6 +6634,7 @@ impl RoomScreen {
             replied_to: None,
             target_user_id: None,
             explicit_room: false,
+            broadcast_target_user_ids: None,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
@@ -6674,6 +6680,7 @@ impl RoomScreen {
             replied_to: None,
             target_user_id: bound_bot_user_id,
             explicit_room: false,
+            broadcast_target_user_ids: None,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
@@ -7342,16 +7349,15 @@ impl RoomScreen {
                 }
                 TimelineUpdate::LinkPreviewFetched => {}
                 TimelineUpdate::AttachmentDownloadFinished(mxc_uri, result) => {
-                    if let Some(entry) = tl.pending_downloads.iter_mut().find(|pending| pending.mxc == mxc_uri) {
-                        entry.state = match result {
-                            Ok(()) => PendingDownloadState::JustSucceeded,
-                            Err(_) => PendingDownloadState::JustFailed,
-                        };
+                    if mark_pending_download_finished(&mut tl.pending_downloads, &mxc_uri, &result) {
+                        tl.content_drawn_since_last_update.clear();
                     }
                     portal_list.redraw(cx);
                 }
                 TimelineUpdate::AttachmentDownloadReset(mxc_uri) => {
-                    tl.pending_downloads.retain(|pending| pending.mxc != mxc_uri);
+                    if reset_pending_download(&mut tl.pending_downloads, &mxc_uri) {
+                        tl.content_drawn_since_last_update.clear();
+                    }
                     portal_list.redraw(cx);
                 }
                 TimelineUpdate::FileUploadConfirmed(file_data) => {
@@ -8051,6 +8057,12 @@ impl RoomScreen {
                     start_attachment_download(info.clone(), update_sender);
                 }
                 MessageAction::CancelDownload(mxc) => {
+                    if let Some(tl) = self.tl_state.as_mut()
+                        && reset_pending_download(&mut tl.pending_downloads, &mxc)
+                    {
+                        tl.content_drawn_since_last_update.clear();
+                        portal_list.redraw(cx);
+                    }
                     submit_async_request(MatrixRequest::CancelDownload(mxc.clone()));
                 }
                 // This is handled within the Message widget itself.
@@ -9182,6 +9194,7 @@ pub struct RoomScreenProps {
     pub has_persisted_management_binding: bool,
     pub bound_bot_user_id: Option<OwnedUserId>,
     pub resolved_parent_bot_user_id: Option<OwnedUserId>,
+    pub persisted_bound_bot_user_ids: Vec<OwnedUserId>,
     pub known_bot_user_ids: Vec<OwnedUserId>,
 }
 

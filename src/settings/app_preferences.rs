@@ -24,7 +24,7 @@ impl Default for AppPreferences {
     fn default() -> Self {
         Self {
             view_mode: ViewModeOverride::default(),
-            send_on_enter: true,
+            send_on_enter: false,
             thumbnail_max_height: ThumbnailMaxHeight::default(),
             ui_zoom: UiZoom::default(),
             agent_chat_enabled: false,
@@ -239,5 +239,15 @@ pub fn effective_is_desktop(cx: &mut Cx) -> bool {
         ViewModeOverride::Automatic => {
             cx.display_context.is_desktop() || !cx.display_context.is_screen_size_known()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_send_shortcut_requires_primary_modifier() {
+        assert!(!AppPreferences::default().send_on_enter);
     }
 }
