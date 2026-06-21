@@ -1498,6 +1498,7 @@ impl MatchEvent for App {
                         replied_to: None,
                         target_user_id: None,
                         explicit_room: false,
+                        broadcast_target_user_ids: None,
                         #[cfg(feature = "tsp")]
                         sign_with_tsp: false,
                     });

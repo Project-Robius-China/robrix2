@@ -7,6 +7,16 @@
 .DS_Store
 proxychains.conf
 
+## local agent/tooling artifacts
+.mcp.json
+.playwright-mcp/
+.superpowers/
+.agent-spec/
+
+## local config backups / screenshots
+*.bak
+weather-directions-*.png
+
 ## agent-chat demo runtime logs / machine-specific registry
 roadmap/agentchat-demo/.demo-logs/
 roadmap/agentchat-demo/projects.json
