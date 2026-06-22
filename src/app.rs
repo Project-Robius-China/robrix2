@@ -837,7 +837,7 @@ impl MatchEvent for App {
                 continue;
             }
 
-            if let RoomFilterResultAction::Clicked(target) = action.as_widget_action().cast() {
+            if let Some(RoomFilterResultAction::Clicked(target)) = action.downcast_ref::<RoomFilterResultAction>() {
                 self.ui.modal(cx, ids!(room_filter_modal)).close(cx);
                 match target {
                     RoomFilterResultTarget::LocalSpace { room_name_id: space_name_id, .. }
