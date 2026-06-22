@@ -2081,7 +2081,7 @@ script_mod! {
                         show_bg: true
                         draw_bg +: {
                             color: (mod.widgets.COLOR_BOT_CARD_BG)
-                            border_radius: 14.0
+                            border_radius: 6.0
                             border_size: 1.0
                             border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
                         }
@@ -2273,7 +2273,7 @@ script_mod! {
                         show_bg: true
                         draw_bg +: {
                             color: (mod.widgets.COLOR_BOT_CARD_BG)
-                            border_radius: 14.0
+                            border_radius: 6.0
                             border_size: 1.0
                             border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
                         }
