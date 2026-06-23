@@ -8058,7 +8058,7 @@ impl RoomScreen {
                 }
                 MessageAction::CancelDownload(mxc) => {
                     if let Some(tl) = self.tl_state.as_mut()
-                        && reset_pending_download(&mut tl.pending_downloads, &mxc)
+                        && reset_pending_download(&mut tl.pending_downloads, mxc)
                     {
                         tl.content_drawn_since_last_update.clear();
                         portal_list.redraw(cx);
