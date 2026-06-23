@@ -24,7 +24,7 @@ use crate::{
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
-    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom}
+    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
 };
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
@@ -1290,6 +1290,21 @@ impl MatchEvent for App {
             }
 
             if let Some(RoomsListHeaderAction::OpenRoomFilterModal) = action.downcast_ref() {
+                // Adapt the search modal to the platform: on mobile use a narrower
+                // width (screen minus side margins) and a shorter results area to
+                // avoid a large mostly-empty modal; on desktop keep 420 x 260.
+                // Numeric width avoids Fill collapsing to 0 in the modal's context.
+                let is_desktop = effective_is_desktop(cx);
+                let modal_width = if is_desktop { 420.0_f64 } else { (cx.display_context.screen_size.x - 24.0).max(280.0) };
+                let results_height = if is_desktop { 260.0_f64 } else { 180.0_f64 };
+                let mut modal_inner = self.ui.view(cx, ids!(room_filter_modal_inner));
+                script_apply_eval!(cx, modal_inner, {
+                    width: #(modal_width)
+                });
+                let mut results_scroll = self.ui.view(cx, ids!(room_filter_modal_inner.search_results_scroll));
+                script_apply_eval!(cx, results_scroll, {
+                    height: #(results_height)
+                });
                 self.ui.modal(cx, ids!(room_filter_modal)).open(cx);
                 let room_filter_input = self.ui.text_input(cx, ids!(room_filter_modal_inner.room_filter_input_bar.input));
                 room_filter_input.set_key_focus(cx);
