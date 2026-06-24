@@ -13,6 +13,35 @@ script_mod! {
     mod.widgets.ICO_CHEVRON_RIGHT = crate_resource("self://resources/icons/chevron_right.svg")
     mod.widgets.ICO_CHEVRON_DOWN = crate_resource("self://resources/icons/chevron_down.svg")
 
+    // A mobile settings segmented tab. Selection is driven by the `selected`
+    // animator (teal text when active, gray when idle) instead of
+    // `script_apply_eval!`, because these tabs are instantiated by an
+    // AdaptiveView and eval-based restyling silently fails on such widgets
+    // (their ScriptObject is zero — Makepad pitfall #40). The animator writes
+    // the shader instance directly, so it works.
+    let SettingsSegmentTab = RobrixNeutralIconButton {
+        width: Fit, height: Fit,
+        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+        spacing: 0, margin: 0,
+        icon_walk: Walk{width: 0, height: 0, margin: 0}
+        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
+        draw_text +: { color: (RBX_FG_SECONDARY) }
+        text: ""
+        animator +: {
+            selected: {
+                default: @off
+                off: AnimatorState {
+                    from: {all: Forward {duration: 0.0}}
+                    apply: { draw_text: { color: (RBX_FG_SECONDARY) } }
+                }
+                on: AnimatorState {
+                    from: {all: Forward {duration: 0.0}}
+                    apply: { draw_text: { color: (RBX_ACCENT) } }
+                }
+            }
+        }
+    }
+
     // The main, top-level settings screen widget.
     mod.widgets.SettingsScreen = #(SettingsScreen::register_widget(vm)) {
         width: Fill, height: Fill,
@@ -644,51 +673,11 @@ script_mod! {
                     spacing: (SPACE_XS)
                     padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: 0, bottom: (SPACE_SM)}
 
-                    m_tab_account := RobrixNeutralIconButton {
-                        width: Fit, height: Fit,
-                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
-                        spacing: 0, margin: 0,
-                        icon_walk: Walk{width: 0, height: 0, margin: 0}
-                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
-                        draw_text +: { color: (RBX_FG_SECONDARY) }
-                        text: "Account"
-                    }
-                    m_tab_preferences := RobrixNeutralIconButton {
-                        width: Fit, height: Fit,
-                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
-                        spacing: 0, margin: 0,
-                        icon_walk: Walk{width: 0, height: 0, margin: 0}
-                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
-                        draw_text +: { color: (RBX_FG_SECONDARY) }
-                        text: "Preferences"
-                    }
-                    m_tab_devices := RobrixNeutralIconButton {
-                        width: Fit, height: Fit,
-                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
-                        spacing: 0, margin: 0,
-                        icon_walk: Walk{width: 0, height: 0, margin: 0}
-                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
-                        draw_text +: { color: (RBX_FG_SECONDARY) }
-                        text: "Devices"
-                    }
-                    m_tab_labs := RobrixNeutralIconButton {
-                        width: Fit, height: Fit,
-                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
-                        spacing: 0, margin: 0,
-                        icon_walk: Walk{width: 0, height: 0, margin: 0}
-                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
-                        draw_text +: { color: (RBX_FG_SECONDARY) }
-                        text: "Labs"
-                    }
-                    m_tab_contribute := RobrixNeutralIconButton {
-                        width: Fit, height: Fit,
-                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
-                        spacing: 0, margin: 0,
-                        icon_walk: Walk{width: 0, height: 0, margin: 0}
-                        draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000, border_size: 0.0 }
-                        draw_text +: { color: (RBX_FG_SECONDARY) }
-                        text: "Contribute"
-                    }
+                    m_tab_account := SettingsSegmentTab { text: "Account" }
+                    m_tab_preferences := SettingsSegmentTab { text: "Preferences" }
+                    m_tab_devices := SettingsSegmentTab { text: "Devices" }
+                    m_tab_labs := SettingsSegmentTab { text: "Labs" }
+                    m_tab_contribute := SettingsSegmentTab { text: "Contribute" }
                 }
 
                 // hairline under the tabs
