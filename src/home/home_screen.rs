@@ -425,26 +425,16 @@ script_mod! {
                         }
                     }
 
-                    // Room views: multiple instances to support deep stacking
-                    // (e.g., room -> thread -> room -> thread -> ...).
-                    // Each stack depth gets its own dedicated view widget,
-                    // avoiding complex state save/restore when views are reused.
-                    room_view_0  := mod.widgets.RobrixRoomContentView { body +: { room_screen_0  := mod.widgets.RoomScreen {} } }
-                    room_view_1  := mod.widgets.RobrixRoomContentView { body +: { room_screen_1  := mod.widgets.RoomScreen {} } }
-                    room_view_2  := mod.widgets.RobrixRoomContentView { body +: { room_screen_2  := mod.widgets.RoomScreen {} } }
-                    room_view_3  := mod.widgets.RobrixRoomContentView { body +: { room_screen_3  := mod.widgets.RoomScreen {} } }
-                    room_view_4  := mod.widgets.RobrixRoomContentView { body +: { room_screen_4  := mod.widgets.RoomScreen {} } }
-                    room_view_5  := mod.widgets.RobrixRoomContentView { body +: { room_screen_5  := mod.widgets.RoomScreen {} } }
-                    room_view_6  := mod.widgets.RobrixRoomContentView { body +: { room_screen_6  := mod.widgets.RoomScreen {} } }
-                    room_view_7  := mod.widgets.RobrixRoomContentView { body +: { room_screen_7  := mod.widgets.RoomScreen {} } }
-                    room_view_8  := mod.widgets.RobrixRoomContentView { body +: { room_screen_8  := mod.widgets.RoomScreen {} } }
-                    room_view_9  := mod.widgets.RobrixRoomContentView { body +: { room_screen_9  := mod.widgets.RoomScreen {} } }
-                    room_view_10 := mod.widgets.RobrixRoomContentView { body +: { room_screen_10 := mod.widgets.RoomScreen {} } }
-                    room_view_11 := mod.widgets.RobrixRoomContentView { body +: { room_screen_11 := mod.widgets.RoomScreen {} } }
-                    room_view_12 := mod.widgets.RobrixRoomContentView { body +: { room_screen_12 := mod.widgets.RoomScreen {} } }
-                    room_view_13 := mod.widgets.RobrixRoomContentView { body +: { room_screen_13 := mod.widgets.RoomScreen {} } }
-                    room_view_14 := mod.widgets.RobrixRoomContentView { body +: { room_screen_14 := mod.widgets.RoomScreen {} } }
-                    room_view_15 := mod.widgets.RobrixRoomContentView { body +: { room_screen_15 := mod.widgets.RoomScreen {} } }
+                    // Only two room-view slots are needed: Makepad's
+                    // StackNavigation keeps a single current view (its depth()
+                    // returns 0/1) and a push transition shows at most two at
+                    // once (outgoing + incoming). Per-room UI state (scroll,
+                    // draft, timeline) is preserved across reuse via the global
+                    // TIMELINE_STATES map (keyed by room, not by widget), so
+                    // reusing these two across all rooms loses nothing. Kept in
+                    // sync with `App::ROOM_VIEW_IDS` / `ROOM_SCREEN_IDS`.
+                    room_view_0 := mod.widgets.RobrixRoomContentView { body +: { room_screen_0 := mod.widgets.RoomScreen {} } }
+                    room_view_1 := mod.widgets.RobrixRoomContentView { body +: { room_screen_1 := mod.widgets.RoomScreen {} } }
 
                     invite_view := mod.widgets.RobrixContentView {
                         body +: {

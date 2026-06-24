@@ -2449,31 +2449,22 @@ impl App {
         }
     }
 
-    /// Room StackNavigationView instances, one per stack depth.
-    /// Each depth gets its own dedicated view widget to avoid
-    /// complex state save/restore when views would otherwise be reused.
-    const ROOM_VIEW_IDS: [LiveId; 16] = [
-        live_id!(room_view_0),  live_id!(room_view_1),
-        live_id!(room_view_2),  live_id!(room_view_3),
-        live_id!(room_view_4),  live_id!(room_view_5),
-        live_id!(room_view_6),  live_id!(room_view_7),
-        live_id!(room_view_8),  live_id!(room_view_9),
-        live_id!(room_view_10), live_id!(room_view_11),
-        live_id!(room_view_12), live_id!(room_view_13),
-        live_id!(room_view_14), live_id!(room_view_15),
+    /// Room StackNavigationView slots, indexed by visual depth.
+    ///
+    /// Only TWO are needed: Makepad's `StackNavigation` keeps a single
+    /// `current_view` (its `depth()` returns 0 or 1), and a push transition
+    /// shows at most two views at once (outgoing + incoming). Per-room UI state
+    /// (scroll, draft, timeline) is preserved across reuse via the global
+    /// `TIMELINE_STATES` map (keyed by room, not by widget), so a 2-slot pool
+    /// loses nothing vs. a larger one.
+    const ROOM_VIEW_IDS: [LiveId; 2] = [
+        live_id!(room_view_0), live_id!(room_view_1),
     ];
 
     /// The RoomScreen widget IDs inside each room view,
     /// corresponding 1:1 with [`Self::ROOM_VIEW_IDS`].
-    const ROOM_SCREEN_IDS: [LiveId; 16] = [
-        live_id!(room_screen_0),  live_id!(room_screen_1),
-        live_id!(room_screen_2),  live_id!(room_screen_3),
-        live_id!(room_screen_4),  live_id!(room_screen_5),
-        live_id!(room_screen_6),  live_id!(room_screen_7),
-        live_id!(room_screen_8),  live_id!(room_screen_9),
-        live_id!(room_screen_10), live_id!(room_screen_11),
-        live_id!(room_screen_12), live_id!(room_screen_13),
-        live_id!(room_screen_14), live_id!(room_screen_15),
+    const ROOM_SCREEN_IDS: [LiveId; 2] = [
+        live_id!(room_screen_0), live_id!(room_screen_1),
     ];
 
     /// Returns the room view and room screen LiveIds for the given stack depth.
