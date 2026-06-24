@@ -763,7 +763,7 @@
   "space_lobby.item.child_room_n": "~{count} rooms",
   "settings.labs.agents.title": "Agent Access",
   "settings.labs.agents.description": "Bind a Matrix account, mark which agent framework it uses, and let Robrix identify it across rooms.",
-  "settings.labs.agents.empty": "No agents yet. Search above to add and bind one.",
+  "settings.labs.agents.empty": "No agents yet. Add one to bind its Matrix account.",
   "settings.labs.agents.add_title": "Bind existing Matrix agent",
   "settings.labs.agents.framework_label": "Agent type",
   "settings.labs.agents.search_placeholder": "Search or enter @agent:server",
@@ -774,5 +774,5 @@
   "settings.labs.agents.popup.added": "Added {name} as a {framework} agent.",
   "settings.labs.agents.popup.already": "{name} is already a registered agent.",
   "settings.labs.agents.octos_appservice_hint": "For Octos AppService bots, configure BotFather and the local Octos service below. Octos direct agents can be added here by Matrix ID.",
-  "settings.labs.agents.add_button": "＋ Add an agent"
+  "settings.labs.agents.add_button": "Add an agent"
 }

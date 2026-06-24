@@ -1932,6 +1932,10 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            if self.suppress_add_agent_direct_message_action(cx, action) {
+                continue;
+            }
+
             // Handle DirectMessageRoomActions
             match action.downcast_ref() {
                 Some(DirectMessageRoomAction::FoundExisting { user_id, room_name_id }) => {
@@ -2108,6 +2112,20 @@ impl AppMain for App {
 }
 
 impl App {
+    fn suppress_add_agent_direct_message_action(&mut self, cx: &mut Cx, action: &Action) -> bool {
+        let target_user_id: &OwnedUserId = match action.downcast_ref() {
+            Some(DirectMessageRoomAction::FoundExisting { user_id, .. }) => user_id,
+            Some(DirectMessageRoomAction::DidNotExist { user_profile }) => &user_profile.user_id,
+            Some(DirectMessageRoomAction::FailedToCreate { user_profile, .. }) => &user_profile.user_id,
+            Some(DirectMessageRoomAction::NewlyCreated { user_profile, .. }) => &user_profile.user_id,
+            _ => return false,
+        };
+
+        self.ui
+            .add_agent_modal(cx, ids!(add_agent_modal_inner))
+            .is_waiting_for_direct_message_result(target_user_id)
+    }
+
     fn handle_lifecycle_event(&mut self, cx: &mut Cx, event: &Event) {
         match event {
             Event::QuitRequested(e) => {

@@ -2,7 +2,7 @@
 use makepad_widgets::*;
 use url::Url;
 
-use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}, styles::{apply_neutral_button_style, apply_primary_button_style, apply_segment_selected_style, apply_segment_idle_style}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
+use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}, styles::{apply_neutral_button_style, apply_primary_button_style, apply_segment_selected_style, apply_segment_idle_style}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
 
 const CONTRIBUTE_REPO_URL: &str = "https://github.com/Project-Robius-China/robrix2";
 
@@ -715,7 +715,7 @@ script_mod! {
                         devices_settings := DevicesScreen {}
                     }
 
-                    labs_settings_page := ScrollXYView {
+                    labs_settings_page := ScrollYView {
                         width: Fill, height: Fill
                         flow: Down
                         spacing: (SPACE_MD)
@@ -849,12 +849,6 @@ script_mod! {
         create_did_modal := Modal {
             content +: {
                 create_did_modal_inner := CreateDidModal {}
-            }
-        }
-
-        add_agent_modal := Modal {
-            content +: {
-                add_agent_modal_inner := mod.widgets.AddAgentModal {}
             }
         }
     }
@@ -1267,9 +1261,6 @@ impl SettingsScreen {
             .account_settings(cx, ids!(account_settings))
             .set_app_language(cx, self.app_language);
         self.view
-            .bot_settings(cx, ids!(bot_settings))
-            .set_app_language(cx, self.app_language);
-        self.view
             .translation_settings(cx, ids!(translation_settings))
             .set_app_language(cx, self.app_language);
         self.sync_tsp_settings_card_visibility(cx);
@@ -1604,7 +1595,7 @@ impl SettingsScreen {
     }
 
     /// Fetches the current user's profile and uses it to populate the settings screen.
-    pub fn populate(&mut self, cx: &mut Cx, own_profile: Option<UserProfile>, bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_prefs: &AppPreferences, app_language: AppLanguage) {
+    pub fn populate(&mut self, cx: &mut Cx, own_profile: Option<UserProfile>, _bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_prefs: &AppPreferences, app_language: AppLanguage) {
         // Ensure the AdaptiveView has selected the right Desktop/Mobile variant
         // before we populate it, so populate targets the live variant's widgets.
         self.apply_settings_view_mode(cx, app_prefs.view_mode);
@@ -1614,7 +1605,6 @@ impl SettingsScreen {
             error!("Failed to get own profile for settings screen.");
         }
         self.view.app_settings(cx, ids!(app_settings)).populate(cx, app_prefs, app_language);
-        self.view.bot_settings(cx, ids!(bot_settings)).populate(cx, bot_settings);
         self.load_saved_proxy_to_preferences_form(cx);
         self.view.translation_settings(cx, ids!(translation_settings)).populate(cx, translation_config);
         #[cfg(feature = "tsp")]
@@ -1637,6 +1627,12 @@ impl SettingsScreenRef {
         let Some(mut inner) = self.borrow_mut() else { return; };
         inner.populate(cx, own_profile, bot_settings, translation_config, app_prefs, app_language);
     }
+
+    pub fn is_showing_agent_access(&self) -> bool {
+        self.borrow()
+            .map(|inner| inner.selected_category == SettingsCategory::Labs)
+            .unwrap_or(false)
+    }
 }
 
 fn persist_app_state(app_state: &AppState) {
@@ -1644,5 +1640,55 @@ fn persist_app_state(app_state: &AppState) {
         if let Err(e) = persistence::save_app_state(app_state.clone(), user_id) {
             error!("Failed to persist app state after updating language setting. Error: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn production_src(src: &'static str) -> &'static str {
+        src.split("#[cfg(test)]").next().unwrap_or(src)
+    }
+
+    #[test]
+    fn test_mobile_labs_page_uses_vertical_scroll_only() {
+        let src = production_src(include_str!("settings_screen.rs"));
+        let mobile_start = src
+            .find("Mobile := View")
+            .expect("settings screen should define a mobile variant");
+        let mobile_src = &src[mobile_start..];
+        let labs_start = mobile_src
+            .find("labs_settings_page :=")
+            .expect("mobile settings should include the Labs page");
+        let labs_decl = mobile_src[labs_start..]
+            .lines()
+            .next()
+            .expect("Labs page declaration should be on its own line");
+
+        assert!(
+            labs_decl.contains("labs_settings_page := ScrollYView"),
+            "mobile Labs must be vertical-only so Agent Access cannot horizontally pan or clip: {labs_decl}",
+        );
+    }
+
+    #[test]
+    fn test_settings_screen_does_not_shadow_root_add_agent_modal() {
+        let src = production_src(include_str!("settings_screen.rs"));
+
+        assert!(
+            !src.contains("add_agent_modal := Modal"),
+            "AddAgentModal must be hosted only at app root so show/open target the same modal",
+        );
+        assert!(
+            !src.contains("add_agent_modal_inner := mod.widgets.AddAgentModal"),
+            "SettingsScreen must not define a second add_agent_modal_inner with the root modal id",
+        );
+    }
+
+    #[test]
+    fn test_settings_screen_exposes_agent_access_context_for_bottom_nav() {
+        let src = production_src(include_str!("settings_screen.rs"));
+
+        assert!(src.contains("pub fn is_showing_agent_access"));
+        assert!(src.contains("inner.selected_category == SettingsCategory::Labs"));
     }
 }

@@ -66,6 +66,11 @@ script_mod! {
     mod.widgets.RBX_BG_PRESSED        = #xE7ECF3
     // Disabled control surface.
     mod.widgets.RBX_BG_DISABLED       = #xF0F2F6
+    // Transparent hit-test / overlay fill.
+    mod.widgets.RBX_TRANSPARENT       = #x00000000
+    // Subtle transparent hover/down fills for invisible hit targets.
+    mod.widgets.RBX_HIT_HOVER         = #x00000008
+    mod.widgets.RBX_HIT_DOWN          = #x00000012
 
     // =========================================================================
     // 2. FOREGROUND — text & icons on light surfaces
