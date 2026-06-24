@@ -21,7 +21,7 @@ use matrix_sdk::room::reply::{EnforceThread, Reply};
 use ruma::events::room::message::AddMentions;
 use matrix_sdk_ui::timeline::{EmbeddedEvent, EventTimelineItem, TimelineEventItemId};
 use ruma::{events::room::message::{LocationMessageEventContent, MessageType, ReplyWithinThread, RoomMessageEventContent}, OwnedRoomId, OwnedUserId, UserId};
-use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, classify_known_slash_command_for_submission, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
+use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, SlashCommandDiscoveryContext, classify_known_slash_command_for_submission_in_context, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::shared::file_upload_modal::{FilePreviewerMetaData, ThumbnailData};
 
@@ -378,7 +378,13 @@ fn classified_management_command_target_for_context(
         return None;
     }
 
-    classify_known_slash_command_for_submission(entered_text).and_then(|_| {
+    let context = if is_direct_room {
+        SlashCommandDiscoveryContext::ManagementDm
+    } else {
+        SlashCommandDiscoveryContext::ManagementRoom
+    };
+
+    classify_known_slash_command_for_submission_in_context(entered_text, context).and_then(|_| {
         management_bot_target_user_id(
             bound_bot_user_id,
             resolved_parent_bot_user_id,
@@ -414,6 +420,50 @@ fn addressed_command_target_for_context(
     };
 
     Ok(Some(target_user_id))
+}
+
+fn allbots_broadcast_target_user_ids_for_context(
+    entered_text: &str,
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&UserId>,
+    resolved_parent_bot_user_id: Option<&UserId>,
+    persisted_bound_bot_user_ids: &[OwnedUserId],
+    _room_bot_user_ids: &[OwnedUserId],
+    known_bot_user_ids: &[OwnedUserId],
+) -> Option<Vec<OwnedUserId>> {
+    let parsed_command = parse_command_with_at_suffix(entered_text)?;
+    if parsed_command.command != "/allbots" || parsed_command.target_localpart.is_some() {
+        return None;
+    }
+
+    if is_direct_room {
+        return None;
+    }
+
+    if !is_management_bot_room_for_context(
+        app_service_enabled,
+        is_direct_room,
+        has_persisted_management_binding,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+    ) {
+        return None;
+    }
+
+    let mut targets = persisted_bound_bot_user_ids
+        .iter()
+        .filter(|bot_user_id|
+            resolved_parent_bot_user_id
+                .is_none_or(|parent_bot_user_id| bot_user_id.as_str() != parent_bot_user_id.as_str())
+        )
+        .cloned()
+        .collect::<Vec<_>>();
+    targets.sort_by(|lhs, rhs| lhs.as_str().cmp(rhs.as_str()));
+    targets.dedup_by(|lhs, rhs| lhs.as_str() == rhs.as_str());
+    Some(targets)
 }
 
 fn routing_directives_for_submission(
@@ -1781,6 +1831,7 @@ impl RoomInputBar {
                     replied_to,
                     target_user_id,
                     explicit_room,
+                    broadcast_target_user_ids: None,
                     #[cfg(feature = "tsp")]
                     sign_with_tsp: self.is_tsp_signing_enabled(cx),
                 });
@@ -1854,6 +1905,17 @@ impl RoomInputBar {
                         return;
                     }
                 };
+                let broadcast_target_user_ids = allbots_broadcast_target_user_ids_for_context(
+                    &entered_text,
+                    room_screen_props.app_service_enabled,
+                    room_screen_props.is_direct_room,
+                    room_screen_props.has_persisted_management_binding,
+                    room_screen_props.bound_bot_user_id.as_deref(),
+                    room_screen_props.resolved_parent_bot_user_id.as_deref(),
+                    &room_screen_props.persisted_bound_bot_user_ids,
+                    &room_screen_props.room_bot_user_ids,
+                    &room_screen_props.known_bot_user_ids,
+                );
                 let replied_to = self.replying_to.take().and_then(|(event_tl_item, _emb)|
                     event_tl_item.event_id().map(|event_id| {
                         let enforce_thread = if room_screen_props.timeline_kind.thread_root_event_id().is_some() {
@@ -1882,6 +1944,7 @@ impl RoomInputBar {
                     replied_to,
                     target_user_id,
                     explicit_room,
+                    broadcast_target_user_ids,
                     #[cfg(feature = "tsp")]
                     sign_with_tsp: self.is_tsp_signing_enabled(cx),
                 });
@@ -3010,6 +3073,36 @@ mod tests {
     }
 
     #[test]
+    fn test_allbots_classification_requires_management_room_context() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        assert_eq!(
+            classified_management_command_target_for_context(
+                "/allbots summarize",
+                true,
+                true,
+                false,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[],
+            ),
+            None,
+        );
+        assert_eq!(
+            classified_management_command_target_for_context(
+                "/allbots summarize",
+                true,
+                false,
+                true,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[],
+            ),
+            Some(parent_bot_user_id),
+        );
+    }
+
+    #[test]
     #[ignore = "pre-existing failure on main (1.0.0-alpha.1): returns None instead of the bound bot. See issues/011."]
     fn test_classified_management_command_prefers_bound_bot_when_parent_config_mismatches() {
         let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
@@ -3186,6 +3279,69 @@ mod tests {
                 std::slice::from_ref(&child_bot_user_id),
             ),
             Ok((Some(parent_bot_user_id), false)),
+        );
+    }
+
+    #[test]
+    fn test_allbots_broadcast_targets_use_persisted_child_bindings_only() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let persisted_child_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+        let detected_only_bot_user_id = test_user_id("@octosbot_detected:127.0.0.1:8128");
+
+        assert_eq!(
+            allbots_broadcast_target_user_ids_for_context(
+                "/allbots summarize this issue",
+                true,
+                false,
+                true,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[
+                    parent_bot_user_id.clone(),
+                    persisted_child_bot_user_id.clone(),
+                ],
+                std::slice::from_ref(&detected_only_bot_user_id),
+                std::slice::from_ref(&detected_only_bot_user_id),
+            ),
+            Some(vec![persisted_child_bot_user_id]),
+        );
+    }
+
+    #[test]
+    fn test_allbots_broadcast_targets_require_management_room_context() {
+        let parent_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+        let child_bot_user_id = test_user_id("@octosbot_bob:127.0.0.1:8128");
+
+        assert_eq!(
+            allbots_broadcast_target_user_ids_for_context(
+                "/allbots summarize this issue",
+                true,
+                true,
+                false,
+                Some(parent_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                &[
+                    parent_bot_user_id.clone(),
+                    child_bot_user_id.clone(),
+                ],
+                std::slice::from_ref(&child_bot_user_id),
+                std::slice::from_ref(&child_bot_user_id),
+            ),
+            None,
+        );
+        assert_eq!(
+            allbots_broadcast_target_user_ids_for_context(
+                "/allbots summarize this issue",
+                true,
+                false,
+                true,
+                Some(child_bot_user_id.as_ref()),
+                Some(parent_bot_user_id.as_ref()),
+                std::slice::from_ref(&child_bot_user_id),
+                std::slice::from_ref(&child_bot_user_id),
+                std::slice::from_ref(&child_bot_user_id),
+            ),
+            None,
         );
     }
 

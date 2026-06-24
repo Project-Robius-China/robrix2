@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, media_source_mxc, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -2104,7 +2104,7 @@ script_mod! {
                         show_bg: true
                         draw_bg +: {
                             color: (mod.widgets.COLOR_BOT_CARD_BG)
-                            border_radius: 14.0
+                            border_radius: 6.0
                             border_size: 1.0
                             border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
                         }
@@ -2296,7 +2296,7 @@ script_mod! {
                         show_bg: true
                         draw_bg +: {
                             color: (mod.widgets.COLOR_BOT_CARD_BG)
-                            border_radius: 14.0
+                            border_radius: 6.0
                             border_size: 1.0
                             border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
                         }
@@ -6345,6 +6345,7 @@ impl RoomScreen {
                 has_persisted_management_binding,
                 bound_bot_user_id,
                 resolved_parent_bot_user_id,
+                persisted_bound_bot_user_ids,
                 room_bot_user_ids,
                 known_bot_user_ids,
             ) = scope
@@ -6359,6 +6360,7 @@ impl RoomScreen {
                     } else {
                         Vec::new()
                     };
+                    let persisted_bound_bot_user_ids = persisted_room_bot_user_ids.clone();
                     let resolved_parent_bot_user_id = if app_service_enabled {
                         app_state
                             .bot_settings
@@ -6407,11 +6409,12 @@ impl RoomScreen {
                         has_persisted_management_binding,
                         bound_bot_user_id,
                         resolved_parent_bot_user_id,
+                        persisted_bound_bot_user_ids,
                         room_bot_user_ids,
                         known_bot_user_ids,
                     )
                 })
-                .unwrap_or((false, false, false, None, None, Vec::new(), Vec::new()));
+                .unwrap_or((false, false, false, None, None, Vec::new(), Vec::new(), Vec::new()));
 
             Some(RoomScreenProps {
                 room_screen_widget_uid,
@@ -6429,6 +6432,7 @@ impl RoomScreen {
                 has_persisted_management_binding,
                 bound_bot_user_id,
                 resolved_parent_bot_user_id,
+                persisted_bound_bot_user_ids,
                 known_bot_user_ids,
             })
         } else {
@@ -6449,6 +6453,7 @@ impl RoomScreen {
                 has_persisted_management_binding: false,
                 bound_bot_user_id: None,
                 resolved_parent_bot_user_id: None,
+                persisted_bound_bot_user_ids: Vec::new(),
                 known_bot_user_ids: Vec::new(),
             })
         }
@@ -6648,6 +6653,7 @@ impl RoomScreen {
             replied_to: None,
             target_user_id: None,
             explicit_room: false,
+            broadcast_target_user_ids: None,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
@@ -6693,6 +6699,7 @@ impl RoomScreen {
             replied_to: None,
             target_user_id: bound_bot_user_id,
             explicit_room: false,
+            broadcast_target_user_ids: None,
             #[cfg(feature = "tsp")]
             sign_with_tsp: false,
         });
@@ -6869,11 +6876,21 @@ impl RoomScreen {
                     if new_items.is_empty() {
                         if !tl.items.is_empty() {
                             log!("process_timeline_updates(): timeline (had {} items) was cleared for room {}", tl.items.len(), tl.kind.room_id());
-                            // For now, we paginate a cleared timeline in order to be able to show something at least.
-                            // A proper solution would be what's described below, which would be to save a few event IDs
-                            // and then either focus on them (if we're not close to the end of the timeline)
-                            // or paginate backwards until we find them (only if we are close the end of the timeline).
+                            // The matrix SDK frequently emits a *transient* `Clear` (an empty
+                            // snapshot) immediately before re-pushing the rebuilt timeline --
+                            // e.g. on every message send/receive in some sliding-sync setups.
+                            // If we applied this empty snapshot, the portal list would render
+                            // nothing for a frame or two, exposing the near-white room
+                            // background as a jarring "white flash", and we'd blank the viewport
+                            // before the rebuilt items arrive.
+                            //
+                            // Instead, keep the currently-rendered items in place and skip
+                            // applying this empty snapshot entirely. We still kick off a
+                            // backwards pagination so a genuinely-cleared timeline can be
+                            // refilled; the follow-up rebuild (or that pagination) delivers the
+                            // full item list and refreshes the UI without any blank frame.
                             should_continue_backwards_pagination = true;
+                            continue;
                         }
 
                         // If the bottom of the timeline (the last event) is visible, then we should
@@ -7361,16 +7378,15 @@ impl RoomScreen {
                 }
                 TimelineUpdate::LinkPreviewFetched => {}
                 TimelineUpdate::AttachmentDownloadFinished(mxc_uri, result) => {
-                    if let Some(entry) = tl.pending_downloads.iter_mut().find(|pending| pending.mxc == mxc_uri) {
-                        entry.state = match result {
-                            Ok(()) => PendingDownloadState::JustSucceeded,
-                            Err(_) => PendingDownloadState::JustFailed,
-                        };
+                    if mark_pending_download_finished(&mut tl.pending_downloads, &mxc_uri, &result) {
+                        tl.content_drawn_since_last_update.clear();
                     }
                     portal_list.redraw(cx);
                 }
                 TimelineUpdate::AttachmentDownloadReset(mxc_uri) => {
-                    tl.pending_downloads.retain(|pending| pending.mxc != mxc_uri);
+                    if reset_pending_download(&mut tl.pending_downloads, &mxc_uri) {
+                        tl.content_drawn_since_last_update.clear();
+                    }
                     portal_list.redraw(cx);
                 }
                 TimelineUpdate::FileUploadConfirmed(file_data) => {
@@ -8070,6 +8086,12 @@ impl RoomScreen {
                     start_attachment_download(info.clone(), update_sender);
                 }
                 MessageAction::CancelDownload(mxc) => {
+                    if let Some(tl) = self.tl_state.as_mut()
+                        && reset_pending_download(&mut tl.pending_downloads, mxc)
+                    {
+                        tl.content_drawn_since_last_update.clear();
+                        portal_list.redraw(cx);
+                    }
                     submit_async_request(MatrixRequest::CancelDownload(mxc.clone()));
                 }
                 // This is handled within the Message widget itself.
@@ -9201,6 +9223,7 @@ pub struct RoomScreenProps {
     pub has_persisted_management_binding: bool,
     pub bound_bot_user_id: Option<OwnedUserId>,
     pub resolved_parent_bot_user_id: Option<OwnedUserId>,
+    pub persisted_bound_bot_user_ids: Vec<OwnedUserId>,
     pub known_bot_user_ids: Vec<OwnedUserId>,
 }
 

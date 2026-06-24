@@ -4,6 +4,7 @@ use makepad_widgets::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AppPreferences {
     #[serde(default)]
     pub view_mode: ViewModeOverride,
@@ -20,17 +21,6 @@ pub struct AppPreferences {
     pub agent_chat_enabled: bool,
 }
 
-impl Default for AppPreferences {
-    fn default() -> Self {
-        Self {
-            view_mode: ViewModeOverride::default(),
-            send_on_enter: true,
-            thumbnail_max_height: ThumbnailMaxHeight::default(),
-            ui_zoom: UiZoom::default(),
-            agent_chat_enabled: false,
-        }
-    }
-}
 
 impl AppPreferences {
     pub fn on_view_mode_changed(&self, cx: &mut Cx) {
@@ -239,5 +229,15 @@ pub fn effective_is_desktop(cx: &mut Cx) -> bool {
         ViewModeOverride::Automatic => {
             cx.display_context.is_desktop() || !cx.display_context.is_screen_size_known()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_send_shortcut_requires_primary_modifier() {
+        assert!(!AppPreferences::default().send_on_enter);
     }
 }

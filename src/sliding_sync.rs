@@ -1367,6 +1367,7 @@ pub enum MatrixRequest {
         replied_to: Option<Reply>,
         target_user_id: Option<OwnedUserId>,
         explicit_room: bool,
+        broadcast_target_user_ids: Option<Vec<OwnedUserId>>,
         #[cfg(feature = "tsp")]
         sign_with_tsp: bool,
     },
@@ -1552,17 +1553,44 @@ fn add_octos_explicit_room_marker(
     content
 }
 
+fn add_octos_broadcast_targets(
+    mut content: serde_json::Value,
+    broadcast_target_user_ids: Option<&[OwnedUserId]>,
+) -> serde_json::Value {
+    let Some(broadcast_target_user_ids) = broadcast_target_user_ids else {
+        return content;
+    };
+    if broadcast_target_user_ids.is_empty() {
+        return content;
+    }
+
+    if let Some(content_obj) = content.as_object_mut() {
+        content_obj.insert(
+            "org.octos.broadcast_targets".to_string(),
+            serde_json::Value::Array(
+                broadcast_target_user_ids
+                    .iter()
+                    .map(|user_id| serde_json::Value::String(user_id.to_string()))
+                    .collect(),
+            ),
+        );
+    }
+    content
+}
+
 fn add_octos_routing_metadata(
     content: serde_json::Value,
     target_user_id: Option<&UserId>,
     explicit_room: bool,
+    broadcast_target_user_ids: Option<&[OwnedUserId]>,
 ) -> serde_json::Value {
     let content = add_octos_explicit_room_marker(content, explicit_room);
-    if let Some(target_user_id) = target_user_id {
+    let content = if let Some(target_user_id) = target_user_id {
         add_octos_target_user_id(content, target_user_id)
     } else {
         content
-    }
+    };
+    add_octos_broadcast_targets(content, broadcast_target_user_ids)
 }
 
 async fn ensure_target_user_joined_room(
@@ -1958,6 +1986,41 @@ mod matrix_request_tests {
         assert!(
             content.get("org.octos.explicit_room").is_none(),
             "RoomDefault should not suppress Octos room fallback",
+        );
+    }
+
+    #[test]
+    fn test_send_message_adds_octos_broadcast_targets() {
+        let targets = vec![
+            OwnedUserId::try_from("@octosbot_bob:example.com").unwrap(),
+            OwnedUserId::try_from("@octosbot_weather:example.com").unwrap(),
+        ];
+        let content = serde_json::json!({
+            "msgtype": "m.text",
+            "body": "/allbots summarize",
+        });
+
+        let content = add_octos_routing_metadata(
+            content,
+            None,
+            false,
+            Some(&targets),
+        );
+
+        assert_eq!(
+            content
+                .get("org.octos.broadcast_targets")
+                .and_then(|value| value.as_array())
+                .map(|targets|
+                    targets
+                        .iter()
+                        .filter_map(|target| target.as_str())
+                        .collect::<Vec<_>>()
+                ),
+            Some(vec![
+                "@octosbot_bob:example.com",
+                "@octosbot_weather:example.com",
+            ])
         );
     }
 
@@ -4585,6 +4648,7 @@ async fn matrix_worker_task(
                 replied_to,
                 target_user_id,
                 explicit_room,
+                broadcast_target_user_ids,
                 #[cfg(feature = "tsp")]
                 sign_with_tsp,
             } => {
@@ -4640,6 +4704,9 @@ async fn matrix_worker_task(
                             message
                         }
                     };
+                    let has_broadcast_targets = broadcast_target_user_ids
+                        .as_ref()
+                        .is_some_and(|targets| !targets.is_empty());
 
                     if let Some(replied_to_info) = replied_to {
                         let reply_content = match timeline
@@ -4659,7 +4726,7 @@ async fn matrix_worker_task(
                             }
                         };
 
-                        if target_user_id.is_some() || explicit_room {
+                        if target_user_id.is_some() || explicit_room || has_broadcast_targets {
                             let target_user_id = target_user_id.as_ref();
                             if let Some(target_user_id) = target_user_id
                                 && let Err(_e) = ensure_target_user_joined_room(
@@ -4682,6 +4749,7 @@ async fn matrix_worker_task(
                                     content,
                                     target_user_id.map(|user_id| user_id.as_ref()),
                                     explicit_room,
+                                    broadcast_target_user_ids.as_deref(),
                                 ),
                                 Err(_e) => {
                                     error!("Failed to serialize reply content for {timeline_kind}: {_e:?}");
@@ -4715,7 +4783,7 @@ async fn matrix_worker_task(
                                 }
                             }
                         }
-                    } else if target_user_id.is_some() || explicit_room {
+                    } else if target_user_id.is_some() || explicit_room || has_broadcast_targets {
                         let target_user_id = target_user_id.as_ref();
                         if let Some(target_user_id) = target_user_id
                             && let Err(_e) = ensure_target_user_joined_room(
@@ -4738,6 +4806,7 @@ async fn matrix_worker_task(
                                 content,
                                 target_user_id.map(|user_id| user_id.as_ref()),
                                 explicit_room,
+                                broadcast_target_user_ids.as_deref(),
                             ),
                             Err(_e) => {
                                 error!("Failed to serialize message content for {timeline_kind}: {_e:?}");
@@ -4869,6 +4938,7 @@ async fn matrix_worker_task(
                         content,
                         Some(target_user_id.as_ref()),
                         explicit_room,
+                        None,
                     );
                     match timeline.room().send_raw("m.room.message", raw_content).await {
                         Ok(_response) => {

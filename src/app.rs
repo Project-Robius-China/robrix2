@@ -21,10 +21,10 @@ use crate::{
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
-    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom}
+    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
 };
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
@@ -466,6 +466,12 @@ pub struct App {
     #[rust] auto_update_check_started: bool,
     #[rust] skipped_update_version: Option<String>,
     #[rust] update_prompt_versions: Option<(String, String)>,
+    /// The app language that `sync_app_language()` last applied to the UI,
+    /// used to skip the (deep, root-level) widget lookups in that function
+    /// when the language hasn't changed. `handle_actions()` calls it on every
+    /// actions batch (i.e., every frame during a scroll), so it must be cheap
+    /// in the common no-change case. `None` forces the next call to re-apply.
+    #[rust] synced_app_language: Option<AppLanguage>,
 }
 
 impl ScriptHook for App {
@@ -747,22 +753,39 @@ impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         self.sync_app_language(cx);
 
-        let invite_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(invite_confirmation_modal_inner));
-        if let Some(_accepted) = invite_confirmation_modal_inner.closed(actions) {
-            self.ui.modal(cx, ids!(invite_confirmation_modal)).close(cx);
+        // Pre-scan this actions batch for the *types* of events the blocks below
+        // care about, before paying for any widget lookups. Casting an action's
+        // data is a cheap downcast, but resolving a widget via a root-level
+        // `ids!()` lookup is expensive during scrolling: PortalList item
+        // recycling invalidates the widget-tree cache every frame, forcing each
+        // lookup to re-collect and re-hash the tree. Scroll-frame actions contain
+        // no modal-close or button-click events, so these gates skip all six
+        // root-level lookups below on every frame of a scroll.
+        let any_confirmation_modal_closed = actions.iter().any(|action|
+            matches!(action.as_widget_action().cast_ref(), ConfirmationModalAction::Close(_))
+        );
+        let any_button_clicked = actions.iter().any(|action|
+            matches!(action.as_widget_action().cast(), ButtonAction::Clicked(_))
+        );
+
+        if any_confirmation_modal_closed {
+            let invite_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(invite_confirmation_modal_inner));
+            if let Some(_accepted) = invite_confirmation_modal_inner.closed(actions) {
+                self.ui.modal(cx, ids!(invite_confirmation_modal)).close(cx);
+            }
+
+            let delete_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(delete_confirmation_modal_inner));
+            if let Some(_accepted) = delete_confirmation_modal_inner.closed(actions) {
+                self.ui.modal(cx, ids!(delete_confirmation_modal)).close(cx);
+            }
+
+            let positive_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(positive_confirmation_modal_inner));
+            if let Some(_accepted) = positive_confirmation_modal_inner.closed(actions) {
+                self.ui.modal(cx, ids!(positive_confirmation_modal)).close(cx);
+            }
         }
 
-        let delete_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(delete_confirmation_modal_inner));
-        if let Some(_accepted) = delete_confirmation_modal_inner.closed(actions) {
-            self.ui.modal(cx, ids!(delete_confirmation_modal)).close(cx);
-        }
-
-        let positive_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(positive_confirmation_modal_inner));
-        if let Some(_accepted) = positive_confirmation_modal_inner.closed(actions) {
-            self.ui.modal(cx, ids!(positive_confirmation_modal)).close(cx);
-        }
-
-        if self.ui.button(cx, ids!(update_available_modal_inner.update_upgrade_button)).clicked(actions) {
+        if any_button_clicked && self.ui.button(cx, ids!(update_available_modal_inner.update_upgrade_button)).clicked(actions) {
             let latest_version = self.update_prompt_versions
                 .as_ref()
                 .map(|(_, latest_version)| latest_version.clone());
@@ -784,11 +807,11 @@ impl MatchEvent for App {
             self.update_prompt_versions = None;
             self.ui.modal(cx, ids!(update_available_modal)).close(cx);
         }
-        if self.ui.button(cx, ids!(update_available_modal_inner.update_cancel_button)).clicked(actions) {
+        if any_button_clicked && self.ui.button(cx, ids!(update_available_modal_inner.update_cancel_button)).clicked(actions) {
             self.update_prompt_versions = None;
             self.ui.modal(cx, ids!(update_available_modal)).close(cx);
         }
-        if self.ui.button(cx, ids!(update_available_modal_inner.update_skip_button)).clicked(actions) {
+        if any_button_clicked && self.ui.button(cx, ids!(update_available_modal_inner.update_skip_button)).clicked(actions) {
             if let Some((_, latest_version)) = self.update_prompt_versions.as_ref() {
                 self.skipped_update_version = Some(latest_version.clone());
                 if let Err(error) = save_skipped_update_version(Some(latest_version.as_str())) {
@@ -814,7 +837,7 @@ impl MatchEvent for App {
                 continue;
             }
 
-            if let RoomFilterResultAction::Clicked(target) = action.as_widget_action().cast() {
+            if let Some(RoomFilterResultAction::Clicked(target)) = action.downcast_ref::<RoomFilterResultAction>() {
                 self.ui.modal(cx, ids!(room_filter_modal)).close(cx);
                 match target {
                     RoomFilterResultTarget::LocalSpace { room_name_id: space_name_id, .. }
@@ -1267,6 +1290,21 @@ impl MatchEvent for App {
             }
 
             if let Some(RoomsListHeaderAction::OpenRoomFilterModal) = action.downcast_ref() {
+                // Adapt the search modal to the platform: on mobile use a narrower
+                // width (screen minus side margins) and a shorter results area to
+                // avoid a large mostly-empty modal; on desktop keep 420 x 260.
+                // Numeric width avoids Fill collapsing to 0 in the modal's context.
+                let is_desktop = effective_is_desktop(cx);
+                let modal_width = if is_desktop { 420.0_f64 } else { (cx.display_context.screen_size.x - 24.0).max(280.0) };
+                let results_height = if is_desktop { 260.0_f64 } else { 180.0_f64 };
+                let mut modal_inner = self.ui.view(cx, ids!(room_filter_modal_inner));
+                script_apply_eval!(cx, modal_inner, {
+                    width: #(modal_width)
+                });
+                let mut results_scroll = self.ui.view(cx, ids!(room_filter_modal_inner.search_results_scroll));
+                script_apply_eval!(cx, results_scroll, {
+                    height: #(results_height)
+                });
                 self.ui.modal(cx, ids!(room_filter_modal)).open(cx);
                 let room_filter_input = self.ui.text_input(cx, ids!(room_filter_modal_inner.room_filter_input_bar.input));
                 room_filter_input.set_key_focus(cx);
@@ -1475,6 +1513,7 @@ impl MatchEvent for App {
                         replied_to: None,
                         target_user_id: None,
                         explicit_room: false,
+                        broadcast_target_user_ids: None,
                         #[cfg(feature = "tsp")]
                         sign_with_tsp: false,
                     });
@@ -1636,7 +1675,7 @@ impl MatchEvent for App {
             // Handle a request to show the invite confirmation modal.
             if let Some(InviteAction::ShowInviteConfirmationModal(content_opt)) = action.downcast_ref() {
                 if let Some(content) = content_opt.borrow_mut().take() {
-                    invite_confirmation_modal_inner.show(cx, content);
+                    self.ui.confirmation_modal(cx, ids!(invite_confirmation_modal_inner)).show(cx, content);
                     self.ui.modal(cx, ids!(invite_confirmation_modal)).open(cx);
                 }
                 continue;
@@ -1645,7 +1684,7 @@ impl MatchEvent for App {
             // Handle a request to show the generic positive confirmation modal.
             if let Some(PositiveConfirmationModalAction::Show(content_opt)) = action.downcast_ref() {
                 if let Some(content) = content_opt.borrow_mut().take() {
-                    positive_confirmation_modal_inner.show(cx, content);
+                    self.ui.confirmation_modal(cx, ids!(positive_confirmation_modal_inner)).show(cx, content);
                     self.ui.modal(cx, ids!(positive_confirmation_modal)).open(cx);
                 }
                 continue;
@@ -1881,7 +1920,7 @@ impl MatchEvent for App {
                             user_profile.user_id,
                         ),
                     };
-                    positive_confirmation_modal_inner.show(
+                    self.ui.confirmation_modal(cx, ids!(positive_confirmation_modal_inner)).show(
                         cx,
                         ConfirmationModalContent {
                             title_text: "Create New Direct Message".into(),
@@ -2221,8 +2260,17 @@ impl App {
         self.ui.modal(cx, ids!(update_available_modal)).open(cx);
     }
 
-    fn sync_app_language(&self, cx: &mut Cx) {
+    fn sync_app_language(&mut self, cx: &mut Cx) {
         let app_language = self.app_state.app_language;
+        // Skip the widget lookups + set_text calls below if we've already
+        // synced this language. This runs on every actions batch, and the
+        // root-level `ids!()` lookups are expensive during scrolling because
+        // PortalList item recycling invalidates the widget-tree cache every
+        // frame.
+        if self.synced_app_language == Some(app_language) {
+            return;
+        }
+        self.synced_app_language = Some(app_language);
         self.ui.label(cx, ids!(room_filter_modal_inner.search_results_title))
             .set_text(cx, tr_key(app_language, "app.room_filter.search_results_title"));
         self.ui.label(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.search_results_empty))

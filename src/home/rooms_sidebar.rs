@@ -97,8 +97,9 @@ script_mod! {
                 }
 
                 rooms_list_header := RoomsListHeader {
+                    spacing: 10
                     open_room_filter_modal_button +: {
-                        visible: false
+                        visible: true
                     }
                     // Mobile reaches the SpacesBar via this header toggle (the
                     // bottom tab bar no longer carries a Spaces button).

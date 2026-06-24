@@ -41,6 +41,34 @@ impl PendingDownloadState {
     }
 }
 
+pub fn mark_pending_download_finished(
+    pending_downloads: &mut [PendingDownload],
+    mxc_uri: &OwnedMxcUri,
+    result: &Result<(), String>,
+) -> bool {
+    let Some(entry) = pending_downloads
+        .iter_mut()
+        .find(|pending| &pending.mxc == mxc_uri)
+    else {
+        return false;
+    };
+    entry.state = if result.is_ok() {
+        PendingDownloadState::JustSucceeded
+    } else {
+        PendingDownloadState::JustFailed
+    };
+    true
+}
+
+pub fn reset_pending_download(
+    pending_downloads: &mut Vec<PendingDownload>,
+    mxc_uri: &OwnedMxcUri,
+) -> bool {
+    let old_len = pending_downloads.len();
+    pending_downloads.retain(|pending| &pending.mxc != mxc_uri);
+    pending_downloads.len() != old_len
+}
+
 /// What the download section below a message should show.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum DownloadDisplayState {
@@ -179,4 +207,48 @@ pub fn save_loaded_attachment(_info: DownloadableAttachment, _bytes: Arc<[u8]>) 
         PopupKind::Error,
         Some(5.0),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mxc(id: &str) -> OwnedMxcUri {
+        OwnedMxcUri::from(format!("mxc://example.org/{id}"))
+    }
+
+    #[test]
+    fn finished_download_marks_pending_entry_successful() {
+        let uri = mxc("artifact");
+        let mut pending = vec![PendingDownload {
+            mxc: uri.clone(),
+            state: PendingDownloadState::InProgress,
+        }];
+
+        assert!(mark_pending_download_finished(&mut pending, &uri, &Ok(())));
+        assert!(matches!(
+            pending[0].state,
+            PendingDownloadState::JustSucceeded
+        ));
+    }
+
+    #[test]
+    fn reset_download_removes_pending_entry() {
+        let uri = mxc("artifact");
+        let other = mxc("other");
+        let mut pending = vec![
+            PendingDownload {
+                mxc: uri.clone(),
+                state: PendingDownloadState::InProgress,
+            },
+            PendingDownload {
+                mxc: other.clone(),
+                state: PendingDownloadState::InProgress,
+            },
+        ];
+
+        assert!(reset_pending_download(&mut pending, &uri));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].mxc, other);
+    }
 }
