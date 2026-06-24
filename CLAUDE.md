@@ -39,6 +39,15 @@ view.animator_cut(cx, ids!(highlight.on));
 ### Async Matrix Operations
 Always use `submit_async_request(MatrixRequest::*)`. Do NOT spawn raw tokio tasks for Matrix API calls.
 
+### UI / Design System (tokens + visual spec)
+The visual language is governed by [docs/ui-visual-spec-zh.md](docs/ui-visual-spec-zh.md) (the implementation contract) and `src/shared/design_tokens.rs` (the semantic `RBX_*` token layer). When building or changing any UI:
+
+- Use `RBX_*` design tokens for color / radius / typography (DSL: `(RBX_TOKEN)`; Rust: `crate::shared::design_tokens::RBX_*`), or the existing `styles.rs` tokens. **Do NOT hardcode hex colors in screens** — add a token to `design_tokens.rs` first, then reference it.
+- Do NOT reinvent card / badge / row styles. Follow the component contracts and recipes in the spec (§4); promote reusable pieces into `src/shared/`.
+- Change a token in ONE place (`design_tokens.rs`); never copy a set of visual constants per page.
+- Follow the spec's hard constraints (§0.1), build order (§8: tokens → components → Settings → Detail → Timeline), and state coverage (§7). Keep visual refactors in commits separate from logic changes.
+- Components are NOT pre-bundled — build them per the spec's contracts, not ad hoc.
+
 ## Makepad 2.0 Skills
 
 When working on Makepad UI code, **always invoke the relevant Makepad 2.0 skill** before writing or debugging:
