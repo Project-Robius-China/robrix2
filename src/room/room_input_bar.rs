@@ -867,13 +867,23 @@ script_mod! {
         flow: Down,
         clip_x: false,
         clip_y: false,
+        // Composer gets its OWN GPU draw list (new_batch) so the whole composer
+        // subtree — the white `input_bar` card AND the mention/slash popup that
+        // overflows above it — composites as one unit ON TOP of the timeline's
+        // bot-card new_batch draw lists. Without it, a freshly-drawn bot card's
+        // batch can composite over the composer/popup until a manual scroll
+        // re-settles the order. clip stays false so the upward popup isn't clipped.
+        new_batch: true,
 
-        // Outer wrapper is FULLY TRANSPARENT — it paints nothing; only the inner
-        // `input_bar` card (white + border) is painted. Use PADDING (not margin)
-        // to inset the card from the edges, so the gap around the card's border
-        // is this transparent wrapper showing through, not a white background.
+        // PADDING insets the inner white card so it floats with a gap around it.
+        // The wrapper also paints an opaque fill that EXACTLY matches the page
+        // background (COLOR_PRIMARY_DARKER) — visually identical to transparent,
+        // a belt-and-suspenders mask for the composer body.
         padding: Inset{left: 8, right: 8, top: 4, bottom: 8}
-        show_bg: false,
+        show_bg: true,
+        draw_bg +: {
+            color: (COLOR_PRIMARY_DARKER)
+        }
 
         // The top-most element is a preview of the message that the user is replying to, if any.
         replying_preview := ReplyingPreview { }
