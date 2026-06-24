@@ -943,8 +943,8 @@ impl MatchEvent for App {
             }
 
             // Agent Registry "Add an agent" bottom sheet, hosted at the app root so its
-            // scrim covers the whole screen (incl. the bottom nav). The open request is
-            // emitted by the AgentSettings screen (Settings ▸ Labs) and bubbles up here.
+            // scrim covers the whole screen. The open request is emitted by the
+            // AgentSettings screen (Settings ▸ Labs) and bubbles up here.
             if let Some(AgentSettingsAction::OpenAddAgent) = action.downcast_ref() {
                 let app_language = self.app_state.app_language;
                 self.ui.add_agent_modal(cx, ids!(add_agent_modal_inner)).show(cx, app_language);

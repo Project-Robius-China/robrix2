@@ -62,8 +62,8 @@ script_mod! {
             height: Fit
             flow: Right
             align: Align{y: 0.5}
-            spacing: 12
-            padding: Inset{left: 13, right: 13, top: 12, bottom: 12}
+            spacing: 11
+            padding: Inset{left: 12, right: 12, top: 9, bottom: 9}
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE)
@@ -73,8 +73,8 @@ script_mod! {
             }
 
             card_tile := RoundedView {
-                width: 46
-                height: 46
+                width: 40
+                height: 40
                 align: Align{x: 0.5, y: 0.5}
                 show_bg: true
                 draw_bg +: {
@@ -86,7 +86,7 @@ script_mod! {
                     height: Fit
                     draw_text +: {
                         color: (RBX_FG_PRIMARY)
-                        text_style: TITLE_TEXT { font_size: 14.0 }
+                        text_style: TITLE_TEXT { font_size: 13.0 }
                     }
                     text: ""
                 }
@@ -203,9 +203,11 @@ script_mod! {
             width: 360
             height: Fit
             flow: Down
-            // Lift the sheet clear of the bottom navigation bar behind the modal,
-            // so the footer button is never spatially over a nav button.
-            margin: Inset{bottom: 76}
+            // Lift the sheet clear of the bottom navigation bar behind the modal
+            // (the nav is drawn above app-root modals, so its tap area would
+            // otherwise overlap the sheet's footer). This margin keeps the footer
+            // button above the nav's hit zone.
+            margin: Inset{bottom: 96}
             // capture_overload + cursor make this view hit-test and ABSORB every
             // finger event inside the sheet's rect that a child control didn't
             // already take (e.g. taps on padding around the Continue button).
@@ -296,7 +298,7 @@ script_mod! {
                 width: Fill
                 height: Fit
                 flow: Down
-                spacing: 11
+                spacing: 9
 
                 step1_intro := Label {
                     width: Fill
