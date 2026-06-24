@@ -25,7 +25,6 @@ use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWi
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::shared::file_upload_modal::{FilePreviewerMetaData, ThumbnailData};
 
-const ROOM_INFO_CARD_MOBILE_BREAKPOINT: f32 = 700.0;
 #[cfg(test)]
 const TRANSLATION_LANG_POPUP_WIDTH: f64 = 220.0;
 #[cfg(test)]
@@ -347,16 +346,6 @@ fn is_management_bot_room_for_context(
     )
 }
 
-fn is_management_bot_room(room_screen_props: &RoomScreenProps) -> bool {
-    is_management_bot_room_for_context(
-        room_screen_props.app_service_enabled,
-        room_screen_props.is_direct_room,
-        room_screen_props.has_persisted_management_binding,
-        room_screen_props.bound_bot_user_id.as_deref(),
-        room_screen_props.resolved_parent_bot_user_id.as_deref(),
-        &room_screen_props.known_bot_user_ids,
-    )
-}
 
 fn classified_management_command_target_for_context(
     entered_text: &str,
@@ -698,17 +687,102 @@ script_mod! {
         },
 
         persistent +: {
+            // CommandTextInput's `persistent` and `center` are RoundedViews, and
+            // RoundedView defaults show_bg:true — so each paints a white fill
+            // around the text. Turn both off so the composer is truly transparent.
+            show_bg: false
             center +: {
+                show_bg: false
                 text_input := RobrixTextInput {
                     // 10 lines of MESSAGE_TEXT_STYLE (11 * 1.3) plus vertical padding.
                     // Above this height the multiline TextInput keeps the composer
                     // stable and scrolls its own content.
                     height: Fit{max: FitBound.Abs(170.0)}
-                    empty_text: "Write a message (in Markdown) ..."
+                    empty_text: "Write a message or use / for commands"
                     is_multiline: true,
+                    // Borderless + transparent: the text sits directly on the
+                    // page with no white fill (the see-through composer).
+                    draw_bg +: {
+                        border_size: 0.0
+                        color: #0000
+                        color_hover: #0000
+                        color_focus: #0000
+                        color_down: #0000
+                        color_empty: #0000
+                    }
                 }
             }
         }
+    }
+
+    // ---- Composer toolbar building blocks (new visual language, RBX_* tokens) ----
+    // Ghost icon button for the primary composer toolbar: transparent fill,
+    // subtle hover/press wash, secondary-grey icon. Matches the redesigned
+    // (teal-accent, light-surface) input bar.
+    let ComposerToolButton = RobrixIconButton {
+        margin: Inset{left: 2, right: 2, top: 4, bottom: 4}
+        padding: Inset{left: 8, right: 8, top: 6, bottom: 6}
+        spacing: 0,
+        draw_icon +: { color: (RBX_FG_SECONDARY) }
+        draw_bg +: {
+            color: #0000
+            color_hover: (RBX_BG_HOVER)
+            color_down: (RBX_BG_PRESSED)
+            border_size: 0.0
+            border_radius: (RBX_RADIUS_SM)
+        }
+        icon_walk: Walk{width: 20, height: 20}
+        text: "",
+    }
+
+    // Same ghost shell, but renders a text glyph (e.g. "@" / "/") instead of an
+    // SVG icon — used for the mention and slash-command shortcuts.
+    let ComposerGlyphButton = RobrixIconButton {
+        margin: Inset{left: 2, right: 2, top: 4, bottom: 4}
+        padding: Inset{left: 9, right: 9, top: 4, bottom: 4}
+        spacing: 0,
+        align: Align{x: 0.5, y: 0.5}
+        icon_walk: Walk{width: 0, height: 0}
+        draw_bg +: {
+            color: #0000
+            color_hover: (RBX_BG_HOVER)
+            color_down: (RBX_BG_PRESSED)
+            border_size: 0.0
+            border_radius: (RBX_RADIUS_SM)
+        }
+        draw_text +: {
+            color: (RBX_FG_SECONDARY)
+            color_hover: (RBX_FG_SECONDARY)
+            color_down: (RBX_FG_SECONDARY)
+            text_style: MESSAGE_TEXT_STYLE { font_size: 16.0 }
+        }
+        text: "",
+    }
+
+    // Labeled chip used inside the "more actions" overflow row (icon + label).
+    let ComposerOverflowCard = RobrixIconButton {
+        width: Fit
+        align: Align{x: 0.0, y: 0.5}
+        margin: Inset{top: 1, bottom: 1}
+        padding: Inset{left: 10, right: 12, top: 8, bottom: 8}
+        spacing: 8
+        draw_icon +: { color: (RBX_FG_SECONDARY) }
+        draw_bg +: {
+            color: (RBX_BG_SURFACE_SUBTLE)
+            color_hover: (RBX_BG_HOVER)
+            color_down: (RBX_BG_PRESSED)
+            border_size: 1.0
+            border_color: (RBX_STROKE_SOFT)
+            border_radius: (RBX_RADIUS_SM)
+        }
+        draw_text +: {
+            color: (RBX_FG_PRIMARY)
+            color_hover: (RBX_FG_PRIMARY)
+            color_down: (RBX_FG_PRIMARY)
+            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+        }
+        icon_walk: Walk{width: 18, height: 18}
+        text: "",
     }
 
     // The action buttons shown to the LEFT of the input on desktop. On mobile
@@ -724,104 +798,29 @@ script_mod! {
             margin: Inset{bottom: 9, left: 6, right: 0}
         }
 
-        // Opens the sticker drawer above the input bar.
-        sticker_drawer_toggle_button := RobrixIconButton {
-            margin: Inset{left: 1, right: 1, top: 4, bottom: 4}
-            spacing: 0,
-            draw_icon +: {
-                svg: (mod.widgets.ICO_MORE_VERT)
-                color: (COLOR_ACTIVE_PRIMARY_DARKER)
-            },
-            draw_bg +: {
-                color: (COLOR_BG_PREVIEW)
-                color_hover: #E0E8F0
-                color_down: #D0D8E8
-            }
-            icon_walk: Walk{width: 19, height: 19}
-            text: "",
+        // Attachment button for uploading files/images.
+        send_attachment_button := ComposerToolButton {
+            draw_icon +: { svg: (ICON_ADD_ATTACHMENT) }
         }
 
-        // Attachment button for uploading files/images
-        send_attachment_button := RobrixIconButton {
-            margin: Inset{left: 3, right: 1, top: 4, bottom: 4}
-            spacing: 0,
-            draw_icon +: {
-                svg: (ICON_ADD_ATTACHMENT)
-                color: (COLOR_ACTIVE_PRIMARY_DARKER)
-            },
-            draw_bg +: {
-                color: (COLOR_BG_PREVIEW)
-                color_hover: #E0E8F0
-                color_down: #D0D8E8
-            }
-            icon_walk: Walk{width: 21, height: 21}
-            text: "",
+        // Inserts an "@" to start a member mention (existing mention system).
+        at_mention_button := ComposerGlyphButton {
+            text: "@",
         }
 
-        // Opens the modal showing only the user's added stickers.
-        my_stickers_button := RobrixIconButton {
-            margin: Inset{left: 1, right: 1, top: 4, bottom: 4}
-            spacing: 0,
-            draw_icon +: {
-                svg: (ICON_SQUARES)
-                color: (COLOR_ACTIVE_PRIMARY_DARKER)
-            },
-            draw_bg +: {
-                color: (COLOR_BG_PREVIEW)
-                color_hover: #E0E8F0
-                color_down: #D0D8E8
-            }
-            icon_walk: Walk{width: 18, height: 18}
-            text: "",
+        // Opens the quick emoji picker row above the input.
+        emoji_picker_button := ComposerToolButton {
+            draw_icon +: { svg: (ICON_ADD_REACTION) }
         }
 
-        emoji_picker_button := RobrixIconButton {
-            margin: Inset{left: 3, right: 1, top: 4, bottom: 4}
-            spacing: 0,
-            draw_icon +: {
-                svg: (ICON_ADD_REACTION)
-                color: (COLOR_ACTIVE_PRIMARY_DARKER)
-            },
-            draw_bg +: {
-                color: (COLOR_BG_PREVIEW)
-                color_hover: #E0E8F0
-                color_down: #D0D8E8
-            }
-            icon_walk: Walk{width: 19, height: 19}
-            text: "",
+        // Opens the slash-command popup (existing slash-command system).
+        slash_command_button := ComposerGlyphButton {
+            text: "/",
         }
 
-        translate_button := RobrixIconButton {
-            margin: Inset{left: 1, right: 1, top: 4, bottom: 4}
-            spacing: 0,
-            draw_icon +: {
-                svg: (mod.widgets.ICO_TRANSLATE)
-                color: (COLOR_ACTIVE_PRIMARY_DARKER)
-            },
-            draw_bg +: {
-                color: (COLOR_BG_PREVIEW)
-                color_hover: #xE0E8F0
-                color_down: #xD0D8E8
-            }
-            icon_walk: Walk{width: 19, height: 19}
-            text: "",
-        }
-
-        bot_menu_button := RobrixIconButton {
-            visible: false,
-            margin: Inset{left: 1, right: 1, top: 4, bottom: 4}
-            spacing: 0,
-            draw_icon +: {
-                svg: (ICON_LINK)
-                color: (COLOR_ACTIVE_PRIMARY_DARKER)
-            },
-            draw_bg +: {
-                color: (COLOR_BG_PREVIEW)
-                color_hover: #xE0E8F0
-                color_down: #xD0D8E8
-            }
-            icon_walk: Walk{width: 18, height: 18}
-            text: "",
+        // Overflow ("more actions") trigger — opens the secondary-actions row.
+        more_actions_button := ComposerToolButton {
+            draw_icon +: { svg: (mod.widgets.ICO_MENU) }
         }
     }
 
@@ -832,28 +831,31 @@ script_mod! {
         flow: Right
         align: Align{y: 1.0}
 
+        // Filled teal send button — always visible (the send handler ignores
+        // empty input, so there's nothing to gate). Explicit square + small
+        // radius so the teal fill is a rounded SQUARE, not a circle: a Fit-sized
+        // button hugs the icon and the radius then rounds it into a circle.
         send_message_button := RobrixPositiveIconButton {
-            visible: false,
-            // Disabled by default; enabled when text is inputted
-            enabled: false,
+            enabled: true,
+            width: 44, height: 44,
+            align: Align{x: 0.5, y: 0.5}
             spacing: 0,
             text: "",
-            margin: 4
-            draw_icon +: { svg: (ICON_SEND) }
-            icon_walk: Walk{width: 21, height: 21},
-        }
-
-        more_actions_button := RobrixIconButton {
-            spacing: 0,
-            text: "",
-            margin: 4
-            draw_icon +: { svg: (mod.widgets.ICO_MENU) }
+            margin: Inset{left: 4, right: 4, top: 4, bottom: 4}
+            padding: 0
             draw_bg +: {
-                color: (COLOR_ACTIVE_PRIMARY)
-                color_hover: (COLOR_ACTIVE_PRIMARY_DARKER)
-                color_down: #0C5DAA
+                color: (RBX_ACCENT)
+                color_hover: (RBX_ACCENT_HOVER)
+                color_down: (RBX_ACCENT_PRESSED)
+                color_disabled: (RBX_BG_DISABLED)
+                border_size: 0.0
+                border_color: #0000
+                border_color_hover: #0000
+                border_color_down: #0000
+                border_radius: (RBX_RADIUS_XS)
             }
-            icon_walk: Walk{width: 19, height: 19},
+            draw_icon +: { svg: (ICON_SEND), color: (RBX_FG_ON_ACCENT) }
+            icon_walk: Walk{width: 20, height: 20},
         }
     }
 
@@ -865,21 +867,22 @@ script_mod! {
         flow: Down,
         clip_x: false,
         clip_y: false,
+        // Composer gets its OWN GPU draw list (new_batch) so the whole composer
+        // subtree — the white `input_bar` card AND the mention/slash popup that
+        // overflows above it — composites as one unit ON TOP of the timeline's
+        // bot-card new_batch draw lists. Without it, a freshly-drawn bot card's
+        // batch can composite over the composer/popup until a manual scroll
+        // re-settles the order. clip stays false so the upward popup isn't clipped.
+        new_batch: true,
 
-        // These margins are a hack to make the borders of the RoomInputBar
-        // line up with the boundaries of its parent widgets.
-        // This only works if the border_color is the same as its parents,
-        // which is currently `COLOR_SECONDARY`.
-        margin: Inset{left: -4, right: -4, bottom: -4 }
+        // PADDING insets the inner white card so it floats with a gap around it.
+        // The wrapper also paints an opaque fill that EXACTLY matches the page
+        // background (COLOR_PRIMARY_DARKER) — visually identical to transparent,
+        // a belt-and-suspenders mask for the composer body.
+        padding: Inset{left: 8, right: 8, top: 4, bottom: 8}
         show_bg: true,
         draw_bg +: {
-            color: (COLOR_PRIMARY)
-            border_radius: 5.0
-            border_color: (COLOR_SECONDARY)
-            border_size: 2.0
-            // shadow_color: #0006
-            // shadow_radius: 0.0
-            // shadow_offset: vec2(0.0,0.0)
+            color: (COLOR_PRIMARY_DARKER)
         }
 
         // The top-most element is a preview of the message that the user is replying to, if any.
@@ -978,12 +981,22 @@ script_mod! {
             flow: Overlay,
 
             // Below that, display a view that holds the message input bar and send button.
-            input_bar := View {
+            input_bar := RoundedView {
                 width: Fill,
                 height: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.75}}
                 flow: Down
                 padding: 6,
                 spacing: 4
+                // The white composer card WITH a soft border. The outer
+                // RoomInputBar wrapper is transparent, so the gap around this
+                // border shows through to whatever is behind — not a white fill.
+                show_bg: true,
+                draw_bg +: {
+                    color: (RBX_BG_SURFACE)
+                    border_radius: (RBX_RADIUS_XS)
+                    border_color: (RBX_STROKE_SOFT)
+                    border_size: 1.0
+                }
 
                 more_actions_popup := View {
                     visible: false
@@ -993,123 +1006,31 @@ script_mod! {
                     spacing: 6
                     align: Align{x: 0.0, y: 0.5}
 
-                    room_info_card_button := RobrixIconButton {
-                        width: Fit
-                        align: Align{x: 0.0, y: 0.5}
-                        margin: Inset{top: 1, bottom: 1}
-                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                        spacing: 8
-                        draw_icon +: {
-                            svg: (ICON_INFO)
-                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
-                        },
-                        draw_bg +: {
-                            color: (COLOR_BG_PREVIEW)
-                            color_hover: #E0E8F0
-                            color_down: #D0D8E8
-                            border_size: 1.0
-                            border_color: (COLOR_SECONDARY)
-                        }
-                        draw_text +: {
-                            color: (COLOR_TEXT)
-                            color_hover: (COLOR_TEXT)
-                            color_down: (COLOR_TEXT)
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
-                        }
-                        icon_walk: Walk{width: 20, height: 20}
-                        text: "info",
+                    location_card_button := ComposerOverflowCard {
+                        draw_icon +: { svg: (mod.widgets.ICO_LOCATION_PERSON) }
+                        text: "Location",
                     }
 
-                    location_card_button := RobrixIconButton {
-                        width: Fit
-                        align: Align{x: 0.0, y: 0.5}
-                        margin: Inset{top: 1, bottom: 1}
-                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                        spacing: 8
-                        draw_icon +: {
-                            svg: (mod.widgets.ICO_LOCATION_PERSON)
-                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
-                        },
-                        draw_bg +: {
-                            color: (COLOR_BG_PREVIEW)
-                            color_hover: #E0E8F0
-                            color_down: #D0D8E8
-                            border_size: 1.0
-                            border_color: (COLOR_SECONDARY)
-                        }
-                        draw_text +: {
-                            color: (COLOR_TEXT)
-                            color_hover: (COLOR_TEXT)
-                            color_down: (COLOR_TEXT)
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
-                        }
-                        icon_walk: Walk{width: 20, height: 20}
-                        text: "location",
+                    threads_card_button := ComposerOverflowCard {
+                        draw_icon +: { svg: (mod.widgets.ICO_THREADS) }
+                        text: "Threads",
                     }
 
-                    threads_card_button := RobrixIconButton {
-                        width: Fit
-                        align: Align{x: 0.0, y: 0.5}
-                        margin: Inset{top: 1, bottom: 1}
-                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                        spacing: 8
-                        draw_icon +: {
-                            svg: (mod.widgets.ICO_THREADS)
-                            color: (COLOR_ACTIVE_PRIMARY_DARKER)
-                        },
-                        draw_bg +: {
-                            color: (COLOR_BG_PREVIEW)
-                            color_hover: #E0E8F0
-                            color_down: #D0D8E8
-                            border_size: 1.0
-                            border_color: (COLOR_SECONDARY)
-                        }
-                        draw_text +: {
-                            color: (COLOR_TEXT)
-                            color_hover: (COLOR_TEXT)
-                            color_down: (COLOR_TEXT)
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
-                        }
-                        icon_walk: Walk{width: 20, height: 20}
-                        text: "threads",
+                    // Relocated from the main toolbar into the overflow row so the
+                    // primary toolbar stays close to the reference design.
+                    translate_button := ComposerOverflowCard {
+                        draw_icon +: { svg: (mod.widgets.ICO_TRANSLATE) }
+                        text: "Translate",
                     }
-                }
 
-                // Drawer that floats above the input bar. Currently only
-                // contains a "Sticker" button; the layout matches
-                // `more_actions_popup` so additional drawer entries can
-                // slot in later without restructuring.
-                sticker_drawer_popup := View {
-                    visible: false
-                    width: Fit
-                    height: Fit
-                    flow: Right{wrap: true}
-                    align: Align{x: 0.0, y: 0.5}
-                    margin: Inset{left: 5, top: 1, bottom: 1}
-                    padding: Inset{left: 0, right: 0, top: 0, bottom: 0}
-                    spacing: 6
+                    my_stickers_button := ComposerOverflowCard {
+                        draw_icon +: { svg: (ICON_SQUARES) }
+                        text: "Stickers",
+                    }
 
-                    sticker_drawer_button := RobrixIconButton {
-                        width: Fit
-                        align: Align{x: 0.0, y: 0.5}
-                        margin: Inset{top: 1, bottom: 1}
-                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                        spacing: 0
-                        draw_bg +: {
-                            color: (COLOR_BG_PREVIEW)
-                            color_hover: #E0E8F0
-                            color_down: #D0D8E8
-                            border_size: 1.0
-                            border_color: (COLOR_SECONDARY)
-                        }
-                        draw_text +: {
-                            color: (COLOR_TEXT)
-                            color_hover: (COLOR_TEXT)
-                            color_down: (COLOR_TEXT)
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
-                        }
-                        icon_walk: Walk{width: 0, height: 0}
-                        text: "Sticker",
+                    sticker_drawer_toggle_button := ComposerOverflowCard {
+                        draw_icon +: { svg: (mod.widgets.ICO_MORE_VERT) }
+                        text: "Sticker pack",
                     }
                 }
 
@@ -1139,12 +1060,20 @@ script_mod! {
                     flow: Down
                     spacing: 4
 
-                    // Toolbar ABOVE the composer. The composer is the focused
-                    // IME field, and keyboard avoidance only keeps the focused
-                    // field above the on-screen keyboard — anything below it is
-                    // covered. So the composer must be the bottom-most row; the
-                    // toolbar sits above it and stays visible. (Input-at-bottom
-                    // is also the conventional mobile chat layout.)
+                    // Composer on TOP, toolbar BELOW — matches the reference
+                    // design (message input above, actions + send beneath).
+                    // NOTE: on mobile this puts the toolbar/send below the focused
+                    // IME field, so the on-screen keyboard can cover it while
+                    // typing (keyboard avoidance only lifts the focused field).
+                    // Acceptable for the desktop-first redesign; revisit with an
+                    // adaptive (mobile = toolbar-on-top) layout if mobile needs it.
+                    message_row := View {
+                        width: Fill, height: Fit
+                        flow: Right
+                        mentionable_text_input := MessageInputField {}
+                    }
+
+                    // Action toolbar: left icon cluster + Filler + send (bottom-right).
                     button_row := View {
                         width: Fill, height: Fit
                         flow: Right
@@ -1152,14 +1081,6 @@ script_mod! {
                         LeftActionButtons {}
                         Filler { height: Fit }
                         RightActionButtons {}
-                    }
-
-                    // Composer on its own full-width row so the toolbar can't
-                    // squeeze the placeholder into a tall, narrow column.
-                    message_row := View {
-                        width: Fill, height: Fit
-                        flow: Right
-                        mentionable_text_input := MessageInputField {}
                     }
                 }
             }
@@ -1253,21 +1174,12 @@ pub struct RoomInputBar {
     #[rust] is_location_card_expanded: bool,
     /// Whether the emoji picker popup is currently expanded.
     #[rust] is_emoji_picker_expanded: bool,
-    /// Whether the sticker drawer popup (above the input bar) is open.
-    #[rust] is_sticker_drawer_open: bool,
     /// Cached natural Fit height of the input_bar, used as the animation
     /// target when the editing pane is being hidden.
     #[rust] input_bar_natural_height: f64,
     /// The pending file load operation, if any. Contains the receiver channel
     /// for receiving the loaded file data from a background thread.
     #[rust] pending_file_load: Option<crate::shared::file_upload_modal::FileLoadReceiver>,
-    /// The last `enable` state applied to the send button, used to skip the
-    /// expensive `script_apply_eval!` in `enable_send_message_button()` when
-    /// the state hasn't changed. `handle_actions()` calls it on every actions
-    /// batch (i.e., every frame during a scroll), and each `script_apply_eval!`
-    /// re-tokenizes, re-parses, and re-evaluates the script source.
-    /// `None` forces the next call to apply unconditionally.
-    #[rust] send_button_enabled: Option<bool>,
 
     // --- Translation state ---
     /// Whether real-time translation is currently active.
@@ -1301,8 +1213,6 @@ impl Widget for RoomInputBar {
 
         let room_screen_props = scope.props.get::<RoomScreenProps>();
         let room_screen_widget_uid = room_screen_props.map(|props| props.room_screen_widget_uid);
-        let show_bot_menu_tooltip =
-            room_screen_props.is_some_and(is_management_bot_room);
 
         match event.hits(cx, self.view.view(cx, ids!(replying_preview.reply_preview_content)).area()) {
             // If the hit occurred on the replying message preview, jump to it.
@@ -1325,33 +1235,6 @@ impl Widget for RoomInputBar {
                 }
             }
             _ => {}
-        }
-
-        if show_bot_menu_tooltip {
-            let bot_menu_button_area = self.button(cx, ids!(bot_menu_button)).area();
-            match event.hits(cx, bot_menu_button_area) {
-                Hit::FingerHoverIn(_) | Hit::FingerLongPress(_) => {
-                    cx.widget_action(
-                        self.widget_uid(),
-                        TooltipAction::HoverIn {
-                            text: tr_key(
-                                self.app_language,
-                                "room_input_bar.bot_menu_button.tooltip",
-                            )
-                            .to_string(),
-                            widget_rect: bot_menu_button_area.rect(cx),
-                            options: CalloutTooltipOptions {
-                                position: TooltipPosition::Top,
-                                ..Default::default()
-                            },
-                        },
-                    );
-                }
-                Hit::FingerHoverOut(_) => {
-                    cx.widget_action(self.widget_uid(), TooltipAction::HoverOut);
-                }
-                _ => {}
-            }
         }
 
         // Always read the latest translation config from global state.
@@ -1462,7 +1345,6 @@ impl Widget for RoomInputBar {
         if !self.app_language_initialized || self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
-        let room_screen_props = scope.props.get::<RoomScreenProps>();
 
         // Shrink the input_bar's height as the editing pane slides in,
         // and grow it back as the editing pane slides out.
@@ -1491,12 +1373,6 @@ impl Widget for RoomInputBar {
                 inner.walk.height = Size::Fixed((target * remapped).max(0.0));
             }
         }
-
-        let width = self.view.area().rect(cx).size.x as f32;
-        let show_room_info_card = !(width > 1.0 && width < ROOM_INFO_CARD_MOBILE_BREAKPOINT);
-        self.button(cx, ids!(room_info_card_button)).set_visible(cx, show_room_info_card);
-        self.button(cx, ids!(bot_menu_button))
-            .set_visible(cx, room_screen_props.is_some_and(is_management_bot_room));
 
         self.view.draw_walk(cx, scope, walk)
     }
@@ -1596,6 +1472,14 @@ impl RoomInputBar {
             self.redraw(cx);
         }
 
+        // Handle the "@" mention shortcut button — opens the member-mention
+        // popup immediately (the counterpart to the "/" button). Reuses the
+        // existing mention system; no new mention logic is introduced.
+        if self.button(cx, ids!(at_mention_button)).clicked(actions) {
+            mentionable_text_input.open_mention_popup(cx, scope);
+            self.redraw(cx);
+        }
+
         // Handle the add attachment button being clicked.
         if self.button(cx, ids!(send_attachment_button)).clicked(actions) {
             log!("Add attachment button clicked; opening file picker...");
@@ -1630,33 +1514,26 @@ impl RoomInputBar {
             }
         }
 
-        // Toggle the sticker drawer popup that floats above the input bar.
+        // "Sticker pack" in the overflow row: open the sticker modal directly.
+        // (Previously this toggled an intermediate one-button drawer; that
+        // secondary menu is gone — the action lives in "more" now.)
         if self.button(cx, ids!(sticker_drawer_toggle_button)).clicked(actions) {
-            self.is_sticker_drawer_open = !self.is_sticker_drawer_open;
-            self.view
-                .view(cx, ids!(sticker_drawer_popup))
-                .set_visible(cx, self.is_sticker_drawer_open);
-            self.redraw(cx);
-        }
-
-        // Open the sticker modal from the drawer.
-        if self.button(cx, ids!(sticker_drawer_button)).clicked(actions) {
-            self.is_sticker_drawer_open = false;
-            self.view
-                .view(cx, ids!(sticker_drawer_popup))
-                .set_visible(cx, false);
+            self.is_location_card_expanded = false;
+            self.view.view(cx, ids!(more_actions_popup)).set_visible(cx, false);
             cx.action(crate::home::sticker_modal::StickerModalAction::Open);
             self.redraw(cx);
         }
 
-        if self.button(cx, ids!(bot_menu_button)).clicked(actions) {
+        // The "/" toolbar shortcut opens the slash-command popup. Guarded to the
+        // main timeline (slash/bot commands aren't supported inside threads).
+        if self.button(cx, ids!(slash_command_button)).clicked(actions) {
             let in_thread = scope
                 .props
                 .get::<RoomScreenProps>()
                 .is_some_and(|props| props.timeline_kind.thread_root_event_id().is_some());
             if in_thread {
                 enqueue_popup_notification(
-                    "Bot commands are only supported in the main room timeline.",
+                    "Slash commands are only supported in the main room timeline.",
                     PopupKind::Warning,
                     Some(4.0),
                 );
@@ -1778,14 +1655,6 @@ impl RoomInputBar {
             cx.widget_action(
                 room_screen_props.room_screen_widget_uid,
                 MessageAction::ShowThreadsPane,
-            );
-            self.redraw(cx);
-        }
-
-        if self.button(cx, ids!(room_info_card_button)).clicked(actions) {
-            cx.widget_action(
-                room_screen_props.room_screen_widget_uid,
-                MessageAction::ShowRoomInfoPane,
             );
             self.redraw(cx);
         }
@@ -2134,27 +2003,10 @@ impl RoomInputBar {
         }
     }
 
-    /// Sets the send_message_button to be shown/enabled, or hidden/disabled.
-    ///
-    /// This should be called to update the button state when the message TextInput content changes.
-    fn enable_send_message_button(&mut self, cx: &mut Cx, enable: bool) {
-        // Skip the work below if the button is already in the requested state.
-        // This function is called unconditionally from `handle_actions()`, which
-        // runs on every actions batch — including every frame of a scroll — so
-        // it must be cheap when nothing has changed.
-        if self.send_button_enabled == Some(enable) {
-            return;
-        }
-        self.send_button_enabled = Some(enable);
-        // The green enabled-state styling is already baked into the
-        // `RobrixPositiveIconButton` template, and the disabled state is hidden
-        // entirely, so toggling visibility/enabled-ness is all that's needed.
-        // (The previous `script_apply_eval!` here re-compiled script source on
-        // every call, which was the dominant CPU cost during scrolling.)
-        let send_message_button = self.view.button(cx, ids!(send_message_button));
-        send_message_button.set_visible(cx, enable);
-        send_message_button.set_enabled(cx, enable);
-    }
+    /// No-op retained for its many call sites. The send button is now always
+    /// visible and enabled — the send handler ignores empty input — so there is
+    /// no per-keystroke show/enable toggling to do.
+    fn enable_send_message_button(&mut self, _cx: &mut Cx, _enable: bool) {}
 
     fn try_handle_bot_shortcut(
         &mut self,
@@ -2463,9 +2315,6 @@ impl RoomInputBarRef {
         let is_text_input_empty = inner.text_input(cx, ids!(mentionable_text_input.text_input))
             .text()
             .is_empty();
-        // Force a re-apply: this `RoomInputBar` instance is reused across rooms,
-        // so the cached send-button state may not match the newly-restored room.
-        inner.send_button_enabled = None;
         inner.enable_send_message_button(cx, !is_text_input_empty);
         inner.is_location_card_expanded = false;
         inner.view.view(cx, ids!(more_actions_popup)).set_visible(cx, false);
