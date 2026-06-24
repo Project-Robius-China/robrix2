@@ -137,13 +137,17 @@ script_mod! {
                     border_size: 2.0
                     border_color: (RBX_STROKE_STRONG)
                 }
-                card_radio_check := Icon {
-                    width: 12
-                    height: 12
+                card_radio_check := View {
+                    width: Fit
+                    height: Fit
                     visible: false
-                    draw_icon +: {
-                        svg: (ICON_CHECKMARK)
-                        color: (RBX_FG_ON_ACCENT)
+                    Icon {
+                        width: 12
+                        height: 12
+                        draw_icon +: {
+                            svg: (ICON_CHECKMARK)
+                            color: (RBX_FG_ON_ACCENT)
+                        }
                     }
                 }
             }
@@ -251,7 +255,7 @@ script_mod! {
                     padding: Inset{left: 2, right: 6, top: 6, bottom: 6}
                     spacing: 0
                     text: ""
-                    draw_icon.svg: (AGENT_ICON_BACK)
+                    draw_icon.svg: (mod.widgets.AGENT_ICON_BACK)
                     draw_icon.color: (RBX_FG_SECONDARY)
                     icon_walk: Walk{width: 18, height: 18}
                     draw_bg +: { color: #0000, color_hover: #0000, color_down: #0000 }
