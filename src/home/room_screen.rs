@@ -3824,10 +3824,10 @@ script_mod! {
 
                 // The Chat / Info bodies share the same space via an Overlay so
                 // exactly one is shown at a time. (Two `height: Fill` siblings
-                // in a Down flow mis-size when one is hidden — the hidden one's
-                // Fill space can still be reserved, pushing the visible one
-                // off-screen. An Overlay sizes BOTH children to the full area,
-                // so toggling visibility just swaps which one is drawn.)
+                // in a Down flow are sized incorrectly when one is hidden — the
+                // hidden one's Fill space can still be reserved, pushing the
+                // visible one off-screen. An Overlay sizes BOTH children to the
+                // full area, so toggling visibility just swaps which is drawn.)
                 body_area := View {
                     width: Fill, height: Fill,
                     flow: Overlay,
