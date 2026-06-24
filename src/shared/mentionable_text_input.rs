@@ -2110,6 +2110,34 @@ impl MentionableTextInput {
         self.pending_draw_focus_restore = true;
     }
 
+    /// Opens the member-mention popup, the `@` counterpart to
+    /// [`Self::open_slash_command_popup`]. Appends an `@` on a word boundary
+    /// (preserving any text the user already typed), places the cursor after it,
+    /// and runs the same text-change path a real keystroke would, so the member
+    /// search popup opens immediately instead of waiting for the next keypress.
+    fn open_mention_popup(&mut self, cx: &mut Cx, scope: &mut Scope) {
+        let text_input_ref = self.cmd_text_input.text_input_ref();
+        let mut text = self.text();
+        if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+            text.push(' ');
+        }
+        text.push('@');
+        let cursor_index = text.len();
+        self.set_input_text_preserving_mentions(cx, &text);
+        text_input_ref.set_cursor(
+            cx,
+            Cursor {
+                index: cursor_index,
+                prefer_next_row: false,
+            },
+            false,
+        );
+        self.handle_text_change(cx, scope, text);
+        text_input_ref.set_key_focus(cx);
+        // Same focus-commit race as open_slash_command_popup; see note above.
+        self.pending_draw_focus_restore = true;
+    }
+
     /// Update popup visibility and layout based on current state
     fn update_popup_visibility(&mut self, cx: &mut Cx, scope: &mut Scope, has_items: bool) {
         let popup = self.cmd_text_input.view(cx, ids!(popup));
@@ -3054,6 +3082,14 @@ impl MentionableTextInputRef {
     pub fn open_slash_command_popup(&self, cx: &mut Cx, scope: &mut Scope) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.open_slash_command_popup(cx, scope);
+        }
+    }
+
+    /// Opens the `@` member-mention popup (the counterpart to
+    /// [`Self::open_slash_command_popup`]).
+    pub fn open_mention_popup(&self, cx: &mut Cx, scope: &mut Scope) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.open_mention_popup(cx, scope);
         }
     }
 
