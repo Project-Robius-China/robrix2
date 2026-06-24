@@ -901,13 +901,10 @@ impl MatchEvent for App {
             return;
         }
 
-        if let Some(room_screen_id) = self.clicked_mobile_room_info_button(cx, actions) {
-            let room_screen_widget_uid = self.ui.room_screen(cx, &[room_screen_id]).widget_uid();
-            cx.widget_action(
-                room_screen_widget_uid,
-                MessageAction::ShowRoomInfoPane,
-            );
-        }
+        // The mobile room header (back / search / info / encryption / member
+        // count / Chat-Info tabs) is now owned by `RoomScreen`'s `RoomTopBar`
+        // widget, which handles those interactions internally — so there is no
+        // longer any header wiring to drive from here.
 
         for action in actions {
             if let Some(AppUpdateAction::AutoCheckFinished(result)) = action.downcast_ref() {
@@ -2324,22 +2321,6 @@ impl App {
         None
     }
 
-    fn clicked_mobile_room_info_button(&self, cx: &mut Cx, actions: &Actions) -> Option<LiveId> {
-        for (view_id, room_screen_id) in Self::ROOM_VIEW_IDS.iter().zip(Self::ROOM_SCREEN_IDS.iter()) {
-            let button_path = &[
-                *view_id,
-                live_id!(header),
-                live_id!(content),
-                live_id!(button_container),
-                live_id!(right_button),
-            ];
-            if self.ui.button(cx, button_path).clicked(actions) {
-                return Some(*room_screen_id);
-            }
-        }
-        None
-    }
-
     fn set_room_filter_modal_empty_state(
         &self,
         cx: &mut Cx,
@@ -2556,21 +2537,12 @@ impl App {
             }
         };
 
-        // Set the header title for the view being pushed.
+        // Set the generic StackNavigation header title. This header is only
+        // visible for invite/space views; room views hide it and render their
+        // own name/members/encryption/search/tabs via `RoomScreen`'s
+        // `RoomTopBar`, so no per-child header wiring is needed here anymore.
         let title_path = &[view_id, live_id!(header), live_id!(content), live_id!(title_container), live_id!(title)];
         self.ui.label(cx, title_path).set_text(cx, &selected_room.display_name());
-        let right_button_path = &[view_id, live_id!(header), live_id!(content), live_id!(button_container), live_id!(right_button)];
-        let show_info_button = matches!(
-            selected_room,
-            SelectedRoom::JoinedRoom { .. }
-            | SelectedRoom::Thread { .. }
-        );
-        let right_button = self.ui.button(cx, right_button_path);
-        right_button.set_visible(cx, show_info_button);
-        if show_info_button {
-            right_button.set_text(cx, "");
-            right_button.reset_hover(cx);
-        }
 
         // Save the current selected_room onto the navigation stack before replacing it.
         if !same_selected_room && let Some(prev) = self.app_state.selected_room.take() {

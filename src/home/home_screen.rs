@@ -16,7 +16,7 @@ script_mod! {
     // Defines the total height of the StackNavigationView's header.
     // This has to be set in multiple places because of how StackNavigation
     // uses an Overlay view internally.
-    mod.widgets.STACK_VIEW_HEADER_HEIGHT = 45
+    mod.widgets.STACK_VIEW_HEADER_HEIGHT = 54
 
     // A reusable base for StackNavigationView children in the mobile layout.
     // Each specific content view (room, invite, space lobby) extends this
@@ -135,9 +135,58 @@ script_mod! {
                         button_spacer := View {
                             width: Fill, height: Fill
                         }
+                        // Room encryption status: a shield with a small dot at its
+                        // bottom-right — green when encrypted, red when not. The
+                        // App toggles the dot + visibility for room views only.
+                        encryption_indicator := View {
+                            visible: false,
+                            width: Fit, height: Fit,
+                            flow: Overlay,
+                            align: Align{x: 1.0, y: 1.0},
+                            margin: Inset{left: 4, right: 4}
+                            enc_shield := Icon {
+                                width: 22, height: 22,
+                                draw_icon +: { svg: (ICON_SHIELD), color: (ROOM_NAME_TEXT_COLOR) }
+                                icon_walk: Walk{width: 20, height: 20}
+                            }
+                            enc_dot_green := RoundedView {
+                                width: 9, height: 9,
+                                show_bg: true,
+                                draw_bg +: {
+                                    color: (RBX_SUCCESS_FG),
+                                    border_radius: 4.5,
+                                    border_size: 1.5,
+                                    border_color: (COLOR_PRIMARY_DARKER),
+                                }
+                            }
+                            enc_dot_red := RoundedView {
+                                visible: false,
+                                width: 9, height: 9,
+                                show_bg: true,
+                                draw_bg +: {
+                                    color: (RBX_DANGER_FG),
+                                    border_radius: 4.5,
+                                    border_size: 1.5,
+                                    border_color: (COLOR_PRIMARY_DARKER),
+                                }
+                            }
+                        }
+                        header_search_button := ButtonFlatterIcon {
+                            visible: false
+                            width: 40, height: Fill,
+                            padding: 0,
+                            margin: 0
+                            draw_icon +: {
+                                color: (ROOM_NAME_TEXT_COLOR)
+                                svg: (ICON_SEARCH)
+                            }
+                            icon_walk: Walk{width: 18, height: Fit}
+                            spacing: 0
+                            text: ""
+                        }
                         right_button := ButtonFlatterIcon {
                             visible: false
-                            width: 56, height: Fill,
+                            width: 44, height: Fill,
                             padding: 0,
                             margin: 0
                             draw_icon +: {
@@ -152,8 +201,10 @@ script_mod! {
                     title_container +: {
                     width: Fill
                     height: Fill
-                    padding: Inset{top: 0, left: 56, right: 56}
-                    align: Align{x: 0.5, y: 0.5}
+                    flow: Down
+                    padding: Inset{top: 0, left: 56, right: 130}
+                    align: Align{x: 0.0, y: 0.5}
+                    spacing: 0
                     title +: {
                         width: Fill
                         margin: 0
@@ -161,9 +212,20 @@ script_mod! {
                         max_lines: 1
                         text_overflow: Ellipsis
                         draw_text +: {
-                            text_style: theme.font_bold { font_size: 11.5 }
+                            text_style: theme.font_bold { font_size: 13.0 }
                             color: (ROOM_NAME_TEXT_COLOR)
                         }
+                    }
+                    member_count_label := Label {
+                        width: Fill, height: Fit
+                        margin: 0
+                        max_lines: 1
+                        text_overflow: Ellipsis
+                        draw_text +: {
+                            text_style: theme.font_regular { font_size: 9.5 }
+                            color: (RBX_FG_SECONDARY)
+                        }
+                        text: ""
                     }
                 }
             }
@@ -171,6 +233,15 @@ script_mod! {
         body +: {
             margin: Inset{top: (mod.widgets.STACK_VIEW_HEADER_HEIGHT)}
         }
+    }
+
+    // Room views own their header via RoomScreen's `RoomTopBar` (back + name +
+    // members + encryption + search + more, plus the Chat/Info tab row), so the
+    // generic StackNavigation header is hidden here and the body fills from the
+    // very top. Invite/Space views keep the generic header above.
+    mod.widgets.RobrixRoomContentView = mod.widgets.RobrixContentView {
+        header +: { visible: false }
+        body +: { margin: 0 }
     }
 
     // A wrapper view around the SpacesBar that lets us show/hide it via animation.
@@ -358,22 +429,22 @@ script_mod! {
                     // (e.g., room -> thread -> room -> thread -> ...).
                     // Each stack depth gets its own dedicated view widget,
                     // avoiding complex state save/restore when views are reused.
-                    room_view_0  := mod.widgets.RobrixContentView { body +: { room_screen_0  := mod.widgets.RoomScreen {} } }
-                    room_view_1  := mod.widgets.RobrixContentView { body +: { room_screen_1  := mod.widgets.RoomScreen {} } }
-                    room_view_2  := mod.widgets.RobrixContentView { body +: { room_screen_2  := mod.widgets.RoomScreen {} } }
-                    room_view_3  := mod.widgets.RobrixContentView { body +: { room_screen_3  := mod.widgets.RoomScreen {} } }
-                    room_view_4  := mod.widgets.RobrixContentView { body +: { room_screen_4  := mod.widgets.RoomScreen {} } }
-                    room_view_5  := mod.widgets.RobrixContentView { body +: { room_screen_5  := mod.widgets.RoomScreen {} } }
-                    room_view_6  := mod.widgets.RobrixContentView { body +: { room_screen_6  := mod.widgets.RoomScreen {} } }
-                    room_view_7  := mod.widgets.RobrixContentView { body +: { room_screen_7  := mod.widgets.RoomScreen {} } }
-                    room_view_8  := mod.widgets.RobrixContentView { body +: { room_screen_8  := mod.widgets.RoomScreen {} } }
-                    room_view_9  := mod.widgets.RobrixContentView { body +: { room_screen_9  := mod.widgets.RoomScreen {} } }
-                    room_view_10 := mod.widgets.RobrixContentView { body +: { room_screen_10 := mod.widgets.RoomScreen {} } }
-                    room_view_11 := mod.widgets.RobrixContentView { body +: { room_screen_11 := mod.widgets.RoomScreen {} } }
-                    room_view_12 := mod.widgets.RobrixContentView { body +: { room_screen_12 := mod.widgets.RoomScreen {} } }
-                    room_view_13 := mod.widgets.RobrixContentView { body +: { room_screen_13 := mod.widgets.RoomScreen {} } }
-                    room_view_14 := mod.widgets.RobrixContentView { body +: { room_screen_14 := mod.widgets.RoomScreen {} } }
-                    room_view_15 := mod.widgets.RobrixContentView { body +: { room_screen_15 := mod.widgets.RoomScreen {} } }
+                    room_view_0  := mod.widgets.RobrixRoomContentView { body +: { room_screen_0  := mod.widgets.RoomScreen {} } }
+                    room_view_1  := mod.widgets.RobrixRoomContentView { body +: { room_screen_1  := mod.widgets.RoomScreen {} } }
+                    room_view_2  := mod.widgets.RobrixRoomContentView { body +: { room_screen_2  := mod.widgets.RoomScreen {} } }
+                    room_view_3  := mod.widgets.RobrixRoomContentView { body +: { room_screen_3  := mod.widgets.RoomScreen {} } }
+                    room_view_4  := mod.widgets.RobrixRoomContentView { body +: { room_screen_4  := mod.widgets.RoomScreen {} } }
+                    room_view_5  := mod.widgets.RobrixRoomContentView { body +: { room_screen_5  := mod.widgets.RoomScreen {} } }
+                    room_view_6  := mod.widgets.RobrixRoomContentView { body +: { room_screen_6  := mod.widgets.RoomScreen {} } }
+                    room_view_7  := mod.widgets.RobrixRoomContentView { body +: { room_screen_7  := mod.widgets.RoomScreen {} } }
+                    room_view_8  := mod.widgets.RobrixRoomContentView { body +: { room_screen_8  := mod.widgets.RoomScreen {} } }
+                    room_view_9  := mod.widgets.RobrixRoomContentView { body +: { room_screen_9  := mod.widgets.RoomScreen {} } }
+                    room_view_10 := mod.widgets.RobrixRoomContentView { body +: { room_screen_10 := mod.widgets.RoomScreen {} } }
+                    room_view_11 := mod.widgets.RobrixRoomContentView { body +: { room_screen_11 := mod.widgets.RoomScreen {} } }
+                    room_view_12 := mod.widgets.RobrixRoomContentView { body +: { room_screen_12 := mod.widgets.RoomScreen {} } }
+                    room_view_13 := mod.widgets.RobrixRoomContentView { body +: { room_screen_13 := mod.widgets.RoomScreen {} } }
+                    room_view_14 := mod.widgets.RobrixRoomContentView { body +: { room_screen_14 := mod.widgets.RoomScreen {} } }
+                    room_view_15 := mod.widgets.RobrixRoomContentView { body +: { room_screen_15 := mod.widgets.RoomScreen {} } }
 
                     invite_view := mod.widgets.RobrixContentView {
                         body +: {
