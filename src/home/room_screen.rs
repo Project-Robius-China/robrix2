@@ -45,11 +45,13 @@ use crate::home::search_messages::{
 };
 use crate::home::streaming_animation::StreamingAnimState;
 use crate::room::room_input_bar::RoomInputBarWidgetExt;
+use crate::room::room_top_bar::{RoomTab, RoomTopBarAction, RoomTopBarWidgetExt};
 use crate::shared::mentionable_text_input::MentionableTextInputAction;
 use crate::shared::audio_message_player::AudioMessagePlayerWidgetRefExt;
 use crate::shared::video_message_player::VideoMessagePlayerWidgetRefExt;
 use crate::event_preview::{summarize_audio_message, summarize_video_message};
 use crate::shared::animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt};
+use crate::settings::app_preferences::effective_is_desktop;
 
 use rangemap::RangeSet;
 
@@ -3759,12 +3761,12 @@ script_mod! {
         threads_button := mod.widgets.ThreadsButton { }
 
         // Floating search button at the top-right (mirrors jump-to-bottom).
-        // Clicking it opens the `search_messages_pane` sliding pane below.
+        // Clicking it opens the `search_messages_pane` sliding pane.
+        // NOTE: the pane itself is NOT defined here — it lives as a top-level
+        // overlay in `room_screen_wrapper` (next to `room_info_sliding_pane`)
+        // so it composites OVER the timeline's `new_batch` cards. Defining it
+        // inside this Timeline overlay let those cards z-fight through it.
         search_messages_button := mod.widgets.SearchMessagesButton { }
-
-        // Right-sliding pane that hosts the search input and the
-        // server-side `/search` results list.
-        search_messages_pane := mod.widgets.SearchMessagesSlidingPane { }
     }
 
     mod.widgets.TranslationLangPopupButton = RobrixIconButton {
@@ -3813,16 +3815,71 @@ script_mod! {
                 width: Fill, height: Fill,
                 flow: Down,
 
-                // First, display the timeline of all messages/events.
-                timeline := mod.widgets.Timeline {
-                    // margin: Inset{bottom: 10}
+                // Robrix-owned mobile room header + `Chat | Info` tab row.
+                // Hidden on desktop (which uses its own dock chrome); shown and
+                // populated on mobile from `draw_walk`.
+                room_top_bar := mod.widgets.RoomTopBar {
+                    visible: false,
                 }
 
-                // Below that, display a typing notice when other users in the room are typing.
-                typing_notice := TypingNotice { }
+                // The Chat / Info bodies share the same space via an Overlay so
+                // exactly one is shown at a time. (Two `height: Fill` siblings
+                // in a Down flow mis-size when one is hidden — the hidden one's
+                // Fill space can still be reserved, pushing the visible one
+                // off-screen. An Overlay sizes BOTH children to the full area,
+                // so toggling visibility just swaps which one is drawn.)
+                body_area := View {
+                    width: Fill, height: Fill,
+                    flow: Overlay,
 
-                room_input_bar := RoomInputBar {
-                    // margin: Inset{top: 20}
+                    // "Chat" tab body: the timeline, typing notice, and input bar.
+                    chat_content := View {
+                        width: Fill, height: Fill,
+                        flow: Down,
+
+                        // First, display the timeline of all messages/events.
+                        timeline := mod.widgets.Timeline {
+                            // margin: Inset{bottom: 10}
+                        }
+
+                        // Below that, display a typing notice when other users in the room are typing.
+                        typing_notice := TypingNotice { }
+
+                        room_input_bar := RoomInputBar {
+                            // margin: Inset{top: 20}
+                        }
+                    }
+
+                    // "Info" tab body: the existing room-info content reused
+                    // inline (no slide animation / backdrop / close button).
+                    //
+                    // NOTE: the visibility toggle is on this PLAIN `View`
+                    // wrapper — not on `info_content` directly — because
+                    // `set_visible` is a no-op on a custom widget
+                    // (`RoomInfoSlidingPane`); only plain Views honor it. The
+                    // inner pane stays always-visible + inline.
+                    info_tab_body := View {
+                        width: Fill, height: Fill,
+                        visible: false,
+
+                        info_content := mod.widgets.RoomInfoSlidingPane {
+                            // The base RoomInfoSlidingPane is `visible: false`
+                            // (it's normally a hidden slide-in pane); override
+                            // to always-visible here since the `info_tab_body`
+                            // wrapper controls when this inline copy is shown.
+                            visible: true,
+                            inline: true,
+                            bg_view +: { visible: false }
+                            main_content +: {
+                                width: Fill
+                                header +: {
+                                    padding: 0
+                                    title +: { visible: false }
+                                    close_button +: { visible: false }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -3888,6 +3945,11 @@ script_mod! {
 
             threads_sliding_pane := mod.widgets.ThreadsSlidingPane { }
             room_info_sliding_pane := mod.widgets.RoomInfoSlidingPane { }
+            // Right-sliding pane hosting the server-side message search. Lives
+            // here (a top-level wrapper overlay), NOT inside the Timeline, so it
+            // composites over the timeline's `new_batch` message cards — same
+            // as `room_info_sliding_pane`, which has no z-order glitch.
+            search_messages_pane := mod.widgets.SearchMessagesSlidingPane { }
 
             // The user profile sliding pane should be displayed on top of other "static" subviews
             // (on top of all other views that are always visible).
@@ -4386,6 +4448,12 @@ pub struct RoomInfoSlidingPane {
     #[apply_default] animator: Animator,
     #[live] slide: f32,
 
+    /// When `true`, this pane is mounted *inline* (e.g. as the room's "Info"
+    /// body tab) rather than as a right-sliding overlay: the slide animation,
+    /// dimmed backdrop, and tap-outside/back-to-close behavior are all skipped,
+    /// and its visibility is controlled entirely by the parent (the tab).
+    #[live] inline: bool,
+
     #[rust] info: Option<RoomInfoPaneInfo>,
     #[rust] is_animating_out: bool,
     #[rust] show_people_page: bool,
@@ -4413,33 +4481,37 @@ impl Widget for RoomInfoSlidingPane {
             return;
         }
 
-        let area = self.view.area();
-        let close_pane = if is_invite_modal_open() || is_room_info_action_modal_open() {
-            matches!(
-                event,
-                Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
-            )
-        } else {
-            matches!(
-                event,
-                Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
-            )
-            || event.back_pressed()
-            || match event.hits_with_capture_overload(cx, area, true) {
-                Hit::KeyUp(key) => key.key_code == KeyCode::Escape,
-                Hit::FingerDown(_fde) => {
-                    cx.set_key_focus(area);
-                    false
+        // Inline (tab) mode is opened/closed by the parent tab, so it never
+        // self-closes on back-press / tap-outside / Escape.
+        if !self.inline {
+            let area = self.view.area();
+            let close_pane = if is_invite_modal_open() || is_room_info_action_modal_open() {
+                matches!(
+                    event,
+                    Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
+                )
+            } else {
+                matches!(
+                    event,
+                    Event::Actions(actions) if self.button(cx, ids!(close_button)).clicked(actions)
+                )
+                || event.back_pressed()
+                || match event.hits_with_capture_overload(cx, area, true) {
+                    Hit::KeyUp(key) => key.key_code == KeyCode::Escape,
+                    Hit::FingerDown(_fde) => {
+                        cx.set_key_focus(area);
+                        false
+                    }
+                    Hit::FingerUp(fue) if fue.is_over => {
+                        fue.mouse_button().is_some_and(|b| b.is_back())
+                        || !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    }
+                    _ => false,
                 }
-                Hit::FingerUp(fue) if fue.is_over => {
-                    fue.mouse_button().is_some_and(|b| b.is_back())
-                    || !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
-                }
-                _ => false,
+            };
+            if close_pane {
+                self.hide(cx);
             }
-        };
-        if close_pane {
-            self.hide(cx);
         }
 
         if let Event::Actions(actions) = event {
@@ -4521,22 +4593,29 @@ impl Widget for RoomInfoSlidingPane {
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         let Some(info) = self.info.as_ref() else {
-            self.visible = false;
+            // In inline (tab) mode the parent controls visibility, so don't
+            // force-hide just because info hasn't been populated yet.
+            if !self.inline {
+                self.visible = false;
+            }
             return self.view.draw_walk(cx, scope, walk);
         };
 
-        let panel_width = 320.0;
-        let right_margin = -(self.slide * panel_width);
-        let mut main_content = self.view(cx, ids!(main_content));
-        script_apply_eval!(cx, main_content, {
-            margin.right: #(right_margin)
-        });
-        let bg_alpha = (1.0 - self.slide) * 0.733;
-        let bg_color = vec4(0.0, 0.0, 0.0, bg_alpha);
-        let mut bg_view = self.view(cx, ids!(bg_view));
-        script_apply_eval!(cx, bg_view, {
-            draw_bg +: { color: #(bg_color) }
-        });
+        // Slide animation + dimmed backdrop only apply to the overlay variant.
+        if !self.inline {
+            let panel_width = 320.0;
+            let right_margin = -(self.slide * panel_width);
+            let mut main_content = self.view(cx, ids!(main_content));
+            script_apply_eval!(cx, main_content, {
+                margin.right: #(right_margin)
+            });
+            let bg_alpha = (1.0 - self.slide) * 0.733;
+            let bg_color = vec4(0.0, 0.0, 0.0, bg_alpha);
+            let mut bg_view = self.view(cx, ids!(bg_view));
+            script_apply_eval!(cx, bg_view, {
+                draw_bg +: { color: #(bg_color) }
+            });
+        }
 
         self.button(cx, ids!(header.back_button)).set_visible(cx, self.show_people_page);
         self.label(cx, ids!(header.title)).set_text(cx, if self.show_people_page { "People" } else { "Info" });
@@ -4655,6 +4734,15 @@ impl RoomInfoSlidingPaneRef {
     fn set_info(&self, cx: &mut Cx, info: RoomInfoPaneInfo) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.set_info(cx, info);
+    }
+
+    /// Force the inline (docked, non-sliding) presentation. Set imperatively
+    /// because the DSL `inline: true` instance override is not reliably applied
+    /// to this `#[live]` field on the inline `info_content` instance.
+    pub fn set_inline(&self, inline: bool) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.inline = inline;
+        }
     }
 
     pub fn show(&self, cx: &mut Cx) {
@@ -4813,6 +4901,9 @@ pub struct RoomScreen {
     /// query, the room it targets, the most recent `next_batch` token, and
     /// whether a request is currently in flight.
     #[rust] search_state: RoomSearchState,
+    /// Which body tab (Chat / Info) is currently shown in the mobile layout.
+    /// Reset to `Chat` whenever a new room is displayed. Unused on desktop.
+    #[rust] active_room_tab: RoomTab,
 }
 
 /// Tracks the active server-side message search shown in the
@@ -4880,6 +4971,11 @@ impl Widget for RoomScreen {
         let threads_sliding_pane = self.threads_sliding_pane(cx, ids!(threads_sliding_pane));
         let room_info_sliding_pane = self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane));
         let room_info_sliding_pane_widget_uid = room_info_sliding_pane.widget_uid();
+        // The mobile "Info" tab reuses a second RoomInfoSlidingPane instance
+        // (`info_content`, inline). Its action buttons (Invite / People /
+        // Report / Leave / member taps) emit `RoomInfoPaneAction`s under this
+        // uid, so route them the same as the overlay pane's.
+        let info_content_widget_uid = self.room_info_sliding_pane(cx, ids!(info_content)).widget_uid();
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
         set_room_info_action_modal_open(
             self.view.modal(cx, ids!(report_room_modal)).is_open()
@@ -5120,6 +5216,37 @@ impl Widget for RoomScreen {
             self.handle_message_actions(cx, actions, &portal_list, &loading_pane);
 
             for action in actions {
+                // Mobile RoomTopBar (header + Chat/Info tabs) actions.
+                match action.as_widget_action().cast::<RoomTopBarAction>() {
+                    RoomTopBarAction::Back => {
+                        cx.widget_action(room_screen_widget_uid, StackNavigationAction::Pop);
+                    }
+                    RoomTopBarAction::Search => {
+                        cx.widget_action(room_screen_widget_uid, SearchMessagesAction::OpenRequested);
+                    }
+                    RoomTopBarAction::TabSelected(tab) => {
+                        self.active_room_tab = tab;
+                        if matches!(tab, RoomTab::Info) {
+                            // Lazy-load: only fetch the room's members the first
+                            // time the user opens the Info tab (the members list
+                            // backs the inline info / People sub-page). When they
+                            // arrive, the inline pane is re-populated below.
+                            if let Some(tl) = self.tl_state.as_ref() {
+                                if tl.room_members.is_none() {
+                                    submit_async_request(MatrixRequest::GetRoomMembers {
+                                        timeline_kind: tl.kind.clone(),
+                                        memberships: matrix_sdk::RoomMemberships::JOIN,
+                                        local_only: false,
+                                    });
+                                }
+                            }
+                            self.refresh_inline_room_info(cx);
+                        }
+                        self.redraw(cx);
+                    }
+                    RoomTopBarAction::None => {}
+                }
+
                 if let Some(RoomsListAction::Selected(selected_room)) = action.downcast_ref() {
                     if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
                         self.close_report_room_modal(cx);
@@ -5268,9 +5395,10 @@ impl Widget for RoomScreen {
                     ThreadsPaneAction::None => {}
                 }
 
-                match action
-                    .as_widget_action()
+                let room_info_widget_action = action.as_widget_action();
+                match room_info_widget_action
                     .widget_uid_eq(room_info_sliding_pane_widget_uid)
+                    .or_else(|| room_info_widget_action.widget_uid_eq(info_content_widget_uid))
                     .cast_ref()
                 {
                     RoomInfoPaneAction::InviteUser => {
@@ -5373,8 +5501,8 @@ impl Widget for RoomScreen {
 
             // In-room message search actions: open/close the pane, react to
             // query changes, and jump to a clicked result. The pane lives at
-            // `ids!(timeline.search_messages_pane)` and the floating button
-            // at `ids!(timeline.search_messages_button)`.
+            // `ids!(search_messages_pane)` (a top-level wrapper overlay) and the
+            // floating button at `ids!(timeline.search_messages_button)`.
             self.handle_search_messages_actions(cx, actions, &portal_list, &loading_pane);
 
             // Floating threads button click → open the threads sliding pane.
@@ -5442,6 +5570,11 @@ impl Widget for RoomScreen {
             }
             if room_info_sliding_pane.is_currently_shown(cx) {
                 self.refresh_room_info_pane(cx);
+            }
+            // Keep the inline "Info" tab body current as room data (members,
+            // topic, etc.) arrives, mirroring the overlay pane above.
+            if matches!(self.active_room_tab, RoomTab::Info) {
+                self.refresh_inline_room_info(cx);
             }
 
             // Ideally we would do this elsewhere on the main thread, because it's not room-specific,
@@ -5880,6 +6013,57 @@ impl Widget for RoomScreen {
         let Some(room_props) = self.build_room_screen_props(cx, scope, room_screen_widget_uid) else {
             return DrawStep::done();
         };
+
+        // On mobile, hide the floating in-timeline search + threads buttons:
+        // search now lives in the RoomTopBar header and both have other entry
+        // points. Keep them on desktop, which has no mobile header. NOTE: these
+        // are custom widgets, so toggle via `.widget()` — `.view()` returns an
+        // empty ref for non-View widgets and `set_visible` would no-op.
+        let is_desktop = effective_is_desktop(cx);
+        self.view.widget(cx, ids!(timeline.search_messages_button)).set_visible(cx, is_desktop);
+        self.view.widget(cx, ids!(timeline.threads_button)).set_visible(cx, is_desktop);
+
+        // Drive the Robrix-owned mobile room header (RoomTopBar) and the
+        // Chat/Info body switch. The top bar is mobile-only; desktop keeps its
+        // dock chrome and always shows the chat body.
+        let show_top_bar = !is_desktop;
+        if show_top_bar {
+            // Gather the header's room data with read-only borrows first, then
+            // push it to the widget (which needs `&mut`).
+            let room_name = self.room_name_id.as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            let member_count_text = self.room_id()
+                .and_then(|rid| get_client().and_then(|c| c.get_room(rid)))
+                .map(|room| room.joined_members_count())
+                .filter(|&n| n > 0)
+                .map(|n| format!("{n} members"))
+                .unwrap_or_default();
+            let is_encrypted = room_props.is_encrypted;
+            self.room_top_bar(cx, ids!(room_top_bar))
+                .set_room(cx, &room_name, &member_count_text, is_encrypted);
+        }
+        self.room_top_bar(cx, ids!(room_top_bar)).set_visible(cx, show_top_bar);
+
+        // Push the top "loading earlier" status bar below the mobile header +
+        // tab row so it doesn't overlap them. RoomTopBar height = header(56) +
+        // tabs(40) + divider(1). No offset on desktop (no mobile header).
+        let top_space_offset = if show_top_bar { 97.0 } else { 0.0 };
+        let mut top_space = self.view(cx, ids!(top_space));
+        script_apply_eval!(cx, top_space, {
+            margin.top: #(top_space_offset)
+        });
+
+        // Show the timeline ("Chat") or the inline room-info ("Info") body.
+        // Desktop always shows the chat body (info lives in its sliding pane).
+        let on_info_tab = show_top_bar && matches!(self.active_room_tab, RoomTab::Info);
+        // Ensure the inline info pane stays in docked (non-sliding) mode.
+        self.room_info_sliding_pane(cx, ids!(info_content)).set_inline(true);
+        // Toggle the PLAIN-View wrappers (set_visible is a no-op on the custom
+        // RoomInfoSlidingPane, so we toggle its wrapper instead).
+        self.view.view(cx, ids!(chat_content)).set_visible(cx, !on_info_tab);
+        self.view.view(cx, ids!(info_tab_body)).set_visible(cx, on_info_tab);
+
         let mut room_scope = if let Some(app_state) = scope.data.get_mut::<AppState>() {
             Scope::with_data_props(app_state, &room_props)
         } else {
@@ -8253,7 +8437,7 @@ impl RoomScreen {
         portal_list: &PortalListRef,
         loading_pane: &LoadingPaneRef,
     ) {
-        let pane = self.search_messages_sliding_pane(cx, ids!(timeline.search_messages_pane));
+        let pane = self.search_messages_sliding_pane(cx, ids!(search_messages_pane));
         let button = self.search_messages_button(cx, ids!(timeline.search_messages_button));
 
         let mut requested_close = false;
@@ -8415,7 +8599,7 @@ impl RoomScreen {
     /// handler. Stale results (different room or different query) are
     /// dropped; matching results are pushed into the pane.
     fn handle_search_messages_results(&mut self, cx: &mut Cx, actions: &Actions) {
-        let pane = self.search_messages_sliding_pane(cx, ids!(timeline.search_messages_pane));
+        let pane = self.search_messages_sliding_pane(cx, ids!(search_messages_pane));
 
         for action in actions {
             let Some(result) = action.downcast_ref::<SearchMessagesResultAction>() else {
@@ -8530,8 +8714,11 @@ impl RoomScreen {
         self.threads_button(cx, ids!(timeline.threads_button)).set_visible(cx, true);
     }
 
-    fn refresh_room_info_pane(&mut self, cx: &mut Cx) {
-        let Some(room_id) = self.room_id().cloned() else { return };
+    /// Build the room-info payload from current state, or `None` if no room is
+    /// displayed. Shared by both the sliding info pane and the inline "Info"
+    /// tab body so the two presentations stay in sync.
+    fn build_room_info_pane_info(&self) -> Option<RoomInfoPaneInfo> {
+        let room_id = self.room_id().cloned()?;
         let room_name = self.room_name_id.as_ref()
             .map(ToString::to_string)
             .unwrap_or_else(|| room_id.to_string());
@@ -8627,21 +8814,32 @@ impl RoomScreen {
                 true,
             ));
 
-        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).set_info(
-            cx,
-            RoomInfoPaneInfo {
-                room_name,
-                room_id: room_id.to_string(),
-                topic,
-                visibility,
-                encryption,
-                room_avatar_uri,
-                room_avatar_fallback_text,
-                people_entries,
-                people_count_text,
-                show_people_loading,
-            },
-        );
+        Some(RoomInfoPaneInfo {
+            room_name,
+            room_id: room_id.to_string(),
+            topic,
+            visibility,
+            encryption,
+            room_avatar_uri,
+            room_avatar_fallback_text,
+            people_entries,
+            people_count_text,
+            show_people_loading,
+        })
+    }
+
+    fn refresh_room_info_pane(&mut self, cx: &mut Cx) {
+        if let Some(info) = self.build_room_info_pane_info() {
+            self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).set_info(cx, info);
+        }
+    }
+
+    /// Populate the inline "Info" tab body (a second `RoomInfoSlidingPane`
+    /// instance mounted inline inside `keyboard_view`).
+    fn refresh_inline_room_info(&mut self, cx: &mut Cx) {
+        if let Some(info) = self.build_room_info_pane_info() {
+            self.room_info_sliding_pane(cx, ids!(info_content)).set_info(cx, info);
+        }
     }
 
     fn show_room_info_pane(&mut self, cx: &mut Cx) {
@@ -9062,6 +9260,11 @@ impl RoomScreen {
             room_id: timeline_kind.room_id().clone(),
             can_notify_room: false,
         });
+
+        // A freshly-displayed room always starts on the "Chat" tab (the mobile
+        // RoomTopBar's tab selection persists per widget instance, so reset it).
+        self.active_room_tab = RoomTab::Chat;
+        self.room_top_bar(cx, ids!(room_top_bar)).set_active_tab(cx, RoomTab::Chat);
 
         self.show_timeline(cx);
     }
