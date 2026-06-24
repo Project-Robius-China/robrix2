@@ -6857,11 +6857,21 @@ impl RoomScreen {
                     if new_items.is_empty() {
                         if !tl.items.is_empty() {
                             log!("process_timeline_updates(): timeline (had {} items) was cleared for room {}", tl.items.len(), tl.kind.room_id());
-                            // For now, we paginate a cleared timeline in order to be able to show something at least.
-                            // A proper solution would be what's described below, which would be to save a few event IDs
-                            // and then either focus on them (if we're not close to the end of the timeline)
-                            // or paginate backwards until we find them (only if we are close the end of the timeline).
+                            // The matrix SDK frequently emits a *transient* `Clear` (an empty
+                            // snapshot) immediately before re-pushing the rebuilt timeline --
+                            // e.g. on every message send/receive in some sliding-sync setups.
+                            // If we applied this empty snapshot, the portal list would render
+                            // nothing for a frame or two, exposing the near-white room
+                            // background as a jarring "white flash", and we'd blank the viewport
+                            // before the rebuilt items arrive.
+                            //
+                            // Instead, keep the currently-rendered items in place and skip
+                            // applying this empty snapshot entirely. We still kick off a
+                            // backwards pagination so a genuinely-cleared timeline can be
+                            // refilled; the follow-up rebuild (or that pagination) delivers the
+                            // full item list and refreshes the UI without any blank frame.
                             should_continue_backwards_pagination = true;
+                            continue;
                         }
 
                         // If the bottom of the timeline (the last event) is visible, then we should
