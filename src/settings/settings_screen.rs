@@ -453,18 +453,9 @@ script_mod! {
                         flow: Down
                         spacing: (SPACE_SM)
 
-                        // --- App Service card ---
-                        RoundedView {
-                            width: Fill, height: Fit
-                            flow: Down
-                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
-                            show_bg: true
-                            draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
-                            }
-                            bot_settings := BotSettings {}
-                        }
+                        // --- Agents card (Agent Registry; Octos AppService config
+                        // lives inside the "Add an agent" → Octos flow) ---
+                        agent_settings := AgentSettings {}
 
                         // --- Translation card ---
                         RoundedView {
@@ -740,7 +731,7 @@ script_mod! {
                         flow: Down
                         spacing: (SPACE_MD)
                         padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: (SPACE_MD), bottom: (SPACE_XXL)}
-                        bot_settings := BotSettings {}
+                        agent_settings := AgentSettings {}
                         translation_settings := TranslationSettings {}
                     }
 
@@ -869,6 +860,12 @@ script_mod! {
         create_did_modal := Modal {
             content +: {
                 create_did_modal_inner := CreateDidModal {}
+            }
+        }
+
+        add_agent_modal := Modal {
+            content +: {
+                add_agent_modal_inner := mod.widgets.AddAgentModal {}
             }
         }
     }

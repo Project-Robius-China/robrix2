@@ -11,7 +11,7 @@ use crate::{
 const OCTOS_HEALTH_REQUEST_ID: LiveId = live_id!(octos_health);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum OctosHealthStatus {
+pub enum OctosHealthStatus {
     #[default]
     Unknown,
     Checking,
@@ -20,22 +20,24 @@ enum OctosHealthStatus {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum OctosHealthProbeStage {
+pub enum OctosHealthProbeStage {
     #[default]
     Idle,
     Health,
     ApiStatus,
 }
 
+/// Shared two-stage (`/health` → `/api/status`) Octos service health probe.
+/// Reused by both the App Service settings card and the Agent add-sheet.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct OctosHealthState {
-    status: OctosHealthStatus,
-    probe_stage: OctosHealthProbeStage,
-    in_flight: bool,
+pub struct OctosHealthState {
+    pub status: OctosHealthStatus,
+    pub probe_stage: OctosHealthProbeStage,
+    pub in_flight: bool,
 }
 
 impl OctosHealthState {
-    fn begin_check(&mut self, base_url: &str) -> Option<String> {
+    pub fn begin_check(&mut self, base_url: &str) -> Option<String> {
         if self.in_flight {
             return None;
         }
@@ -45,7 +47,7 @@ impl OctosHealthState {
         Some(normalize_octos_probe_url(base_url, "/health"))
     }
 
-    fn handle_http_result(&mut self, base_url: &str, status_code: u16) -> Option<String> {
+    pub fn handle_http_result(&mut self, base_url: &str, status_code: u16) -> Option<String> {
         if status_code == 200 {
             self.finish(OctosHealthStatus::Reachable);
             None
@@ -54,7 +56,7 @@ impl OctosHealthState {
         }
     }
 
-    fn handle_transport_error(&mut self, base_url: &str) -> Option<String> {
+    pub fn handle_transport_error(&mut self, base_url: &str) -> Option<String> {
         self.handle_failure(base_url)
     }
 

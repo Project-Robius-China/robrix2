@@ -253,6 +253,21 @@ script_mod! {
     mod.widgets.RBX_TEXT_META          = theme.font_regular { font_size: 9.5,  line_spacing: 1.3 }
     // Badge / chip label (single line).
     mod.widgets.RBX_TEXT_BADGE         = theme.font_bold    { font_size: 9.0 }
+
+    // =========================================================================
+    // 15. AGENT FRAMEWORK ACCENTS — per-framework identity color pairs used by
+    //     the Agent Registry tiles / badges (monogram + soft fill). One agent
+    //     framework = one color pair, always. (See Agent Registry design handoff.)
+    // =========================================================================
+    // Hermes — warm amber.
+    mod.widgets.RBX_FW_HERMES_FG   = #xC47D1E
+    mod.widgets.RBX_FW_HERMES_BG   = #xFBF1E3
+    // OpenClaw — violet.
+    mod.widgets.RBX_FW_OPENCLAW_FG = #x6A52C4
+    mod.widgets.RBX_FW_OPENCLAW_BG = #xEEE9FB
+    // Octos — cyan (the app-service framework).
+    mod.widgets.RBX_FW_OCTOS_FG    = #x1488B5
+    mod.widgets.RBX_FW_OCTOS_BG    = #xE6F2F9
 }
 
 // =============================================================================

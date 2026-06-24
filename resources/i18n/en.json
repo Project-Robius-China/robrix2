@@ -760,5 +760,19 @@
   "space_lobby.item.member_one": "1 member",
   "space_lobby.item.member_n": "{count} members",
   "space_lobby.item.child_room_one": "~{count} room",
-  "space_lobby.item.child_room_n": "~{count} rooms"
+  "space_lobby.item.child_room_n": "~{count} rooms",
+  "settings.labs.agents.title": "Agent Access",
+  "settings.labs.agents.description": "Bind a Matrix account, mark which agent framework it uses, and let Robrix identify it across rooms.",
+  "settings.labs.agents.empty": "No agents yet. Search above to add and bind one.",
+  "settings.labs.agents.add_title": "Bind existing Matrix agent",
+  "settings.labs.agents.framework_label": "Agent type",
+  "settings.labs.agents.search_placeholder": "Search or enter @agent:server",
+  "settings.labs.agents.search.searching": "Searching local cache and server…",
+  "settings.labs.agents.search.none": "No users found.",
+  "settings.labs.agents.search.found": "Found {count} user(s).",
+  "settings.labs.agents.search.failed": "Server search failed: {error}",
+  "settings.labs.agents.popup.added": "Added {name} as a {framework} agent.",
+  "settings.labs.agents.popup.already": "{name} is already a registered agent.",
+  "settings.labs.agents.octos_appservice_hint": "For Octos AppService bots, configure BotFather and the local Octos service below. Octos direct agents can be added here by Matrix ID.",
+  "settings.labs.agents.add_button": "＋ Add an agent"
 }

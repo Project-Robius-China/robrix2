@@ -24,7 +24,9 @@ use crate::{
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
-    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
+    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop},
+    settings::agent_add_modal::{AddAgentModalAction, AddAgentModalWidgetRefExt},
+    settings::agent_settings::AgentSettingsAction,
 };
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
@@ -138,6 +140,18 @@ script_mod! {
                         invite_modal := Modal {
                             content +: {
                                 invite_modal_inner := InviteModal {}
+                            }
+                        }
+
+                        // The "Add an agent" bottom sheet (Agent Registry). Hosted at the
+                        // app root so its scrim covers the whole screen — including the
+                        // bottom navigation bar — preventing taps from leaking through to
+                        // the nav (which previously dismissed the sheet to the chat view).
+                        add_agent_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 1.0},
+                                add_agent_modal_inner := mod.widgets.AddAgentModal {}
                             }
                         }
 
@@ -926,6 +940,33 @@ impl MatchEvent for App {
                     *from_auto_check,
                 );
                 continue;
+            }
+
+            // Agent Registry "Add an agent" bottom sheet, hosted at the app root so its
+            // scrim covers the whole screen (incl. the bottom nav). The open request is
+            // emitted by the AgentSettings screen (Settings ▸ Labs) and bubbles up here.
+            if let Some(AgentSettingsAction::OpenAddAgent) = action.downcast_ref() {
+                let app_language = self.app_state.app_language;
+                self.ui.add_agent_modal(cx, ids!(add_agent_modal_inner)).show(cx, app_language);
+                self.ui.modal(cx, ids!(add_agent_modal)).open(cx);
+                continue;
+            }
+            match action.downcast_ref::<AddAgentModalAction>() {
+                Some(AddAgentModalAction::Close) => {
+                    self.ui.modal(cx, ids!(add_agent_modal)).close(cx);
+                    continue;
+                }
+                Some(AddAgentModalAction::Registered(name)) => {
+                    self.ui.modal(cx, ids!(add_agent_modal)).close(cx);
+                    enqueue_popup_notification(
+                        format!("{name} registered"),
+                        PopupKind::Success,
+                        Some(2.6),
+                    );
+                    self.ui.redraw(cx);
+                    continue;
+                }
+                None => {}
             }
 
             match action.downcast_ref::<WindowFullscreenAction>() {
@@ -2729,6 +2770,23 @@ impl AgentRegistry {
     /// All registered agent MXIDs, in deterministic (sorted) order.
     pub fn agent_user_ids(&self) -> Vec<OwnedUserId> {
         self.agents.keys().cloned().collect()
+    }
+
+    /// Removes the agent with the given MXID. Returns `true` if it was present.
+    /// Does not touch the legacy `known_bot_user_ids` / App Service bindings.
+    pub fn unregister(&mut self, user_id: &UserId) -> bool {
+        let key = self
+            .agents
+            .keys()
+            .find(|registered| registered.as_str() == user_id.as_str())
+            .cloned();
+        match key {
+            Some(k) => {
+                self.agents.remove(&k);
+                true
+            }
+            None => false,
+        }
     }
 }
 

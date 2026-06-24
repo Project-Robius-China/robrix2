@@ -758,5 +758,19 @@
   "space_lobby.item.member_one": "1 位成员",
   "space_lobby.item.member_n": "{count} 位成员",
   "space_lobby.item.child_room_one": "~{count} 个房间",
-  "space_lobby.item.child_room_n": "~{count} 个房间"
+  "space_lobby.item.child_room_n": "~{count} 个房间",
+  "settings.labs.agents.title": "Agent Access",
+  "settings.labs.agents.description": "绑定一个 Matrix 账号,标记它使用的 agent framework,并让 Robrix 在房间中识别它。",
+  "settings.labs.agents.empty": "还没有 agent。在上方搜索并绑定一个。",
+  "settings.labs.agents.add_title": "绑定已有 Matrix agent",
+  "settings.labs.agents.framework_label": "Agent type",
+  "settings.labs.agents.search_placeholder": "搜索或输入 @agent:server",
+  "settings.labs.agents.search.searching": "正在搜索本地缓存和服务器…",
+  "settings.labs.agents.search.none": "未找到用户。",
+  "settings.labs.agents.search.found": "找到 {count} 个用户。",
+  "settings.labs.agents.search.failed": "服务器搜索失败:{error}",
+  "settings.labs.agents.popup.added": "已将 {name} 添加为 {framework} agent。",
+  "settings.labs.agents.popup.already": "{name} 已是注册的 agent。",
+  "settings.labs.agents.octos_appservice_hint": "Octos AppService 机器人请在下方配置 BotFather 和本地 Octos 服务。Octos direct agent 也可以在这里用 Matrix ID 添加。",
+  "settings.labs.agents.add_button": "＋ 添加 agent"
 }

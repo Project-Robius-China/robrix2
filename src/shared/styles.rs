@@ -513,6 +513,11 @@ pub fn apply_accent_button_style(cx: &mut Cx, button: &mut ButtonRef) {
 
 /// Applies the *selected* segmented-tab styling — text-only: a transparent
 /// background with teal (`RBX_ACCENT`) text marking the active category.
+///
+/// Only the fields actually declared on the segment-tab button template
+/// (`draw_bg.{color,color_hover,color_down,border_size}` + `draw_text.color`)
+/// are set — the tabs have no icon and no border, so touching `draw_icon` /
+/// `border_color*` raised "field not found" type-check errors at runtime.
 pub fn apply_segment_selected_style(cx: &mut Cx, button: &mut ButtonRef) {
     script_apply_eval!(cx, button, {
         draw_bg +: {
@@ -520,16 +525,8 @@ pub fn apply_segment_selected_style(cx: &mut Cx, button: &mut ButtonRef) {
             color: #0000,
             color_hover: #0000,
             color_down: #0000,
-            border_color: #0000,
-            border_color_hover: #0000,
-            border_color_down: #0000,
         }
         draw_text +: {
-            color: mod.widgets.RBX_ACCENT,
-            color_hover: mod.widgets.RBX_ACCENT,
-            color_down: mod.widgets.RBX_ACCENT,
-        }
-        draw_icon +: {
             color: mod.widgets.RBX_ACCENT,
         }
     });
@@ -544,16 +541,8 @@ pub fn apply_segment_idle_style(cx: &mut Cx, button: &mut ButtonRef) {
             color: #0000,
             color_hover: #0000,
             color_down: #0000,
-            border_color: #0000,
-            border_color_hover: #0000,
-            border_color_down: #0000,
         }
         draw_text +: {
-            color: mod.widgets.RBX_FG_SECONDARY,
-            color_hover: mod.widgets.RBX_FG_SECONDARY,
-            color_down: mod.widgets.RBX_FG_SECONDARY,
-        }
-        draw_icon +: {
             color: mod.widgets.RBX_FG_SECONDARY,
         }
     });
