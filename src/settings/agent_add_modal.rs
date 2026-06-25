@@ -104,12 +104,12 @@ script_mod! {
             align: Align{y: 0.5}
             spacing: 12
             new_batch: true
-            padding: Inset{left: 14, right: 14, top: 11, bottom: 11}
+            padding: Inset{left: 14, right: 14, top: 8, bottom: 8}
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE)
                 border_radius: (RBX_RADIUS_MD)
-                border_size: 1.5
+                border_size: 1.0
                 border_color: (RBX_STROKE_SOFT)
             }
 
@@ -138,24 +138,37 @@ script_mod! {
                 width: Fill
                 height: Fit
                 flow: Down
-                spacing: 3
+                spacing: 2
                 card_name := Label {
                     width: Fill
                     height: Fit
                     draw_text +: {
                         color: (RBX_FG_PRIMARY)
-                        text_style: TITLE_TEXT { font_size: 14.0 }
+                        text_style: TITLE_TEXT { font_size: 13.0 }
                     }
                     text: ""
                 }
-                card_tag_label := Label {
-                    width: Fill
+                // Tag sits on its own line (Fit-width pill) so it never clips,
+                // however long the agent name is.
+                card_tag := RoundedView {
+                    width: Fit
                     height: Fit
-                    draw_text +: {
-                        color: (RBX_FG_SECONDARY)
-                        text_style: RBX_TEXT_BADGE {}
+                    padding: Inset{left: 6, right: 6, top: 1, bottom: 1}
+                    new_batch: true
+                    show_bg: true
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE_SUBTLE)
+                        border_radius: (RBX_RADIUS_XS)
                     }
-                    text: ""
+                    card_tag_label := Label {
+                        width: Fit
+                        height: Fit
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY)
+                            text_style: RBX_TEXT_BADGE { font_size: 7.5 }
+                        }
+                        text: ""
+                    }
                 }
                 card_blurb := Label {
                     width: Fill
@@ -334,7 +347,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE)
-                border_radius: (RBX_RADIUS_XL)
+                border_radius: (RBX_RADIUS_LG)
             }
 
             grip := View {
@@ -417,12 +430,12 @@ script_mod! {
                     width: Fill
                     height: Fit
                     flow: Down
-                    spacing: 9
+                    spacing: 6
 
                     step1_intro := Label {
                         width: Fill
                         height: Fit
-                        margin: Inset{bottom: 2}
+                        margin: Inset{bottom: 1}
                         draw_text +: {
                             color: (RBX_FG_SECONDARY)
                             text_style: RBX_TEXT_BODY {}
@@ -1090,15 +1103,15 @@ impl AddAgentModal {
         // Text content.
         self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono)).set_text(cx, "Oc");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_name)).set_text(cx, "Octos");
-        self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag_label)).set_text(cx, "APPSERVICE");
+        self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "APPSERVICE");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_blurb)).set_text(cx, "Friend plus local AppService.");
         self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono)).set_text(cx, "He");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_name)).set_text(cx, "Hermes");
-        self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag_label)).set_text(cx, "DIRECT AGENT");
+        self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_blurb)).set_text(cx, "Registered as a Matrix friend.");
         self.view.label(cx, ids!(openclaw_card.card_body.card_tile.card_mono)).set_text(cx, "Cl");
         self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_name)).set_text(cx, "OpenClaw");
-        self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_tag_label)).set_text(cx, "DIRECT AGENT");
+        self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
         self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_blurb)).set_text(cx, "Registered as a Matrix friend.");
 
         // Per-framework colors (tile fill + mono text + tag text).
@@ -1106,22 +1119,28 @@ impl AddAgentModal {
         script_apply_eval!(cx, octos_tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
         let mut octos_mono = self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono));
         script_apply_eval!(cx, octos_mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
-        let mut octos_tag = self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag_label));
+        let mut octos_tag = self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label));
         script_apply_eval!(cx, octos_tag, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+        let mut octos_tag_pill = self.view.view(cx, ids!(octos_card.card_body.card_col.card_tag));
+        script_apply_eval!(cx, octos_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
 
         let mut hermes_tile = self.view.view(cx, ids!(hermes_card.card_body.card_tile));
         script_apply_eval!(cx, hermes_tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
         let mut hermes_mono = self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono));
         script_apply_eval!(cx, hermes_mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
-        let mut hermes_tag = self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag_label));
+        let mut hermes_tag = self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag.card_tag_label));
         script_apply_eval!(cx, hermes_tag, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
+        let mut hermes_tag_pill = self.view.view(cx, ids!(hermes_card.card_body.card_col.card_tag));
+        script_apply_eval!(cx, hermes_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
 
         let mut openclaw_tile = self.view.view(cx, ids!(openclaw_card.card_body.card_tile));
         script_apply_eval!(cx, openclaw_tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
         let mut openclaw_mono = self.view.label(cx, ids!(openclaw_card.card_body.card_tile.card_mono));
         script_apply_eval!(cx, openclaw_mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
-        let mut openclaw_tag = self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_tag_label));
+        let mut openclaw_tag = self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_tag.card_tag_label));
         script_apply_eval!(cx, openclaw_tag, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
+        let mut openclaw_tag_pill = self.view.view(cx, ids!(openclaw_card.card_body.card_col.card_tag));
+        script_apply_eval!(cx, openclaw_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
     }
 
     fn update_framework_cards(&mut self, cx: &mut Cx) {
@@ -1138,10 +1157,10 @@ impl AddAgentModal {
             let mut card = self.view.view(cx, &[card_id[0], live_id!(card_body)]);
             if selected {
                 script_apply_eval!(cx, radio, { draw_bg +: { color: mod.widgets.RBX_ACCENT, border_color: mod.widgets.RBX_ACCENT } });
-                script_apply_eval!(cx, card, { draw_bg +: { border_size: 2.0, border_color: mod.widgets.RBX_ACCENT, color: mod.widgets.RBX_ACCENT_SOFT } });
+                script_apply_eval!(cx, card, { draw_bg +: { border_size: 1.5, border_color: mod.widgets.RBX_ACCENT, color: mod.widgets.RBX_ACCENT_SOFT } });
             } else {
                 script_apply_eval!(cx, radio, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE, border_color: mod.widgets.RBX_STROKE_STRONG } });
-                script_apply_eval!(cx, card, { draw_bg +: { border_size: 1.5, border_color: mod.widgets.RBX_STROKE_SOFT, color: mod.widgets.RBX_BG_SURFACE } });
+                script_apply_eval!(cx, card, { draw_bg +: { border_size: 1.0, border_color: mod.widgets.RBX_STROKE_SOFT, color: mod.widgets.RBX_BG_SURFACE } });
             }
         }
         self.view.redraw(cx);
