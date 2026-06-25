@@ -3,12 +3,9 @@
 //! Two-step flow:
 //!   Step 1 — choose a framework (Hermes / OpenClaw = direct friend agents,
 //!            Octos = AppService agent).
-//!   Step 2 — enter the agent's Matrix ID and "Add friend & bind" (real DM via
-//!            `OpenOrCreateDirectMessage`). For Octos, an additional AppService
-//!            section writes the real `BotSettingsState` (enable + BotFather ID +
-//!            local Octos URL) and runs the shared `OctosHealthState` health probe
-//!            — so the existing App Service / slash-command binding is reused, not
-//!            duplicated or broken.
+//!   Step 2 — enter the agent's Matrix ID and bind it by creating/reusing the
+//!            DM (`OpenOrCreateDirectMessage`). Octos adds a compact AppService
+//!            URL check/save block before the same Matrix ID binding.
 //!
 //! A successful bind writes the agent into the global `AgentRegistry`.
 //!
@@ -78,8 +75,8 @@ fn bind_button_state(
 
     match friend_state {
         FriendState::Idle if !valid_matrix_id => ("Enter Matrix ID", false),
-        FriendState::Idle if is_octos => ("Add friend & bind Octos", true),
-        FriendState::Idle => ("Add friend & bind", true),
+        FriendState::Idle if is_octos => ("Bind Octos agent", true),
+        FriendState::Idle => ("Bind agent", true),
         FriendState::Pending => ("Sending friend request...", false),
         FriendState::Added => ("Bound", false),
     }
@@ -91,7 +88,7 @@ script_mod! {
 
     // Back chevron icon (left arrow) — drawn as SVG, not a text glyph, so it
     // never renders as a missing-glyph box in the app font.
-    mod.widgets.AGENT_ICON_BACK = crate_resource("self://resources/icons/go_back.svg")
+    mod.widgets.AGENT_ICON_BACK = crate_resource("self://resources/icons/chevron_left.svg")
 
     // A selectable framework card for step 1. Root is Overlay so the transparent
     // `card_click` button covers the whole card (mirrors invite_modal result row).
@@ -315,8 +312,8 @@ script_mod! {
         padding: Inset{left: 8, right: 8}
 
         sheet := RoundedView {
-            width: Fill{min: 0 max: 368}
-            height: 620
+            width: Fill{min: 0 max: 352}
+            height: 592
             flow: Down
             new_batch: true
             // Lift the sheet clear of the bottom navigation bar behind the modal
@@ -332,7 +329,7 @@ script_mod! {
             // animator — see widgets/src/view.rs.)
             capture_overload: true
             cursor: MouseCursor.Default
-            padding: Inset{left: 18, right: 18, top: 10, bottom: 20}
+            padding: Inset{left: 16, right: 16, top: 10, bottom: 16}
             spacing: 0
             show_bg: true
             draw_bg +: {
@@ -411,7 +408,7 @@ script_mod! {
 
             body_scroll := ScrollYView {
                 width: Fill
-                height: 420
+                height: 382
                 flow: Down
                 spacing: 0
 
@@ -487,6 +484,129 @@ script_mod! {
                         }
                     }
 
+                    octos_section := RoundedView {
+                        width: Fill
+                        height: Fit
+                        visible: false
+                        flow: Down
+                        new_batch: true
+                        spacing: 7
+                        margin: Inset{bottom: 4}
+                        padding: Inset{left: 12, right: 12, top: 11, bottom: 12}
+                        show_bg: true
+                        draw_bg +: {
+                            color: (RBX_FW_OCTOS_BG)
+                            border_radius: (RBX_RADIUS_MD)
+                            border_size: 1.0
+                            border_color: (RBX_STROKE_SOFT)
+                        }
+
+                        octos_heading := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                color: (RBX_FW_OCTOS_FG)
+                                text_style: RBX_TEXT_BODY_STRONG {}
+                            }
+                            text: "Octos AppService"
+                        }
+                        octos_blurb := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_SECONDARY)
+                                text_style: RBX_TEXT_META {}
+                            }
+                            text: "Check and save before binding."
+                        }
+                        octos_url_field := AgentField {
+                            field_label.text: "AppService URL"
+                            field_input.empty_text: "http://127.0.0.1:8010"
+                        }
+                        octos_check_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            align: Align{y: 0.5}
+                            spacing: 8
+                            margin: Inset{top: 1}
+                            check_now_button := RobrixIconButton {
+                                width: Fit
+                                height: Fit
+                                padding: Inset{top: 7, bottom: 7, left: 12, right: 12}
+                                icon_walk: Walk{width: 0, height: 0}
+                                spacing: 0
+                                text: "Check"
+                                draw_bg +: {
+                                    color: (RBX_BG_SURFACE)
+                                    color_hover: (RBX_BG_HOVER)
+                                    color_down: (RBX_BG_PRESSED)
+                                    border_radius: (RBX_RADIUS_SM)
+                                    border_size: 1.0
+                                    border_color: (RBX_FW_OCTOS_FG)
+                                }
+                                draw_text +: { color: (RBX_FW_OCTOS_FG), color_hover: (RBX_FW_OCTOS_FG), color_down: (RBX_FW_OCTOS_FG) }
+                            }
+                            octos_check_spinner := LoadingSpinner {
+                                visible: false
+                                width: 16
+                                height: 16
+                                draw_bg +: {
+                                    color: (RBX_FW_OCTOS_FG)
+                                    border_size: 2.0
+                                }
+                            }
+                            octos_status_pill := RoundedView {
+                                width: Fit
+                                height: Fit
+                                padding: Inset{left: 10, right: 10, top: 5, bottom: 5}
+                                new_batch: true
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (RBX_NEUTRAL_BG)
+                                    border_radius: (RBX_RADIUS_PILL)
+                                }
+                                octos_status_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        color: (RBX_NEUTRAL_FG)
+                                        text_style: RBX_TEXT_BADGE {}
+                                    }
+                                    text: "Unknown"
+                                }
+                            }
+                        }
+                        octos_error_label := Label {
+                            width: Fill
+                            height: Fit
+                            visible: false
+                            margin: Inset{top: 1}
+                            draw_text +: {
+                                color: (RBX_DANGER_FG)
+                                text_style: RBX_TEXT_META {}
+                            }
+                            text: ""
+                        }
+                        save_appservice_button := RobrixIconButton {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{top: 2}
+                            height: (RBX_CONTROL_H_MD)
+                            padding: Inset{top: 8, bottom: 8, left: 12, right: 12}
+                            icon_walk: Walk{width: 0, height: 0}
+                            spacing: 0
+                            text: "Save AppService"
+                            draw_bg +: {
+                                color: (RBX_ACCENT)
+                                color_hover: (RBX_ACCENT_HOVER)
+                                color_down: (RBX_ACCENT_PRESSED)
+                                border_radius: (RBX_RADIUS_SM)
+                            }
+                            draw_text +: { color: (RBX_FG_ON_ACCENT), color_hover: (RBX_FG_ON_ACCENT), color_down: (RBX_FG_ON_ACCENT) }
+                        }
+                    }
+
                     id_field := MatrixIdField {}
 
                     step2_helper := Label {
@@ -501,9 +621,9 @@ script_mod! {
 
                     add_friend_button := RobrixIconButton {
                         width: Fill
-                        height: (RBX_CONTROL_H_LG)
+                        height: (RBX_CONTROL_H_MD)
                         margin: Inset{top: 2}
-                        padding: Inset{top: 10, bottom: 10, left: 16, right: 16}
+                        padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
                         draw_icon.svg: (ICON_ADD_USER)
                         draw_icon.color: (RBX_FG_ON_ACCENT)
                         icon_walk: Walk{width: 16, height: 16, margin: Inset{right: 7}}
@@ -574,163 +694,6 @@ script_mod! {
                         }
                     }
 
-                    // Octos AppService controls follow the Matrix friend binding.
-                    // AppService binding unlocks after the friend request is sent.
-                    octos_section := RoundedView {
-                        width: Fill
-                        height: Fit
-                        visible: false
-                        flow: Down
-                        new_batch: true
-                        spacing: 8
-                        margin: Inset{top: 2, bottom: 2}
-                        padding: Inset{left: 12, right: 12, top: 11, bottom: 12}
-                        show_bg: true
-                        draw_bg +: {
-                            color: (RBX_BG_SURFACE_SUBTLE)
-                            border_radius: (RBX_RADIUS_SM)
-                            border_size: 1.0
-                            border_color: (RBX_STROKE_SOFT)
-                        }
-
-                        octos_heading := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                color: (RBX_FG_PRIMARY)
-                                text_style: RBX_TEXT_BODY_STRONG {}
-                            }
-                            text: "AppService binding"
-                        }
-                        octos_blurb := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                color: (RBX_FG_SECONDARY)
-                                text_style: RBX_TEXT_META {}
-                            }
-                            text: "Unlocks after the friend is added."
-                        }
-                        octos_url_field := AgentField {
-                            field_label.text: "Local Octos service"
-                            field_input.empty_text: "http://127.0.0.1:8010"
-                        }
-                        octos_check_row := View {
-                            width: Fill
-                            height: Fit
-                            flow: Right
-                            align: Align{y: 0.5}
-                            spacing: 9
-                            margin: Inset{top: 1}
-                            check_now_button := RobrixIconButton {
-                                width: Fit
-                                height: Fit
-                                padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
-                                icon_walk: Walk{width: 0, height: 0}
-                                spacing: 0
-                                text: "Check now"
-                                draw_bg +: {
-                                    color: (RBX_FW_OCTOS_BG)
-                                    color_hover: (RBX_FW_OCTOS_BG)
-                                    color_down: (RBX_FW_OCTOS_BG)
-                                    border_radius: (RBX_RADIUS_SM)
-                                }
-                                draw_text +: { color: (RBX_FW_OCTOS_FG), color_hover: (RBX_FW_OCTOS_FG), color_down: (RBX_FW_OCTOS_FG) }
-                            }
-                            octos_check_spinner := LoadingSpinner {
-                                visible: false
-                                width: 16
-                                height: 16
-                                draw_bg +: {
-                                    color: (RBX_FW_OCTOS_FG)
-                                    border_size: 2.0
-                                }
-                            }
-                            octos_status_pill := RoundedView {
-                                width: Fit
-                                height: Fit
-                                padding: Inset{left: 10, right: 10, top: 5, bottom: 5}
-                                new_batch: true
-                                show_bg: true
-                                draw_bg +: {
-                                    color: (RBX_NEUTRAL_BG)
-                                    border_radius: (RBX_RADIUS_SM)
-                                }
-                                octos_status_label := Label {
-                                    width: Fit
-                                    height: Fit
-                                    draw_text +: {
-                                        color: (RBX_NEUTRAL_FG)
-                                        text_style: RBX_TEXT_BADGE {}
-                                    }
-                                    text: "Unknown"
-                                }
-                            }
-                        }
-                        octos_error_label := Label {
-                            width: Fill
-                            height: Fit
-                            visible: false
-                            margin: Inset{top: 1}
-                            draw_text +: {
-                                color: (RBX_DANGER_FG)
-                                text_style: RBX_TEXT_META {}
-                            }
-                            text: ""
-                        }
-                        botfather_locked_strip := RoundedView {
-                            width: Fill
-                            height: Fit
-                            flow: Down
-                            spacing: 3
-                            padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
-                            new_batch: true
-                            show_bg: true
-                            draw_bg +: {
-                                color: (RBX_BG_SURFACE)
-                                border_radius: (RBX_RADIUS_SM)
-                                border_size: 1.0
-                                border_color: (RBX_STROKE_SOFT)
-                            }
-                            botfather_locked_label := Label {
-                                width: Fill
-                                height: Fit
-                                draw_text +: {
-                                    color: (RBX_FG_SECONDARY)
-                                    text_style: RBX_TEXT_META {}
-                                }
-                                text: "BotFather"
-                            }
-                            botfather_locked_value := Label {
-                                width: Fill
-                                height: Fit
-                                draw_text +: {
-                                    color: (RBX_FG_PRIMARY)
-                                    text_style: RBX_TEXT_BODY_STRONG {}
-                                }
-                                text: "Uses the agent Matrix ID"
-                            }
-                        }
-
-                        open_local_binding_button := RobrixIconButton {
-                            width: Fill
-                            height: Fit
-                            margin: Inset{top: 2}
-                            padding: Inset{top: 8, bottom: 8, left: 12, right: 12}
-                            icon_walk: Walk{width: 0, height: 0}
-                            spacing: 0
-                            text: "Open local binding"
-                            draw_bg +: {
-                                color: (RBX_BG_SURFACE)
-                                color_hover: (RBX_BG_HOVER)
-                                color_down: (RBX_BG_PRESSED)
-                                border_radius: (RBX_RADIUS_SM)
-                                border_size: 1.0
-                                border_color: (RBX_INFO_FG)
-                            }
-                            draw_text +: { color: (RBX_INFO_FG), color_hover: (RBX_INFO_FG), color_down: (RBX_INFO_FG) }
-                        }
-                    }
                 }
             }
 
@@ -880,6 +843,8 @@ impl WidgetMatchEvent for AddAgentModal {
             if octos_url_changed {
                 self.octos_health = OctosHealthState::default();
                 self.octos_probe_base_url = None;
+                self.view.button(cx, ids!(octos_section.save_appservice_button))
+                    .set_text(cx, "Save AppService");
             }
             if id_changed || octos_url_changed {
                 self.sync_step2(cx);
@@ -901,15 +866,15 @@ impl WidgetMatchEvent for AddAgentModal {
 
         // Step 2: add friend & bind.
         if self.step == 2 && self.view.button(cx, ids!(add_friend_button)).clicked(actions) {
+            if self.friend_state != FriendState::Idle {
+                return;
+            }
             self.add_friend(cx);
             return;
         }
 
         // Step 2 (Octos): check service health.
         if self.step == 2 && self.view.button(cx, ids!(check_now_button)).clicked(actions) {
-            if self.friend_state != FriendState::Added {
-                return;
-            }
             let url = self.octos_service_url(cx);
             if let Some(probe) = self.octos_health.begin_check(&url) {
                 self.octos_probe_base_url = Some(url);
@@ -919,16 +884,11 @@ impl WidgetMatchEvent for AddAgentModal {
             return;
         }
 
-        // Step 2 (Octos): open the local binding surface once the service is online.
-        if self.step == 2
-            && self.view.button(cx, ids!(open_local_binding_button)).clicked(actions)
-            && self.friend_state == FriendState::Added
-            && self.octos_health.status == OctosHealthStatus::Reachable
+        // Step 2 (Octos): save the AppService URL independently from friend binding.
+        if self.step == 2 && self.is_octos()
+            && self.view.button(cx, ids!(save_appservice_button)).clicked(actions)
         {
-            let url = self.octos_service_url(cx);
-            if let Err(e) = robius_open::Uri::new(&url).open() {
-                error!("Failed to open Octos local binding URL {:?}. Error: {:?}", url, e);
-            }
+            self.save_octos_appservice_settings(cx, scope);
             return;
         }
 
@@ -978,7 +938,6 @@ impl AddAgentModal {
 
     fn can_finish(&self) -> bool {
         self.friend_state == FriendState::Added
-            && (!self.is_octos() || self.octos_health.status == OctosHealthStatus::Reachable)
     }
 
     fn octos_service_url(&self, cx: &mut Cx) -> String {
@@ -1055,6 +1014,34 @@ impl AddAgentModal {
         cx.http_request(AGENT_OCTOS_HEALTH_REQUEST_ID, req);
     }
 
+    fn save_octos_appservice_settings(&mut self, cx: &mut Cx, scope: &mut Scope) {
+        let url = self.octos_service_url(cx);
+        let err = self.view.label(cx, ids!(octos_section.octos_error_label));
+        if let Err(error) = BotSettingsState::validate_octos_service_url(&url) {
+            err.set_text(cx, &error);
+            err.set_visible(cx, true);
+            self.view.button(cx, ids!(octos_section.save_appservice_button))
+                .set_text(cx, "Save AppService");
+            self.view.redraw(cx);
+            return;
+        }
+
+        let Some(app_state) = scope.data.get_mut::<AppState>() else { return };
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.octos_service_url = url.clone();
+        if let Some(account_user_id) = current_user_id() {
+            if let Err(e) = persistence::save_app_state(app_state.clone(), account_user_id) {
+                error!("Failed to persist Octos AppService URL. Error: {e}");
+            }
+        }
+
+        self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).set_text(cx, &url);
+        err.set_visible(cx, false);
+        self.view.button(cx, ids!(octos_section.save_appservice_button))
+            .set_text(cx, "Saved");
+        self.view.redraw(cx);
+    }
+
     fn set_add_friend_label(&mut self, cx: &mut Cx, text: &str) {
         self.view.button(cx, ids!(add_friend_button)).set_text(cx, text);
     }
@@ -1070,7 +1057,10 @@ impl AddAgentModal {
 
         let mut button = self.view.button(cx, ids!(add_friend_button));
         button.set_text(cx, text);
-        button.set_enabled(cx, enabled);
+        // Keep the control hit-testable on Android; disabled RobrixIconButton
+        // variants can draw as effectively invisible. The action is still gated
+        // by `friend_state` and Matrix ID parsing in `add_friend`.
+        button.set_enabled(cx, true);
         self.view.view(cx, ids!(bind_progress_row))
             .set_visible(cx, self.friend_state == FriendState::Pending);
         if enabled {
@@ -1162,15 +1152,15 @@ impl AddAgentModal {
         self.view.view(cx, ids!(step1_view)).set_visible(cx, !step2);
         self.view.view(cx, ids!(step2_view)).set_visible(cx, step2);
         self.view.button(cx, ids!(back_button)).set_visible(cx, step2);
-        self.view.view(cx, ids!(footer)).set_visible(cx, true);
+        self.view.view(cx, ids!(footer)).set_visible(cx, !step2);
 
         if step2 {
             let fw = self.selected_framework.map(framework_label).unwrap_or("agent");
             self.view.label(cx, ids!(sheet_title)).set_text(cx, &format!("Connect {fw}"));
             let sub = if self.is_octos() {
-                "Step 2 of 2 · Friend + AppService binding"
+                "Step 2 of 2 · AppService + Matrix ID"
             } else {
-                "Step 2 of 2 · Find the Matrix friend"
+                "Step 2 of 2 · Matrix ID"
             };
             self.view.label(cx, ids!(sheet_subtitle)).set_text(cx, sub);
             self.view.label(cx, ids!(step2_heading)).set_text(cx, &format!("New {fw} agent"));
@@ -1178,9 +1168,9 @@ impl AddAgentModal {
                 self.sync_step2_framework_header(cx, framework);
             }
             let helper = if self.is_octos() {
-                "Friend first; AppService binding unlocks next."
+                "Save service, then bind Matrix ID."
             } else {
-                "Creates the DM and records this agent."
+                "Bind Matrix ID to this agent."
             };
             self.view.label(cx, ids!(step2_helper)).set_text(cx, helper);
             self.sync_step2(cx);
@@ -1226,21 +1216,10 @@ impl AddAgentModal {
         // The Matrix ID field locks once a friend request is in flight / done.
         self.view.text_input(cx, ids!(id_field.field_control.field_input)).set_is_read_only(cx, self.friend_state != FriendState::Idle);
 
-        // Octos AppService detection unlocks after Matrix friend binding.
         if self.is_octos() {
-            let appservice_unlocked = self.friend_state == FriendState::Added;
-            self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).set_is_read_only(cx, !appservice_unlocked);
-            let botfather_value = self
-                .target_user_id
-                .as_ref()
-                .map(|user_id| user_id.as_str())
-                .unwrap_or("Uses the agent Matrix ID");
-            self.view.label(cx, ids!(octos_section.botfather_locked_strip.botfather_locked_value))
-                .set_text(cx, botfather_value);
+            self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).set_is_read_only(cx, false);
             self.view.button(cx, ids!(octos_section.octos_check_row.check_now_button))
-                .set_enabled(cx, appservice_unlocked && !self.octos_health.in_flight);
-            self.view.button(cx, ids!(octos_section.open_local_binding_button))
-                .set_enabled(cx, appservice_unlocked && self.octos_health.status == OctosHealthStatus::Reachable);
+                .set_enabled(cx, !self.octos_health.in_flight);
         }
         self.sync_octos_status(cx);
         self.sync_bind_button(cx);
@@ -1256,24 +1235,21 @@ impl AddAgentModal {
             OctosHealthStatus::Unreachable => "Offline",
         };
         self.view.label(cx, ids!(octos_section.octos_check_row.octos_status_pill.octos_status_label)).set_text(cx, text);
-        let appservice_unlocked = self.friend_state == FriendState::Added;
-        let check_enabled = appservice_unlocked && !self.octos_health.in_flight;
+        let check_enabled = !self.octos_health.in_flight;
         let check_button = self.view.button(cx, ids!(octos_section.octos_check_row.check_now_button));
         check_button.set_enabled(cx, check_enabled);
         if self.octos_health.in_flight {
             check_button.set_text(cx, "Checking...");
         } else {
-            check_button.set_text(cx, "Check now");
+            check_button.set_text(cx, "Check");
         }
         self.view.view(cx, ids!(octos_section.octos_check_row.octos_check_spinner))
             .set_visible(cx, self.octos_health.in_flight);
-        self.view.button(cx, ids!(octos_section.open_local_binding_button))
-            .set_enabled(cx, appservice_unlocked && self.octos_health.status == OctosHealthStatus::Reachable);
         let offline = self.octos_health.status == OctosHealthStatus::Unreachable;
         let err = self.view.label(cx, ids!(octos_section.octos_error_label));
         if offline {
             let url = self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).text();
-            err.set_text(cx, &format!("No response from {}. Start the local Octos service, then re-check.", url.trim()));
+            err.set_text(cx, &format!("No response from {}.", url.trim()));
         }
         err.set_visible(cx, offline);
 
@@ -1297,166 +1273,16 @@ impl AddAgentModal {
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_DANGER_FG } });
             }
         }
-        self.sync_octos_appservice_lock_visuals(cx, appservice_unlocked);
         self.sync_bind_button(cx);
         self.sync_primary_button(cx);
         self.view.redraw(cx);
-    }
-
-    fn sync_octos_appservice_lock_visuals(&mut self, cx: &mut Cx, appservice_unlocked: bool) {
-        let mut section = self.view.view(cx, ids!(octos_section));
-        let mut heading = self.view.label(cx, ids!(octos_section.octos_heading));
-        let mut blurb = self.view.label(cx, ids!(octos_section.octos_blurb));
-        let mut url_label = self.view.label(cx, ids!(octos_section.octos_url_field.field_label));
-        let mut botfather_strip = self.view.view(cx, ids!(octos_section.botfather_locked_strip));
-        let mut botfather_label = self.view.label(cx, ids!(octos_section.botfather_locked_strip.botfather_locked_label));
-        let mut botfather_value = self.view.label(cx, ids!(octos_section.botfather_locked_strip.botfather_locked_value));
-        let mut url_input = self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input));
-        let mut check_button = self.view.button(cx, ids!(octos_section.octos_check_row.check_now_button));
-        let mut open_button = self.view.button(cx, ids!(octos_section.open_local_binding_button));
-
-        if appservice_unlocked {
-            script_apply_eval!(cx, section, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_SURFACE_SUBTLE,
-                    border_color: mod.widgets.RBX_STROKE_SOFT,
-                }
-            });
-            script_apply_eval!(cx, heading, { draw_text +: { color: mod.widgets.RBX_FG_PRIMARY } });
-            script_apply_eval!(cx, blurb, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
-            script_apply_eval!(cx, url_label, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
-            script_apply_eval!(cx, botfather_strip, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_SURFACE,
-                    border_color: mod.widgets.RBX_STROKE_SOFT,
-                }
-            });
-            script_apply_eval!(cx, botfather_label, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
-            script_apply_eval!(cx, botfather_value, { draw_text +: { color: mod.widgets.RBX_FG_PRIMARY } });
-            script_apply_eval!(cx, url_input, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_SURFACE_SUBTLE,
-                    color_disabled: mod.widgets.RBX_BG_DISABLED,
-                    border_color: mod.widgets.RBX_STROKE_SOFT,
-                    border_color_disabled: mod.widgets.RBX_STROKE_STRONG,
-                }
-                draw_text +: {
-                    color: mod.widgets.RBX_FG_PRIMARY,
-                    color_disabled: mod.widgets.RBX_FG_DISABLED,
-                }
-            });
-            script_apply_eval!(cx, check_button, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_FW_OCTOS_BG,
-                    color_hover: mod.widgets.RBX_FW_OCTOS_BG,
-                    color_down: mod.widgets.RBX_FW_OCTOS_BG,
-                }
-                draw_text +: {
-                    color: mod.widgets.RBX_FW_OCTOS_FG,
-                    color_hover: mod.widgets.RBX_FW_OCTOS_FG,
-                    color_down: mod.widgets.RBX_FW_OCTOS_FG,
-                }
-            });
-            if self.octos_health.status == OctosHealthStatus::Reachable {
-                script_apply_eval!(cx, open_button, {
-                    draw_bg +: {
-                        color: mod.widgets.RBX_BG_SURFACE,
-                        color_hover: mod.widgets.RBX_BG_HOVER,
-                        color_down: mod.widgets.RBX_BG_PRESSED,
-                        border_color: mod.widgets.RBX_INFO_FG,
-                    }
-                    draw_text +: {
-                        color: mod.widgets.RBX_INFO_FG,
-                        color_hover: mod.widgets.RBX_INFO_FG,
-                        color_down: mod.widgets.RBX_INFO_FG,
-                    }
-                });
-            } else {
-                script_apply_eval!(cx, open_button, {
-                    draw_bg +: {
-                        color: mod.widgets.RBX_BG_DISABLED,
-                        color_hover: mod.widgets.RBX_BG_DISABLED,
-                        color_down: mod.widgets.RBX_BG_DISABLED,
-                        border_color: mod.widgets.RBX_STROKE_STRONG,
-                    }
-                    draw_text +: {
-                        color: mod.widgets.RBX_FG_DISABLED,
-                        color_hover: mod.widgets.RBX_FG_DISABLED,
-                        color_down: mod.widgets.RBX_FG_DISABLED,
-                    }
-                });
-            }
-        } else {
-            script_apply_eval!(cx, section, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_DISABLED,
-                    border_color: mod.widgets.RBX_STROKE_STRONG,
-                }
-            });
-            script_apply_eval!(cx, heading, { draw_text +: { color: mod.widgets.RBX_FG_DISABLED } });
-            script_apply_eval!(cx, blurb, { draw_text +: { color: mod.widgets.RBX_FG_DISABLED } });
-            script_apply_eval!(cx, url_label, { draw_text +: { color: mod.widgets.RBX_FG_DISABLED } });
-            script_apply_eval!(cx, botfather_strip, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_DISABLED,
-                    border_color: mod.widgets.RBX_STROKE_STRONG,
-                }
-            });
-            script_apply_eval!(cx, botfather_label, { draw_text +: { color: mod.widgets.RBX_FG_DISABLED } });
-            script_apply_eval!(cx, botfather_value, { draw_text +: { color: mod.widgets.RBX_FG_DISABLED } });
-            script_apply_eval!(cx, url_input, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_DISABLED,
-                    color_disabled: mod.widgets.RBX_BG_DISABLED,
-                    border_color: mod.widgets.RBX_STROKE_STRONG,
-                    border_color_disabled: mod.widgets.RBX_STROKE_STRONG,
-                }
-                draw_text +: {
-                    color: mod.widgets.RBX_FG_DISABLED,
-                    color_disabled: mod.widgets.RBX_FG_DISABLED,
-                }
-            });
-            script_apply_eval!(cx, check_button, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_DISABLED,
-                    color_hover: mod.widgets.RBX_BG_DISABLED,
-                    color_down: mod.widgets.RBX_BG_DISABLED,
-                }
-                draw_text +: {
-                    color: mod.widgets.RBX_FG_DISABLED,
-                    color_hover: mod.widgets.RBX_FG_DISABLED,
-                    color_down: mod.widgets.RBX_FG_DISABLED,
-                }
-            });
-            script_apply_eval!(cx, open_button, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_DISABLED,
-                    color_hover: mod.widgets.RBX_BG_DISABLED,
-                    color_down: mod.widgets.RBX_BG_DISABLED,
-                    border_color: mod.widgets.RBX_STROKE_STRONG,
-                }
-                draw_text +: {
-                    color: mod.widgets.RBX_FG_DISABLED,
-                    color_hover: mod.widgets.RBX_FG_DISABLED,
-                    color_down: mod.widgets.RBX_FG_DISABLED,
-                }
-            });
-        }
     }
 
     fn sync_primary_button(&mut self, cx: &mut Cx) {
         let (text, enabled) = if self.step == 1 {
             ("Continue".to_string(), self.selected_framework.is_some())
         } else {
-            let enabled = self.can_finish();
-            let text = if enabled {
-                "Finish & register"
-            } else if self.friend_state != FriendState::Added {
-                "Add the agent above to continue"
-            } else {
-                "Service must be online"
-            };
-            (text.to_string(), enabled)
+            ("Continue".to_string(), self.can_finish())
         };
         let button = self.view.button(cx, ids!(primary_button));
         button.set_text(cx, &text);
@@ -1486,9 +1312,8 @@ impl AddAgentModal {
 
         self.view.text_input(cx, ids!(id_field.field_control.field_input)).set_text(cx, "");
         self.view.text_input(cx, ids!(id_field.field_control.field_input)).set_is_read_only(cx, false);
-        self.view.label(cx, ids!(octos_section.botfather_locked_strip.botfather_locked_value))
-            .set_text(cx, "Uses the agent Matrix ID");
         self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).set_text(cx, BotSettingsState::DEFAULT_OCTOS_SERVICE_URL);
+        self.view.button(cx, ids!(octos_section.save_appservice_button)).set_text(cx, "Save AppService");
         self.set_add_friend_label(cx, "Add friend & bind");
         self.populate_framework_cards(cx);
         self.update_framework_cards(cx);
@@ -1574,41 +1399,37 @@ mod tests {
     }
 
     #[test]
-    fn test_octos_appservice_controls_are_locked_until_friend_binding() {
+    fn test_octos_appservice_controls_precede_matrix_binding() {
         let src = production_src(include_str!("agent_add_modal.rs"));
-        let lock_condition = "let appservice_unlocked = self.friend_state == FriendState::Added;";
-        let check_gate = "set_enabled(cx, appservice_unlocked && !self.octos_health.in_flight)";
-        let dim_copy = "AppService binding unlocks after the friend request is sent.";
+        let octos_pos = src
+            .find("octos_section := RoundedView")
+            .expect("Octos step should expose an AppService section");
+        let matrix_pos = src
+            .find("id_field := MatrixIdField")
+            .expect("Octos step should still include Matrix ID binding");
 
-        assert!(src.contains(lock_condition));
-        assert!(src.contains(check_gate));
-        assert!(src.contains(dim_copy));
+        assert!(octos_pos < matrix_pos, "Octos AppService URL should be configured before Matrix ID binding");
+        assert!(src.contains("save_appservice_button"));
+        assert!(!src.contains("Unlocks after the friend is added."));
     }
 
     #[test]
-    fn test_octos_appservice_lock_has_visual_dim_state() {
+    fn test_octos_appservice_controls_are_not_friend_locked() {
         let src = production_src(include_str!("agent_add_modal.rs"));
 
-        assert!(src.contains("fn sync_octos_appservice_lock_visuals"));
-        assert!(src.contains("mod.widgets.RBX_BG_DISABLED"));
-        assert!(src.contains("mod.widgets.RBX_FG_DISABLED"));
-        assert!(src.contains("ids!(octos_section.octos_blurb)"));
+        assert!(!src.contains("let appservice_unlocked = self.friend_state == FriendState::Added;"));
+        assert!(!src.contains("if self.friend_state != FriendState::Added {\n                return;\n            }"));
+        assert!(src.contains("fn save_octos_appservice_settings"));
     }
 
     #[test]
-    fn test_open_local_binding_uses_system_browser_when_octos_is_online() {
+    fn test_octos_flow_removed_local_binding_browser_step() {
         let src = production_src(include_str!("agent_add_modal.rs"));
 
-        assert!(src.contains("open_local_binding_button"));
-        assert!(src.contains("robius_open::Uri::new(&url).open()"));
-        assert!(src.contains("self.octos_health.status == OctosHealthStatus::Reachable"));
-        let handler_start = src.find("&& self.view.button(cx, ids!(open_local_binding_button)).clicked(actions)")
-            .expect("expected open-local-binding handler");
-        let handler_end = src[handler_start..]
-            .find("let url = self.octos_service_url(cx);")
-            .expect("expected open-local-binding action body");
-        let handler_guard = &src[handler_start..handler_start + handler_end];
-        assert!(handler_guard.contains("self.friend_state == FriendState::Added"));
+        assert!(!src.contains("open_local_binding_button"));
+        assert!(!src.contains("robius_open::Uri::new(&url).open()"));
+        assert!(!src.contains("BotFather"));
+        assert!(!src.contains("botfather_locked_strip"));
     }
 
     #[test]
@@ -1638,11 +1459,11 @@ mod tests {
         );
         assert_eq!(
             bind_button_state(FriendState::Idle, false, OctosHealthStatus::Unknown, "@agent:example.org"),
-            ("Add friend & bind", true),
+            ("Bind agent", true),
         );
         assert_eq!(
             bind_button_state(FriendState::Idle, true, OctosHealthStatus::Unknown, "@octos:example.org"),
-            ("Add friend & bind Octos", true),
+            ("Bind Octos agent", true),
         );
         assert_eq!(
             bind_button_state(FriendState::Idle, true, OctosHealthStatus::Reachable, ""),
@@ -1650,7 +1471,7 @@ mod tests {
         );
         assert_eq!(
             bind_button_state(FriendState::Idle, true, OctosHealthStatus::Reachable, "@octos:example.org"),
-            ("Add friend & bind Octos", true),
+            ("Bind Octos agent", true),
         );
     }
 
@@ -1671,8 +1492,8 @@ mod tests {
     #[test]
     fn test_add_modal_uses_responsive_sheet_width_and_batched_surfaces() {
         let src = production_src(include_str!("agent_add_modal.rs"));
-        let responsive_width = ["width: Fill{min: 0 max: ", "368}"].concat();
-        let sheet_batch = ["sheet := RoundedView {", "\n            width: Fill{min: 0 max: 368}", "\n            height: 620", "\n            flow: Down", "\n            new_batch: true"].concat();
+        let responsive_width = ["width: Fill{min: 0 max: ", "352}"].concat();
+        let sheet_batch = ["sheet := RoundedView {", "\n            width: Fill{min: 0 max: 352}", "\n            height: 592", "\n            flow: Down", "\n            new_batch: true"].concat();
         let root_start = src
             .find("mod.widgets.AddAgentModal = #(AddAgentModal::register_widget(vm)) {")
             .expect("expected AddAgentModal definition");
@@ -1697,10 +1518,10 @@ mod tests {
     fn test_add_modal_uses_scrollable_body_with_sticky_footer() {
         let src = production_src(include_str!("agent_add_modal.rs"));
 
-        assert!(src.contains("height: 620"));
+        assert!(src.contains("height: 592"));
         assert!(src.contains("body_scroll := ScrollYView"));
         assert!(
-            src.contains("body_scroll := ScrollYView {\n                width: Fill\n                height: 420"),
+            src.contains("body_scroll := ScrollYView {\n                width: Fill\n                height: 382"),
             "body_scroll must not Fill over the sticky footer hit area on Android",
         );
         let body_pos = src.find("body_scroll := ScrollYView").expect("modal should have a scroll body");
@@ -1735,7 +1556,8 @@ mod tests {
     fn test_step2_helper_copy_is_mobile_safe() {
         let src = production_src(include_str!("agent_add_modal.rs"));
 
-        assert!(src.contains("Creates the DM and records this agent."));
+        assert!(src.contains("Bind Matrix ID to this agent."));
+        assert!(src.contains("Save service, then bind Matrix ID."));
         assert!(
             !src.contains("Bind creates or reuses the direct message and registers the agent."),
             "long Step 2 helper text clips on Android instead of wrapping",
@@ -1757,9 +1579,12 @@ mod tests {
     fn test_step2_primary_button_copy_matches_handoff() {
         let src = production_src(include_str!("agent_add_modal.rs"));
 
-        assert!(src.contains("\"Finish & register\""));
-        assert!(src.contains("\"Add the agent above to continue\""));
-        assert!(src.contains("\"Service must be online\""));
+        assert!(src.contains("self.view.view(cx, ids!(footer)).set_visible(cx, !step2);"));
+        assert!(src.contains("Bind Octos agent"));
+        assert!(src.contains("save_appservice_button"));
+        assert!(!src.contains("\"Finish & register\""));
+        assert!(!src.contains("\"Add the agent above to continue\""));
+        assert!(!src.contains("\"Service must be online\""));
         assert!(!src.contains("\"Ready\""));
         assert!(!src.contains("\"Bind above to continue\""));
     }
@@ -1772,7 +1597,15 @@ mod tests {
         assert!(src.contains("bind_progress_spinner := LoadingSpinner"));
         assert!(src.contains("\"Sending friend request...\""));
         assert!(src.contains("octos_check_spinner := LoadingSpinner"));
-        assert!(src.contains("text: \"Check now\""));
+        assert!(src.contains("text: \"Check\""));
         assert!(src.contains("set_text(cx, \"Checking...\")"));
+    }
+
+    #[test]
+    fn test_back_button_uses_plain_left_chevron() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+
+        assert!(src.contains("resources/icons/chevron_left.svg"));
+        assert!(!src.contains("resources/icons/go_back.svg"));
     }
 }
