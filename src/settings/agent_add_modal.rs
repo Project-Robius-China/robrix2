@@ -248,6 +248,14 @@ script_mod! {
                 border_size: 1.0
                 border_color: (RBX_STROKE_SOFT)
             }
+            // Real input is dark (PRIMARY); the placeholder/hint is a light grey
+            // (TERTIARY) so it reads clearly as a hint, not an entered value.
+            draw_text +: {
+                color: (RBX_FG_PRIMARY)
+                color_empty: (RBX_FG_TERTIARY)
+                color_empty_hover: (RBX_FG_TERTIARY)
+                color_empty_focus: (RBX_FG_TERTIARY)
+            }
         }
     }
 
@@ -310,6 +318,14 @@ script_mod! {
                     border_color_empty: (RBX_TRANSPARENT)
                     border_color_disabled: (RBX_TRANSPARENT)
                 }
+                // Dark real input vs light-grey placeholder, so the hint reads
+                // as a hint rather than an entered ID.
+                draw_text +: {
+                    color: (RBX_FG_PRIMARY)
+                    color_empty: (RBX_FG_TERTIARY)
+                    color_empty_hover: (RBX_FG_TERTIARY)
+                    color_empty_focus: (RBX_FG_TERTIARY)
+                }
             }
         }
     }
@@ -365,28 +381,31 @@ script_mod! {
             header := View {
                 width: Fill
                 height: Fit
-                flow: Right
-                align: Align{y: 0.5}
-                spacing: 8
+                flow: Down
+                spacing: 1
                 margin: Inset{bottom: 10}
 
-                back_button := RobrixNeutralIconButton {
-                    width: Fit
-                    height: Fit
-                    visible: false
-                    padding: Inset{left: 2, right: 6, top: 6, bottom: 6}
-                    spacing: 0
-                    text: ""
-                    draw_icon.svg: (mod.widgets.AGENT_ICON_BACK)
-                    draw_icon.color: (RBX_FG_SECONDARY)
-                    icon_walk: Walk{width: 18, height: 18}
-                    draw_bg +: { color: (RBX_TRANSPARENT), color_hover: (RBX_TRANSPARENT), color_down: (RBX_TRANSPARENT) }
-                }
-                header_col := View {
+                // Back ‹ · title · close ✕ all share one baseline (the subtitle
+                // drops to its own line below) — keeps the header two lines tall,
+                // same as before, but the nav icons sit on the title line.
+                header_top := View {
                     width: Fill
                     height: Fit
-                    flow: Down
-                    spacing: 1
+                    flow: Right
+                    align: Align{y: 0.5}
+                    spacing: 8
+                    back_button := RobrixNeutralIconButton {
+                        width: Fit
+                        height: Fit
+                        visible: false
+                        padding: Inset{left: 2, right: 6, top: 4, bottom: 4}
+                        spacing: 0
+                        text: ""
+                        draw_icon.svg: (mod.widgets.AGENT_ICON_BACK)
+                        draw_icon.color: (RBX_FG_SECONDARY)
+                        icon_walk: Walk{width: 18, height: 18}
+                        draw_bg +: { color: (RBX_TRANSPARENT), color_hover: (RBX_TRANSPARENT), color_down: (RBX_TRANSPARENT) }
+                    }
                     sheet_title := Label {
                         width: Fill
                         height: Fit
@@ -396,26 +415,26 @@ script_mod! {
                         }
                         text: "Add an agent"
                     }
-                    sheet_subtitle := Label {
-                        width: Fill
+                    close_button := RobrixNeutralIconButton {
+                        width: Fit
                         height: Fit
-                        draw_text +: {
-                            color: (RBX_FG_SECONDARY)
-                            text_style: RBX_TEXT_META {}
-                        }
-                        text: "Step 1 of 2 · Choose a framework"
+                        padding: Inset{left: 6, right: 6, top: 4, bottom: 4}
+                        spacing: 0
+                        text: ""
+                        draw_icon.svg: (ICON_CLOSE)
+                        draw_icon.color: (RBX_FG_TERTIARY)
+                        icon_walk: Walk{width: 16, height: 16}
+                        draw_bg +: { color: (RBX_TRANSPARENT), color_hover: (RBX_TRANSPARENT), color_down: (RBX_TRANSPARENT) }
                     }
                 }
-                close_button := RobrixNeutralIconButton {
-                    width: Fit
+                sheet_subtitle := Label {
+                    width: Fill
                     height: Fit
-                    padding: Inset{left: 6, right: 6, top: 6, bottom: 6}
-                    spacing: 0
-                    text: ""
-                    draw_icon.svg: (ICON_CLOSE)
-                    draw_icon.color: (RBX_FG_TERTIARY)
-                    icon_walk: Walk{width: 16, height: 16}
-                    draw_bg +: { color: (RBX_TRANSPARENT), color_hover: (RBX_TRANSPARENT), color_down: (RBX_TRANSPARENT) }
+                    draw_text +: {
+                        color: (RBX_FG_SECONDARY)
+                        text_style: RBX_TEXT_META {}
+                    }
+                    text: "Step 1 of 2 · Choose a framework"
                 }
             }
 
@@ -467,8 +486,8 @@ script_mod! {
                         spacing: 9
 
                         step2_framework_tile := RoundedView {
-                            width: 22
-                            height: 22
+                            width: 26
+                            height: 26
                             align: Align{x: 0.5, y: 0.5}
                             new_batch: true
                             show_bg: true
@@ -481,7 +500,7 @@ script_mod! {
                                 height: Fit
                                 draw_text +: {
                                     color: (RBX_FG_PRIMARY)
-                                    text_style: TITLE_TEXT { font_size: 8.5 }
+                                    text_style: TITLE_TEXT { font_size: 10.5 }
                                 }
                                 text: ""
                             }
@@ -594,9 +613,9 @@ script_mod! {
                         }
                         save_appservice_button := RobrixIconButton {
                             width: Fill
-                            height: Fit
-                            margin: Inset{top: 2}
                             height: (RBX_CONTROL_H_MD)
+                            align: Align{x: 0.5, y: 0.5}
+                            margin: Inset{top: 2}
                             padding: Inset{top: 8, bottom: 8, left: 12, right: 12}
                             icon_walk: Walk{width: 0, height: 0}
                             spacing: 0
@@ -616,6 +635,7 @@ script_mod! {
                     add_friend_button := RobrixIconButton {
                         width: Fill
                         height: (RBX_CONTROL_H_MD)
+                        align: Align{x: 0.5, y: 0.5}
                         margin: Inset{top: 2}
                         padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
                         draw_icon.svg: (ICON_ADD_USER)
@@ -711,6 +731,7 @@ script_mod! {
                 primary_button := RobrixIconButton {
                     width: Fill
                     height: (RBX_CONTROL_H_LG)
+                    align: Align{x: 0.5, y: 0.5}
                     padding: Inset{top: 11, bottom: 11, left: 16, right: 16}
                     icon_walk: Walk{width: 0, height: 0}
                     spacing: 0
