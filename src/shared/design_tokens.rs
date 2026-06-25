@@ -197,6 +197,8 @@ script_mod! {
     // 11. RADIUS scale — bigger & softer than the legacy RADIUS_* (4/6/8).
     //     Cards lean on radius + border, not heavy shadow.
     // =========================================================================
+    // Crisp 4px corner — matches the invite ("search friend") modal.
+    mod.widgets.RBX_RADIUS_XXS  = 4.0
     mod.widgets.RBX_RADIUS_XS   = 6.0
     mod.widgets.RBX_RADIUS_SM   = 8.0
     mod.widgets.RBX_RADIUS_MD   = 12.0

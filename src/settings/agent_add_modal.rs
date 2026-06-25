@@ -108,7 +108,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE)
-                border_radius: (RBX_RADIUS_MD)
+                border_radius: (RBX_RADIUS_XXS)
                 border_size: 1.0
                 border_color: (RBX_STROKE_SOFT)
             }
@@ -121,7 +121,7 @@ script_mod! {
                 show_bg: true
                 draw_bg +: {
                     color: (RBX_BG_SURFACE_SUBTLE)
-                    border_radius: (RBX_RADIUS_MD)
+                    border_radius: (RBX_RADIUS_XXS)
                 }
                 card_mono := Label {
                     width: Fit
@@ -158,7 +158,7 @@ script_mod! {
                     show_bg: true
                     draw_bg +: {
                         color: (RBX_BG_SURFACE_SUBTLE)
-                        border_radius: (RBX_RADIUS_XS)
+                        border_radius: (RBX_RADIUS_XXS)
                     }
                     card_tag_label := Label {
                         width: Fit
@@ -218,7 +218,7 @@ script_mod! {
                 color: (RBX_TRANSPARENT)
                 color_hover: (RBX_HIT_HOVER)
                 color_down: (RBX_HIT_DOWN)
-                    border_radius: (RBX_RADIUS_MD)
+                    border_radius: (RBX_RADIUS_XXS)
             }
         }
     }
@@ -244,7 +244,7 @@ script_mod! {
             empty_text: ""
             draw_bg +: {
                 color: (RBX_BG_SURFACE_SUBTLE)
-                border_radius: (RBX_RADIUS_SM)
+                border_radius: (RBX_RADIUS_XXS)
                 border_size: 1.0
                 border_color: (RBX_STROKE_SOFT)
             }
@@ -276,7 +276,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE_SUBTLE)
-                border_radius: (RBX_RADIUS_SM)
+                border_radius: (RBX_RADIUS_XXS)
                 border_size: 1.0
                 border_color: (RBX_STROKE_SOFT)
             }
@@ -347,7 +347,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE)
-                border_radius: (RBX_RADIUS_LG)
+                border_radius: (RBX_RADIUS_XXS)
             }
 
             grip := View {
@@ -474,7 +474,7 @@ script_mod! {
                             show_bg: true
                             draw_bg +: {
                                 color: (RBX_BG_SURFACE_SUBTLE)
-                                border_radius: (RBX_RADIUS_XS)
+                                border_radius: (RBX_RADIUS_XXS)
                             }
                             step2_framework_mono := Label {
                                 width: Fit
@@ -509,7 +509,7 @@ script_mod! {
                         show_bg: true
                         draw_bg +: {
                             color: (RBX_FW_OCTOS_BG)
-                            border_radius: (RBX_RADIUS_MD)
+                            border_radius: (RBX_RADIUS_XXS)
                             border_size: 1.0
                             border_color: (RBX_STROKE_SOFT)
                         }
@@ -522,15 +522,6 @@ script_mod! {
                                 text_style: RBX_TEXT_BODY_STRONG {}
                             }
                             text: "Octos AppService"
-                        }
-                        octos_blurb := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                color: (RBX_FG_SECONDARY)
-                                text_style: RBX_TEXT_META {}
-                            }
-                            text: "Check and save before binding."
                         }
                         octos_url_field := AgentField {
                             field_label.text: "AppService URL"
@@ -554,7 +545,7 @@ script_mod! {
                                     color: (RBX_BG_SURFACE)
                                     color_hover: (RBX_BG_HOVER)
                                     color_down: (RBX_BG_PRESSED)
-                                    border_radius: (RBX_RADIUS_XS)
+                                    border_radius: (RBX_RADIUS_XXS)
                                     border_size: 1.0
                                     border_color: (RBX_FW_OCTOS_FG)
                                 }
@@ -577,7 +568,7 @@ script_mod! {
                                 show_bg: true
                                 draw_bg +: {
                                     color: (RBX_NEUTRAL_BG)
-                                    border_radius: (RBX_RADIUS_SM)
+                                    border_radius: (RBX_RADIUS_XXS)
                                 }
                                 octos_status_label := Label {
                                     width: Fit
@@ -614,23 +605,13 @@ script_mod! {
                                 color: (RBX_ACCENT)
                                 color_hover: (RBX_ACCENT_HOVER)
                                 color_down: (RBX_ACCENT_PRESSED)
-                                border_radius: (RBX_RADIUS_SM)
+                                border_radius: (RBX_RADIUS_XXS)
                             }
                             draw_text +: { color: (RBX_FG_ON_ACCENT), color_hover: (RBX_FG_ON_ACCENT), color_down: (RBX_FG_ON_ACCENT) }
                         }
                     }
 
                     id_field := MatrixIdField {}
-
-                    step2_helper := Label {
-                        width: Fill
-                        height: Fit
-                        draw_text +: {
-                            color: (RBX_FG_SECONDARY)
-                            text_style: RBX_TEXT_META {}
-                        }
-                        text: "Creates the DM and records this agent."
-                    }
 
                     add_friend_button := RobrixIconButton {
                         width: Fill
@@ -646,7 +627,7 @@ script_mod! {
                             color: (RBX_ACCENT)
                             color_hover: (RBX_ACCENT_HOVER)
                             color_down: (RBX_ACCENT_PRESSED)
-                            border_radius: (RBX_RADIUS_SM)
+                            border_radius: (RBX_RADIUS_XXS)
                         }
                         draw_text +: { color: (RBX_FG_ON_ACCENT), color_hover: (RBX_FG_ON_ACCENT), color_down: (RBX_FG_ON_ACCENT) }
                     }
@@ -692,7 +673,7 @@ script_mod! {
                         show_bg: true
                         draw_bg +: {
                             color: (RBX_SUCCESS_BG)
-                            border_radius: (RBX_RADIUS_SM)
+                            border_radius: (RBX_RADIUS_XXS)
                             border_size: 1.0
                             border_color: (RBX_SUCCESS_FG)
                         }
@@ -738,7 +719,7 @@ script_mod! {
                         color: (RBX_ACCENT)
                         color_hover: (RBX_ACCENT_HOVER)
                         color_down: (RBX_ACCENT_PRESSED)
-                        border_radius: (RBX_RADIUS_SM)
+                        border_radius: (RBX_RADIUS_XXS)
                     }
                     draw_text +: { color: (RBX_FG_ON_ACCENT), color_hover: (RBX_FG_ON_ACCENT), color_down: (RBX_FG_ON_ACCENT) }
                 }
@@ -1186,12 +1167,6 @@ impl AddAgentModal {
             if let Some(framework) = self.selected_framework {
                 self.sync_step2_framework_header(cx, framework);
             }
-            let helper = if self.is_octos() {
-                "Save service, then bind Matrix ID."
-            } else {
-                "Bind Matrix ID to this agent."
-            };
-            self.view.label(cx, ids!(step2_helper)).set_text(cx, helper);
             self.sync_step2(cx);
         } else {
             self.view.label(cx, ids!(sheet_title)).set_text(cx, "Add an agent");
@@ -1571,17 +1546,6 @@ mod tests {
         assert!(src.contains("framework_mono(framework)"));
     }
 
-    #[test]
-    fn test_step2_helper_copy_is_mobile_safe() {
-        let src = production_src(include_str!("agent_add_modal.rs"));
-
-        assert!(src.contains("Bind Matrix ID to this agent."));
-        assert!(src.contains("Save service, then bind Matrix ID."));
-        assert!(
-            !src.contains("Bind creates or reuses the direct message and registers the agent."),
-            "long Step 2 helper text clips on Android instead of wrapping",
-        );
-    }
 
     #[test]
     fn test_matrix_id_field_matches_handoff_at_adornment() {

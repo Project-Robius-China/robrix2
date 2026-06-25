@@ -150,7 +150,7 @@ script_mod! {
         show_bg: true
         draw_bg +: {
             color: (RBX_BG_SURFACE)
-            border_radius: (RBX_RADIUS_MD)
+            border_radius: (RBX_RADIUS_XXS)
             border_size: 1.0
             border_color: (RBX_STROKE_SOFT)
         }
@@ -170,7 +170,7 @@ script_mod! {
                 show_bg: true
                 draw_bg +: {
                     color: (RBX_BG_SURFACE_SUBTLE)
-                    border_radius: (RBX_RADIUS_MD)
+                    border_radius: (RBX_RADIUS_XXS)
                 }
                 agent_tile_mono := Label {
                     width: Fit
@@ -238,7 +238,7 @@ script_mod! {
                 show_bg: true
                 draw_bg +: {
                     color: (RBX_ACCENT_SOFT)
-                    border_radius: (RBX_RADIUS_SM)
+                    border_radius: (RBX_RADIUS_XXS)
                 }
                 agent_framework_dot := RoundedView {
                     width: 6
@@ -285,7 +285,7 @@ script_mod! {
                     color: (RBX_BG_SURFACE_SUBTLE)
                     color_hover: (RBX_BG_HOVER)
                     color_down: (RBX_BG_PRESSED)
-                    border_radius: (RBX_RADIUS_SM)
+                    border_radius: (RBX_RADIUS_XXS)
                 }
                 draw_text +: { color: (RBX_FG_PRIMARY), color_hover: (RBX_FG_PRIMARY), color_down: (RBX_FG_PRIMARY) }
             }
@@ -300,7 +300,7 @@ script_mod! {
                     color: (RBX_INFO_BG)
                     color_hover: (RBX_HIT_HOVER)
                     color_down: (RBX_HIT_DOWN)
-                    border_radius: (RBX_RADIUS_SM)
+                    border_radius: (RBX_RADIUS_XXS)
                 }
                 draw_text +: { color: (RBX_INFO_FG), color_hover: (RBX_INFO_FG), color_down: (RBX_INFO_FG) }
             }
@@ -315,7 +315,7 @@ script_mod! {
                     color: (RBX_DANGER_BG)
                     color_hover: (RBX_DANGER_BG)
                     color_down: (RBX_DANGER_BG)
-                    border_radius: (RBX_RADIUS_SM)
+                    border_radius: (RBX_RADIUS_XXS)
                 }
                 draw_text +: { color: (RBX_DANGER_FG), color_hover: (RBX_DANGER_FG), color_down: (RBX_DANGER_FG) }
             }
@@ -332,7 +332,7 @@ script_mod! {
         show_bg: true
         draw_bg +: {
             color: (RBX_BG_SURFACE_SUBTLE)
-            border_radius: (RBX_RADIUS_SM)
+            border_radius: (RBX_RADIUS_XXS)
             border_size: 1.0
             border_color: (RBX_STROKE_SOFT)
         }
@@ -366,7 +366,7 @@ script_mod! {
         padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: (SPACE_LG), bottom: (SPACE_LG)}
         draw_bg +: {
             color: (RBX_BG_SURFACE)
-            border_radius: (RBX_RADIUS_SM)
+            border_radius: (RBX_RADIUS_XXS)
             border_size: 1.0
             border_color: (RBX_STROKE_STRONG)
         }
@@ -410,7 +410,7 @@ script_mod! {
                 color: (RBX_ACCENT)
                 color_hover: (RBX_ACCENT_HOVER)
                 color_down: (RBX_ACCENT_PRESSED)
-                border_radius: (RBX_RADIUS_SM)
+                border_radius: (RBX_RADIUS_XXS)
             }
             draw_text +: { color: (RBX_FG_ON_ACCENT), color_hover: (RBX_FG_ON_ACCENT), color_down: (RBX_FG_ON_ACCENT) }
         }
@@ -445,7 +445,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: (RBX_INFO_BG)
-                border_radius: (RBX_RADIUS_SM)
+                border_radius: (RBX_RADIUS_XXS)
             }
 
             appservice_summary_header := View {
@@ -474,7 +474,7 @@ script_mod! {
                     show_bg: true
                     draw_bg +: {
                         color: (RBX_BG_SURFACE)
-                        border_radius: (RBX_RADIUS_SM)
+                        border_radius: (RBX_RADIUS_XXS)
                     }
                     appservice_online_dot := RoundedView {
                         width: 7
@@ -522,7 +522,7 @@ script_mod! {
                     show_bg: true
                     draw_bg +: {
                         color: (RBX_NEUTRAL_BG)
-                        border_radius: (RBX_RADIUS_SM)
+                        border_radius: (RBX_RADIUS_XXS)
                     }
                     appservice_config_state_label := Label {
                         width: Fit
@@ -557,7 +557,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE)
-                border_radius: (RBX_RADIUS_SM)
+                border_radius: (RBX_RADIUS_XXS)
                 border_size: 1.0
                 border_color: (RBX_STROKE_SOFT)
             }
@@ -585,7 +585,7 @@ script_mod! {
                     show_bg: true
                     draw_bg +: {
                         color: (RBX_SUCCESS_BG)
-                        border_radius: (RBX_RADIUS_SM)
+                        border_radius: (RBX_RADIUS_XXS)
                     }
                     registry_source_label := Label {
                         width: Fit
@@ -608,7 +608,7 @@ script_mod! {
                 show_bg: true
                 draw_bg +: {
                     color: (RBX_BG_SURFACE_SUBTLE)
-                    border_radius: (RBX_RADIUS_MD)
+                    border_radius: (RBX_RADIUS_XXS)
                     border_size: 1.0
                     border_color: (RBX_STROKE_STRONG)
                 }
