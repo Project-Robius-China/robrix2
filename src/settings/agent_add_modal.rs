@@ -31,6 +31,20 @@ use crate::{
 
 const AGENT_OCTOS_HEALTH_REQUEST_ID: LiveId = live_id!(agent_add_octos_health);
 
+/// The sheet's resting bottom margin (lifts it clear of the nav). Must match the
+/// `margin: Inset{bottom: ...}` on the `sheet` view; keyboard avoidance overrides
+/// it with the keyboard height while the soft keyboard is shown.
+const SHEET_BASE_BOTTOM_MARGIN: f64 = 96.0;
+
+/// The sheet's fixed height (layout points). Must match `height:` on the `sheet`
+/// view. Used to cap the keyboard lift so the sheet's top never rises above
+/// `SHEET_TOP_INSET` (header stays on-screen).
+const SHEET_HEIGHT: f64 = 592.0;
+
+/// Minimum gap kept between the window top (status bar) and the sheet top when
+/// the keyboard lift is at its maximum.
+const SHEET_TOP_INSET: f64 = 24.0;
+
 pub fn register_agent_with_modal_settings(
     app_state: &mut AppState,
     user_id: OwnedUserId,
@@ -776,6 +790,13 @@ pub struct AddAgentModal {
     octos_health: OctosHealthState,
     #[rust]
     octos_probe_base_url: Option<String>,
+    /// On-screen keyboard occlusion height (Makepad layout points), 0 when hidden.
+    /// Read from `VirtualKeyboardEvent` — NOT from `cx.keyboard_shift`, which is
+    /// derived from the focused IME position and would feed back into a jump loop
+    /// once we move the sheet (this modal draws in its own overlay pass, outside
+    /// the window KeyboardView's content shift).
+    #[rust]
+    keyboard_height: f64,
 }
 
 impl Widget for AddAgentModal {
@@ -809,11 +830,46 @@ impl Widget for AddAgentModal {
                 }
             }
         }
+        // Track the on-screen keyboard height so `draw_walk` can lift the sheet
+        // clear of it. Driven purely by the keyboard's own show/hide events, so
+        // moving the sheet never changes this value (no jump loop).
+        if let Event::VirtualKeyboard(vk) = event {
+            let new_height = match vk {
+                VirtualKeyboardEvent::WillShow { height, .. }
+                | VirtualKeyboardEvent::DidShow { height, .. } => *height,
+                VirtualKeyboardEvent::WillHide { .. } | VirtualKeyboardEvent::DidHide { .. } => 0.0,
+            };
+            if (new_height - self.keyboard_height).abs() > 0.5 {
+                self.keyboard_height = new_height;
+                self.redraw(cx);
+            }
+        }
         self.view.handle_event(cx, event, scope);
         self.widget_match_event(cx, event, scope);
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        // Keyboard avoidance: raise the bottom-anchored sheet so its lower
+        // controls (Matrix ID field, Add friend button) stay above the on-screen
+        // keyboard. When hidden, fall back to the resting margin that clears the
+        // nav bar. The height comes from VirtualKeyboardEvent, so this never
+        // ping-pongs the way reading `cx.keyboard_shift` did.
+        //
+        // Cap the lift so the sheet top never rises above SHEET_TOP_INSET: the
+        // sheet (SHEET_HEIGHT) is taller than the gap above the keyboard, so a
+        // full-height lift would push the header off-screen. Clamping pins the
+        // header just below the status bar; the sheet's own bottom padding then
+        // absorbs the keyboard and lands the Matrix ID field just above it.
+        let margin_bottom = if self.keyboard_height > 0.0 {
+            let window_h = cx.current_pass_size().y;
+            let max_lift = (window_h - SHEET_HEIGHT - SHEET_TOP_INSET).max(SHEET_BASE_BOTTOM_MARGIN);
+            (self.keyboard_height + 8.0).min(max_lift)
+        } else {
+            SHEET_BASE_BOTTOM_MARGIN
+        };
+        if let Some(mut sheet) = self.view.view(cx, ids!(sheet)).borrow_mut() {
+            sheet.walk.margin.bottom = margin_bottom;
+        }
         self.view.draw_walk(cx, scope, walk)
     }
 }
