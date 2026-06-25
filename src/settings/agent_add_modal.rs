@@ -554,7 +554,7 @@ script_mod! {
                                     color: (RBX_BG_SURFACE)
                                     color_hover: (RBX_BG_HOVER)
                                     color_down: (RBX_BG_PRESSED)
-                                    border_radius: (RBX_RADIUS_SM)
+                                    border_radius: (RBX_RADIUS_XS)
                                     border_size: 1.0
                                     border_color: (RBX_FW_OCTOS_FG)
                                 }
@@ -577,7 +577,7 @@ script_mod! {
                                 show_bg: true
                                 draw_bg +: {
                                     color: (RBX_NEUTRAL_BG)
-                                    border_radius: (RBX_RADIUS_PILL)
+                                    border_radius: (RBX_RADIUS_SM)
                                 }
                                 octos_status_label := Label {
                                     width: Fit
