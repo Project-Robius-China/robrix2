@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -3065,7 +3065,9 @@ script_mod! {
             align: Align{x: 1.0}
 
             show_bg: true,
-            draw_bg.color: (COLOR_PRIMARY)
+            // Cool off-white page so the white cards below read as distinct
+            // surfaces (the grouped-list look from the spec).
+            draw_bg.color: (RBX_BG_CANVAS)
 
             header := View {
                 width: Fill
@@ -3120,234 +3122,646 @@ script_mod! {
                     width: Fill
                     height: Fit
                     flow: Down
-                    spacing: 10
+                    spacing: 12
                     padding: Inset{left: 12, right: 12, top: 12, bottom: 12}
 
-                    summary_card := RoundedView {
+                    // ===== Hero / summary card =====
+                    // Hero sits directly on the page (no card chrome) per spec.
+                    summary_card := View {
                         width: Fill
                         height: Fit
-                        flow: Right
-                        spacing: 10
-                        align: Align{y: 0.5}
-                        padding: Inset{left: 10, right: 10, top: 10, bottom: 10}
+                        flow: Down
+                        spacing: 12
+                        padding: Inset{left: 14, right: 14, top: 4, bottom: 4}
 
-                        show_bg: true
-                        draw_bg +: {
-                            color: #F8FAFD
-                            border_radius: 4.0
-                            border_size: 1.0
-                            border_color: #D8E0EA
-                        }
-
-                        room_avatar := Avatar {
-                            width: 40
-                            height: 40
-                        }
-
-                        room_meta := View {
+                        hero_row := View {
                             width: Fill
                             height: Fit
-                            flow: Down
-                            spacing: 4
+                            flow: Right
+                            spacing: 13
+                            align: Align{y: 0.0}
 
-                            room_name_value := Label {
-                                width: Fill
-                                height: Fit
-                                flow: Flow.Right{wrap: true}
-                                draw_text +: {
-                                    text_style: USERNAME_TEXT_STYLE { font_size: 11.0 }
-                                    color: #1F1F1F
-                                }
-                                text: ""
+                            room_avatar := Avatar {
+                                width: 56
+                                height: 56
                             }
 
-                            room_id_row := View {
+                            room_meta := View {
                                 width: Fill
                                 height: Fit
-                                flow: Right
-                                align: Align{y: 0.5}
-                                spacing: 5
+                                flow: Down
+                                spacing: 2
 
-                                room_id_value := Label {
+                                name_row := View {
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    align: Align{y: 0.5}
+                                    spacing: 6
+
+                                    room_name_value := Label {
+                                        width: Fill
+                                        height: Fit
+                                        flow: Flow.Right{wrap: true}
+                                        draw_text +: {
+                                            text_style: RBX_TEXT_SECTION_TITLE {}
+                                            color: (RBX_FG_PRIMARY)
+                                        }
+                                        text: ""
+                                    }
+
+                                    favorite_button := View {
+                                        width: Fit
+                                        height: Fit
+                                        flow: Overlay
+                                        align: Align{x: 0.5, y: 0.5}
+                                        padding: 1
+                                        cursor: MouseCursor.Hand
+
+                                        star_outline := View {
+                                            width: Fit
+                                            height: Fit
+                                            Icon {
+                                                width: 17
+                                                height: 17
+                                                align: Align{x: 0.5, y: 0.5}
+                                                draw_icon +: {
+                                                    svg: (ICON_STAR)
+                                                    color: (RBX_FG_TERTIARY)
+                                                }
+                                                icon_walk: Walk{width: 17, height: 17}
+                                            }
+                                        }
+
+                                        star_filled := View {
+                                            visible: false
+                                            width: Fit
+                                            height: Fit
+                                            Icon {
+                                                width: 17
+                                                height: 17
+                                                align: Align{x: 0.5, y: 0.5}
+                                                draw_icon +: {
+                                                    svg: (ICON_STAR_FILLED)
+                                                    color: (RBX_WARNING_FG)
+                                                }
+                                                icon_walk: Walk{width: 17, height: 17}
+                                            }
+                                        }
+                                    }
+                                }
+
+                                room_id_row := View {
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    align: Align{y: 0.5}
+                                    spacing: 4
+
+                                    room_id_value := Label {
+                                        width: Fill
+                                        height: Fit
+                                        flow: Flow.Right{wrap: true}
+                                        draw_text +: {
+                                            text_style: RBX_TEXT_META {}
+                                            color: (RBX_FG_TERTIARY)
+                                        }
+                                        text: ""
+                                    }
+
+                                    copy_room_id_button := RobrixNeutralIconButton {
+                                        width: Fit
+                                        height: Fit
+                                        padding: 2
+                                        spacing: 0
+                                        margin: 0
+                                        draw_bg +: {
+                                            color: #00000000
+                                            color_hover: #00000000
+                                            color_down: #00000000
+                                            border_size: 0.0
+                                        }
+                                        draw_icon +: { svg: (ICON_COPY), color: (RBX_FG_TERTIARY) }
+                                        icon_walk: Walk{width: 13, height: 13}
+                                        text: ""
+                                    }
+                                }
+
+                                // visibility · members · encryption — one horizontal
+                                // line, left-aligned directly under the room id.
+                                meta_row := View {
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 12
+                                    align: Align{y: 0.5}
+                                    margin: Inset{top: 3}
+
+                                    visibility_meta := View {
+                                        width: Fit
+                                        height: Fit
+                                        flow: Right
+                                        spacing: 4
+                                        align: Align{y: 0.5}
+
+                                        Icon {
+                                            width: 13
+                                            height: 13
+                                            draw_icon +: { svg: (ICON_GLOBE), color: (RBX_FG_SECONDARY) }
+                                            icon_walk: Walk{width: 13, height: 13}
+                                        }
+                                        visibility_value := Label {
+                                            width: Fit
+                                            height: Fit
+                                            draw_text +: { text_style: RBX_TEXT_META {}, color: (RBX_FG_SECONDARY) }
+                                            text: ""
+                                        }
+                                    }
+
+                                    members_meta := View {
+                                        width: Fit
+                                        height: Fit
+                                        flow: Right
+                                        spacing: 4
+                                        align: Align{y: 0.5}
+
+                                        Icon {
+                                            width: 13
+                                            height: 13
+                                            draw_icon +: { svg: (ICON_PEOPLE), color: (RBX_FG_SECONDARY) }
+                                            icon_walk: Walk{width: 13, height: 13}
+                                        }
+                                        members_meta_value := Label {
+                                            width: Fit
+                                            height: Fit
+                                            draw_text +: { text_style: RBX_TEXT_META {}, color: (RBX_FG_SECONDARY) }
+                                            text: ""
+                                        }
+                                    }
+
+                                    encryption_meta := View {
+                                        width: Fit
+                                        height: Fit
+                                        flow: Right
+                                        spacing: 4
+                                        align: Align{y: 0.5}
+
+                                        enc_icon_locked := View {
+                                            width: Fit
+                                            height: Fit
+                                            Icon {
+                                                width: 13
+                                                height: 13
+                                                draw_icon +: { svg: (ICON_LOCK), color: (RBX_SUCCESS_FG) }
+                                                icon_walk: Walk{width: 13, height: 13}
+                                            }
+                                        }
+                                        enc_icon_unlocked := View {
+                                            visible: false
+                                            width: Fit
+                                            height: Fit
+                                            Icon {
+                                                width: 13
+                                                height: 13
+                                                draw_icon +: { svg: (ICON_LOCK_OPEN), color: (RBX_FG_TERTIARY) }
+                                                icon_walk: Walk{width: 13, height: 13}
+                                            }
+                                        }
+                                        encryption_value := Label {
+                                            width: Fit
+                                            height: Fit
+                                            draw_text +: { text_style: RBX_TEXT_META {}, color: (RBX_FG_SECONDARY) }
+                                            text: ""
+                                        }
+                                    }
+                                }
+
+                                badges_row := View {
                                     width: Fill
                                     height: Fit
                                     flow: Flow.Right{wrap: true}
-                                    draw_text +: {
-                                        text_style: MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                        color: #6A6A6A
+                                    spacing: 8
+
+                                    agent_badge_wrap := View {
+                                        visible: false
+                                        width: Fit
+                                        height: Fit
+                                        // Outdent by the pill's left padding so the
+                                        // robot icon lines up with the meta-row icons
+                                        // (globe / people) directly above.
+                                        margin: Inset{left: -10}
+
+                                        agent_badge := RoundedView {
+                                            width: Fit
+                                            height: Fit
+                                            flow: Right
+                                            spacing: 5
+                                            align: Align{y: 0.5}
+                                            padding: Inset{left: 10, right: 11, top: 5, bottom: 5}
+                                            show_bg: true
+                                            draw_bg +: {
+                                                color: (RBX_ACCENT_SOFT)
+                                                border_radius: (RBX_RADIUS_PILL)
+                                            }
+
+                                            Icon {
+                                                width: 14
+                                                height: 14
+                                                draw_icon +: { svg: (ICON_ROBOT), color: (RBX_ACCENT) }
+                                                icon_walk: Walk{width: 14, height: 14}
+                                            }
+                                            Label {
+                                                width: Fit
+                                                height: Fit
+                                                draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_ACCENT) }
+                                                text: "Agent-enabled"
+                                            }
+                                        }
                                     }
-                                    text: ""
-                                }
-
-                                copy_room_id_button := RobrixNeutralIconButton {
-                                    width: 24
-                                    height: 22
-                                    padding: 4
-                                    spacing: 0
-                                    draw_icon.svg: (ICON_COPY)
-                                    icon_walk: Walk{width: 11, height: 11}
-                                    text: ""
                                 }
                             }
                         }
                     }
 
-                    topic_card := RoundedView {
+                    // ===== About / topic card =====
+                    about_card := RoundedView {
                         width: Fill
                         height: Fit
-                        flow: Down
-                        spacing: 5
-                        padding: Inset{left: 10, right: 10, top: 8, bottom: 8}
+                        flow: Right
+                        spacing: 12
+                        align: Align{y: 0.0}
+                        padding: Inset{left: 14, right: 14, top: 13, bottom: 13}
 
                         show_bg: true
                         draw_bg +: {
-                            color: #F8FAFD
-                            border_radius: 4.0
+                            color: (RBX_BG_SURFACE)
+                            border_radius: (RBX_RADIUS_MD)
                             border_size: 1.0
-                            border_color: #D8E0EA
+                            border_color: (RBX_STROKE_SOFT)
                         }
 
-                        topic_label := Label {
+                        about_icon_circle := CircleView {
+                            width: 38
+                            height: 38
+                            align: Align{x: 0.5, y: 0.5}
+                            show_bg: true
+                            draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                            Icon {
+                                width: 19
+                                height: 19
+                                draw_icon +: { svg: (ICON_FILE), color: (RBX_ACCENT) }
+                                icon_walk: Walk{width: 19, height: 19}
+                            }
+                        }
+
+                        about_col := View {
                             width: Fill
                             height: Fit
-                            draw_text +: {
-                                text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
-                                color: #4A4A4A
-                            }
-                            text: "Topic"
-                        }
+                            flow: Down
+                            spacing: 2
 
-                        topic_value := Label {
-                            width: Fill
-                            height: Fit
-                            flow: Flow.Right{wrap: true}
-                            draw_text +: {
-                                text_style: MESSAGE_TEXT_STYLE { font_size: 10.2 }
-                                color: #6A6A6A
+                            about_title := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: { text_style: RBX_TEXT_CARD_TITLE {}, color: (RBX_FG_PRIMARY) }
+                                text: "About"
                             }
-                            text: ""
-                        }
 
-                        topic_toggle_button := RobrixNeutralIconButton {
-                            visible: false
-                            width: Fit
-                            height: 30
-                            align: Align{x: 0.0, y: 0.5}
-                            padding: Inset{left: 9, right: 9, top: 6, bottom: 6}
-                            spacing: 0
-                            icon_walk: Walk{width: 0, height: 0}
-                            text: "Expand"
+                            topic_value := Label {
+                                width: Fill
+                                height: Fit
+                                flow: Flow.Right{wrap: true}
+                                draw_text +: { text_style: RBX_TEXT_META {}, color: (RBX_FG_SECONDARY) }
+                                text: ""
+                            }
+
+                            topic_toggle_button := RobrixNeutralIconButton {
+                                visible: false
+                                width: Fit
+                                height: 24
+                                align: Align{x: 0.0, y: 0.5}
+                                padding: Inset{left: 0, right: 0, top: 3, bottom: 0}
+                                spacing: 0
+                                icon_walk: Walk{width: 0, height: 0}
+                                draw_bg +: {
+                                    color: #00000000
+                                    color_hover: #00000000
+                                    color_down: #00000000
+                                    border_size: 0.0
+                                }
+                                draw_text +: { color: (RBX_ACCENT), text_style: RBX_TEXT_META {} }
+                                text: "Expand"
+                            }
                         }
                     }
 
-                    facts_card := RoundedView {
+                    // ===== Members card =====
+                    members_card := RoundedView {
                         width: Fill
                         height: Fit
                         flow: Down
-                        spacing: 6
-                        padding: Inset{left: 10, right: 10, top: 9, bottom: 9}
+                        spacing: 7
+                        padding: Inset{left: 14, right: 14, top: 13, bottom: 13}
 
                         show_bg: true
                         draw_bg +: {
-                            color: #F8FAFD
-                            border_radius: 4.0
+                            color: (RBX_BG_SURFACE)
+                            border_radius: (RBX_RADIUS_MD)
                             border_size: 1.0
-                            border_color: #D8E0EA
+                            border_color: (RBX_STROKE_SOFT)
                         }
 
-                        visibility_row := View {
+                        members_header := View {
                             width: Fill
                             height: Fit
                             flow: Right
+                            spacing: 12
+                            align: Align{y: 0.5}
+                            cursor: MouseCursor.Hand
 
-                            visibility_label := Label {
-                                width: 78
-                                height: Fit
-                                draw_text +: {
-                                    text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
-                                    color: #4A4A4A
+                            members_icon_circle := CircleView {
+                                width: 38
+                                height: 38
+                                align: Align{x: 0.5, y: 0.5}
+                                show_bg: true
+                                draw_bg +: { color: (RBX_INFO_BG) }
+                                Icon {
+                                    width: 19
+                                    height: 19
+                                    draw_icon +: { svg: (ICON_PEOPLE), color: (RBX_INFO_FG) }
+                                    icon_walk: Walk{width: 19, height: 19}
                                 }
-                                text: "Visibility"
                             }
 
-                            visibility_value := Label {
-                                width: Fill
+                            members_title := Label {
+                                width: Fit
                                 height: Fit
-                                draw_text +: {
-                                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
-                                    color: (COLOR_TEXT)
+                                draw_text +: { text_style: RBX_TEXT_CARD_TITLE {}, color: (RBX_FG_PRIMARY) }
+                                text: "Members"
+                            }
+
+                            members_header_spacer := View { width: Fill, height: Fit }
+
+                            // count + chevron kept close together on the right edge
+                            members_count_group := View {
+                                width: Fit
+                                height: Fit
+                                flow: Right
+                                spacing: 2
+                                align: Align{y: 0.5}
+
+                                members_count_value := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: { text_style: RBX_TEXT_BODY_STRONG {}, color: (RBX_FG_SECONDARY) }
+                                    text: ""
                                 }
-                                text: ""
+
+                                Icon {
+                                    width: 14
+                                    height: 14
+                                    draw_icon +: { svg: (ICON_CHEVRON_RIGHT), color: (RBX_FG_TERTIARY) }
+                                    icon_walk: Walk{width: 14, height: 14}
+                                }
                             }
                         }
 
-                        encryption_row := View {
+                        members_detail := View {
                             width: Fill
                             height: Fit
                             flow: Right
+                            align: Align{y: 0.5}
+                            spacing: 8
+                            // Indent so the avatar row lines up under "Members"
+                            // (icon width 38 + header spacing 12).
+                            margin: Inset{left: 50}
 
-                            encryption_label := Label {
-                                width: 78
+                            members_stack := View {
+                                width: Fit
                                 height: Fit
-                                draw_text +: {
-                                    text_style: USERNAME_TEXT_STYLE { font_size: 9.5 }
-                                    color: #4A4A4A
+                                flow: Right
+                                align: Align{y: 0.5}
+
+                                stack_slot_0 := View {
+                                    width: Fit
+                                    height: Fit
+                                    ring_0 := RoundedView {
+                                        width: Fit
+                                        height: Fit
+                                        padding: 2
+                                        show_bg: true
+                                        draw_bg +: { color: (RBX_BG_SURFACE), border_radius: 18.0 }
+                                        stack_avatar_0 := Avatar { width: 32, height: 32 }
+                                    }
                                 }
-                                text: "Encryption"
+                                stack_slot_1 := View {
+                                    visible: false
+                                    width: Fit
+                                    height: Fit
+                                    margin: Inset{left: -11}
+                                    ring_1 := RoundedView {
+                                        width: Fit
+                                        height: Fit
+                                        padding: 2
+                                        show_bg: true
+                                        draw_bg +: { color: (RBX_BG_SURFACE), border_radius: 18.0 }
+                                        stack_avatar_1 := Avatar { width: 32, height: 32 }
+                                    }
+                                }
+                                stack_slot_2 := View {
+                                    visible: false
+                                    width: Fit
+                                    height: Fit
+                                    margin: Inset{left: -11}
+                                    ring_2 := RoundedView {
+                                        width: Fit
+                                        height: Fit
+                                        padding: 2
+                                        show_bg: true
+                                        draw_bg +: { color: (RBX_BG_SURFACE), border_radius: 18.0 }
+                                        stack_avatar_2 := Avatar { width: 32, height: 32 }
+                                    }
+                                }
+                                stack_more_wrap := View {
+                                    visible: false
+                                    width: Fit
+                                    height: Fit
+                                    margin: Inset{left: 1}
+                                    stack_more_chip := RoundedView {
+                                        width: Fit
+                                        height: Fit
+                                        align: Align{x: 0.5, y: 0.5}
+                                        padding: Inset{left: 7, right: 7, top: 5, bottom: 5}
+                                        show_bg: true
+                                        draw_bg +: { color: (RBX_NEUTRAL_BG), border_radius: (RBX_RADIUS_PILL) }
+                                        stack_more := Label {
+                                            width: Fit
+                                            height: Fit
+                                            draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_FG_SECONDARY) }
+                                            text: ""
+                                        }
+                                    }
+                                }
                             }
 
-                            encryption_value := Label {
-                                width: Fill
+                            members_detail_spacer := View { width: Fill, height: Fit }
+
+                            my_role_wrap := View {
+                                visible: false
+                                width: Fit
                                 height: Fit
-                                draw_text +: {
-                                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
-                                    color: (COLOR_TEXT)
+
+                                my_role_chip := RoundedView {
+                                    width: Fit
+                                    height: Fit
+                                    align: Align{x: 0.5, y: 0.5}
+                                    padding: Inset{left: 10, right: 10, top: 4, bottom: 4}
+                                    show_bg: true
+                                    draw_bg +: {
+                                        color: (RBX_ACCENT_SOFT)
+                                        border_radius: (RBX_RADIUS_PILL)
+                                    }
+                                    my_role_label := Label {
+                                        width: Fit
+                                        height: Fit
+                                        draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_ACCENT) }
+                                        text: ""
+                                    }
                                 }
-                                text: ""
                             }
                         }
                     }
 
+                    // ===== Actions =====
                     actions_row := View {
                         width: Fill
                         height: Fit
                         flow: Down
                         spacing: 8
 
-                        invite_button := RobrixNeutralIconButton {
+                        // Primary actions grouped into ONE card (rows + hairline
+                        // divider) so they read as a settings list, not three
+                        // floating boxes. Rows are transparent; the card paints
+                        // the single border + radius.
+                        actions_card := RoundedView {
                             width: Fill
-                            height: 40
-                            padding: 10
-                            draw_icon.svg: (ICON_ADD_USER)
-                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
-                            text: "Invite"
+                            height: Fit
+                            flow: Down
+                            clip_x: true
+                            clip_y: true
+                            show_bg: true
+                            draw_bg +: {
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_MD)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
+                            }
+
+                            invite_button := RobrixNeutralIconButton {
+                                width: Fill
+                                height: 50
+                                align: Align{x: 0.0, y: 0.5}
+                                spacing: 13
+                                padding: Inset{left: 16, right: 14, top: 0, bottom: 0}
+                                draw_bg +: {
+                                    color: #00000000
+                                    color_hover: (RBX_BG_HOVER)
+                                    color_down: (RBX_BG_PRESSED)
+                                    border_size: 0.0
+                                    border_radius: 0.0
+                                    border_color: #0000
+                                    border_color_hover: #0000
+                                    border_color_down: #0000
+                                }
+                                draw_icon +: { svg: (ICON_ADD_USER), color: (RBX_FG_SECONDARY) }
+                                icon_walk: Walk{width: 20, height: 20}
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    color_hover: (RBX_FG_PRIMARY)
+                                    color_down: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY {}
+                                }
+                                text: "Invite"
+                            }
+
+                            action_divider := RoundedView {
+                                width: Fill
+                                height: 1.0
+                                margin: Inset{left: 49}
+                                show_bg: true
+                                draw_bg +: { color: (RBX_STROKE_SOFT) }
+                            }
+
+                            report_room_button := RobrixNeutralIconButton {
+                                width: Fill
+                                height: 50
+                                align: Align{x: 0.0, y: 0.5}
+                                spacing: 13
+                                padding: Inset{left: 16, right: 14, top: 0, bottom: 0}
+                                draw_bg +: {
+                                    color: #00000000
+                                    color_hover: (RBX_BG_HOVER)
+                                    color_down: (RBX_BG_PRESSED)
+                                    border_size: 0.0
+                                    border_radius: 0.0
+                                    border_color: #0000
+                                    border_color_hover: #0000
+                                    border_color_down: #0000
+                                }
+                                draw_icon +: { svg: (ICON_INFO), color: (RBX_FG_SECONDARY) }
+                                icon_walk: Walk{width: 20, height: 20}
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    color_hover: (RBX_FG_PRIMARY)
+                                    color_down: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY {}
+                                }
+                                text: "Report room"
+                            }
                         }
 
-                        people_button := RobrixNeutralIconButton {
+                        // Destructive action — its own card, separated by the gap,
+                        // red icon + label.
+                        leave_card := RoundedView {
                             width: Fill
-                            height: 40
-                            padding: 10
-                            draw_icon.svg: (ICON_ADD_USER)
-                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
-                            text: "People"
-                        }
+                            height: Fit
+                            flow: Down
+                            clip_x: true
+                            clip_y: true
+                            show_bg: true
+                            draw_bg +: {
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_MD)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
+                            }
 
-                        report_room_button := RobrixNeutralIconButton {
-                            width: Fill
-                            height: 40
-                            padding: 10
-                            draw_icon.svg: (ICON_INFO)
-                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
-                            text: "Report room"
-                        }
-
-                        leave_room_button := RobrixNegativeIconButton {
-                            width: Fill
-                            height: 40
-                            padding: 10
-                            draw_icon.svg: (ICON_CLOSE)
-                            icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
-                            text: "Leave Room"
+                            leave_room_button := RobrixNegativeIconButton {
+                                width: Fill
+                                height: 50
+                                align: Align{x: 0.0, y: 0.5}
+                                spacing: 13
+                                padding: Inset{left: 16, right: 14, top: 0, bottom: 0}
+                                draw_bg +: {
+                                    color: #00000000
+                                    color_hover: (RBX_DANGER_BG)
+                                    color_down: (RBX_DANGER_BG)
+                                    border_size: 0.0
+                                    border_radius: 0.0
+                                    border_color: #0000
+                                    border_color_hover: #0000
+                                    border_color_down: #0000
+                                }
+                                draw_icon +: { svg: (ICON_CLOSE), color: (RBX_DANGER_FG) }
+                                icon_walk: Walk{width: 18, height: 18}
+                                draw_text +: {
+                                    color: (RBX_DANGER_FG)
+                                    color_hover: (RBX_DANGER_FG)
+                                    color_down: (RBX_DANGER_FG)
+                                    text_style: RBX_TEXT_BODY {}
+                                }
+                                text: "Leave Room"
+                            }
                         }
                     }
                 }
@@ -4080,9 +4494,24 @@ struct ThreadsPaneInfo {
 struct RoomInfoPaneInfo {
     room_name: String,
     room_id: String,
+    /// Owned room id kept alongside the display string so the info pane can
+    /// issue room-scoped requests (e.g. toggling the favourite tag).
+    owned_room_id: OwnedRoomId,
     topic: String,
+    /// Short visibility label: "Public" / "Private" / "Unknown".
     visibility: String,
+    /// Short encryption label: "Encrypted" / "Unencrypted" / "Unknown".
     encryption: String,
+    is_encrypted: bool,
+    /// Whether the room carries the `m.favourite` tag for the current user.
+    is_favorite: bool,
+    /// Whether this room has a bot/agent participating (any member detected as a
+    /// bot via `is_likely_bot_member`).
+    is_agent_enabled: bool,
+    member_count: usize,
+    /// The current user's role in this room: "Owner" / "Admin" / "Moderator" /
+    /// "Member", or empty if members haven't loaded yet.
+    my_role: String,
     room_avatar_uri: Option<OwnedMxcUri>,
     room_avatar_fallback_text: String,
     people_entries: Vec<RoomInfoPeopleEntryInfo>,
@@ -4459,6 +4888,36 @@ pub struct RoomInfoSlidingPane {
     #[rust] show_people_page: bool,
     #[rust] topic_expanded: bool,
     #[rust] people_display_count: usize,
+    /// Optimistic favourite override `(room_id, is_favorite)` set when the user
+    /// taps the star. `room.is_favourite()` keeps returning the old value until
+    /// the async tag write syncs back, so this survives the frequent
+    /// Signal-driven `set_info` rebuilds and is cleared once the room agrees.
+    #[rust] pending_favorite: Option<(OwnedRoomId, bool)>,
+}
+
+/// Populate an `Avatar` with the member/room image if it's cached, otherwise
+/// fall back to the text initials. Shared by the room hero avatar and the
+/// members-card avatar stack.
+fn show_avatar_or_text(
+    cx: &mut Cx,
+    avatar: &AvatarRef,
+    avatar_uri: Option<&OwnedMxcUri>,
+    fallback_text: &str,
+) {
+    if let Some(uri) = avatar_uri
+        && let avatar_cache::AvatarCacheEntry::Loaded(image_data) = avatar_cache::get_or_fetch_avatar(cx, uri)
+    {
+        let res = avatar.show_image(
+            cx,
+            None,
+            |cx, img_ref| utils::load_png_or_jpg(&img_ref, cx, &image_data),
+        );
+        if res.is_err() {
+            avatar.show_text(cx, None, None, fallback_text);
+        }
+    } else {
+        avatar.show_text(cx, None, None, fallback_text);
+    }
 }
 
 impl Widget for RoomInfoSlidingPane {
@@ -4479,6 +4938,46 @@ impl Widget for RoomInfoSlidingPane {
             self.view(cx, ids!(bg_view)).set_visible(cx, false);
             self.redraw(cx);
             return;
+        }
+
+        // Tap on the favourite star (in the hero) toggles the room's favourite
+        // tag. The star is a plain View (not a Button), so hit-test its area
+        // directly — this works in both inline and overlay modes.
+        let favorite_area = self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button)).area();
+        if let Hit::FingerUp(fe) = event.hits(cx, favorite_area)
+            && fe.is_over && fe.is_primary_hit() && fe.was_tap()
+        {
+            // Flip the cached value first (ends the `self.info` borrow), then
+            // record the optimistic override + fire the async tag write.
+            let toggled = self.info.as_mut().map(|info| {
+                let new_is_favorite = !info.is_favorite;
+                info.is_favorite = new_is_favorite;
+                (info.owned_room_id.clone(), new_is_favorite)
+            });
+            if let Some((owned_room_id, new_is_favorite)) = toggled {
+                self.pending_favorite = Some((owned_room_id.clone(), new_is_favorite));
+                submit_async_request(MatrixRequest::SetIsFavorite {
+                    room_id: owned_room_id,
+                    is_favorite: new_is_favorite,
+                });
+                self.redraw(cx);
+            }
+        }
+
+        // Tap anywhere on the members card header opens the People sub-page.
+        let members_header_area = self.view(cx, ids!(content_scroll.info_view.members_card.members_header)).area();
+        if let Hit::FingerUp(fe) = event.hits(cx, members_header_area)
+            && fe.is_over && fe.is_primary_hit() && fe.was_tap()
+        {
+            self.show_people_page = true;
+            self.people_display_count = self.info.as_ref()
+                .map(|info| info.people_entries.len().min(40))
+                .unwrap_or(0);
+            cx.widget_action(
+                self.widget_uid(),
+                RoomInfoPaneAction::ShowPeoplePage,
+            );
+            self.redraw(cx);
         }
 
         // Inline (tab) mode is opened/closed by the parent tab, so it never
@@ -4531,11 +5030,11 @@ impl Widget for RoomInfoSlidingPane {
                 self.show_people_page = false;
                 self.redraw(cx);
             }
-            if self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).clicked(actions) {
+            if self.button(cx, ids!(content_scroll.info_view.about_card.about_col.topic_toggle_button)).clicked(actions) {
                 self.topic_expanded = !self.topic_expanded;
                 self.redraw(cx);
             }
-            if self.button(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_id_row.copy_room_id_button)).clicked(actions)
+            if self.button(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.room_id_row.copy_room_id_button)).clicked(actions)
                 && let Some(info) = self.info.as_ref()
             {
                 cx.copy_to_clipboard(&info.room_id);
@@ -4545,30 +5044,19 @@ impl Widget for RoomInfoSlidingPane {
                     Some(2.0),
                 );
             }
-            if self.button(cx, ids!(content_scroll.info_view.actions_row.invite_button)).clicked(actions) {
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.actions_card.invite_button)).clicked(actions) {
                 cx.widget_action(
                     self.widget_uid(),
                     RoomInfoPaneAction::InviteUser,
                 );
             }
-            if self.button(cx, ids!(content_scroll.info_view.actions_row.people_button)).clicked(actions) {
-                self.show_people_page = true;
-                self.people_display_count = self.info.as_ref()
-                    .map(|info| info.people_entries.len().min(40))
-                    .unwrap_or(0);
-                cx.widget_action(
-                    self.widget_uid(),
-                    RoomInfoPaneAction::ShowPeoplePage,
-                );
-                self.redraw(cx);
-            }
-            if self.button(cx, ids!(content_scroll.info_view.actions_row.report_room_button)).clicked(actions) {
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.actions_card.report_room_button)).clicked(actions) {
                 cx.widget_action(
                     self.widget_uid(),
                     RoomInfoPaneAction::ReportRoom,
                 );
             }
-            if self.button(cx, ids!(content_scroll.info_view.actions_row.leave_room_button)).clicked(actions) {
+            if self.button(cx, ids!(content_scroll.info_view.actions_row.leave_card.leave_room_button)).clicked(actions) {
                 cx.widget_action(
                     self.widget_uid(),
                     RoomInfoPaneAction::LeaveRoom,
@@ -4623,11 +5111,23 @@ impl Widget for RoomInfoSlidingPane {
         self.view(cx, ids!(content_scroll.info_view)).set_visible(cx, !self.show_people_page);
         self.view(cx, ids!(people_view)).set_visible(cx, self.show_people_page);
 
-        self.label(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_name_value)).set_text(cx, &info.room_name);
-        self.label(cx, ids!(content_scroll.info_view.summary_card.room_meta.room_id_row.room_id_value)).set_text(cx, &info.room_id);
-        self.label(cx, ids!(content_scroll.info_view.facts_card.visibility_row.visibility_value)).set_text(cx, &info.visibility);
-        self.label(cx, ids!(content_scroll.info_view.facts_card.encryption_row.encryption_value)).set_text(cx, &info.encryption);
+        // ----- Hero: name, room id, favourite star -----
+        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.room_name_value)).set_text(cx, &info.room_name);
+        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.room_id_row.room_id_value)).set_text(cx, &info.room_id);
+        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button.star_outline)).set_visible(cx, !info.is_favorite);
+        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button.star_filled)).set_visible(cx, info.is_favorite);
 
+        // ----- Meta row: visibility / members / encryption -----
+        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.meta_row.visibility_meta.visibility_value)).set_text(cx, &info.visibility);
+        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.meta_row.members_meta.members_meta_value)).set_text(cx, &format!("{} members", info.member_count));
+        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.meta_row.encryption_meta.encryption_value)).set_text(cx, &info.encryption);
+        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.meta_row.encryption_meta.enc_icon_locked)).set_visible(cx, info.is_encrypted);
+        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.meta_row.encryption_meta.enc_icon_unlocked)).set_visible(cx, !info.is_encrypted);
+
+        // ----- Agent-enabled badge -----
+        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.badges_row.agent_badge_wrap)).set_visible(cx, info.is_agent_enabled);
+
+        // ----- About / topic -----
         let topic_chars_len = info.topic.chars().count();
         let topic_has_more = topic_chars_len > TOPIC_PREVIEW_CHARS;
         let topic_display_text = if topic_has_more && !self.topic_expanded {
@@ -4637,28 +5137,42 @@ impl Widget for RoomInfoSlidingPane {
         } else {
             info.topic.clone()
         };
-        self.label(cx, ids!(content_scroll.info_view.topic_card.topic_value)).set_text(cx, &topic_display_text);
-        self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).set_visible(cx, topic_has_more);
-        self.button(cx, ids!(content_scroll.info_view.topic_card.topic_toggle_button)).set_text(
+        self.label(cx, ids!(content_scroll.info_view.about_card.about_col.topic_value)).set_text(cx, &topic_display_text);
+        self.button(cx, ids!(content_scroll.info_view.about_card.about_col.topic_toggle_button)).set_visible(cx, topic_has_more);
+        self.button(cx, ids!(content_scroll.info_view.about_card.about_col.topic_toggle_button)).set_text(
             cx,
             if self.topic_expanded { "Collapse" } else { "Expand" },
         );
 
-        let room_avatar = self.avatar(cx, ids!(content_scroll.info_view.summary_card.room_avatar));
-        if let Some(uri) = info.room_avatar_uri.as_ref()
-            && let avatar_cache::AvatarCacheEntry::Loaded(image_data) = avatar_cache::get_or_fetch_avatar(cx, uri)
-        {
-            let res = room_avatar.show_image(
-                cx,
-                None,
-                |cx, img_ref| utils::load_png_or_jpg(&img_ref, cx, &image_data),
-            );
-            if res.is_err() {
-                room_avatar.show_text(cx, None, None, &info.room_avatar_fallback_text);
-            }
-        } else {
-            room_avatar.show_text(cx, None, None, &info.room_avatar_fallback_text);
+        // ----- Room hero avatar -----
+        let room_avatar = self.avatar(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_avatar));
+        show_avatar_or_text(cx, &room_avatar, info.room_avatar_uri.as_ref(), &info.room_avatar_fallback_text);
+
+        // ----- Members card: count, avatar stack, your role -----
+        self.label(cx, ids!(content_scroll.info_view.members_card.members_header.members_count_group.members_count_value)).set_text(cx, &format!("{}", info.member_count));
+
+        let stack_shown = info.people_entries.len().min(3);
+        self.view(cx, ids!(content_scroll.info_view.members_card.members_detail.members_stack.stack_slot_0)).set_visible(cx, stack_shown > 0);
+        self.view(cx, ids!(content_scroll.info_view.members_card.members_detail.members_stack.stack_slot_1)).set_visible(cx, stack_shown > 1);
+        self.view(cx, ids!(content_scroll.info_view.members_card.members_detail.members_stack.stack_slot_2)).set_visible(cx, stack_shown > 2);
+        if let Some(entry) = info.people_entries.first() {
+            let avatar = self.avatar(cx, ids!(content_scroll.info_view.members_card.members_detail.members_stack.stack_slot_0.ring_0.stack_avatar_0));
+            show_avatar_or_text(cx, &avatar, entry.avatar_uri.as_ref(), &entry.avatar_fallback_text);
         }
+        if let Some(entry) = info.people_entries.get(1) {
+            let avatar = self.avatar(cx, ids!(content_scroll.info_view.members_card.members_detail.members_stack.stack_slot_1.ring_1.stack_avatar_1));
+            show_avatar_or_text(cx, &avatar, entry.avatar_uri.as_ref(), &entry.avatar_fallback_text);
+        }
+        if let Some(entry) = info.people_entries.get(2) {
+            let avatar = self.avatar(cx, ids!(content_scroll.info_view.members_card.members_detail.members_stack.stack_slot_2.ring_2.stack_avatar_2));
+            show_avatar_or_text(cx, &avatar, entry.avatar_uri.as_ref(), &entry.avatar_fallback_text);
+        }
+        let stack_more = info.people_entries.len().saturating_sub(stack_shown);
+        self.view(cx, ids!(content_scroll.info_view.members_card.members_detail.members_stack.stack_more_wrap)).set_visible(cx, stack_more > 0);
+        self.label(cx, ids!(content_scroll.info_view.members_card.members_detail.members_stack.stack_more_wrap.stack_more_chip.stack_more)).set_text(cx, &format!("+{stack_more}"));
+
+        self.view(cx, ids!(content_scroll.info_view.members_card.members_detail.my_role_wrap)).set_visible(cx, !info.my_role.is_empty());
+        self.label(cx, ids!(content_scroll.info_view.members_card.members_detail.my_role_wrap.my_role_chip.my_role_label)).set_text(cx, &info.my_role);
 
         if self.show_people_page && self.people_display_count == 0 {
             self.people_display_count = info.people_entries.len().min(40);
@@ -4690,7 +5204,22 @@ impl RoomInfoSlidingPane {
         self.visible
     }
 
-    fn set_info(&mut self, cx: &mut Cx, info: RoomInfoPaneInfo) {
+    fn set_info(&mut self, cx: &mut Cx, mut info: RoomInfoPaneInfo) {
+        // Preserve an in-flight optimistic favourite toggle across the frequent
+        // Signal-driven rebuilds: keep the optimistic value until the freshly
+        // built `info` (which re-reads `room.is_favourite()`) catches up, then
+        // drop the override. A different room invalidates any stale override.
+        if let Some((pending_room, pending_val)) = self.pending_favorite.clone() {
+            if pending_room == info.owned_room_id {
+                if info.is_favorite == pending_val {
+                    self.pending_favorite = None;
+                } else {
+                    info.is_favorite = pending_val;
+                }
+            } else {
+                self.pending_favorite = None;
+            }
+        }
         self.info = Some(info);
         if self.show_people_page {
             if let Some(info) = self.info.as_ref() {
@@ -8726,41 +9255,63 @@ impl RoomScreen {
             .and_then(|room_name_id| room_name_id.name_for_avatar().map(ToOwned::to_owned))
             .unwrap_or_else(|| String::from("?"));
         let room_avatar_uri = self.room_avatar_url.clone();
-        let (topic, visibility, encryption) = get_client()
+        let (topic, visibility, encryption, is_encrypted, is_favorite, joined_count) = get_client()
             .and_then(|client| client.get_room(&room_id))
             .map(|room| {
                 let topic = room.topic()
                     .unwrap_or_else(|| String::from("No topic"));
                 let visibility = match room.is_public() {
-                    Some(true) => String::from("Public room"),
-                    Some(false) => String::from("Private room"),
+                    Some(true) => String::from("Public"),
+                    Some(false) => String::from("Private"),
                     None => String::from("Unknown"),
                 };
                 let encryption_state = room.encryption_state();
+                let is_encrypted = encryption_state.is_encrypted();
                 let encryption = if encryption_state.is_unknown() {
                     String::from("Unknown")
-                } else if encryption_state.is_encrypted() {
+                } else if is_encrypted {
                     String::from("Encrypted")
                 } else {
                     String::from("Unencrypted")
                 };
-                (topic, visibility, encryption)
+                // Authoritative joined count from the room summary, available
+                // even before the full member list is fetched.
+                let joined_count = room.joined_members_count() as usize;
+                (topic, visibility, encryption, is_encrypted, room.is_favourite(), joined_count)
             })
             .unwrap_or_else(|| (
                 String::from("No topic"),
                 String::from("Unknown"),
                 String::from("Unknown"),
+                false,
+                false,
+                0,
             ));
 
-        let (people_entries, people_count_text, show_people_loading) = self.tl_state.as_ref()
+        let my_user_id = current_user_id();
+        let (people_entries, people_count_text, show_people_loading, member_count, is_agent_enabled, my_role) = self.tl_state.as_ref()
             .map(|tl| {
                 let Some(room_members) = tl.room_members.as_ref() else {
                     return (
                         Vec::new(),
                         String::from("People"),
                         true,
+                        0,
+                        false,
+                        String::new(),
                     );
                 };
+
+                let my_role = room_members.iter()
+                    .find(|member| my_user_id.as_deref() == Some(member.user_id()))
+                    .map(|member| match member.suggested_role_for_power_level() {
+                        RoomMemberRole::Creator => "Owner",
+                        RoomMemberRole::Administrator => "Admin",
+                        RoomMemberRole::Moderator => "Moderator",
+                        RoomMemberRole::User => "Member",
+                    })
+                    .unwrap_or("")
+                    .to_string();
 
                 let mut people_entries: Vec<RoomInfoPeopleEntryInfo> = room_members.iter()
                     .map(|member| {
@@ -8802,24 +9353,53 @@ impl RoomScreen {
                         .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
                 });
 
+                // A room is "Agent-enabled" if any of its members is detected as
+                // a bot (mirrors `is_likely_bot_member`, the same heuristic the
+                // timeline uses to tag bot senders).
+                let is_agent_enabled = people_entries.iter().any(|entry| entry.is_bot);
+
+                let member_count = room_members.len();
                 (
                     people_entries,
-                    format!("{} Members", room_members.len()),
+                    format!("{member_count} Members"),
                     false,
+                    member_count,
+                    is_agent_enabled,
+                    my_role,
                 )
             })
             .unwrap_or_else(|| (
                 Vec::new(),
                 String::from("People"),
                 true,
+                0,
+                false,
+                String::new(),
             ));
+
+        // Prefer the actually-loaded member-list length so the header count, the
+        // avatar-stack "+N", and the People sub-page list all agree. Fall back to
+        // the room-summary joined count only before the member list has loaded
+        // (gives an accurate number immediately instead of a "0" flash).
+        let member_count = if member_count > 0 { member_count } else { joined_count };
+        let people_count_text = if show_people_loading {
+            people_count_text
+        } else {
+            format!("{member_count} Members")
+        };
 
         Some(RoomInfoPaneInfo {
             room_name,
             room_id: room_id.to_string(),
+            owned_room_id: room_id,
             topic,
             visibility,
             encryption,
+            is_encrypted,
+            is_favorite,
+            is_agent_enabled,
+            member_count,
+            my_role,
             room_avatar_uri,
             room_avatar_fallback_text,
             people_entries,
