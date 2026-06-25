@@ -1119,15 +1119,20 @@ impl LoginScreen {
     fn apply_login_surface_style(&mut self, cx: &mut Cx, mobile: bool) {
         let mut login_scroll = self.view.view(cx, ids!(login_scroll));
         let mut login_card = self.view.view(cx, ids!(login_card));
+        // `Inset{}` is a DSL constructor that is NOT in scope at runtime inside
+        // `script_apply_eval!` (Makepad pitfall #41) — build the value in Rust and
+        // interpolate it with `#(...)` instead.
         if mobile {
+            let card_margin = Inset { left: 28.0, right: 28.0, top: 0.0, bottom: 0.0 };
+            let card_padding = Inset { top: 24.0, bottom: 24.0, left: 22.0, right: 22.0 };
             script_apply_eval!(cx, login_scroll, {
                 draw_bg +: {
                     color: mod.widgets.RBX_BG_CANVAS
                 }
             });
             script_apply_eval!(cx, login_card, {
-                margin: Inset{left: 28, right: 28}
-                padding: Inset{top: 24, bottom: 24, left: 22, right: 22}
+                margin: #(card_margin)
+                padding: #(card_padding)
                 draw_bg +: {
                     color: mod.widgets.RBX_BG_SURFACE
                     border_color: mod.widgets.RBX_STROKE_SOFT
@@ -1135,14 +1140,16 @@ impl LoginScreen {
                 }
             });
         } else {
+            let card_margin = Inset { left: 16.0, right: 16.0, top: 0.0, bottom: 0.0 };
+            let card_padding = Inset { top: 24.0, bottom: 24.0, left: 36.0, right: 36.0 };
             script_apply_eval!(cx, login_scroll, {
                 draw_bg +: {
                     color: mod.widgets.RBX_BG_CANVAS
                 }
             });
             script_apply_eval!(cx, login_card, {
-                margin: Inset{left: 16, right: 16}
-                padding: Inset{top: 24, bottom: 24, left: 36, right: 36}
+                margin: #(card_margin)
+                padding: #(card_padding)
                 draw_bg +: {
                     color: mod.widgets.RBX_BG_SURFACE
                     border_color: mod.widgets.RBX_STROKE_SOFT
@@ -1236,9 +1243,12 @@ impl LoginScreen {
         );
         for input_ref in self.view_set(cx, input_ids).iter() {
             let Some(mut input) = input_ref.borrow_mut() else { continue };
+            // `Inset{}` isn't available at runtime in `script_apply_eval!`
+            // (pitfall #41) — construct it in Rust and interpolate with `#(...)`.
             if mobile {
+                let input_padding = Inset { top: 10.0, bottom: 10.0, left: 16.0, right: 16.0 };
                 script_apply_eval!(cx, input, {
-                    padding: Inset{top: 10, bottom: 10, left: 16, right: 16}
+                    padding: #(input_padding)
                     draw_bg +: {
                         color: mod.widgets.RBX_BG_SURFACE
                         color_hover: mod.widgets.RBX_BG_SURFACE
@@ -1265,8 +1275,9 @@ impl LoginScreen {
                     }
                 });
             } else {
+                let input_padding = Inset { top: 10.0, bottom: 10.0, left: 14.0, right: 14.0 };
                 script_apply_eval!(cx, input, {
-                    padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
+                    padding: #(input_padding)
                     draw_bg +: {
                         color: mod.widgets.RBX_BG_SURFACE
                         color_hover: mod.widgets.RBX_BG_SURFACE

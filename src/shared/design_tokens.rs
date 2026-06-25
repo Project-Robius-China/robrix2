@@ -66,6 +66,11 @@ script_mod! {
     mod.widgets.RBX_BG_PRESSED        = #xE7ECF3
     // Disabled control surface.
     mod.widgets.RBX_BG_DISABLED       = #xF0F2F6
+    // Transparent hit-test / overlay fill.
+    mod.widgets.RBX_TRANSPARENT       = #x00000000
+    // Subtle transparent hover/down fills for invisible hit targets.
+    mod.widgets.RBX_HIT_HOVER         = #x00000008
+    mod.widgets.RBX_HIT_DOWN          = #x00000012
 
     // =========================================================================
     // 2. FOREGROUND — text & icons on light surfaces
@@ -192,6 +197,8 @@ script_mod! {
     // 11. RADIUS scale — bigger & softer than the legacy RADIUS_* (4/6/8).
     //     Cards lean on radius + border, not heavy shadow.
     // =========================================================================
+    // Crisp 4px corner — matches the invite ("search friend") modal.
+    mod.widgets.RBX_RADIUS_XXS  = 4.0
     mod.widgets.RBX_RADIUS_XS   = 6.0
     mod.widgets.RBX_RADIUS_SM   = 8.0
     mod.widgets.RBX_RADIUS_MD   = 12.0
@@ -253,6 +260,21 @@ script_mod! {
     mod.widgets.RBX_TEXT_META          = theme.font_regular { font_size: 9.5,  line_spacing: 1.3 }
     // Badge / chip label (single line).
     mod.widgets.RBX_TEXT_BADGE         = theme.font_bold    { font_size: 9.0 }
+
+    // =========================================================================
+    // 15. AGENT FRAMEWORK ACCENTS — per-framework identity color pairs used by
+    //     the Agent Registry tiles / badges (monogram + soft fill). One agent
+    //     framework = one color pair, always. (See Agent Registry design handoff.)
+    // =========================================================================
+    // Hermes — warm amber.
+    mod.widgets.RBX_FW_HERMES_FG   = #xC47D1E
+    mod.widgets.RBX_FW_HERMES_BG   = #xFBF1E3
+    // OpenClaw — violet.
+    mod.widgets.RBX_FW_OPENCLAW_FG = #x6A52C4
+    mod.widgets.RBX_FW_OPENCLAW_BG = #xEEE9FB
+    // Octos — cyan (the app-service framework).
+    mod.widgets.RBX_FW_OCTOS_FG    = #x1488B5
+    mod.widgets.RBX_FW_OCTOS_BG    = #xE6F2F9
 }
 
 // =============================================================================

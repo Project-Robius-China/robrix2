@@ -3,8 +3,9 @@ use makepad_widgets::*;
 use crate::{
     app::AppState,
     home::navigation_tab_bar::{NavigationBarAction, SelectedTab},
+    settings::agent_settings::AgentSettingsAction,
     settings::app_preferences::{AppPreferencesAction, ViewModeOverride},
-    settings::settings_screen::SettingsScreenWidgetRefExt,
+    settings::settings_screen::{SettingsScreenWidgetExt, SettingsScreenWidgetRefExt},
     shared::room_filter_input_bar::{MainFilterAction, RoomFilterInputBarWidgetExt},
 };
 
@@ -483,6 +484,14 @@ impl Widget for HomeScreen {
                         }
                     }
                     Some(NavigationBarAction::GoToAddRoom) => {
+                        if matches!(app_state.selected_tab, SelectedTab::Settings)
+                            && self.view
+                                .settings_screen(cx, ids!(settings_screen))
+                                .is_showing_agent_access()
+                        {
+                            cx.action(AgentSettingsAction::OpenAddAgent);
+                            continue;
+                        }
                         if !matches!(app_state.selected_tab, SelectedTab::AddRoom) {
                             self.previous_selection = app_state.selected_tab.clone();
                             app_state.selected_tab = SelectedTab::AddRoom;
@@ -590,5 +599,30 @@ impl HomeScreen {
                     SelectedTab::Directory => id!(directory_page),
                 },
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn production_src(src: &'static str) -> &'static str {
+        src.split("#[cfg(test)]").next().unwrap_or(src)
+    }
+
+    #[test]
+    fn test_bottom_nav_plus_opens_agent_sheet_from_agent_access() {
+        let src = production_src(include_str!("home_screen.rs"));
+        let add_room_handler = src
+            .find("Some(NavigationBarAction::GoToAddRoom)")
+            .expect("HomeScreen should handle the bottom nav plus action");
+        let add_room_block = &src[add_room_handler..];
+        let agent_intercept = add_room_block
+            .find("is_showing_agent_access()")
+            .expect("Settings/Labs should intercept bottom nav plus for Agent Access");
+        let normal_add_room = add_room_block
+            .find("SelectedTab::AddRoom")
+            .expect("normal AddRoom navigation should remain available");
+
+        assert!(agent_intercept < normal_add_room);
+        assert!(add_room_block.contains("AgentSettingsAction::OpenAddAgent"));
     }
 }

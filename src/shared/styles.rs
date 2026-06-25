@@ -511,50 +511,23 @@ pub fn apply_accent_button_style(cx: &mut Cx, button: &mut ButtonRef) {
     });
 }
 
-/// Applies the *selected* segmented-tab styling — text-only: a transparent
-/// background with teal (`RBX_ACCENT`) text marking the active category.
+/// Selects a segmented tab (teal text) via its `selected` animator.
+///
+/// Uses the animator rather than `script_apply_eval!` because the mobile tabs
+/// are instantiated by an AdaptiveView, and eval-based restyling silently fails
+/// on AdaptiveView-created widgets (zero ScriptObject — Makepad pitfall #40),
+/// which also logged "field not found" type-check errors every render. The
+/// animator writes the shader instance directly, bypassing that.
 pub fn apply_segment_selected_style(cx: &mut Cx, button: &mut ButtonRef) {
-    script_apply_eval!(cx, button, {
-        draw_bg +: {
-            border_size: 0.0,
-            color: #0000,
-            color_hover: #0000,
-            color_down: #0000,
-            border_color: #0000,
-            border_color_hover: #0000,
-            border_color_down: #0000,
-        }
-        draw_text +: {
-            color: mod.widgets.RBX_ACCENT,
-            color_hover: mod.widgets.RBX_ACCENT,
-            color_down: mod.widgets.RBX_ACCENT,
-        }
-        draw_icon +: {
-            color: mod.widgets.RBX_ACCENT,
-        }
-    });
+    if let Some(mut button) = button.borrow_mut() {
+        button.animator_play(cx, ids!(selected.on));
+    }
 }
 
 /// Applies the *idle* (unselected) segmented-tab styling — text-only: a
 /// transparent background with secondary-gray text.
 pub fn apply_segment_idle_style(cx: &mut Cx, button: &mut ButtonRef) {
-    script_apply_eval!(cx, button, {
-        draw_bg +: {
-            border_size: 0.0,
-            color: #0000,
-            color_hover: #0000,
-            color_down: #0000,
-            border_color: #0000,
-            border_color_hover: #0000,
-            border_color_down: #0000,
-        }
-        draw_text +: {
-            color: mod.widgets.RBX_FG_SECONDARY,
-            color_hover: mod.widgets.RBX_FG_SECONDARY,
-            color_down: mod.widgets.RBX_FG_SECONDARY,
-        }
-        draw_icon +: {
-            color: mod.widgets.RBX_FG_SECONDARY,
-        }
-    });
+    if let Some(mut button) = button.borrow_mut() {
+        button.animator_play(cx, ids!(selected.off));
+    }
 }
