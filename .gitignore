@@ -20,3 +20,8 @@ weather-directions-*.png
 ## agent-chat demo runtime logs / machine-specific registry
 roadmap/agentchat-demo/.demo-logs/
 roadmap/agentchat-demo/projects.json
+
+## Agent Registry design-handoff materials (designer mockups / screenshots — kept local, not in PR)
+design_handoff_agent_registry/
+docs/ui-reference/agent-lab-mobile/
+docs/ui-reference/09-mobile-agent-setting.jpg
