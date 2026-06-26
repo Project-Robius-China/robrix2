@@ -505,25 +505,14 @@ impl RoomsListEntryContent {
             RBX_BG_SUNKEN, RBX_FG_PRIMARY, RBX_FG_SECONDARY, RBX_FG_TERTIARY,
         };
 
-        let message_text_color;
-        let room_name_color;
-        let timestamp_color;
-        let code_bg_color;
-
         // The selected row uses a soft teal wash (RBX_BG_SELECTED) plus a teal
         // accent outline (see the draw_bg shader) to signal the active room, so
-        // the text stays dark and fully legible in both states.
-        if is_selected {
-            message_text_color = RBX_FG_SECONDARY;
-            room_name_color = RBX_FG_PRIMARY;
-            timestamp_color = RBX_FG_TERTIARY;
-            code_bg_color = RBX_BG_SUNKEN;
-        } else {
-            message_text_color = RBX_FG_SECONDARY;
-            room_name_color = RBX_FG_PRIMARY;
-            timestamp_color = RBX_FG_TERTIARY;
-            code_bg_color = RBX_BG_SUNKEN;
-        }
+        // the text stays dark and fully legible in both states — i.e. the text
+        // colors are identical for selected and unselected rows.
+        let message_text_color = RBX_FG_SECONDARY;
+        let room_name_color = RBX_FG_PRIMARY;
+        let timestamp_color = RBX_FG_TERTIARY;
+        let code_bg_color = RBX_BG_SUNKEN;
 
         // Toggle the background color via the animator (handles selected/deselected bg).
         self.animator_toggle(cx, is_selected, Animate::No, ids!(selected.on), ids!(selected.off));

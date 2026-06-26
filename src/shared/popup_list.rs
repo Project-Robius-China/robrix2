@@ -162,6 +162,9 @@ pub enum NotifActionStyle {
     Danger,
 }
 
+/// Click handler stored for a notification action button.
+pub type ActionCallback = Box<dyn FnMut(&mut Cx) + Send>;
+
 /// A custom button shown in the footer of a notification card.
 ///
 /// `on_click` runs (with `&mut Cx`) when the button is tapped; the card then
@@ -170,7 +173,7 @@ pub enum NotifActionStyle {
 pub struct NotificationAction {
     pub label: Cow<'static, str>,
     pub style: NotifActionStyle,
-    pub on_click: Box<dyn FnMut(&mut Cx) + Send>,
+    pub on_click: ActionCallback,
 }
 
 impl NotificationAction {
@@ -478,7 +481,7 @@ struct PopupEntry {
     is_notification: bool,
     /// Click handlers for action buttons 0..N, parallel to the visible buttons.
     /// Empty for toasts and for action-less notifications.
-    actions: Vec<Box<dyn FnMut(&mut Cx) + Send>>,
+    actions: Vec<ActionCallback>,
 }
 
 /// The overlay host that owns and draws all live popups.
@@ -571,7 +574,7 @@ impl Widget for RobrixPopupNotification {
             cx.begin_root_turtle(size, self.layout);
             self.draw_bg.begin(cx, self.walk, self.layout);
             for popup in self.popups.iter_mut() {
-                let _ = popup.view.draw_all(cx, scope);
+                popup.view.draw_all(cx, scope);
             }
             self.draw_bg.end(cx);
             cx.end_pass_sized_turtle();
@@ -622,9 +625,9 @@ impl RobrixPopupNotification {
 
     fn add_toast(&mut self, cx: &mut Cx, item: PopupItem, desktop: bool) {
         let ptr = if desktop { self.toast_desktop } else { self.toast_mobile };
-        let mut view = view_from_live_ptr(cx, ptr);
+        let view = view_from_live_ptr(cx, ptr);
         view.label(cx, ids!(toast_label)).set_text(cx, &item.message);
-        apply_kind_visuals(cx, &mut view, item.kind, NotificationIcon::Auto);
+        apply_kind_visuals(cx, &view, item.kind, NotificationIcon::Auto);
 
         self.enforce_toast_cap(cx, desktop);
 
@@ -667,7 +670,7 @@ impl RobrixPopupNotification {
 
     fn instantiate_notification(&mut self, cx: &mut Cx, mut ni: NotificationItem, desktop: bool) {
         let ptr = if desktop { self.notif_desktop } else { self.notif_mobile };
-        let mut view = view_from_live_ptr(cx, ptr);
+        let view = view_from_live_ptr(cx, ptr);
 
         let title = ni
             .title
@@ -675,14 +678,14 @@ impl RobrixPopupNotification {
             .unwrap_or_else(|| Cow::Borrowed(default_title(ni.kind)));
         view.label(cx, ids!(notif_title)).set_text(cx, &title);
         view.label(cx, ids!(notif_label)).set_text(cx, &ni.message);
-        apply_kind_visuals(cx, &mut view, ni.kind, ni.icon);
+        apply_kind_visuals(cx, &view, ni.kind, ni.icon);
 
         let mut actions: Vec<NotificationAction> = ni.actions.drain(..).collect();
         actions.truncate(3);
         let has_actions = !actions.is_empty();
         view.view(cx, ids!(actions_row)).set_visible(cx, has_actions);
 
-        let mut closures: Vec<Box<dyn FnMut(&mut Cx) + Send>> = Vec::new();
+        let mut closures: Vec<ActionCallback> = Vec::new();
         for (i, action) in actions.into_iter().enumerate() {
             let btn = match i {
                 0 => view.button(cx, ids!(action_btn_0)),
@@ -694,7 +697,7 @@ impl RobrixPopupNotification {
             style_action_button(cx, btn, action.style);
             closures.push(action.on_click);
         }
-        if closures.len() < 1 {
+        if closures.is_empty() {
             view.widget(cx, ids!(action_btn_0)).set_visible(cx, false);
         }
         if closures.len() < 2 {
@@ -825,10 +828,10 @@ fn popup_from_notification(ni: NotificationItem) -> PopupItem {
 /// or hides the circle entirely when there is nothing to show.
 fn apply_kind_visuals(cx: &mut Cx, view: &View, kind: PopupKind, icon: NotificationIcon) {
     let mut circle = view.view(cx, ids!(icon_circle));
-    let show = !matches!(icon, NotificationIcon::Hidden)
-        && !(kind == PopupKind::Blank && matches!(icon, NotificationIcon::Auto));
-    circle.set_visible(cx, show);
-    if !show {
+    let hide = matches!(icon, NotificationIcon::Hidden)
+        || (kind == PopupKind::Blank && matches!(icon, NotificationIcon::Auto));
+    circle.set_visible(cx, !hide);
+    if hide {
         return;
     }
 
