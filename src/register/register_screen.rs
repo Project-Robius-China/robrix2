@@ -42,6 +42,33 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
+    // Primary CTA — mirrors the login screen's login_button (teal RBX_ACCENT
+    // fill, on-accent text, XS control radius). Shared by the homeserver "Next"
+    // step and the final "Create Account" submit so the two read as one system.
+    mod.widgets.RegisterPrimaryButton = RobrixIconButton {
+        width: Fill,
+        height: (RBX_CONTROL_H_LG)
+        padding: 10
+        align: Align{x: 0.5, y: 0.5}
+        draw_bg +: {
+            color: (RBX_ACCENT)
+            color_hover: (RBX_ACCENT_HOVER)
+            color_down: (RBX_ACCENT_PRESSED)
+            border_radius: (RBX_RADIUS_XS)
+            // Same-color 1px border smooths the rounded outer edge (matches login).
+            border_size: 1.0
+            border_color: (RBX_ACCENT)
+            border_color_hover: (RBX_ACCENT_HOVER)
+            border_color_down: (RBX_ACCENT_PRESSED)
+        }
+        draw_text +: {
+            color: (RBX_FG_ON_ACCENT)
+            color_hover: (RBX_FG_ON_ACCENT)
+            color_down: (RBX_FG_ON_ACCENT)
+            text_style: TITLE_TEXT {font_size: 12.0}
+        }
+    }
+
     mod.widgets.RegisterScreen = set_type_default() do #(RegisterScreen::register_widget(vm)) {
         ..mod.widgets.SolidView
 
@@ -50,7 +77,7 @@ script_mod! {
         align: Align{x: 0.5, y: 0.5}
         show_bg: true,
         draw_bg +: {
-            color: COLOR_SECONDARY
+            color: (RBX_BG_CANVAS)
         }
 
         ScrollYView {
@@ -59,7 +86,7 @@ script_mod! {
             flow: Down,
             align: Align{x: 0.5, y: 0.5}
             show_bg: true,
-            draw_bg.color: (COLOR_SECONDARY)
+            draw_bg.color: (RBX_BG_CANVAS)
 
             scroll_bars: {
                 show_scroll_x: false,
@@ -78,80 +105,99 @@ script_mod! {
                 align: Align{x: 0.5, y: 0.5}
                 flow: Overlay
 
-                View {
-                    width: Fill,
+                // The register card — mirrors login_card: white surface, soft 1px
+                // stroke, MD (8) corner radius (main's calm/crisp card token).
+                register_card := RoundedView {
+                    width: Fill{max: 460}
                     height: Fit,
+                    margin: Inset{left: 16, right: 16}
+                    new_batch: true
                     flow: Down,
                     align: Align{x: 0.5, y: 0.5}
-                    spacing: 15.0
+                    spacing: 12.0
+                    padding: Inset{top: 24, bottom: 24, left: 36, right: 36}
+                    show_bg: true,
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        border_size: 1.0
+                        border_color: (RBX_STROKE_SOFT)
+                        border_radius: (RBX_RADIUS_MD)
+                    }
 
                     logo_image := Image {
                         fit: ImageFit.Smallest,
-                        width: 80
+                        width: 60
                         src: (mod.widgets.IMG_APP_LOGO),
                     }
 
                     title := Label {
                         width: Fit,
                         height: Fit,
-                        margin: Inset{bottom: 5}
+                        margin: Inset{bottom: 2}
                         padding: 0,
                         draw_text +: {
-                            color: (COLOR_TEXT)
-                            text_style: TITLE_TEXT {font_size: 16.0}
+                            color: (RBX_FG_PRIMARY)
+                            text_style: RBX_TEXT_PAGE_TITLE {font_size: 20.0}
                         }
                         text: "Create Account"
                     }
 
+                    subtitle := Label {
+                        width: Fit,
+                        height: Fit,
+                        margin: Inset{bottom: 6}
+                        padding: 0,
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY)
+                            text_style: REGULAR_TEXT {font_size: 10.5}
+                        }
+                        text: "Set up your account on a Matrix homeserver"
+                    }
+
                     View {
-                        width: 275,
+                        width: Fill,
                         height: Fit,
                         flow: Down,
+                        spacing: 5.0
 
-                        homeserver_input := RobrixTextInput {
-                            width: 275,
-                            height: Fit,
+                        homeserver_input := mod.widgets.LoginTextInput {
+                            width: Fill,
                             flow: Right,
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
                             empty_text: "matrix.org"
                         }
 
                         View {
-                            width: 275,
+                            width: Fill,
                             height: Fit,
                             flow: Right,
                             padding: Inset{top: 3, left: 2, right: 2}
-                            spacing: 0.0,
+                            spacing: 6.0,
                             align: Align{x: 0.5, y: 0.5}
 
-                            LineH { draw_bg.color: #C8C8C8 }
+                            LineH { draw_bg.color: (RBX_DIVIDER) }
 
                             homeserver_hint_label := Label {
                                 width: Fit,
                                 height: Fit,
                                 padding: 0,
                                 draw_text +: {
-                                    color: #8C8C8C
+                                    color: (RBX_FG_TERTIARY)
                                     text_style: REGULAR_TEXT {font_size: 9}
                                 }
                                 text: "Homeserver URL"
                             }
 
-                            LineH { draw_bg.color: #C8C8C8 }
+                            LineH { draw_bg.color: (RBX_DIVIDER) }
                         }
                     }
 
-                    next_button := RobrixIconButton {
-                        width: 275,
-                        height: 40
-                        padding: 10
-                        margin: Inset{top: 5, bottom: 10}
-                        align: Align{x: 0.5, y: 0.5}
+                    next_button := mod.widgets.RegisterPrimaryButton {
+                        margin: Inset{top: 5, bottom: 6}
                         text: "Next"
                     }
 
                     status_area := View {
-                        width: 275,
+                        width: Fill,
                         height: Fit,
                         flow: Down,
                         visible: false
@@ -161,7 +207,7 @@ script_mod! {
                             width: Fill,
                             height: Fit,
                             draw_text +: {
-                                color: (COLOR_TEXT)
+                                color: (RBX_FG_SECONDARY)
                                 text_style: REGULAR_TEXT {font_size: 10.5}
                             }
                             text: ""
@@ -169,31 +215,28 @@ script_mod! {
                     }
 
                     registration_form := View {
-                        width: 275,
+                        width: Fill,
                         height: Fit,
                         flow: Down,
                         spacing: 10,
                         visible: false
 
-                        username_input := RobrixTextInput {
-                            width: 275, height: Fit,
+                        username_input := mod.widgets.LoginTextInput {
+                            width: Fill,
                             flow: Right,
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
                             empty_text: "Username"
                         }
 
-                        password_input := RobrixTextInput {
-                            width: 275, height: Fit,
+                        password_input := mod.widgets.LoginTextInput {
+                            width: Fill,
                             flow: Right,
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
                             empty_text: "Password"
                             is_password: true,
                         }
 
-                        confirm_password_input := RobrixTextInput {
-                            width: 275, height: Fit,
+                        confirm_password_input := mod.widgets.LoginTextInput {
+                            width: Fill,
                             flow: Right,
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
                             empty_text: "Confirm password"
                             is_password: true,
                         }
@@ -202,56 +245,72 @@ script_mod! {
                             width: Fill, height: Fit,
                             visible: false
                             draw_text +: {
-                                color: (COLOR_FG_DANGER_RED)
+                                color: (RBX_DANGER_FG)
                                 text_style: REGULAR_TEXT {font_size: 10.5}
                             }
                             text: ""
                         }
 
-                        submit_button := RobrixIconButton {
-                            width: 275, height: 40
-                            padding: 10
+                        submit_button := mod.widgets.RegisterPrimaryButton {
                             margin: Inset{top: 5}
-                            align: Align{x: 0.5, y: 0.5}
+                            draw_icon +: {
+                                svg: (ICON_LOCK)
+                                color: (RBX_FG_ON_ACCENT)
+                            }
+                            icon_walk: Walk{width: 15, height: 15, margin: Inset{right: 5}}
                             text: "Create Account"
                         }
                     }
 
                     LineH {
-                        width: 275
-                        margin: Inset{bottom: -5}
-                        draw_bg.color: #C8C8C8
+                        width: Fill
+                        margin: Inset{top: 8, bottom: 0}
+                        draw_bg.color: (RBX_DIVIDER)
                     }
 
                     View {
-                        width: 275,
+                        width: Fill,
                         height: Fit,
                         flow: Right,
-                        spacing: 0.0,
+                        spacing: 6.0,
                         align: Align{x: 0.5, y: 0.5}
 
-                        LineH { draw_bg.color: #C8C8C8 }
+                        LineH { draw_bg.color: (RBX_DIVIDER) }
 
                         account_prompt_label := Label {
                             width: Fit,
                             height: Fit,
                             padding: Inset{left: 1, right: 1, top: 0, bottom: 0}
                             draw_text +: {
-                                color: #x6c6c6c
+                                color: (RBX_FG_SECONDARY)
                                 text_style: REGULAR_TEXT {}
                             }
                             text: "Already have an account?"
                         }
 
-                        LineH { draw_bg.color: #C8C8C8 }
+                        LineH { draw_bg.color: (RBX_DIVIDER) }
                     }
 
                     back_button := RobrixIconButton {
                         width: Fit,
                         height: Fit,
-                        padding: Inset{left: 15, right: 15, top: 10, bottom: 10}
+                        padding: Inset{left: 8, right: 8, top: 6, bottom: 6}
                         margin: Inset{bottom: 5}
                         align: Align{x: 0.5, y: 0.5}
+                        draw_bg +: {
+                            color: (COLOR_TRANSPARENT)
+                            color_hover: (COLOR_TRANSPARENT)
+                            color_down: (COLOR_TRANSPARENT)
+                            border_color: (COLOR_TRANSPARENT)
+                            border_color_hover: (COLOR_TRANSPARENT)
+                            border_color_down: (COLOR_TRANSPARENT)
+                        }
+                        draw_text +: {
+                            color: (RBX_ACCENT)
+                            color_hover: (RBX_ACCENT_HOVER)
+                            color_down: (RBX_ACCENT_PRESSED)
+                            text_style: TITLE_TEXT {font_size: 11.0}
+                        }
                         text: "← Back to Login"
                     }
                 }
