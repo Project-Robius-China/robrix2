@@ -97,18 +97,21 @@ script_mod! {
             }
         }
 
-        // --- Avatar card ---
+        // --- Identity card: Avatar + Display Name + User ID grouped together ---
         RoundedView {
             width: Fill, height: Fit
             flow: Down
-            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_MD), bottom: (SPACE_MD)}
             margin: Inset{top: (SPACE_SM)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
+            // -- Avatar --
             avatar_section_label := SubsectionLabel {
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
                 text: "Your Avatar:"
@@ -118,90 +121,95 @@ script_mod! {
                 width: Fill, height: Fit
                 flow: Right { wrap: true },
                 align: Align{y: 0.5}
+                spacing: (SPACE_LG)
 
                 our_own_avatar := Avatar {
-                    width: 100,
-                    height: 100,
+                    width: 84,
+                    height: 84,
                     margin: (SPACE_SM),
                     text_view +: {
                         text +: {
                             draw_text +: {
-                                text_style: theme.font_regular { font_size: 35.0 }
+                                text_style: theme.font_regular { font_size: 30.0 }
                             }
                         }
                     }
                 }
 
+                // Compact action column: hint + small Upload / Remove buttons.
                 View {
-                    width: Fit, height: Fit
+                    width: Fill, height: Fit
                     flow: Down,
-                    align: Align{y: 0.5}
-                    padding: Inset{ left: (SPACE_SM), right: (SPACE_SM) }
                     spacing: (SPACE_SM)
 
+                    avatar_hint_label := Label {
+                        width: Fill, height: Fit
+                        flow: Flow.Right{wrap: true}
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY),
+                            text_style: REGULAR_TEXT { font_size: 10.5 }
+                        }
+                        text: "Upload a new avatar, or remove the current one."
+                    }
+
                     View {
-                        width: Fit, height: Fit
-                        flow: Right,
+                        width: Fill, height: Fit
+                        flow: Flow.Right{wrap: true},
                         align: Align{y: 0.5}
                         spacing: (SPACE_SM)
 
-                        upload_avatar_button := RobrixIconButton {
-                            width: 140,
-                            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
-                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                        upload_avatar_button := SettingsPrimaryButton {
+                            width: Fit, height: Fit,
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                             margin: 0,
-                            draw_bg +: { border_radius: (RADIUS_MD) }
+                            draw_bg +: {
+                                color: (RBX_ACCENT)
+                                color_hover: (RBX_ACCENT_HOVER)
+                                color_down: (RBX_ACCENT_PRESSED)
+                                border_radius: (RBX_RADIUS_SM)
+                            }
                             draw_icon.svg: (ICON_UPLOAD)
-                            icon_walk: Walk{width: 16, height: 16}
-                            text: "Upload Avatar"
+                            icon_walk: Walk{width: 15, height: 15}
+                            text: "Upload"
+                        }
+
+                        delete_avatar_button := RobrixNegativeIconButton {
+                            width: Fit, height: Fit,
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                            margin: 0,
+                            draw_bg +: {
+                                color: #0000
+                                color_hover: (RBX_DANGER_BG)
+                                color_down: (RBX_DANGER_BG)
+                                border_size: 0.0
+                                border_color: #0000
+                                border_color_hover: #0000
+                                border_color_down: #0000
+                                border_radius: (RBX_RADIUS_SM)
+                            }
+                            draw_icon.svg: (ICON_TRASH)
+                            icon_walk: Walk{ width: 15, height: 15 }
+                            text: "Remove"
                         }
 
                         upload_avatar_spinner := LoadingSpinner {
                             width: 16, height: 16
                             visible: false
-                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
-                        }
-                    }
-
-                    View {
-                        width: Fit, height: Fit
-                        flow: Right,
-                        align: Align{y: 0.5}
-                        spacing: (SPACE_SM)
-
-                        delete_avatar_button := RobrixNegativeIconButton {
-                            width: 140,
-                            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
-                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
-                            margin: 0,
-                            draw_bg +: { border_radius: (RADIUS_MD) }
-                            draw_icon.svg: (ICON_TRASH)
-                            icon_walk: Walk{ width: 16, height: 16 }
-                            text: "Delete Avatar"
+                            draw_bg.color: (RBX_ACCENT)
                         }
 
                         delete_avatar_spinner := LoadingSpinner {
                             width: 16, height: 16
                             visible: false
-                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                            draw_bg.color: (RBX_DANGER_FG)
                         }
                     }
                 }
             }
-        }
 
-        // --- Display Name card ---
-        RoundedView {
-            width: Fill, height: Fit
-            flow: Down
-            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
-            margin: Inset{top: (SPACE_SM)}
-            show_bg: true
-            draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
-            }
+            LineH { height: 1.0, margin: Inset{top: (SPACE_MD), bottom: (SPACE_MD)}, draw_bg.color: (RBX_STROKE_SOFT) }
 
+            // -- Display Name --
             display_name_section_label := SubsectionLabel {
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
                 text: "Your Display Name:"
@@ -249,23 +257,13 @@ script_mod! {
                     width: 16, height: 16
                     margin: Inset{left: (SPACE_XS), top: 13} // vertically center with buttons
                     visible: false
-                    draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                    draw_bg.color: (RBX_ACCENT)
                 }
             }
-        }
 
-        // --- User ID card ---
-        RoundedView {
-            width: Fill, height: Fit
-            flow: Down
-            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
-            margin: Inset{top: (SPACE_SM)}
-            show_bg: true
-            draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
-            }
+            LineH { height: 1.0, margin: Inset{top: (SPACE_MD), bottom: (SPACE_MD)}, draw_bg.color: (RBX_STROKE_SOFT) }
 
+            // -- User ID --
             user_id_section_label := SubsectionLabel {
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
                 text: "Your User ID:"
@@ -275,25 +273,36 @@ script_mod! {
                 width: Fill, height: Fit
                 flow: Right,
                 align: Align{y: 0.5}
-                spacing: (SPACE_SM)
-
-                copy_user_id_button := RobrixNeutralIconButton {
-                    enable_long_press: true,
-                    padding: (SPACE_MD),
-                    spacing: 0,
-                    draw_icon.svg: (ICON_COPY)
-                    icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
-                }
+                spacing: (SPACE_XS)
 
                 user_id := Label {
                     width: Fill, height: Fit
                     flow: Flow.Right{wrap: true},
-                    margin: Inset{top: 9}
                     draw_text +: {
                         color: (MESSAGE_TEXT_COLOR),
                         text_style: MESSAGE_TEXT_STYLE { font_size: 11.5 },
                     }
                     text: "You are not logged in."
+                }
+
+                // Copy button sits AFTER the id, small and ghost-styled.
+                copy_user_id_button := RobrixNeutralIconButton {
+                    enable_long_press: true,
+                    width: Fit, height: Fit,
+                    padding: (SPACE_XS),
+                    spacing: 0,
+                    draw_bg +: {
+                        color: #0000
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_size: 0.0
+                        border_color: #0000
+                        border_color_hover: #0000
+                        border_color_down: #0000
+                        border_radius: (RBX_RADIUS_XS)
+                    }
+                    draw_icon +: { svg: (ICON_COPY), color: (RBX_FG_TERTIARY) }
+                    icon_walk: Walk{width: 13, height: 13}
                 }
             }
         }
@@ -306,13 +315,33 @@ script_mod! {
             margin: Inset{top: (SPACE_SM)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
-            multiple_accounts_section_label := SubsectionLabel {
+            View {
+                width: Fill, height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                spacing: (SPACE_SM)
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                text: "Multiple Accounts:"
+
+                SettingsIconCircle {
+                    width: 30, height: 30
+                    draw_bg +: { color: (RBX_INFO_BG) }
+                    Icon {
+                        width: 16, height: 16
+                        draw_icon +: { svg: (ICON_ADD_USER), color: (RBX_INFO_FG) }
+                        icon_walk: Walk{width: 16, height: 16}
+                    }
+                }
+                multiple_accounts_section_label := SubsectionLabel {
+                    width: Fill
+                    margin: 0
+                    text: "Multiple Accounts:"
+                }
             }
 
             View {
@@ -330,29 +359,35 @@ script_mod! {
                 spacing: (SPACE_SM)
                 show_bg: true
                 draw_bg +: {
-                    color: (COLOR_ACCOUNT_ACTIVE_BG)
-                    border_radius: (RADIUS_LG)
+                    color: (RBX_ACCENT_SOFT)
+                    border_radius: (RBX_RADIUS_SM)
+                    border_size: 1.0
+                    border_color: (RBX_ACCENT)
                 }
 
-                View {
+                active_account_label := Label {
                     width: Fill, height: Fit
-                    flow: Down,
-                    spacing: 2
-
-                    active_account_label := Label {
-                        width: Fill, height: Fit
-                        draw_text +: {
-                            color: (COLOR_PRIMARY),
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
-                        }
-                        text: "@user:server"
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        color: (RBX_FG_PRIMARY),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
                     }
+                    text: "@user:server"
+                }
+
+                // "Active" as a compact solid-teal pill, inline on the right.
+                active_account_status_pill := RoundedView {
+                    width: Fit, height: Fit
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: Inset{left: 9, right: 9, top: 3, bottom: 3}
+                    show_bg: true
+                    draw_bg +: { color: (RBX_ACCENT), border_radius: (RBX_RADIUS_PILL) }
 
                     active_account_status_label := Label {
                         width: Fit, height: Fit
                         draw_text +: {
-                            color: (COLOR_PRIMARY),
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 9 },
+                            color: (RBX_FG_ON_ACCENT),
+                            text_style: theme.font_bold { font_size: 9 },
                         }
                         text: "Active"
                     }
@@ -381,10 +416,10 @@ script_mod! {
                 visible: false
                 show_bg: true
                 draw_bg +: {
-                    color: (COLOR_SECONDARY)
-                    border_radius: (RADIUS_LG)
+                    color: (RBX_BG_SURFACE_SUBTLE)
+                    border_radius: (RBX_RADIUS_SM)
                     border_size: 1.0
-                    border_color: (COLOR_INACTIVE_BORDER)
+                    border_color: (RBX_STROKE_SOFT)
                 }
 
                 View {
@@ -402,7 +437,7 @@ script_mod! {
                     }
                 }
 
-                switch_account_button := RobrixIconButton {
+                switch_account_button := SettingsPrimaryButton {
                     width: Fit, height: Fit
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM), right: (SPACE_SM)}
                     draw_icon.svg: (ICON_JUMP)
@@ -421,7 +456,7 @@ script_mod! {
                 text: "1 account logged in"
             }
 
-            add_account_button := RobrixIconButton {
+            add_account_button := SettingsPrimaryButton {
                 width: Fit,
                 padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                 margin: Inset{top: (SPACE_XS)}
@@ -441,13 +476,33 @@ script_mod! {
             margin: Inset{top: (SPACE_SM), bottom: (SPACE_LG)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
-            other_actions_section_label := SubsectionLabel {
+            View {
+                width: Fill, height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                spacing: (SPACE_SM)
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                text: "Other actions:"
+
+                SettingsIconCircle {
+                    width: 30, height: 30
+                    draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                    Icon {
+                        width: 16, height: 16
+                        draw_icon +: { svg: (ICON_SETTINGS), color: (RBX_ACCENT) }
+                        icon_walk: Walk{width: 16, height: 16}
+                    }
+                }
+                other_actions_section_label := SubsectionLabel {
+                    width: Fill
+                    margin: 0
+                    text: "Other actions:"
+                }
             }
 
             View {
@@ -456,7 +511,7 @@ script_mod! {
                 align: Align{y: 0.5},
                 spacing: (SPACE_SM)
 
-                manage_account_button := RobrixIconButton {
+                manage_account_button := SettingsPrimaryButton {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                     draw_bg +: { border_radius: (RADIUS_MD) }
                     draw_icon.svg: (ICON_EXTERNAL_LINK)
@@ -1170,98 +1225,109 @@ impl AccountSettings {
         enable: bool,
         delete_avatar_button: &ButtonRef,
     ) {
-        let (delete_button_fg_color, delete_button_bg_color) = if enable {
-            (COLOR_FG_DANGER_RED, COLOR_BG_DANGER_RED)
-        } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
-        };
+        use crate::shared::design_tokens::{RBX_DANGER_BG, RBX_DANGER_FG, RBX_FG_DISABLED};
+        // Ghost "Remove" button: transparent fill, danger-red text/icon, red-tinted
+        // hover. Disabled = greyed text, still transparent.
+        let fg = if enable { RBX_DANGER_FG } else { RBX_FG_DISABLED };
         let mut delete_avatar_button = delete_avatar_button.clone();
         script_apply_eval!(cx, delete_avatar_button, {
             enabled: #(enable),
             draw_bg +: {
-                color: #(delete_button_bg_color),
-                border_color: #(delete_button_fg_color),
+                color: #00000000,
+                color_hover: #(RBX_DANGER_BG),
+                color_down: #(RBX_DANGER_BG),
+                border_size: 0.0,
+                border_color: #00000000,
             }
             draw_icon +: {
-                color: #(delete_button_fg_color),
+                color: #(fg),
             }
             draw_text +: {
-                color: #(delete_button_fg_color),
+                color: #(fg),
             }
         });
     }
 
-    /// Enable or disable the upload avatar button.
+    /// Enable or disable the upload avatar badge.
     fn enable_upload_avatar_button(
         cx: &mut Cx,
         enable: bool,
         upload_avatar_button: &ButtonRef,
     ) {
-        let (upload_button_fg_color, upload_button_bg_color) = if enable {
-            (COLOR_PRIMARY, COLOR_ACTIVE_PRIMARY)
+        use crate::shared::design_tokens::{
+            RBX_ACCENT, RBX_BG_DISABLED, RBX_FG_DISABLED, RBX_FG_ON_ACCENT,
+        };
+        // Teal "Upload" button (grey when disabled).
+        let (fg, bg) = if enable {
+            (RBX_FG_ON_ACCENT, RBX_ACCENT)
         } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
+            (RBX_FG_DISABLED, RBX_BG_DISABLED)
         };
         let mut upload_avatar_button = upload_avatar_button.clone();
         script_apply_eval!(cx, upload_avatar_button, {
             enabled: #(enable),
             draw_bg +: {
-                color: #(upload_button_bg_color),
-                border_color: #(upload_button_fg_color),
+                color: #(bg),
             }
             draw_icon +: {
-                color: #(upload_button_fg_color),
+                color: #(fg),
             }
             draw_text +: {
-                color: #(upload_button_fg_color),
+                color: #(fg),
             }
         });
     }
 
-    /// Enable or disable the display name accept and cancel buttons.
+    /// Enable or disable the display name accept and cancel buttons. Styled to
+    /// match the rest of settings: Save = teal primary, Cancel = ghost neutral.
     fn enable_display_name_buttons(
         cx: &mut Cx,
         enable: bool,
         accept_display_name_button: &ButtonRef,
         cancel_display_name_button: &ButtonRef,
     ) {
-        let (accept_button_fg_color, accept_button_bg_color) = if enable {
-            (COLOR_FG_ACCEPT_GREEN, COLOR_BG_ACCEPT_GREEN)
-        } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
+        use crate::shared::design_tokens::{
+            RBX_ACCENT, RBX_BG_DISABLED, RBX_BG_HOVER, RBX_BG_PRESSED, RBX_FG_DISABLED,
+            RBX_FG_ON_ACCENT, RBX_FG_SECONDARY,
         };
-        let (cancel_button_fg_color, cancel_button_bg_color) = if enable {
-            (COLOR_FG_DANGER_RED, COLOR_BG_DANGER_RED)
+        // Save Name: teal primary (grey when disabled).
+        let (accept_fg, accept_bg) = if enable {
+            (RBX_FG_ON_ACCENT, RBX_ACCENT)
         } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
+            (RBX_FG_DISABLED, RBX_BG_DISABLED)
         };
-
         let mut accept_display_name_button = accept_display_name_button.clone();
         script_apply_eval!(cx, accept_display_name_button, {
             enabled: #(enable),
             draw_bg +: {
-                color: #(accept_button_bg_color),
-                border_color: #(accept_button_fg_color),
-            },
+                color: #(accept_bg),
+                border_size: 0.0,
+                border_color: #00000000,
+            }
             draw_text +: {
-                color: #(accept_button_fg_color),
-            },
+                color: #(accept_fg),
+            }
             draw_icon +: {
-                color: #(accept_button_fg_color),
+                color: #(accept_fg),
             }
         });
+        // Cancel: ghost neutral (transparent fill, subtle hover).
+        let cancel_fg = if enable { RBX_FG_SECONDARY } else { RBX_FG_DISABLED };
         let mut cancel_display_name_button = cancel_display_name_button.clone();
         script_apply_eval!(cx, cancel_display_name_button, {
             enabled: #(enable),
             draw_bg +: {
-                color: #(cancel_button_bg_color),
-                border_color: #(cancel_button_fg_color),
-            },
+                color: #00000000,
+                color_hover: #(RBX_BG_HOVER),
+                color_down: #(RBX_BG_PRESSED),
+                border_size: 0.0,
+                border_color: #00000000,
+            }
             draw_text +: {
-                color: #(cancel_button_fg_color),
-            },
+                color: #(cancel_fg),
+            }
             draw_icon +: {
-                color: #(cancel_button_fg_color),
+                color: #(cancel_fg),
             }
         });
     }

@@ -20,7 +20,7 @@ script_mod! {
         flow: Flow.Right{wrap: true}
         margin: Inset{left: 0.5, top: 0, bottom: 0, right: 5}
         draw_text +: {
-            color: #666,
+            color: (RBX_FG_SECONDARY),
             text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
         }
     }
@@ -33,7 +33,7 @@ script_mod! {
         draw_text +: {
             color: (MESSAGE_TEXT_COLOR),
             color_hover: (MESSAGE_TEXT_COLOR),
-            color_active: (COLOR_ACTIVE_PRIMARY_DARKER),
+            color_active: (RBX_ACCENT_HOVER),
             text_style: REGULAR_TEXT {},
         }
 
@@ -47,7 +47,7 @@ script_mod! {
             border_size: 0.0,
             border_radius: 3.0,
             mark_color: vec4(0.0, 0.0, 0.0, 0.0),
-            mark_color_active: (COLOR_ACTIVE_PRIMARY_DARKER),
+            mark_color_active: (RBX_ACCENT_HOVER),
         }
     }
 
@@ -87,15 +87,15 @@ script_mod! {
             color_down: (COLOR_PRIMARY),
             color_focus: (COLOR_PRIMARY),
             border_color: (COLOR_SECONDARY_DARKER),
-            border_color_hover: (COLOR_ACTIVE_PRIMARY),
-            border_color_focus: (COLOR_ACTIVE_PRIMARY_DARKER),
-            border_color_down: (COLOR_ACTIVE_PRIMARY_DARKER),
+            border_color_hover: (RBX_ACCENT),
+            border_color_focus: (RBX_ACCENT_HOVER),
+            border_color_down: (RBX_ACCENT_HOVER),
             border_size: 1.0,
             border_radius: 4.0,
             arrow_color: (MESSAGE_TEXT_COLOR),
-            arrow_color_hover: (COLOR_ACTIVE_PRIMARY_DARKER),
-            arrow_color_focus: (COLOR_ACTIVE_PRIMARY_DARKER),
-            arrow_color_down: (COLOR_ACTIVE_PRIMARY_DARKER),
+            arrow_color_hover: (RBX_ACCENT_HOVER),
+            arrow_color_focus: (RBX_ACCENT_HOVER),
+            arrow_color_down: (RBX_ACCENT_HOVER),
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
 
@@ -163,12 +163,12 @@ script_mod! {
             color_focus: (COLOR_PRIMARY),
             color_down: (COLOR_PRIMARY),
             border_color: (COLOR_SECONDARY_DARKER),
-            border_color_hover: (COLOR_ACTIVE_PRIMARY),
-            border_color_active: (COLOR_ACTIVE_PRIMARY_DARKER),
-            border_color_focus: (COLOR_ACTIVE_PRIMARY_DARKER),
-            border_color_down: (COLOR_ACTIVE_PRIMARY_DARKER),
+            border_color_hover: (RBX_ACCENT),
+            border_color_active: (RBX_ACCENT_HOVER),
+            border_color_focus: (RBX_ACCENT_HOVER),
+            border_color_down: (RBX_ACCENT_HOVER),
             mark_color: vec4(0.0, 0.0, 0.0, 0.0),
-            mark_color_active: (COLOR_ACTIVE_PRIMARY_DARKER),
+            mark_color_active: (RBX_ACCENT_HOVER),
         }
     }
 
@@ -177,8 +177,25 @@ script_mod! {
         flow: Down,
         spacing: (SPACE_SM)
 
-        preferences_app_title := TitleLabel {
-            text: "App"
+        View {
+            width: Fill, height: Fit
+            flow: Right
+            align: Align{y: 0.5}
+            spacing: (SPACE_SM)
+
+            SettingsIconCircle {
+                width: 30, height: 30
+                draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                Icon {
+                    width: 16, height: 16
+                    draw_icon +: { svg: (ICON_SETTINGS), color: (RBX_ACCENT) }
+                    icon_walk: Walk{width: 16, height: 16}
+                }
+            }
+            preferences_app_title := TitleLabel {
+                width: Fill
+                text: "App"
+            }
         }
 
         RoundedView {
@@ -187,8 +204,10 @@ script_mod! {
             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
             preferences_view_mode_label := SubsectionLabel {
@@ -211,8 +230,10 @@ script_mod! {
             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
             preferences_ui_zoom_label := SubsectionLabel {
@@ -258,8 +279,10 @@ script_mod! {
             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
             preferences_send_shortcut_label := SubsectionLabel {
@@ -268,8 +291,8 @@ script_mod! {
             }
 
             send_on_cmd_enter_toggle := ToggleFlat {
+                width: Fit, height: Fit
                 margin: Inset{left: 6.5, top: 5, bottom: 5}
-                padding: Inset { left: 15}
                 active: false,
                 draw_bg +: { size: 21 }
                 text: ""
@@ -283,7 +306,7 @@ script_mod! {
                 flow: Flow.Right{wrap: true}
                 margin: Inset{left: 0.5, top: 4, bottom: 0, right: 5}
                 draw_text +: {
-                    color: #666,
+                    color: (RBX_FG_SECONDARY),
                     text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
                 }
                 text: "Current setting: 'Enter' to send, 'Shift + Enter' for a new line"
@@ -299,8 +322,10 @@ script_mod! {
             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
             preferences_agent_chat_label := SubsectionLabel {
@@ -330,8 +355,10 @@ script_mod! {
             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
             preferences_thumb_height_label := SubsectionLabel {

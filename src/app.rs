@@ -125,6 +125,7 @@ script_mod! {
                         // A modal to confirm sending out an invite to a room.
                         invite_confirmation_modal := Modal {
                             content +: {
+                                width: Fill, height: Fill, align: Align{x: 0.5, y: 0.5},
                                 invite_confirmation_modal_inner := PositiveConfirmationModal {
                                     wrapper +: { buttons_view +: { accept_button +: {
                                         draw_icon +: { svg: (ICON_INVITE) }
@@ -320,6 +321,7 @@ script_mod! {
                         // A generic modal to confirm any positive action.
                         positive_confirmation_modal := Modal {
                             content +: {
+                                width: Fill, height: Fill, align: Align{x: 0.5, y: 0.5},
                                 positive_confirmation_modal_inner := PositiveConfirmationModal { }
                             }
                         }
@@ -327,6 +329,7 @@ script_mod! {
                         // A modal to confirm any deletion/removal action.
                         delete_confirmation_modal := Modal {
                             content +: {
+                                width: Fill, height: Fill, align: Align{x: 0.5, y: 0.5},
                                 delete_confirmation_modal_inner := NegativeConfirmationModal { }
                             }
                         }
