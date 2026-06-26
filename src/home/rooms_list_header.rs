@@ -42,8 +42,9 @@ script_mod! {
             flow: Right, // do not wrap
             text: "All Rooms"
             draw_text +: {
-                color: #x0
-                text_style: TITLE_TEXT {}
+                color: (RBX_FG_PRIMARY)
+                // Regular weight (thinner) — reads as a title via size, not boldness.
+                text_style: theme.font_regular { font_size: 14 }
             }
         },
 
@@ -60,7 +61,7 @@ script_mod! {
             Icon {
                 draw_icon +: {
                     svg: (ICON_SQUARES)
-                    color: (COLOR_TEXT)
+                    color: (RBX_FG_SECONDARY)
                 }
                 icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
             }
@@ -101,7 +102,7 @@ script_mod! {
             Icon {
                 draw_icon +: {
                     svg: (ICON_HIERARCHY)
-                    color: (COLOR_TEXT)
+                    color: (RBX_FG_SECONDARY)
                 }
                 icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
             }
@@ -142,7 +143,7 @@ script_mod! {
             Icon {
                 draw_icon +: {
                     svg: (ICON_SEARCH)
-                    color: (COLOR_TEXT)
+                    color: (RBX_FG_SECONDARY)
                 }
                 icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
             }
@@ -184,7 +185,7 @@ script_mod! {
                 width: 20,
                 height: 20,
                 draw_bg +: {
-                    color: (COLOR_ACTIVE_PRIMARY)
+                    color: (RBX_ACCENT)
                     border_size: 3.0
                 }
             }
@@ -195,7 +196,7 @@ script_mod! {
                 Icon {
                     draw_icon +: {
                         svg: (ICON_CLOUD_OFFLINE),
-                        color: (COLOR_FG_DANGER_RED),
+                        color: (RBX_DANGER_FG),
                     }
                     icon_walk: Walk{width: 25, height: Fit, margin: Inset{left: 1, bottom: 1}}
                 }
@@ -207,7 +208,7 @@ script_mod! {
                 Icon {
                     draw_icon +: {
                         svg: (ICON_CLOUD_CHECKMARK),
-                        color: (COLOR_FG_ACCEPT_GREEN),
+                        color: (RBX_SUCCESS_FG),
                     }
                     icon_walk: Walk{width: 25, height: Fit, margin: Inset{left: 1, bottom: 2}}
                 }
@@ -318,9 +319,9 @@ impl Widget for RoomsListHeader {
 
         // Show tooltips for the sync status icons.
         for (view, text, bg_color) in [
-            (self.view.view(cx, ids!(loading_spinner)), tr_key(self.app_language, "rooms_list_header.tooltip.syncing"), vec4(0.059, 0.533, 0.996, 1.0)), // COLOR_ACTIVE_PRIMARY #0f88fe
-            (self.view.view(cx, ids!(offline_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.offline"), vec4(0.863, 0.0, 0.020, 1.0)),   // COLOR_FG_DANGER_RED #DC0005
-            (self.view.view(cx, ids!(synced_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.synced"), vec4(0.075, 0.533, 0.031, 1.0)), // COLOR_FG_ACCEPT_GREEN #138808
+            (self.view.view(cx, ids!(loading_spinner)), tr_key(self.app_language, "rooms_list_header.tooltip.syncing"), crate::shared::design_tokens::RBX_ACCENT),
+            (self.view.view(cx, ids!(offline_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.offline"), crate::shared::design_tokens::RBX_DANGER_FG),
+            (self.view.view(cx, ids!(synced_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.synced"), crate::shared::design_tokens::RBX_SUCCESS_FG),
         ] {
             if !view.visible() {
                 continue;

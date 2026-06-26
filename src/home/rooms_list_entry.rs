@@ -41,7 +41,7 @@ script_mod! {
             align: Align{x: 0.5, y: 0.5}
             draw_icon +: {
                 svg: (ICON_LOCK_FILLED)
-                color: #888888
+                color: (RBX_FG_SECONDARY)
             }
             icon_walk: Walk{ width: 15, height: 15 }
         }
@@ -54,8 +54,8 @@ script_mod! {
         max_lines: 1
         text_overflow: Ellipsis
         draw_text +: {
-            color: #000,
-            text_style: USERNAME_TEXT_STYLE { font_size: 10. }
+            color: (RBX_FG_PRIMARY),
+            text_style: RBX_TEXT_BODY_STRONG {}
         }
         text: "[Room name unknown]"
     }
@@ -65,8 +65,8 @@ script_mod! {
         width: Fit, height: Fit
         flow: Flow.Right{wrap: false},
         draw_text +: {
-            color: (TIMESTAMP_TEXT_COLOR)
-            text_style: TIMESTAMP_TEXT_STYLE { font_size: 7.5 }
+            color: (RBX_FG_TERTIARY)
+            text_style: RBX_TEXT_META {}
         }
     }
 
@@ -136,14 +136,21 @@ script_mod! {
         draw_bg +: {
             active: instance(0.0)
             color: instance(#0000)
-            color_selected: instance(COLOR_ACTIVE_PRIMARY)
+            color_selected: instance(RBX_BG_SELECTED)
             border_color: instance(#0000)
-            border_size: uniform(0.0)
-            border_radius: uniform(4.0)
+            // Teal accent outline that fades in on the selected/open room, so the
+            // soft-teal wash is unambiguous even on the light canvas sidebar.
+            border_color_selected: instance(RBX_ACCENT)
+            border_size: uniform(1.5)
+            border_radius: uniform(6.0)
             border_inset: uniform(vec4(0.0))
 
             get_color: fn() -> vec4 {
                 return mix(self.color, self.color_selected, self.active)
+            }
+
+            get_border_color: fn() -> vec4 {
+                return mix(self.border_color, self.border_color_selected, self.active)
             }
 
             pixel: fn() {
@@ -157,7 +164,7 @@ script_mod! {
                 )
                 sdf.fill_keep(self.get_color())
                 if self.border_size > 0.0 {
-                    sdf.stroke(self.border_color, self.border_size)
+                    sdf.stroke(self.get_border_color(), self.border_size)
                 }
                 return sdf.result;
             }
@@ -494,22 +501,28 @@ impl RoomsListEntryContent {
 
     /// Updates the styling of the preview based on whether the room is selected or not.
     pub fn update_preview_colors(&mut self, cx: &mut Cx, is_selected: bool) {
+        use crate::shared::design_tokens::{
+            RBX_BG_SUNKEN, RBX_FG_PRIMARY, RBX_FG_SECONDARY, RBX_FG_TERTIARY,
+        };
+
         let message_text_color;
         let room_name_color;
         let timestamp_color;
         let code_bg_color;
 
-        // TODO: use script-defined theme color instead of redefining constants below
+        // The selected row uses a soft teal wash (RBX_BG_SELECTED) plus a teal
+        // accent outline (see the draw_bg shader) to signal the active room, so
+        // the text stays dark and fully legible in both states.
         if is_selected {
-            message_text_color = vec4(1., 1., 1., 1.); // COLOR_PRIMARY
-            room_name_color = vec4(1., 1., 1., 1.); // COLOR_PRIMARY
-            timestamp_color = vec4(1., 1., 1., 1.); // COLOR_PRIMARY
-            code_bg_color = vec4(0.3, 0.3, 0.3, 1.0); // a darker gray used for the background of code blocks and quote blocks
+            message_text_color = RBX_FG_SECONDARY;
+            room_name_color = RBX_FG_PRIMARY;
+            timestamp_color = RBX_FG_TERTIARY;
+            code_bg_color = RBX_BG_SUNKEN;
         } else {
-            message_text_color = vec4(0.267, 0.267, 0.267, 1.0); // MESSAGE_TEXT_COLOR
-            room_name_color = vec4(0., 0., 0., 1.0);
-            timestamp_color = vec4(0.6, 0.6, 0.6, 1.0);
-            code_bg_color = vec4(0.929, 0.929, 0.929, 1.0); // #EDEDED
+            message_text_color = RBX_FG_SECONDARY;
+            room_name_color = RBX_FG_PRIMARY;
+            timestamp_color = RBX_FG_TERTIARY;
+            code_bg_color = RBX_BG_SUNKEN;
         }
 
         // Toggle the background color via the animator (handles selected/deselected bg).
@@ -542,16 +555,11 @@ impl RoomsListEntryContent {
             }
         });
 
-        // When selected, set link color to None so links inherit font_color (white)
-        // for better contrast against the blue selected background.
-        // When not selected, restore the default blue link color.
+        // Both states sit on a light surface (transparent / soft-teal wash), so
+        // use the design-token link color in both cases for a consistent look.
         self.view
             .html_or_plaintext(cx, ids!(latest_message))
-            .set_link_color(cx, if is_selected {
-                None
-            } else {
-                Some(vec4(0., 0., 0.933, 1.0)) // #0000EE, default HtmlLink color
-            });
+            .set_link_color(cx, Some(crate::shared::design_tokens::RBX_LINK));
 
         let mut pt_label = self.view.label(cx, ids!(latest_message.plaintext_view.pt_label));
         script_apply_eval!(cx, pt_label, {
