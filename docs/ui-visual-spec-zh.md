@@ -82,7 +82,7 @@
 - **明亮为主**：内容区（Settings / Detail / Timeline / 桌面主区）一律浅色；**仅两处深色**——桌面左侧导航栏、移动端登录页。本轮不做全量 dark mode。
 - **房间 / 空间身份色**：teal 圆角方块头像（`#14B8A6`）。
 - **状态色**：绿=Connected/Healthy/Active/Synced；琥珀=Approval required/Pending；红=Reject/Failed；蓝=info/链接；灰=Idle/中性。
-- **卡片**：白底、大圆角（12–16）、1px 浅描边、**几乎不用重阴影**。
+- **卡片**：白底、克制圆角（默认 `RBX_RADIUS_MD`=8，与 composer 输入条一致；大卡 / sheet 用 16）、1px 浅描边、**几乎不用重阴影**。
 - **Badge / Chip**：胶囊形，浅底 + 同色系深字。
 - **Agent 消息**：头像带绿色在线点 + 名字后 `APP` 标；步骤 chips；左侧强调边的分析卡；琥珀色审批卡；深底代码块 + "Translated from Chinese / Show original"。
 - **Composer**：单一圆角容器，左侧 attach/emoji/slash，右侧 teal 圆形发送，外加显眼的 `Run agent` 模式切换。
@@ -144,9 +144,9 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 
 | Token | 值 | 用途 |
 |-------|----|----|
-| `RBX_RADIUS_XS` | 6 | 小控件 |
+| `RBX_RADIUS_XS` | 6 | 小控件 / composer 输入条 |
 | `RBX_RADIUS_SM` | 8 | 输入框 / 内嵌块 |
-| `RBX_RADIUS_MD` | 12 | **卡片默认** |
+| `RBX_RADIUS_MD` | 8 | **卡片默认**（由 12 收紧到 8，与 composer 输入条对齐；卡片求克制不求圆润） |
 | `RBX_RADIUS_LG` | 16 | 大卡片 / sheet |
 | `RBX_RADIUS_XL` | 20 | hero / modal |
 | `RBX_RADIUS_PILL` | 100 | badge / chip |
