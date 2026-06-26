@@ -119,7 +119,10 @@ script_mod! {
 
             View {
                 width: Fill, height: Fit
-                flow: Right { wrap: true },
+                // NOTE: plain `flow: Right` (not wrap) — this row has a `width: Fill`
+                // action column child, and `flow: Right { wrap: true }` does not
+                // support Fill-width children (logs a turtle error every frame).
+                flow: Right,
                 align: Align{y: 0.5}
                 spacing: (SPACE_LG)
 
