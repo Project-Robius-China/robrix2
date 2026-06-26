@@ -1,109 +1,49 @@
-//! Centered message toasts + richer notification cards, on one overlay host.
-//!
-//! Two presentational widgets, one manager:
-//!   * **Message toast** (`MessageToastDesktop` / `MessageToastMobile`) — a small,
-//!     top-centered white card with a colored circular icon and one short line.
-//!     For lightweight status blips ("Room ID copied", "Saving…").
-//!   * **Notification card** (`NotificationCard*`) — a white card with a title,
-//!     description, a colored circular icon, an optional custom icon and up to
-//!     three custom action buttons. Top-right stacked on desktop; a full-width
-//!     top banner on mobile (one at a time, the rest queued).
-//!
-//! Call sites do not pick a widget. `enqueue_popup_notification` auto-routes by
-//! message volume (short → toast, long/multiline → notification); the richer
-//! `enqueue_notification` is for explicit title/actions/custom-icon cases.
-//! All routing (toast vs card, desktop vs mobile, mobile demotion) happens in
-//! [`RobrixPopupNotification::enqueue_internal`], which runs with a `Cx`.
-
 use std::borrow::Cow;
 use crossbeam_queue::SegQueue;
 use makepad_widgets::*;
 use crate::{LivePtr, view_from_live_ptr};
-use crate::settings::app_preferences::effective_is_desktop;
 
-/// Messages whose length is at or below this (in characters) and that fit on a
-/// single line render as a lightweight toast; longer ones are promoted to a
-/// notification card. Derived from a survey of all call sites (~60% toast).
-const TOAST_MAX_CHARS: usize = 48;
-
-/// Max concurrently-visible toasts; oldest is dropped past this.
-const TOAST_CAP_DESKTOP: usize = 4;
-const TOAST_CAP_MOBILE: usize = 3;
-
-/// Max concurrently-visible notification cards; extras queue in `notif_backlog`.
-/// Mobile shows one at a time so a banner never dominates the small screen.
-const NOTIF_CAP_DESKTOP: usize = 5;
-const NOTIF_CAP_MOBILE: usize = 1;
-
-static PENDING_POPUP_NOTIFICATIONS: SegQueue<PendingItem> = SegQueue::new();
-
-/// Internal queue payload: either a legacy popup (auto-routed) or an explicit
-/// rich notification.
-enum PendingItem {
-    Popup(PopupItem),
-    Notification(NotificationItem),
-}
+static PENDING_POPUP_NOTIFICATIONS: SegQueue<PopupItem> = SegQueue::new();
 
 /// Displays a new popup notification with a popup item.
 ///
-/// This is the legacy, fire-and-forget entry point used across the app. It can
-/// be called without a Makepad widget context (e.g. from async tasks). Short
-/// messages render as a centered toast; long or multi-line messages are
-/// automatically promoted to a notification card (with a kind-derived title).
-///
-/// Notifications are shown in the order they were enqueued and dismiss either
-/// manually (close button / action) or automatically. Maximum auto-dismissal
-/// duration is 3 minutes.
+/// This function can be used when there is no Makepad widget context in its arguments.
+/// Popup notifications will be shown in the order they were enqueued,
+/// and can be removed when manually closed by the user or automatically.
+/// Maximum auto dismissal duration is 3 minutes.
 pub fn enqueue_popup_notification(
     message: impl Into<Cow<'static, str>>,
     kind: PopupKind,
     auto_dismissal_duration: Option<f64>,
 ) {
-    let popup_item = PopupItem {
+    let mut popup_item = PopupItem {
         message: message.into(),
         kind,
-        // Limit auto dismiss duration to 180 seconds.
-        auto_dismissal_duration: auto_dismissal_duration.map(|d| d.min(3. * 60.)),
+        auto_dismissal_duration,
     };
-    PENDING_POPUP_NOTIFICATIONS.push(PendingItem::Popup(popup_item));
-    SignalToUI::set_ui_signal();
-}
-
-/// Displays a rich notification card with a title, body, optional custom icon,
-/// and up to three custom action buttons.
-///
-/// Use this when a message needs a button (Retry / Open / Undo …) or a custom
-/// title/icon. On mobile, a notification with no actions and no custom icon is
-/// automatically demoted to a lightweight toast to save space.
-///
-/// ```no_run
-/// # use std::borrow::Cow;
-/// # use makepad_widgets::Cx;
-/// # use robrix::shared::popup_list::*;
-/// enqueue_notification(NotificationItem {
-///     kind: PopupKind::Error,
-///     title: Some(Cow::Borrowed("Couldn't switch account")),
-///     message: Cow::Borrowed("The request timed out. Check your connection."),
-///     actions: vec![
-///         NotificationAction::new("Retry", NotifActionStyle::Primary, |_cx: &mut Cx| {
-///             // re-submit the request…
-///         }),
-///     ],
-///     ..Default::default()
-/// });
-/// ```
-pub fn enqueue_notification(mut item: NotificationItem) {
-    item.auto_dismissal_duration = item.auto_dismissal_duration.map(|d| d.min(3. * 60.));
-    PENDING_POPUP_NOTIFICATIONS.push(PendingItem::Notification(item));
+    // Limit auto dismiss duration to 180 seconds
+    popup_item.auto_dismissal_duration = popup_item
+        .auto_dismissal_duration
+        .map(|duration| duration.min(3. * 60.));
+    PENDING_POPUP_NOTIFICATIONS.push(popup_item);
     SignalToUI::set_ui_signal();
 }
 
 /// Retrieves a mutable reference to the global `RobrixPopupNotificationRef`.
+///
+/// This function accesses the global context to obtain a reference to the
+/// `RobrixPopupNotificationRef`, which is used for managing and displaying
+/// popup notifications within the application. It enables interaction with
+/// the popup notification system from various parts of the application.
 pub fn get_global_popup_list(cx: &mut Cx) -> &mut RobrixPopupNotificationRef {
     cx.get_global::<RobrixPopupNotificationRef>()
 }
 
 /// Sets the global popup list notification widget reference.
+///
+/// This function sets the global context to point to the provided
+/// `WidgetRef`, which is expected to be a `RobrixPopupNotificationRef`.
+/// It is used to display popup notifications anywhere in the application.
 pub fn set_global_popup_list(cx: &mut Cx, parent_ref: &WidgetRef) {
     Cx::set_global(
         cx,
@@ -111,398 +51,320 @@ pub fn set_global_popup_list(cx: &mut Cx, parent_ref: &WidgetRef) {
     );
 }
 
-/// Kind of a notification — defines the severity color (and the default icon).
+/// Kind of a popup notification.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PopupKind {
-    /// No icon; a neutral card.
+    /// Shows no icon at all.
     #[default]
     Blank,
-    /// Red circle + forbidden icon. Failed / rejected / error.
+    /// Shows a red background and a error icon.
     Error,
-    /// Blue circle + info icon. Capability / neutral status.
+    /// Shows a white background and a blue info icon.
     Info,
-    /// Green circle + checkmark icon. Connected / done / synced.
+    /// Shows a green background and a checkmark icon.
     Success,
-    /// Amber circle + warning icon. Approval required / pending.
+    /// Shows a yellow background and a warning icon.
     Warning,
 }
 
-/// The glyph drawn inside the colored circle.
-///
-/// `Auto` derives the glyph from [`PopupKind`]; `Hidden` removes the circle.
-/// The remaining variants let a caller override just the glyph while keeping the
-/// kind's circle color (the "custom icon" feature). Each maps to a registered
-/// `ICON_*` resource; dynamic per-call SVG paths are intentionally not supported
-/// because runtime `script_apply_eval!` cannot resolve arbitrary dependencies.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum NotificationIcon {
-    #[default]
-    Auto,
-    Hidden,
-    Info,
-    Success,
-    Warning,
-    Error,
-    Forbidden,
-    Checkmark,
-    CloudCheckmark,
-    Refresh,
-    Close,
-}
-
-/// Visual style of a notification action button.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum NotifActionStyle {
-    /// Solid accent (teal). The recommended/primary action.
-    #[default]
-    Primary,
-    /// Outlined neutral. Secondary / dismiss-style action.
-    Neutral,
-    /// Solid red. Destructive action.
-    Danger,
-}
-
-/// A custom button shown in the footer of a notification card.
-///
-/// `on_click` runs (with `&mut Cx`) when the button is tapped; the card then
-/// dismisses itself. Put the follow-up here — `submit_async_request(...)`,
-/// `Cx::post_action(MyAction::…)`, navigation, etc.
-pub struct NotificationAction {
-    pub label: Cow<'static, str>,
-    pub style: NotifActionStyle,
-    pub on_click: Box<dyn FnMut(&mut Cx) + Send>,
-}
-
-impl NotificationAction {
-    pub fn new(
-        label: impl Into<Cow<'static, str>>,
-        style: NotifActionStyle,
-        on_click: impl FnMut(&mut Cx) + Send + 'static,
-    ) -> Self {
-        Self { label: label.into(), style, on_click: Box::new(on_click) }
-    }
-}
-
-/// Lightweight popup item (legacy API). Renders as a toast, or is promoted to a
-/// notification card when long.
+/// Popup notification item.
 #[derive(Default, Debug, Clone)]
 pub struct PopupItem {
-    /// Text to be displayed.
+    /// Text to be displayed in the popup.
     pub message: Cow<'static, str>,
-    /// Auto-close duration in seconds (max 3 minutes). `None` = manual close.
+    /// Duration in seconds after which the popup will be automatically closed.
+    /// Maximum duration is 3 minutes.
+    /// If none, the popup will not automatically close.
     pub auto_dismissal_duration: Option<f64>,
-    /// Severity, see [`PopupKind`].
+    /// Kind of the popup defined by [`PopupKind`].
     pub kind: PopupKind,
-}
-
-/// Rich notification item — title + body + optional icon + actions.
-pub struct NotificationItem {
-    /// Severity (defines the circle color and default icon).
-    pub kind: PopupKind,
-    /// Bold title line. `None` derives one from `kind` (e.g. "Error").
-    pub title: Option<Cow<'static, str>>,
-    /// Body / description text.
-    pub message: Cow<'static, str>,
-    /// Glyph override; defaults to the kind's icon.
-    pub icon: NotificationIcon,
-    /// Up to three action buttons (extras are ignored).
-    pub actions: Vec<NotificationAction>,
-    /// Auto-close duration in seconds (max 3 minutes). `None` = manual close.
-    pub auto_dismissal_duration: Option<f64>,
-}
-
-impl Default for NotificationItem {
-    fn default() -> Self {
-        Self {
-            kind: PopupKind::Info,
-            title: None,
-            message: Cow::Borrowed(""),
-            icon: NotificationIcon::Auto,
-            actions: Vec::new(),
-            auto_dismissal_duration: Some(8.0),
-        }
-    }
 }
 
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
-    // Colored circle behind the kind glyph. Small (toast) variant.
-    mod.widgets.NotifIconCircleSm = CircleView {
-        width: 26, height: 26,
-        align: Align{ x: 0.5, y: 0.5 }
+    mod.widgets.ProgressBar = View {
+        width: Fill,
+        height: 10,
         show_bg: true,
-        draw_bg +: { color: (RBX_INFO_FG) }
+        margin: Inset{ bottom: 0 },
+        padding: 0,
+        draw_bg +: {
+            direction: uniform(0.0), // Direction of the progress bar: 0.0 is right to left, 1.0 is top to bottom.
+            border_radius:uniform(4.),
+            border_size:uniform(1.0),
+            progress_bar_color: uniform(#00000080), //Black with 50% opacity.
+            // Display progress bar when there is auto_dismissal_duration.
+            display_progress_bar: instance(1.0)
+            // Display progress bar even when progress.on is off.
+            // 0.0 animate according to anim_time, 1.0 displays an oscillating progress bar.
+            debug_progress_bar: uniform(0.0),
+            anim_time: instance(0.0),
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size);
+                let rect_size = self.rect_size;
+                let is_debug = step(0.5, self.debug_progress_bar);
+                let time = (1.0 - is_debug) * self.anim_time + is_debug * (0.5 + 0.5 * sin(self.draw_pass.time * PI));
+                if self.display_progress_bar > 0.5 {
+                    if self.direction > 0.5 {
+                        // Top to bottom
+                        sdf.box(
+                            self.border_size * 2.0,
+                            self.border_size * 2.0,
+                            rect_size.x - self.border_size * 2.0,
+                            rect_size.y * min(1.0, time) - self.border_size * 2.0,
+                            max(1.0, self.border_radius)
+                        )
+                    } else {
+                        // Right to left
+                        sdf.box(
+                            self.border_size * 2.0,
+                            self.border_size * 2.0,
+                            rect_size.x * max(0.0, 1.0 - time) - self.border_size * 2.0,
+                            rect_size.y - self.border_size * 2.0,
+                            max(1.0, self.border_radius)
+                        )
+                    }
+                    sdf.fill(self.progress_bar_color);
+                }
+                return sdf.result
+            }
+        }
+        animator: Animator{
+            progress: {
+                default: @off
+                off: AnimatorState{
+                    redraw: true
+                    from: {all: Snap}
+                    apply: {
+                        draw_bg: {anim_time: 0.0}
+                    }
+                }
+                on: AnimatorState{
+                    redraw: true
+                    from: {all: Forward {duration: 1.0}}
+                    apply: {
+                        draw_bg: {anim_time: 1.0}
+                    }
+                }
+            }
+        }
+    }
+    mod.widgets.MainContent = View {
+        width: Fill,
+        height: Fit,
+        align: Align{ x: 0.0, y: 0.5 }
+        padding: Inset{left: 0, top: 0, bottom: 10, right: 5}
+        popup_label := Label {
+            width: Fill,
+            height: Fit,
+            draw_text +: {
+                color: #000
+                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.5 },
+            }
+        }
+    }
+    mod.widgets.LeftSideView = View {
+        width: Fit,
+        height: Fit,
+        visible: false,
         popup_icon := Icon {
-            width: Fit, height: Fit,
+            width: 28,
+            height: 28,
             draw_icon +: {
-                svg: (ICON_INFO),
+                svg: (ICON_CHECKMARK),
                 color: (COLOR_PRIMARY),
             }
-            icon_walk: Walk{ width: 15, height: 15 }
+            icon_walk: Walk{ width: 22, height: 22 }
         }
     }
 
-    // Colored circle behind the kind glyph. Large (notification) variant.
-    mod.widgets.NotifIconCircleLg = CircleView {
-        width: 34, height: 34,
-        align: Align{ x: 0.5, y: 0.5 }
-        show_bg: true,
-        draw_bg +: { color: (RBX_INFO_FG) }
-        popup_icon := Icon {
-            width: Fit, height: Fit,
-            draw_icon +: {
-                svg: (ICON_INFO),
-                color: (COLOR_PRIMARY),
-            }
-            icon_walk: Walk{ width: 20, height: 20 }
-        }
-    }
-
-    // Minimal close affordance (thin grey ×, hover wash, no border).
-    mod.widgets.NotifCloseButton = ButtonFlat {
-        width: 24, height: 24,
+    mod.widgets.PopupCloseButton = ButtonFlat {
+        width: 32,
+        height: 32,
         text: "",
         spacing: 0,
         margin: 0,
         padding: 0,
         align: Align{ x: 0.5, y: 0.5 }
         label_walk: Walk{ width: 0, height: 0 }
-        icon_walk: Walk{ width: 13, height: 13, margin: 0 }
+        icon_walk: Walk{ width: 14, height: 14, margin: 0 }
         draw_bg +: {
-            border_size: 0.0
-            border_radius: 6.0
-            color: #00000000
-            color_hover: #x00000012
-            color_down: #x0000001E
-            border_color: #00000000
-            border_color_hover: #00000000
-            border_color_down: #00000000
+            border_radius: 4.0
+            border_size: 1.0
+            color: #00000014
+            color_hover: #00000022
+            color_down: #x0000002E
+            border_color: #00000020
+            border_color_hover: #0000002C
+            border_color_down: #00000038
         }
         draw_icon +: {
             svg: (ICON_CLOSE),
-            color: (RBX_FG_SECONDARY),
+            color: #000000D0,
         }
     }
 
-    // Footer action button base. Recolored per-style at runtime.
-    mod.widgets.NotifActionButton = mod.widgets.RobrixIconButton {
-        height: 30,
-        padding: Inset{ left: 14, right: 14, top: 7, bottom: 7 }
-        align: Align{ x: 0.5, y: 0.5 }
-        icon_walk: Walk{ width: 0, height: 0 }
-        draw_bg +: {
-            border_size: 0.0
-            border_radius: (RBX_RADIUS_SM)
-        }
-        draw_text +: {
-            text_style: RBX_TEXT_BODY {},
-        }
-        text: ""
-    }
-
-    // ---- Message toast (lightweight) ----
-
-    mod.widgets.MessageToastDesktop = View {
-        width: Fill, height: Fit,
-        clip_x: false, clip_y: false,
-        align: Align{ x: 0.5, y: 0.0 }
-        toast_card := RoundedShadowView {
-            width: Fit, height: Fit,
-            flow: Right,
-            align: Align{ y: 0.5 }
-            spacing: 10,
-            padding: Inset{ left: 14, right: 10, top: 10, bottom: 10 }
-            draw_bg +: {
-                color: (RBX_BG_SURFACE)
-                border_radius: (RBX_RADIUS_MD)
-                border_size: 1.0
-                border_color: (RBX_STROKE_OVERLAY)
-                shadow_color: (RBX_SHADOW)
-                shadow_radius: 11.0
-                shadow_offset: vec2(0.0, 4.0)
-            }
-            icon_circle := mod.widgets.NotifIconCircleSm {}
-            toast_label := Label {
-                width: Fit, height: Fit,
-                draw_text +: {
-                    color: (RBX_FG_PRIMARY)
-                    text_style: RBX_TEXT_BODY {},
-                }
-                text: ""
-            }
-            close_button := mod.widgets.NotifCloseButton {}
-        }
-    }
-
-    mod.widgets.MessageToastMobile = View {
-        width: Fill, height: Fit,
-        clip_x: false, clip_y: false,
-        align: Align{ x: 0.5, y: 0.0 }
-        padding: Inset{ left: 12, right: 12 }
-        toast_card := RoundedShadowView {
-            width: Fill, height: Fit,
-            flow: Right,
-            align: Align{ y: 0.5 }
-            spacing: 10,
-            padding: Inset{ left: 14, right: 10, top: 11, bottom: 11 }
-            draw_bg +: {
-                color: (RBX_BG_SURFACE)
-                border_radius: (RBX_RADIUS_MD)
-                border_size: 1.0
-                border_color: (RBX_STROKE_OVERLAY)
-                shadow_color: (RBX_SHADOW)
-                shadow_radius: 11.0
-                shadow_offset: vec2(0.0, 4.0)
-            }
-            icon_circle := mod.widgets.NotifIconCircleSm {}
-            toast_label := Label {
-                width: Fill, height: Fit,
-                draw_text +: {
-                    color: (RBX_FG_PRIMARY)
-                    text_style: RBX_TEXT_BODY {},
-                }
-                text: ""
-            }
-            close_button := mod.widgets.NotifCloseButton {}
-        }
-    }
-
-    // ---- Notification card (rich) ----
-    // Shared body; the wrapper sets the width (fixed on desktop, Fill on mobile).
-    mod.widgets.NotificationCardBody = RoundedShadowView {
-        width: Fill, height: Fit,
+    mod.widgets.CloseButtonView = View {
+        width: Fill,
+        height: Fit,
         flow: Down,
-        padding: Inset{ left: 14, right: 12, top: 13, bottom: 12 }
+        padding: Inset{ top: 5, right: 5 }
+        align: Align{ x: 1.0 }
+
+        close_button := mod.widgets.PopupCloseButton {}
+    }
+
+    // Other possible color themes that is not too glaring.
+    // COLOR_POPUP_GREEN = #43bb9e;
+    // COLOR_POPUP_RED = #e74c3c;
+    mod.widgets.PopupDialogRightToLeftProgress = RoundedView {
+        width: 275
+        height: Fit
+        padding: 0,
+        flow: Overlay
+        show_bg: true,
         draw_bg +: {
-            color: (RBX_BG_SURFACE)
-            border_radius: (RBX_RADIUS_MD)
-            border_size: 1.0
-            border_color: (RBX_STROKE_OVERLAY)
-            shadow_color: (RBX_SHADOW)
-            shadow_radius: 13.0
-            shadow_offset: vec2(0.0, 5.0)
-        }
-        header := View {
-            width: Fill, height: Fit,
-            flow: Right,
-            spacing: 11,
-            align: Align{ y: 0.0 }
-            icon_circle := mod.widgets.NotifIconCircleLg {}
-            text_col := View {
-                width: Fill, height: Fit,
-                flow: Down,
-                spacing: 3,
-                padding: Inset{ top: 1 }
-                notif_title := Label {
-                    width: Fill, height: Fit,
-                    draw_text +: {
-                        color: (RBX_FG_PRIMARY)
-                        text_style: RBX_TEXT_CARD_TITLE {},
-                    }
-                    text: ""
+            border_radius: uniform(4.0)
+            border_color: instance(#000000)
+            border_size: uniform(2.0)
+            color: instance(#ffffff)
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size);
+                sdf.box(
+                    1.,
+                    1.,
+                    self.rect_size.x - 2.0,
+                    self.rect_size.y - 2.0,
+                    self.border_radius
+                )
+                sdf.fill_keep(self.color)
+
+                // Only draw black border for white background (blank popups)
+                if length(self.color.rgb - vec3(1.0, 1.0, 1.0)) < 0.1 {
+                    sdf.stroke(
+                        self.border_color,
+                        self.border_size
+                    )
                 }
-                notif_label := Label {
-                    width: Fill, height: Fit,
-                    draw_text +: {
-                        color: (RBX_FG_SECONDARY)
-                        text_style: RBX_TEXT_BODY {},
-                    }
-                    text: ""
+                return sdf.result
+            }
+        }
+
+        popup_content := View {
+            width: Fill, height: Fit,
+            flow: Down
+            //Right side view with close button
+            close_button_view := mod.widgets.CloseButtonView {}
+            padding: Inset{ right: 2, top: 2}
+            inner := View {
+                width: Fill, height: Fit,
+                padding: Inset{ top: 0, right: 5, bottom: 0, left: 10 }
+                flow: Right,
+                align: Align{
+                    y: 0,
+                }
+                // Left side with icon for popup kind.
+                left_side_view := mod.widgets.LeftSideView {}
+                // Main content area
+                main_content := mod.widgets.MainContent {}
+            }
+            progress_bar := mod.widgets.ProgressBar {}
+            // Add a small gap between the progress bar and the end of the popup 
+            // to ensure the progress bar is within the popup.
+            View {
+                height: 0.2
+            }
+        }
+    }
+    mod.widgets.PopupDialogTopToBottomProgress = mod.widgets.PopupDialogRightToLeftProgress {
+        popup_content := View {
+            width: Fill,
+            height: Fit,
+            flow: Right,
+            spacing: 0,
+            align: Align{ x: 0.0, y: 0.5 }
+            // Left side with for popup kind.
+            left_side_view := mod.widgets.LeftSideView {
+                height: Fit,
+                margin: Inset{left: 10 }
+                spacing: 0,
+            }
+            inner := View {
+                width: 230,
+                height: Fit,
+                padding: 0,
+                flow: Down,
+                close_button_view := mod.widgets.CloseButtonView {}
+                // Main content area
+                main_content := mod.widgets.MainContent {
+                    padding: Inset{left: 0}
                 }
             }
-            close_button := mod.widgets.NotifCloseButton {}
-        }
-        actions_row := View {
-            width: Fill, height: Fit,
-            flow: Right,
-            spacing: 8,
-            align: Align{ x: 1.0, y: 0.5 }
-            margin: Inset{ top: 11 }
-            visible: false,
-            action_btn_0 := mod.widgets.NotifActionButton { visible: false }
-            action_btn_1 := mod.widgets.NotifActionButton { visible: false }
-            action_btn_2 := mod.widgets.NotifActionButton { visible: false }
+            progress_bar := mod.widgets.ProgressBar {
+                width: 10,
+                height: Fill,
+                draw_bg +: {
+                    direction: 1.0,
+                    border_radius: 2.0,
+                }
+            }
         }
     }
 
-    mod.widgets.NotificationCardDesktop = View {
-        width: Fill, height: Fit,
-        clip_x: false, clip_y: false,
-        align: Align{ x: 1.0, y: 0.0 }
-        padding: Inset{ left: 14, right: 14 }
-        notif_card := mod.widgets.NotificationCardBody { width: 330 }
-    }
-
-    mod.widgets.NotificationCardMobile = View {
-        width: Fill, height: Fit,
-        clip_x: false, clip_y: false,
-        align: Align{ x: 0.5, y: 0.0 }
-        padding: Inset{ left: 12, right: 12 }
-        notif_card := mod.widgets.NotificationCardBody { width: Fill }
-    }
-
-    // ---- Overlay host ----
-    // Full-screen, transparent, non-capturing. Stacks toasts/cards top-down;
-    // each entry's wrapper aligns itself (center for toasts, right/full for
-    // notifications), so the host just lays them out vertically.
-    mod.widgets.RobrixPopupNotification = set_type_default() do #(RobrixPopupNotification::register_widget(vm)) {
+    mod.widgets.RobrixPopupNotificationRightToLeftProgress = set_type_default() do #(RobrixPopupNotification::register_widget(vm)) {
         ..mod.widgets.SolidView
 
-        width: Fill, height: Fill,
-        flow: Down,
-        spacing: 10,
-        padding: Inset{ top: 16, left: 0, right: 0, bottom: 0 }
-        align: Align{ x: 0.0, y: 0.0 }
+        width: 275
+        height: Fit
+        flow: Down
         draw_bg +: {
             color: (COLOR_TRANSPARENT)
         }
-        toast_desktop: mod.widgets.MessageToastDesktop {}
-        toast_mobile:  mod.widgets.MessageToastMobile {}
-        notif_desktop: mod.widgets.NotificationCardDesktop {}
-        notif_mobile:  mod.widgets.NotificationCardMobile {}
+        content: mod.widgets.PopupDialogRightToLeftProgress {}
     }
 
-    // Full-screen overlay container placed once near the root of the app.
+    mod.widgets.RobrixPopupNotificationTopToBottomProgress = mod.widgets.RobrixPopupNotificationRightToLeftProgress {
+        content: mod.widgets.PopupDialogTopToBottomProgress {}
+    }
+
+    // A widget that displays a vertical list of popups at the top right corner of the screen.
+    // The progress bar slides from right to left.
     mod.widgets.PopupList = View {
-        width: Fill, height: Fill,
-        popup_notification := mod.widgets.RobrixPopupNotification {}
+        width: Fill,
+        height: Fill,
+        margin: Inset{ top: 10 }
+        align: Align{x: 0.99, }
+        popup_notification := mod.widgets.RobrixPopupNotificationRightToLeftProgress {}
+    }
+
+    // A widget that displays a vertical list of popups at the top right corner of the screen.
+    // The progress bar slides from top to bottom.
+    mod.widgets.PopupListTopToBottomProgress = mod.widgets.PopupList {
+        popup_notification := mod.widgets.RobrixPopupNotificationTopToBottomProgress {}
     }
 }
 
-/// A single live popup (toast or notification card) plus its dismissal state.
+/// A widget that displays a vertical list of popups.
 struct PopupEntry {
     view: View,
     close_timer: Timer,
-    is_notification: bool,
-    /// Click handlers for action buttons 0..N, parallel to the visible buttons.
-    /// Empty for toasts and for action-less notifications.
-    actions: Vec<Box<dyn FnMut(&mut Cx) + Send>>,
 }
 
-/// The overlay host that owns and draws all live popups.
+/// A widget that displays a vertical list of popups.
 #[derive(Script, Widget)]
 pub struct RobrixPopupNotification {
     #[uid] uid: WidgetUid,
     #[source] source: ScriptObjectRef,
-    #[live] toast_desktop: Option<LivePtr>,
-    #[live] toast_mobile: Option<LivePtr>,
-    #[live] notif_desktop: Option<LivePtr>,
-    #[live] notif_mobile: Option<LivePtr>,
+    #[live] pub content: Option<LivePtr>,
 
     #[rust] draw_list: Option<DrawList2d>,
     #[redraw] #[live] draw_bg: DrawQuad,
     #[layout] layout: Layout,
     #[walk] walk: Walk,
-
-    /// Currently-visible popups, oldest first.
+    // A list of tuples containing individual widgets, its content and the close timer in the order they were added.
     #[rust] popups: Vec<PopupEntry>,
-    /// Notification cards waiting for a free slot (mobile shows one at a time).
-    #[rust] notif_backlog: Vec<NotificationItem>,
-    /// Cached layout mode, refreshed whenever we process the queue. Drives the
-    /// top inset at draw time (extra room for the mobile status bar / notch).
-    #[rust(true)] is_desktop: bool,
 }
 
 impl ScriptHook for RobrixPopupNotification {
@@ -528,56 +390,46 @@ impl ScriptHook for RobrixPopupNotification {
 impl Widget for RobrixPopupNotification {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         if matches!(event, Event::Signal) {
-            self.is_desktop = effective_is_desktop(cx);
-            while let Some(pending) = PENDING_POPUP_NOTIFICATIONS.pop() {
-                self.enqueue_internal(cx, pending);
+            while let Some(popup_item) = PENDING_POPUP_NOTIFICATIONS.pop() {
+                self.push(cx, popup_item);
             }
         }
         if self.popups.is_empty() {
             return;
         }
-        // Keep the layout-mode cache fresh while popups are visible so the
-        // overlay's top inset tracks window resize / device rotation.
-        self.is_desktop = effective_is_desktop(cx);
 
         let mut remove_index = None;
+
         for (index, popup) in self.popups.iter_mut().enumerate() {
             popup.view.handle_event(cx, event, scope);
+
             if remove_index.is_none() && popup.close_timer.is_event(event).is_some() {
                 remove_index = Some(index);
             }
         }
+
         if let Some(index) = remove_index {
             self.popups.remove(index);
-            self.fill_backlog(cx);
             self.redraw_overlay(cx);
         }
 
         self.widget_match_event(cx, event, scope);
     }
 
-    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, _walk: Walk) -> DrawStep {
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         let draw_list = self.draw_list.as_mut().unwrap();
         draw_list.begin_overlay_reuse(cx);
-
-        // Only establish the full-screen overlay turtle while something is
-        // showing, so the transparent host quad never covers the (interactive)
-        // app when idle.
+        self.draw_bg.begin(cx, walk, self.layout);
         if !self.popups.is_empty() {
-            let size = cx.current_pass_size();
-            // Leave room for the mobile status bar / notch above the first card,
-            // and keep a comfortable gap from the top on desktop.
-            self.layout.padding.top = if self.is_desktop { 30.0 } else { 60.0 };
-            cx.begin_root_turtle(size, self.layout);
-            self.draw_bg.begin(cx, self.walk, self.layout);
+            cx.begin_turtle(walk, self.layout);
             for popup in self.popups.iter_mut() {
-                let _ = popup.view.draw_all(cx, scope);
+                let walk = walk.with_margin_bottom(5.0);
+                let _ = popup.view.draw_walk(cx, scope, walk);
             }
-            self.draw_bg.end(cx);
-            cx.end_pass_sized_turtle();
+            cx.end_turtle();
         }
-
-        self.draw_list.as_mut().unwrap().end(cx);
+        self.draw_bg.end(cx);
+        draw_list.end(cx);
         DrawStep::done()
     }
 }
@@ -590,350 +442,231 @@ impl RobrixPopupNotification {
         self.draw_bg.redraw(cx);
     }
 
-    /// Routes a queued item to a toast or a notification card, applying the
-    /// length heuristic and the mobile demotion rule.
-    fn enqueue_internal(&mut self, cx: &mut Cx, pending: PendingItem) {
-        let desktop = effective_is_desktop(cx);
-        self.is_desktop = desktop;
-        match pending {
-            PendingItem::Popup(item) => {
-                if item.message.chars().count() > TOAST_MAX_CHARS
-                    || item.message.contains('\n')
-                {
-                    self.add_notification(cx, notification_from_popup(item), desktop);
-                } else {
-                    self.add_toast(cx, item, desktop);
-                }
+    /// Adds a new popup with a close button to the right side of the screen.
+    ///
+    /// The popup's content is a string given by the `PopupItem` parameter.
+    /// New popup will be displayed below the previous ones.
+    pub fn push(&mut self, cx: &mut Cx, popup_item: PopupItem) {
+        let mut view = view_from_live_ptr(cx, self.content);
+        let left_side_view = view.view(cx, ids!(popup_content.inner.left_side_view));
+        let mut popup_icon = view.widget(cx, ids!(popup_content.inner.left_side_view.popup_icon));
+        let mut close_button = view.button(cx, ids!(close_button));
+        let mut popup_label = view.label(cx, ids!(popup_label));
+        popup_label.set_text(cx, &popup_item.message);
+
+        // Set the icon and icon color based on the popup kind.
+        let show_left_side_view = popup_item.kind != PopupKind::Blank;
+        left_side_view.set_visible(cx, show_left_side_view);
+        match popup_item.kind {
+            PopupKind::Error => {
+                script_apply_eval!(cx, popup_icon, {
+                    draw_icon.svg: mod.widgets.ICON_FORBIDDEN,
+                    draw_icon.color: mod.widgets.COLOR_PRIMARY,
+                });
             }
-            PendingItem::Notification(ni) => {
-                // On mobile a card with nothing to interact with (no actions,
-                // no custom glyph) wastes space — show it as a toast instead.
-                let demote = !desktop
-                    && ni.actions.is_empty()
-                    && matches!(ni.icon, NotificationIcon::Auto | NotificationIcon::Hidden);
-                if demote {
-                    self.add_toast(cx, popup_from_notification(ni), desktop);
-                } else {
-                    self.add_notification(cx, ni, desktop);
-                }
+            PopupKind::Info => {
+                script_apply_eval!(cx, popup_icon, {
+                    draw_icon.svg: mod.widgets.ICON_INFO,
+                    draw_icon.color: mod.widgets.COLOR_PRIMARY,
+                });
+            }
+            PopupKind::Success => {
+                script_apply_eval!(cx, popup_icon, {
+                    draw_icon.svg: mod.widgets.ICON_CHECKMARK,
+                    draw_icon.color: mod.widgets.COLOR_PRIMARY,
+                });
+            }
+            PopupKind::Warning => {
+                script_apply_eval!(cx, popup_icon, {
+                    draw_icon.svg: mod.widgets.ICON_WARNING,
+                    draw_icon.color: #000000,
+                });
+            }
+            PopupKind::Blank => {}
+        }
+
+        // Set the text and close button color based on the popup kind.
+        match popup_item.kind {
+            PopupKind::Error | PopupKind::Info | PopupKind::Success => {
+                script_apply_eval!(cx, popup_label, {
+                    draw_text +: { color: mod.widgets.COLOR_PRIMARY },
+                });
+                script_apply_eval!(cx, close_button, {
+                    draw_bg +: {
+                        color: #FFFFFF22,
+                        color_hover: #FFFFFF30,
+                        color_down: #FFFFFF42,
+                        border_color: #FFFFFF2C,
+                        border_color_hover: #FFFFFF38,
+                        border_color_down: #FFFFFF4A,
+                    },
+                    draw_icon +: { color: #FFFFFFFA }
+                });
+            }
+            PopupKind::Warning | PopupKind::Blank => {
+                script_apply_eval!(cx, popup_label, {
+                    draw_text +: { color: #000000 },
+                });
+                script_apply_eval!(cx, close_button, {
+                    draw_bg +: {
+                        color: #00000014,
+                        color_hover: #00000022,
+                        color_down: #x0000002E,
+                        border_color: #00000020,
+                        border_color_hover: #0000002C,
+                        border_color_down: #00000038,
+                    },
+                    draw_icon +: { color: #000000D0 }
+                });
             }
         }
-    }
 
-    fn add_toast(&mut self, cx: &mut Cx, item: PopupItem, desktop: bool) {
-        let ptr = if desktop { self.toast_desktop } else { self.toast_mobile };
-        let mut view = view_from_live_ptr(cx, ptr);
-        view.label(cx, ids!(toast_label)).set_text(cx, &item.message);
-        apply_kind_visuals(cx, &mut view, item.kind, NotificationIcon::Auto);
+        // Set the background color of the popup based on its kind.
+        match popup_item.kind {
+            PopupKind::Blank => {
+                script_apply_eval!(cx, view, {
+                    draw_bg.color: mod.widgets.COLOR_PRIMARY,
+                });
+            }
+            PopupKind::Error => {
+                script_apply_eval!(cx, view, {
+                    draw_bg.color: mod.widgets.COLOR_FG_DANGER_RED,
+                });
+            }
+            PopupKind::Info => {
+                script_apply_eval!(cx, view, {
+                    draw_bg.color: mod.widgets.COLOR_INFO_BLUE,
+                });
+            }
+            PopupKind::Success => {
+                script_apply_eval!(cx, view, {
+                    draw_bg.color: mod.widgets.COLOR_FG_ACCEPT_GREEN,
+                });
+            }
+            PopupKind::Warning => {
+                script_apply_eval!(cx, view, {
+                    draw_bg.color: mod.widgets.COLOR_WARNING_YELLOW,
+                });
+            }
+        }
 
-        self.enforce_toast_cap(cx, desktop);
-
-        let close_timer = match item.auto_dismissal_duration {
-            Some(duration) => cx.start_timeout(duration),
-            None => Timer::empty(),
+        let close_timer = if let Some(duration) = popup_item.auto_dismissal_duration {
+            let mut progress_bar = view.view(cx, ids!(popup_content.progress_bar));
+            script_apply_eval!(cx, progress_bar, {
+                draw_bg +: { display_progress_bar: 1.0 }
+            });
+            progress_bar.animator_cut(cx, ids!(progress.off));
+            progress_bar.animator_play_with(cx, ids!(progress.on), Play::Forward { duration });
+            cx.start_timeout(duration)
+        } else {
+            let mut progress_bar = view.view(cx, ids!(popup_content.progress_bar));
+            script_apply_eval!(cx, progress_bar, {
+                draw_bg +: { display_progress_bar: 0.0 }
+            });
+            progress_bar.animator_cut(cx, ids!(progress.off));
+            Timer::empty()
         };
         self.popups.push(PopupEntry {
             view,
             close_timer,
-            is_notification: false,
-            actions: Vec::new(),
         });
         self.redraw_overlay(cx);
     }
 
-    /// Drop the oldest toast(s) so a newly-arriving one stays within the cap.
-    fn enforce_toast_cap(&mut self, cx: &mut Cx, desktop: bool) {
-        let max = if desktop { TOAST_CAP_DESKTOP } else { TOAST_CAP_MOBILE };
-        while self.popups.iter().filter(|p| !p.is_notification).count() >= max {
-            if let Some(pos) = self.popups.iter().position(|p| !p.is_notification) {
-                let entry = self.popups.remove(pos);
-                cx.stop_timer(entry.close_timer);
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Show a notification card now, or queue it if the cap is reached.
-    fn add_notification(&mut self, cx: &mut Cx, ni: NotificationItem, desktop: bool) {
-        let cap = if desktop { NOTIF_CAP_DESKTOP } else { NOTIF_CAP_MOBILE };
-        let active = self.popups.iter().filter(|p| p.is_notification).count();
-        if active >= cap {
-            self.notif_backlog.push(ni);
-            return;
-        }
-        self.instantiate_notification(cx, ni, desktop);
-    }
-
-    fn instantiate_notification(&mut self, cx: &mut Cx, mut ni: NotificationItem, desktop: bool) {
-        let ptr = if desktop { self.notif_desktop } else { self.notif_mobile };
-        let mut view = view_from_live_ptr(cx, ptr);
-
-        let title = ni
-            .title
-            .clone()
-            .unwrap_or_else(|| Cow::Borrowed(default_title(ni.kind)));
-        view.label(cx, ids!(notif_title)).set_text(cx, &title);
-        view.label(cx, ids!(notif_label)).set_text(cx, &ni.message);
-        apply_kind_visuals(cx, &mut view, ni.kind, ni.icon);
-
-        let mut actions: Vec<NotificationAction> = ni.actions.drain(..).collect();
-        actions.truncate(3);
-        let has_actions = !actions.is_empty();
-        view.view(cx, ids!(actions_row)).set_visible(cx, has_actions);
-
-        let mut closures: Vec<Box<dyn FnMut(&mut Cx) + Send>> = Vec::new();
-        for (i, action) in actions.into_iter().enumerate() {
-            let btn = match i {
-                0 => view.button(cx, ids!(action_btn_0)),
-                1 => view.button(cx, ids!(action_btn_1)),
-                _ => view.button(cx, ids!(action_btn_2)),
-            };
-            btn.set_text(cx, &action.label);
-            btn.set_visible(cx, true);
-            style_action_button(cx, btn, action.style);
-            closures.push(action.on_click);
-        }
-        if closures.len() < 1 {
-            view.widget(cx, ids!(action_btn_0)).set_visible(cx, false);
-        }
-        if closures.len() < 2 {
-            view.widget(cx, ids!(action_btn_1)).set_visible(cx, false);
-        }
-        if closures.len() < 3 {
-            view.widget(cx, ids!(action_btn_2)).set_visible(cx, false);
-        }
-
-        let close_timer = match ni.auto_dismissal_duration {
-            Some(duration) => cx.start_timeout(duration),
-            None => Timer::empty(),
-        };
+    /// Adds a new popup with a custom view to the right side of the screen.
+    ///
+    /// This allows arbitrary content to be displayed via RobrixPopupNotification's content live dsl.
+    ///
+    /// The `view` parameter should be constructed using `RobrixPopupNotification::content()`.
+    /// The view should have a view with the id `popup_content` which should contain
+    /// a `progress_bar` view with the id `progress_bar` and a `popup_label` view with the id `popup_label`.
+    /// The `popup_label` view should have a `draw_text` field that will be used to display the popup's message.
+    /// The custom view should also have a close button with the id `close_button` which should have a `draw_icon` field that will be used to display the close button's icon.
+    ///
+    /// The `auto_dismissal_duration` field of the `PopupItem` parameter will be used to automatically dismiss the popup after the given duration.
+    /// If `auto_dismissal_duration` is `None`, the popup will not be automatically dismissed and the user will have to manually close it.
+    /// The maximum auto dismissal duration is 3 minutes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// crate::shared::popup_list::set_global_popup_list(cx, &self.ui);
+    /// let content = crate::shared::popup_list::get_global_popup_list(cx).content();
+    /// let view = View::new_from_ptr(cx, content);
+    /// let popup_item = PopupItem {
+    ///     kind: PopupKind::Info,
+    ///     message: Cow::Borrowed("Welcome!"),
+    ///     auto_dismissal_duration: Some(4.0),
+    /// };
+    ///  view.label(cx, ids!(popup_label))
+    ///     .set_text(cx, &popup_item.message);
+    ///  let close_timer = if let Some(duration) = popup_item.auto_dismissal_duration {
+    ///     cx.start_timeout(duration)
+    /// } else {
+    ///     Timer::empty()
+    /// };
+    /// crate::shared::popup_list::get_global_popup_list(cx).push_with_custom_view(popup_item, view, close_timer);
+    /// ```
+    pub fn push_with_custom_view(
+        &mut self,
+        mut popup_item: PopupItem,
+        view: View,
+        close_timer: Timer,
+    ) {
+        popup_item.auto_dismissal_duration = popup_item
+            .auto_dismissal_duration
+            .map(|duration| duration.min(3. * 60.));
         self.popups.push(PopupEntry {
             view,
             close_timer,
-            is_notification: true,
-            actions: closures,
         });
-        self.redraw_overlay(cx);
     }
 
-    /// After a notification dismisses, promote queued ones into freed slots.
-    fn fill_backlog(&mut self, cx: &mut Cx) {
-        let desktop = effective_is_desktop(cx);
-        self.is_desktop = desktop;
-        let cap = if desktop { NOTIF_CAP_DESKTOP } else { NOTIF_CAP_MOBILE };
-        while !self.notif_backlog.is_empty()
-            && self.popups.iter().filter(|p| p.is_notification).count() < cap
-        {
-            let ni = self.notif_backlog.remove(0);
-            self.instantiate_notification(cx, ni, desktop);
-        }
+    /// Returns a clone of the template for each  popup in the list.
+    ///
+    /// This is used to construct the View for the popup notification.
+    pub fn content(&self) -> Option<LivePtr> {
+        self.content
     }
 }
 
 impl WidgetMatchEvent for RobrixPopupNotification {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
-        // Find the first popup whose close button or an action button was hit.
-        // `usize::MAX` in the second slot means "close button".
-        let mut hit: Option<(usize, usize)> = None;
-        for (i, entry) in self.popups.iter().enumerate() {
-            if entry.view.button(cx, ids!(close_button)).clicked(actions) {
-                hit = Some((i, usize::MAX));
+        for (i, popup) in self.popups.iter_mut().enumerate() {
+            if popup.view.button(cx, ids!(close_button)).clicked(actions) {
+                cx.stop_timer(popup.close_timer);
+                self.popups.remove(i);
+                self.redraw_overlay(cx);
                 break;
             }
-            if !entry.actions.is_empty()
-                && entry.view.button(cx, ids!(action_btn_0)).clicked(actions)
-            {
-                hit = Some((i, 0));
-                break;
-            }
-            if entry.actions.len() > 1
-                && entry.view.button(cx, ids!(action_btn_1)).clicked(actions)
-            {
-                hit = Some((i, 1));
-                break;
-            }
-            if entry.actions.len() > 2
-                && entry.view.button(cx, ids!(action_btn_2)).clicked(actions)
-            {
-                hit = Some((i, 2));
-                break;
-            }
-        }
-
-        if let Some((i, action_index)) = hit {
-            let mut entry = self.popups.remove(i);
-            cx.stop_timer(entry.close_timer);
-            if action_index != usize::MAX {
-                if let Some(on_click) = entry.actions.get_mut(action_index) {
-                    on_click(cx);
-                }
-            }
-            self.fill_backlog(cx);
-            self.redraw_overlay(cx);
         }
     }
 }
-
 impl RobrixPopupNotificationRef {
-    /// Enqueue a lightweight popup directly (with a `Cx` in hand). Most callers
-    /// should use the free function [`enqueue_popup_notification`] instead.
+    /// See [`RobrixPopupNotification::push()`].
     pub fn push(&self, cx: &mut Cx, popup_item: PopupItem) {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.enqueue_internal(cx, PendingItem::Popup(popup_item));
+            inner.push(cx, popup_item);
         } else {
             log!("RobrixPopupNotificationRef is not initialized.");
         }
     }
-}
 
-/// Title shown when a notification doesn't carry an explicit one.
-fn default_title(kind: PopupKind) -> &'static str {
-    match kind {
-        PopupKind::Error => "Error",
-        PopupKind::Warning => "Warning",
-        PopupKind::Success => "Success",
-        PopupKind::Info => "Info",
-        PopupKind::Blank => "Notice",
-    }
-}
-
-fn notification_from_popup(item: PopupItem) -> NotificationItem {
-    NotificationItem {
-        kind: item.kind,
-        title: None,
-        message: item.message,
-        icon: NotificationIcon::Auto,
-        actions: Vec::new(),
-        auto_dismissal_duration: item.auto_dismissal_duration,
-    }
-}
-
-fn popup_from_notification(ni: NotificationItem) -> PopupItem {
-    let message = match ni.title {
-        Some(t) if !t.is_empty() => Cow::Owned(format!("{}: {}", t, ni.message)),
-        _ => ni.message,
-    };
-    PopupItem {
-        message,
-        kind: ni.kind,
-        auto_dismissal_duration: ni.auto_dismissal_duration,
-    }
-}
-
-/// Sets the circle color (by kind) and glyph (by icon, falling back to kind),
-/// or hides the circle entirely when there is nothing to show.
-fn apply_kind_visuals(cx: &mut Cx, view: &View, kind: PopupKind, icon: NotificationIcon) {
-    let mut circle = view.view(cx, ids!(icon_circle));
-    let show = !matches!(icon, NotificationIcon::Hidden)
-        && !(kind == PopupKind::Blank && matches!(icon, NotificationIcon::Auto));
-    circle.set_visible(cx, show);
-    if !show {
-        return;
+    /// See [`RobrixPopupNotification::content()`].
+    pub fn content(&self) -> Option<LivePtr> {
+        if let Some(inner) = self.borrow() {
+            inner.content()
+        } else {
+            None
+        }
     }
 
-    match kind {
-        PopupKind::Info => script_apply_eval!(cx, circle, { draw_bg.color: mod.widgets.RBX_INFO_FG }),
-        PopupKind::Success => script_apply_eval!(cx, circle, { draw_bg.color: mod.widgets.RBX_SUCCESS_FG }),
-        PopupKind::Warning => script_apply_eval!(cx, circle, { draw_bg.color: mod.widgets.RBX_WARNING_FG }),
-        PopupKind::Error => script_apply_eval!(cx, circle, { draw_bg.color: mod.widgets.RBX_DANGER_FG }),
-        PopupKind::Blank => script_apply_eval!(cx, circle, { draw_bg.color: mod.widgets.RBX_NEUTRAL_FG }),
-    }
-
-    let glyph = match icon {
-        NotificationIcon::Auto => kind_glyph(kind),
-        other => other,
-    };
-    let mut popup_icon = view.widget(cx, ids!(popup_icon));
-    match glyph {
-        NotificationIcon::Info => script_apply_eval!(cx, popup_icon, {
-            draw_icon.svg: mod.widgets.ICON_INFO,
-            draw_icon.color: mod.widgets.COLOR_PRIMARY,
-        }),
-        NotificationIcon::Success | NotificationIcon::Checkmark => script_apply_eval!(cx, popup_icon, {
-            draw_icon.svg: mod.widgets.ICON_CHECKMARK,
-            draw_icon.color: mod.widgets.COLOR_PRIMARY,
-        }),
-        NotificationIcon::Warning => script_apply_eval!(cx, popup_icon, {
-            draw_icon.svg: mod.widgets.ICON_WARNING,
-            draw_icon.color: mod.widgets.COLOR_PRIMARY,
-        }),
-        NotificationIcon::Error | NotificationIcon::Forbidden => script_apply_eval!(cx, popup_icon, {
-            draw_icon.svg: mod.widgets.ICON_FORBIDDEN,
-            draw_icon.color: mod.widgets.COLOR_PRIMARY,
-        }),
-        NotificationIcon::CloudCheckmark => script_apply_eval!(cx, popup_icon, {
-            draw_icon.svg: mod.widgets.ICON_CLOUD_CHECKMARK,
-            draw_icon.color: mod.widgets.COLOR_PRIMARY,
-        }),
-        NotificationIcon::Refresh => script_apply_eval!(cx, popup_icon, {
-            draw_icon.svg: mod.widgets.ICON_ROTATE_CW,
-            draw_icon.color: mod.widgets.COLOR_PRIMARY,
-        }),
-        NotificationIcon::Close => script_apply_eval!(cx, popup_icon, {
-            draw_icon.svg: mod.widgets.ICON_CLOSE,
-            draw_icon.color: mod.widgets.COLOR_PRIMARY,
-        }),
-        // Auto/Hidden are resolved above.
-        NotificationIcon::Auto | NotificationIcon::Hidden => {}
-    }
-}
-
-fn kind_glyph(kind: PopupKind) -> NotificationIcon {
-    match kind {
-        PopupKind::Info => NotificationIcon::Info,
-        PopupKind::Success => NotificationIcon::Success,
-        PopupKind::Warning => NotificationIcon::Warning,
-        PopupKind::Error => NotificationIcon::Error,
-        PopupKind::Blank => NotificationIcon::Info,
-    }
-}
-
-fn style_action_button(cx: &mut Cx, mut btn: ButtonRef, style: NotifActionStyle) {
-    match style {
-        NotifActionStyle::Primary => script_apply_eval!(cx, btn, {
-            draw_bg +: {
-                color: mod.widgets.RBX_ACCENT,
-                color_hover: mod.widgets.RBX_ACCENT_HOVER,
-                color_down: mod.widgets.RBX_ACCENT_PRESSED,
-                border_size: 0.0,
-                border_color: #00000000,
-            },
-            draw_text +: {
-                color: mod.widgets.RBX_FG_ON_ACCENT,
-                color_hover: mod.widgets.RBX_FG_ON_ACCENT,
-                color_down: mod.widgets.RBX_FG_ON_ACCENT,
-            },
-        }),
-        NotifActionStyle::Danger => script_apply_eval!(cx, btn, {
-            draw_bg +: {
-                color: mod.widgets.RBX_DANGER_FG,
-                color_hover: mod.widgets.RBX_DANGER_FG,
-                color_down: mod.widgets.RBX_DANGER_FG,
-                border_size: 0.0,
-                border_color: #00000000,
-            },
-            draw_text +: {
-                color: mod.widgets.COLOR_PRIMARY,
-                color_hover: mod.widgets.COLOR_PRIMARY,
-                color_down: mod.widgets.COLOR_PRIMARY,
-            },
-        }),
-        NotifActionStyle::Neutral => script_apply_eval!(cx, btn, {
-            draw_bg +: {
-                color: #00000000,
-                color_hover: mod.widgets.RBX_NEUTRAL_BG,
-                color_down: mod.widgets.RBX_NEUTRAL_BG,
-                border_size: 1.0,
-                border_color: mod.widgets.RBX_STROKE_SOFT,
-                border_color_hover: mod.widgets.RBX_STROKE_STRONG,
-                border_color_down: mod.widgets.RBX_STROKE_STRONG,
-            },
-            draw_text +: {
-                color: mod.widgets.RBX_FG_PRIMARY,
-                color_hover: mod.widgets.RBX_FG_PRIMARY,
-                color_down: mod.widgets.RBX_FG_PRIMARY,
-            },
-        }),
+    /// See [`RobrixPopupNotification::push_with_custom_view()`].
+    pub fn push_with_custom_view(&self, popup_item: PopupItem, view: View, close_timer: Timer) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.push_with_custom_view(popup_item, view, close_timer);
+        } else {
+            log!("RobrixPopupNotificationRef is not initialized.");
+        }
     }
 }

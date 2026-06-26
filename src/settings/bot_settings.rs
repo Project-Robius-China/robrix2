@@ -4,7 +4,7 @@ use crate::{
     app::{AppState, BotSettingsState},
     i18n::{AppLanguage, tr_fmt, tr_key},
     persistence,
-    shared::popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle},
+    shared::popup_list::{PopupKind, enqueue_popup_notification},
     sliding_sync::current_user_id,
 };
 
@@ -359,24 +359,15 @@ impl WidgetMatchEvent for BotSettings {
                     );
                 }
                 Err(error) => {
-                    let error_detail = tr_fmt(
-                        self.app_language,
-                        "settings.labs.app_service.health.validation.invalid_url",
-                        &[("error", &error)],
+                    enqueue_popup_notification(
+                        tr_fmt(
+                            self.app_language,
+                            "settings.labs.app_service.health.validation.invalid_url",
+                            &[("error", &error)],
+                        ),
+                        PopupKind::Error,
+                        Some(4.0),
                     );
-                    let error_detail_copy = error_detail.clone();
-                    enqueue_notification(NotificationItem {
-                        kind: PopupKind::Error,
-                        title: Some("Couldn't save settings".into()),
-                        message: error_detail.into(),
-                        actions: vec![
-                            NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
-                                cx.copy_to_clipboard(&error_detail_copy);
-                            }),
-                        ],
-                        auto_dismissal_duration: Some(4.0),
-                        ..Default::default()
-                    });
                 }
             }
         }
@@ -385,19 +376,11 @@ impl WidgetMatchEvent for BotSettings {
             let service_url = match self.save_app_service_settings(cx, app_state) {
                 Ok(service_url) => service_url,
                 Err(error) => {
-                    let error_copy = error.clone();
-                    enqueue_notification(NotificationItem {
-                        kind: PopupKind::Error,
-                        title: Some("Couldn't validate settings".into()),
-                        message: error.into(),
-                        actions: vec![
-                            NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
-                                cx.copy_to_clipboard(&error_copy);
-                            }),
-                        ],
-                        auto_dismissal_duration: Some(4.0),
-                        ..Default::default()
-                    });
+                    enqueue_popup_notification(
+                        error,
+                        PopupKind::Error,
+                        Some(4.0),
+                    );
                     return;
                 }
             };

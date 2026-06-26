@@ -22,7 +22,7 @@ use makepad_widgets::*;
 
 use crate::app::{ConfirmDeleteAction, PositiveConfirmationModalAction};
 use crate::shared::confirmation_modal::ConfirmationModalContent;
-use crate::shared::popup_list::{PopupKind, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle};
+use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
 use crate::sliding_sync::{
     AccountDataAction, DeviceInfo, MatrixRequest, submit_async_request,
 };
@@ -360,25 +360,11 @@ impl Widget for DevicesScreen {
                                     self.prompt_browser_reauth(cx, fallback_url.clone());
                                 }
                                 Error(msg) => {
-                                    let msg_for_notification = msg.clone();
-                                    let device_id_for_retry = device_id.clone();
-                                    enqueue_notification(NotificationItem {
-                                        kind: PopupKind::Error,
-                                        title: Some("Failed to remove device".into()),
-                                        message: format!("Error: {msg}").into(),
-                                        actions: vec![
-                                            NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
-                                                submit_async_request(MatrixRequest::DeleteDevice {
-                                                    device_id: device_id_for_retry.clone(),
-                                                });
-                                            }),
-                                            NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
-                                                cx.copy_to_clipboard(&format!("Device deletion failed: {msg_for_notification}"));
-                                            }),
-                                        ],
-                                        auto_dismissal_duration: Some(8.0),
-                                        ..Default::default()
-                                    });
+                                    enqueue_popup_notification(
+                                        format!("Failed to remove device: {msg}"),
+                                        PopupKind::Error,
+                                        Some(8.0),
+                                    );
                                 }
                             }
                         }
@@ -477,24 +463,11 @@ impl DevicesScreen {
             cancel_button_text: Some(Cow::Borrowed("Cancel")),
             on_accept_clicked: Some(Box::new(move |_cx| {
                 if let Err(e) = robius_open::Uri::new(&url_for_callback).open() {
-                    let url_for_copy = url_for_callback.clone();
-                    let error_msg = format!("{e:?}");
-                    let error_for_copy = error_msg.clone();
-                    enqueue_notification(NotificationItem {
-                        kind: PopupKind::Error,
-                        title: Some("Couldn't open browser".into()),
-                        message: error_msg.into(),
-                        actions: vec![
-                            NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
-                                let _ = robius_open::Uri::new(&url_for_callback).open();
-                            }),
-                            NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
-                                cx.copy_to_clipboard(&format!("Failed to open: {}\nError: {}", url_for_copy, error_for_copy));
-                            }),
-                        ],
-                        auto_dismissal_duration: Some(8.0),
-                        ..Default::default()
-                    });
+                    enqueue_popup_notification(
+                        format!("Couldn't open browser: {e:?}"),
+                        PopupKind::Error,
+                        Some(8.0),
+                    );
                 }
             })),
             on_cancel_clicked: None,

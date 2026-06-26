@@ -1,7 +1,7 @@
 
 use makepad_widgets::*;
 
-use crate::{app::AppState, i18n::{AppLanguage, tr_fmt, tr_key}, shared::{popup_list::{enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle, PopupKind}, styles::*}, tsp::{create_did_modal::CreateDidModalAction, create_wallet_modal::CreateWalletModalAction, submit_tsp_request, tsp_state_ref, TspIdentityAction, TspRequest, TspWalletAction, TspWalletEntry, TspWalletMetadata}};
+use crate::{app::AppState, i18n::{AppLanguage, tr_fmt, tr_key}, shared::{popup_list::{enqueue_popup_notification, PopupKind}, styles::*}, tsp::{create_did_modal::CreateDidModalAction, create_wallet_modal::CreateWalletModalAction, submit_tsp_request, tsp_state_ref, TspIdentityAction, TspRequest, TspWalletAction, TspWalletEntry, TspWalletMetadata}};
 
 script_mod! {
     link tsp_enabled
@@ -402,23 +402,11 @@ impl MatchEvent for TspSettingsScreen {
                             );
                         }
                         Err(e) => {
-                            let did_to_retry = self.wallets.as_ref()
-                                .and_then(|ws| ws.active_identity.clone())
-                                .unwrap_or_default();
-                            enqueue_notification(NotificationItem {
-                                kind: PopupKind::Error,
-                                title: Some("Republish failed".into()),
-                                message: tr_fmt(self.app_language, "tsp.settings.popup.identity.republish_failed", &[("error", &e.to_string())]).into(),
-                                actions: vec![
-                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
-                                        if !did_to_retry.is_empty() {
-                                            submit_tsp_request(TspRequest::RepublishDid { did: did_to_retry.clone() });
-                                        }
-                                    }),
-                                ],
-                                auto_dismissal_duration: None,
-                                ..Default::default()
-                            });
+                            enqueue_popup_notification(
+                                tr_fmt(self.app_language, "tsp.settings.popup.identity.republish_failed", &[("error", &e.to_string())]),
+                                PopupKind::Error,
+                                None,
+                            );
                         }
                     }
                     continue;
