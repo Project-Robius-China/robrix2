@@ -8041,7 +8041,7 @@ impl RoomScreen {
                             .unwrap_or(tr_key(self.app_language, "room_screen.fallback.unnamed_room")),
                     );
                     let tl_kind_retry = tl.kind.clone();
-                    let direction_retry = direction.clone();
+                    let direction_retry = direction;
                     enqueue_notification(NotificationItem {
                         kind: PopupKind::Error,
                         title: Some("Pagination failed".into()),
@@ -8051,7 +8051,7 @@ impl RoomScreen {
                                 submit_async_request(MatrixRequest::PaginateTimeline {
                                     timeline_kind: tl_kind_retry.clone(),
                                     num_events: 30,
-                                    direction: direction_retry.clone(),
+                                    direction: direction_retry,
                                 });
                             }),
                             NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {

@@ -941,9 +941,7 @@ impl Widget for SettingsScreen {
                                 message: tr_fmt(self.app_language, "room_screen.popup.open_url_failed", &[("url", url.as_str())]).into(),
                                 actions: vec![
                                     NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
-                                        if let Err(_) = robius_open::Uri::new(&url_for_retry).open() {
-                                            // Silently ignore retry failure
-                                        }
+                                        let _ = robius_open::Uri::new(&url_for_retry).open();
                                     }),
                                     NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
                                         cx.copy_to_clipboard(&error_msg);
