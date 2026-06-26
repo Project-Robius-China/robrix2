@@ -43,7 +43,7 @@ script_mod! {
             main_window := Window {
                 window.inner_size: vec2(1280, 800)
                 window.title: "Robrix"
-                pass.clear_color: (COLOR_SECONDARY)
+                pass.clear_color: (RBX_BG_SURFACE)
                 caption_bar +: {
                     draw_bg.color: #F3F3F3
                     caption_label +: {
@@ -62,7 +62,10 @@ script_mod! {
 
                 body +: {
                     show_bg: true
-                    draw_bg.color: (COLOR_SECONDARY)
+                    // White safe-area fill (status bar + home indicator regions),
+                    // unified with the white app chrome. The content inside is
+                    // inset by the platform safe-area via the padding below.
+                    draw_bg.color: (RBX_BG_SURFACE)
                     padding: Inset{
                         top: (mod.widgets.SAFE_INSET_PAD_TOP),
                         bottom: (mod.widgets.SAFE_INSET_PAD_BOTTOM),

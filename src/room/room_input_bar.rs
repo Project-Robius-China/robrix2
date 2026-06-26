@@ -1060,26 +1060,26 @@ script_mod! {
                     flow: Down
                     spacing: 4
 
-                    // Composer on TOP, toolbar BELOW — matches the reference
-                    // design (message input above, actions + send beneath).
-                    // NOTE: on mobile this puts the toolbar/send below the focused
-                    // IME field, so the on-screen keyboard can cover it while
-                    // typing (keyboard avoidance only lifts the focused field).
-                    // Acceptable for the desktop-first redesign; revisit with an
-                    // adaptive (mobile = toolbar-on-top) layout if mobile needs it.
-                    message_row := View {
-                        width: Fill, height: Fit
-                        flow: Right
-                        mentionable_text_input := MessageInputField {}
-                    }
-
-                    // Action toolbar: left icon cluster + Filler + send (bottom-right).
+                    // Tool toolbar on TOP; the text input + send on the BOTTOM row.
+                    // makepad's KeyboardView lifts only the focused field (+ a small
+                    // gap), so the focused input — and the send button beside it —
+                    // must be the bottom-most elements to stay above the on-screen
+                    // keyboard, while the tool toolbar stays visible above it.
                     button_row := View {
                         width: Fill, height: Fit
                         flow: Right
                         align: Align{y: 0.5}
                         LeftActionButtons {}
                         Filler { height: Fit }
+                    }
+
+                    // Bottom row: message input (fill) + send button (right). This
+                    // is the focused row, so it rides just above the soft keyboard.
+                    message_row := View {
+                        width: Fill, height: Fit
+                        flow: Right
+                        align: Align{y: 1.0}
+                        mentionable_text_input := MessageInputField {}
                         RightActionButtons {}
                     }
                 }

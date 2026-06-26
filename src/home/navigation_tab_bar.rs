@@ -305,13 +305,10 @@ script_mod! {
                     draw_icon +: { svg: (ICON_SETTINGS) }
                 }
             }
-
-            // Bottom safe-area inset (iOS home indicator). Height is set at
-            // runtime in `draw_walk` from `cx.display_context.safe_area_insets`;
-            // it is 0 on desktop / non-notch devices, so the bar stays 56px high.
-            safe_area_spacer := View {
-                width: Fill, height: 0.0
-            }
+            // No per-bar safe-area spacer: the window `body` already insets all
+            // content by the platform safe area (SAFE_INSET_PAD_*), so the bar is
+            // a consistent height on iOS and Android. (Supersedes the spacer inset
+            // clamp from #217 — there is no spacer left to inflate.)
         }
     }
 }
@@ -542,9 +539,6 @@ pub struct NavigationTabBar {
     #[rust] applied_selected_tab: Option<SelectedTab>,
     /// The language the tab labels are currently rendered in.
     #[rust] applied_language: Option<AppLanguage>,
-    /// The bottom safe-area inset currently applied to the mobile bar spacer.
-    /// `-1.0` forces a (re-)apply (initial draw / after a view-mode rebuild).
-    #[rust(-1.0)] applied_safe_bottom: f64,
 }
 
 impl ScriptHook for NavigationTabBar {
@@ -567,10 +561,9 @@ impl NavigationTabBar {
         self.view.set_variant_selector(mode.variant_selector());
         self.applied_view_mode = mode;
         // Switching variants rebuilds the (non-cached) mobile tab buttons, so
-        // force the labels, active highlight, and safe-area spacer to re-apply.
+        // force the labels and active highlight to re-apply.
         self.applied_selected_tab = None;
         self.applied_language = None;
-        self.applied_safe_bottom = -1.0;
     }
 
     /// Localize the mobile tab labels. (Harmless on Desktop, where the rail
@@ -704,27 +697,8 @@ impl Widget for NavigationTabBar {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        // Keep the mobile bar clear of the bottom safe-area (iOS home indicator).
-        // `safe_area_spacer` only exists in the Mobile variant; on Desktop the
-        // query returns an empty ref and we skip.
-        //
-        // Clamp the inset: it is only ever a small home-indicator / gesture-nav
-        // gap (~34px on iOS, 0 on most devices). Some Android backends report an
-        // implausibly large value here; applied verbatim it inflates the bar and
-        // pushes the transparent, Fill-height tab buttons up over the room list,
-        // so a tap on the blank area lands on the middle "Add Room" tab. The
-        // ceiling sits well above any real iOS inset, so notch devices are
-        // unaffected.
-        let bottom_inset = cx.display_context.safe_area_insets.bottom.clamp(0.0, 48.0);
-        if (bottom_inset - self.applied_safe_bottom).abs() > 0.5 {
-            let mut spacer = self.view.view(cx, ids!(safe_area_spacer));
-            if spacer.borrow().is_some() {
-                self.applied_safe_bottom = bottom_inset;
-                script_apply_eval!(cx, spacer, {
-                    height: #(bottom_inset)
-                });
-            }
-        }
+        // The bottom safe-area inset is handled globally by the window `body`
+        // padding (SAFE_INSET_PAD_*), so the bar needs no per-widget spacer.
         self.view.draw_walk(cx, scope, walk)
     }
 }
