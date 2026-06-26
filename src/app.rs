@@ -21,7 +21,7 @@ use crate::{
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
@@ -803,11 +803,23 @@ impl MatchEvent for App {
                 let release_page_url = update_release_page_url(&latest_version);
                 if let Err(e) = robius_open::Uri::new(&release_page_url).open() {
                     error!("Failed to open update URL {:?}. Error: {:?}", release_page_url, e);
-                    enqueue_popup_notification(
-                        tr_fmt(self.app_state.app_language, "room_screen.popup.open_url_failed", &[("url", release_page_url.as_str())]),
-                        PopupKind::Error,
-                        Some(10.0),
-                    );
+                    let url_for_retry = release_page_url.clone();
+                    let url_for_copy = release_page_url.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't open the update page".into()),
+                        message: tr_fmt(self.app_state.app_language, "room_screen.popup.open_url_failed", &[("url", release_page_url.as_str())]).into(),
+                        actions: vec![
+                            NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                let _ = robius_open::Uri::new(&url_for_retry).open();
+                            }),
+                            NotificationAction::new("Copy link", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&url_for_copy);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(10.0),
+                        ..Default::default()
+                    });
                 }
             }
             self.update_prompt_versions = None;
@@ -1076,11 +1088,20 @@ impl MatchEvent for App {
                 }
                 Some(AccountSwitchAction::Failed(error)) => {
                     log!("Account switch failed: {}", error);
-                    enqueue_popup_notification(
-                        format!("Failed to switch account: {}", error),
-                        PopupKind::Error,
-                        None,
-                    );
+                    let error_text = error.to_string();
+                    let error_for_copy = error_text.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Failed to switch account".into()),
+                        message: error_text.into(),
+                        actions: vec![
+                            NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&error_for_copy);
+                            }),
+                        ],
+                        auto_dismissal_duration: None,
+                        ..Default::default()
+                    });
                     continue;
                 }
                 _ => {}
@@ -1947,11 +1968,20 @@ impl MatchEvent for App {
                     self.ui.modal(cx, ids!(positive_confirmation_modal)).open(cx);
                 }
                 Some(DirectMessageRoomAction::FailedToCreate { user_profile, error }) => {
-                    enqueue_popup_notification(
-                        format!("Failed to create a new DM room with {}.\n\nError: {error}", user_profile.displayable_name()),
-                        PopupKind::Error,
-                        None,
-                    );
+                    let name = user_profile.displayable_name().to_string();
+                    let error_for_copy = error.to_string();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't create DM".into()),
+                        message: format!("Failed to create a direct message with {name}.\n\nError: {error}").into(),
+                        actions: vec![
+                            NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&error_for_copy);
+                            }),
+                        ],
+                        auto_dismissal_duration: None,
+                        ..Default::default()
+                    });
                 }
                 Some(DirectMessageRoomAction::NewlyCreated { user_profile, room_name_id }) => {
                     self.app_state.bot_settings.bind_dm_target_if_needed(

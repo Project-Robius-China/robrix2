@@ -8,7 +8,7 @@ use std::ops::Deref;
 use makepad_widgets::*;
 use matrix_sdk::ruma::OwnedRoomId;
 
-use crate::{app::{AppState, AppStateAction}, home::rooms_list::RoomsListRef, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{JoinLeaveModalKind, JoinLeaveRoomModalAction}, room::{BasicRoomDetails, FetchedRoomAvatar}, shared::{avatar::AvatarWidgetRefExt, popup_list::{enqueue_popup_notification, PopupKind}, restore_status_view::RestoreStatusViewWidgetExt}, sliding_sync::{submit_async_request, MatrixRequest}, utils::{self, RoomNameId}};
+use crate::{app::{AppState, AppStateAction}, home::rooms_list::RoomsListRef, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{JoinLeaveModalKind, JoinLeaveRoomModalAction}, room::{BasicRoomDetails, FetchedRoomAvatar}, shared::{avatar::AvatarWidgetRefExt, popup_list::{enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle, PopupKind}, restore_status_view::RestoreStatusViewWidgetExt}, sliding_sync::{submit_async_request, MatrixRequest}, utils::{self, RoomNameId}};
 
 use super::rooms_list::{InviteState, InviterInfo};
 
@@ -342,7 +342,21 @@ impl Widget for InviteScreen {
                         self.invite_state = InviteState::WaitingOnUserInput;
                         if !self.has_shown_confirmation {
                             let msg = utils::stringify_join_leave_error(error, info.room_name_id(), true, true);
-                            enqueue_popup_notification(msg, PopupKind::Error, None);
+                            let room_id = info.room_id().clone();
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Failed to join room".into()),
+                                message: msg.into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        submit_async_request(MatrixRequest::JoinRoom {
+                                            room_id: room_id.clone(),
+                                        });
+                                    }),
+                                ],
+                                auto_dismissal_duration: None,
+                                ..Default::default()
+                            });
                         }
                         continue;
                     }
@@ -365,11 +379,21 @@ impl Widget for InviteScreen {
                         self.invite_state = InviteState::WaitingOnUserInput;
                         if !self.has_shown_confirmation {
                             let error_text = error.to_string();
-                            enqueue_popup_notification(
-                                tr_fmt(self.app_language, "invite_screen.popup.reject_failed", &[("error", error_text.as_str())]),
-                                PopupKind::Error,
-                                None,
-                            );
+                            let room_id = info.room_id().clone();
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Failed to reject invite".into()),
+                                message: tr_fmt(self.app_language, "invite_screen.popup.reject_failed", &[("error", error_text.as_str())]).into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        submit_async_request(MatrixRequest::LeaveRoom {
+                                            room_id: room_id.clone(),
+                                        });
+                                    }),
+                                ],
+                                auto_dismissal_duration: None,
+                                ..Default::default()
+                            });
                         }
                         continue;
                     }

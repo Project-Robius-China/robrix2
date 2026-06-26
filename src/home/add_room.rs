@@ -13,7 +13,7 @@ use crate::{
     room::{BasicRoomDetails, FetchedRoomAvatar, FetchedRoomPreview, RoomPreviewAction},
     shared::{
         avatar::{AvatarState, AvatarWidgetRefExt},
-        popup_list::{PopupKind, enqueue_popup_notification},
+        popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle},
         styles::COLOR_FG_DANGER_RED,
     },
     sliding_sync::{DirectMessageRoomAction, MatrixRequest, RoomPreviewResponseMode, current_user_id, submit_async_request},
@@ -1686,11 +1686,24 @@ impl Widget for AddRoomScreen {
                             let err_str = tr_fmt(self.app_language, "add_room.popup.fetch_error", &[
                                 ("error", error_text.as_str()),
                             ]);
-                            enqueue_popup_notification(
-                                err_str.clone(),
-                                PopupKind::Error,
-                                None,
-                            );
+                            let room_or_alias_id_clone = room_or_alias_id.clone();
+                            let via_clone = via.clone();
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Couldn't load room preview".into()),
+                                message: err_str.clone().into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        submit_async_request(MatrixRequest::GetRoomPreview {
+                                            room_or_alias_id: room_or_alias_id_clone.clone(),
+                                            via: via_clone.clone(),
+                                            response_mode: RoomPreviewResponseMode::Action,
+                                        });
+                                    }),
+                                ],
+                                auto_dismissal_duration: None,
+                                ..Default::default()
+                            });
                             self.state = AddRoomState::FetchError(err_str);
                             self.redraw(cx);
                             break;

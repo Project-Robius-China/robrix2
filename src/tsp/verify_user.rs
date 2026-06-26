@@ -2,7 +2,7 @@
 use makepad_widgets::*;
 use matrix_sdk::ruma::OwnedUserId;
 
-use crate::{shared::popup_list::{enqueue_popup_notification, PopupKind}, tsp::{submit_tsp_request, tsp_state_ref, TspIdentityAction, TspRequest}};
+use crate::{shared::popup_list::{enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle, PopupKind}, tsp::{submit_tsp_request, tsp_state_ref, TspIdentityAction, TspRequest}};
 
 script_mod! {
     link tsp_enabled
@@ -175,11 +175,20 @@ impl MatchEvent for TspVerifyUser {
                 {
                     verify_user_button.set_enabled(cx, true);
                     verify_user_button.set_text(cx, "Verify this user via TSP");
-                    enqueue_popup_notification(
-                        format!("Error sending TSP verification request to \"{user_id}\": {error}"),
-                        PopupKind::Error,
-                        None,
-                    );
+                    let error_detail = format!("Error sending TSP verification request to \"{user_id}\": {error}");
+                    let error_for_copy = error.to_string();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("TSP Verification Failed".into()),
+                        message: error_detail.into(),
+                        actions: vec![
+                            NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&error_for_copy);
+                            }),
+                        ],
+                        auto_dismissal_duration: None,
+                        ..Default::default()
+                    });
                 }
                 Some(TspIdentityAction::ReceivedDidAssociationResponse { did, user_id, accepted })
                     if Some(user_id) == self.user_id.as_ref() =>

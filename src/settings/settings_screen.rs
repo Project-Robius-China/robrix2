@@ -2,7 +2,7 @@
 use makepad_widgets::*;
 use url::Url;
 
-use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
+use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
 
 const CONTRIBUTE_REPO_URL: &str = "https://github.com/Project-Robius-China/robrix2";
 
@@ -933,11 +933,25 @@ impl Widget for SettingsScreen {
                     if url == CONTRIBUTE_REPO_URL {
                         if let Err(e) = robius_open::Uri::new(&url).open() {
                             error!("Failed to open URL {:?}. Error: {:?}", url, e);
-                            enqueue_popup_notification(
-                                tr_fmt(self.app_language, "room_screen.popup.open_url_failed", &[("url", url.as_str())]),
-                                PopupKind::Error,
-                                Some(10.0),
-                            );
+                            let url_for_retry = url.clone();
+                            let error_msg = format!("{:?}", e);
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Couldn't open URL".into()),
+                                message: tr_fmt(self.app_language, "room_screen.popup.open_url_failed", &[("url", url.as_str())]).into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        if let Err(_) = robius_open::Uri::new(&url_for_retry).open() {
+                                            // Silently ignore retry failure
+                                        }
+                                    }),
+                                    NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
+                                        cx.copy_to_clipboard(&error_msg);
+                                    }),
+                                ],
+                                auto_dismissal_duration: Some(10.0),
+                                ..Default::default()
+                            });
                         }
                     }
                 }
@@ -1406,13 +1420,21 @@ impl SettingsScreen {
                 );
             }
             UpdateCheckOutcome::Error(error) => {
-                enqueue_popup_notification(
-                    tr_fmt(self.app_language, "settings.update.popup.failed", &[
+                let error_for_copy = error.clone();
+                enqueue_notification(NotificationItem {
+                    kind: PopupKind::Error,
+                    title: Some("Update check failed".into()),
+                    message: tr_fmt(self.app_language, "settings.update.popup.failed", &[
                         ("error", error.as_str()),
-                    ]),
-                    PopupKind::Error,
-                    Some(6.0),
-                );
+                    ]).into(),
+                    actions: vec![
+                        NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
+                            cx.copy_to_clipboard(&error_for_copy);
+                        }),
+                    ],
+                    auto_dismissal_duration: Some(6.0),
+                    ..Default::default()
+                });
             }
         }
     }

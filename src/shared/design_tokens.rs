@@ -115,6 +115,10 @@ script_mod! {
     mod.widgets.RBX_STROKE_SOFT   = #xE6EBF2
     // Stronger border (focused / emphasized control).
     mod.widgets.RBX_STROKE_STRONG = #xD5DEEA
+    // Floating-overlay border (toast / notification card). Distinctly darker than
+    // STRONG so a white card reads clearly against the light canvas WITHOUT a
+    // shadow. Tune this one value to make overlay edges softer / harder.
+    mod.widgets.RBX_STROKE_OVERLAY = #xC8D2DE
     // Hairline divider between rows (alpha black).
     mod.widgets.RBX_DIVIDER       = #x00000010
 
