@@ -62,7 +62,7 @@ script_mod! {
             border_size: 1.0
             border_color: (RBX_STROKE_SOFT)
             color: (RBX_BG_SURFACE)
-            border_radius: (RBX_RADIUS_SM)
+            border_radius: (RBX_RADIUS_XS)
         }
     }
 
@@ -90,7 +90,7 @@ script_mod! {
             color_focus: (RBX_BG_SURFACE)
             color_down: (RBX_BG_SURFACE)
             color_empty: (RBX_BG_SURFACE)
-            border_radius: (RBX_RADIUS_SM)
+            border_radius: (RBX_RADIUS_XS)
             border_color: (RBX_STROKE_SOFT)
             border_color_hover: (RBX_STROKE_STRONG)
             border_color_focus: (RBX_ACCENT)
@@ -151,7 +151,7 @@ script_mod! {
                         color: (RBX_BG_SURFACE)
                         border_size: 1.0
                         border_color: (RBX_STROKE_SOFT)
-                        border_radius: (RBX_RADIUS_LG)
+                        border_radius: (RBX_RADIUS_MD)
                     }
 
                     // Top-right brand badge in normal card flow; avoid card-level
@@ -403,7 +403,7 @@ script_mod! {
                             color: (RBX_ACCENT)
                             color_hover: (RBX_ACCENT_HOVER)
                             color_down: (RBX_ACCENT_PRESSED)
-                            border_radius: (RBX_RADIUS_SM)
+                            border_radius: (RBX_RADIUS_XS)
                             // Same-color 1px border smooths the rounded outer edge
                             // (a fill-only SDF edge aliases against the white card).
                             border_size: 1.0
@@ -784,8 +784,8 @@ script_mod! {
                             padding: Inset{top: 20, left: 20, right: 20, bottom: 20}
                             show_bg: true
                             draw_bg +: {
-                                color: (COLOR_PRIMARY)
-                                border_radius: 8.0
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_MD)
                                 border_size: 1.0
                                 border_color: (RBX_STROKE_SOFT)
                             }
@@ -819,7 +819,7 @@ script_mod! {
                                 show_bg: true
                                 draw_bg +: {
                                     color: (RBX_BG_SURFACE_SUBTLE)
-                                    border_radius: (RADIUS_LG)
+                                    border_radius: (RBX_RADIUS_MD)
                                 }
                                 padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
 
@@ -864,17 +864,16 @@ script_mod! {
                                     proxy_address_label := Label {
                                         width: 90, height: Fit
                                         draw_text +: {
-                                            color: (COLOR_TEXT)
+                                            color: (RBX_FG_SECONDARY)
                                             text_style: REGULAR_TEXT {font_size: 12}
                                         }
                                         text: "Address"
                                     }
 
-                                    proxy_address_input := RobrixTextInput {
-                                        width: Fill, height: Fit,
+                                    proxy_address_input := mod.widgets.LoginTextInput {
+                                        width: Fill,
                                         flow: Right,
                                         empty_text: "127.0.0.1"
-                                        padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
 
@@ -888,17 +887,16 @@ script_mod! {
                                     proxy_port_label := Label {
                                         width: 90, height: Fit
                                         draw_text +: {
-                                            color: (COLOR_TEXT)
+                                            color: (RBX_FG_SECONDARY)
                                             text_style: REGULAR_TEXT {font_size: 12}
                                         }
                                         text: "Port"
                                     }
 
-                                    proxy_port_input := RobrixTextInput {
-                                        width: Fill, height: Fit,
+                                    proxy_port_input := mod.widgets.LoginTextInput {
+                                        width: Fill,
                                         flow: Right,
                                         empty_text: "7890"
-                                        padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
 
@@ -912,17 +910,16 @@ script_mod! {
                                     proxy_account_label := Label {
                                         width: 90, height: Fit
                                         draw_text +: {
-                                            color: (COLOR_TEXT)
+                                            color: (RBX_FG_SECONDARY)
                                             text_style: REGULAR_TEXT {font_size: 12}
                                         }
                                         text: "Account"
                                     }
 
-                                    proxy_account_input := RobrixTextInput {
-                                        width: Fill, height: Fit,
+                                    proxy_account_input := mod.widgets.LoginTextInput {
+                                        width: Fill,
                                         flow: Right,
                                         empty_text: ""
-                                        padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
 
@@ -936,18 +933,17 @@ script_mod! {
                                     proxy_password_label := Label {
                                         width: 90, height: Fit
                                         draw_text +: {
-                                            color: (COLOR_TEXT)
+                                            color: (RBX_FG_SECONDARY)
                                             text_style: REGULAR_TEXT {font_size: 12}
                                         }
                                         text: "Password"
                                     }
 
-                                    proxy_password_input := RobrixTextInput {
-                                        width: Fill, height: Fit,
+                                    proxy_password_input := mod.widgets.LoginTextInput {
+                                        width: Fill,
                                         flow: Right,
                                         empty_text: ""
                                         is_password: true,
-                                        padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
                             }
@@ -958,7 +954,7 @@ script_mod! {
                                 width: Fill, height: Fit
                                 margin: Inset{top: 0, bottom: 0, left: 2, right: 2}
                                 draw_text +: {
-                                    color: (COLOR_TEXT_WARNING_NOT_FOUND)
+                                    color: (RBX_DANGER_FG)
                                     text_style: REGULAR_TEXT {font_size: 11}
                                     wrap: Words
                                 }
@@ -972,8 +968,24 @@ script_mod! {
                                 margin: Inset{top: 2}
 
                                 proxy_settings_save_button := RobrixIconButton {
-                                    width: 160, height: 42
+                                    width: 160, height: (RBX_CONTROL_H_LG)
                                     align: Align{x: 0.5, y: 0.5}
+                                    draw_bg +: {
+                                        color: (RBX_ACCENT)
+                                        color_hover: (RBX_ACCENT_HOVER)
+                                        color_down: (RBX_ACCENT_PRESSED)
+                                        border_radius: (RBX_RADIUS_XS)
+                                        border_size: 1.0
+                                        border_color: (RBX_ACCENT)
+                                        border_color_hover: (RBX_ACCENT_HOVER)
+                                        border_color_down: (RBX_ACCENT_PRESSED)
+                                    }
+                                    draw_text +: {
+                                        color: (RBX_FG_ON_ACCENT)
+                                        color_hover: (RBX_FG_ON_ACCENT)
+                                        color_down: (RBX_FG_ON_ACCENT)
+                                        text_style: TITLE_TEXT {font_size: 12.0}
+                                    }
                                     text: "Save Proxy"
                                 }
                             }
@@ -1131,7 +1143,7 @@ impl LoginScreen {
                 draw_bg +: {
                     color: mod.widgets.RBX_BG_SURFACE
                     border_color: mod.widgets.RBX_STROKE_SOFT
-                    border_radius: mod.widgets.RBX_RADIUS_XL
+                    border_radius: mod.widgets.RBX_RADIUS_MD
                 }
             });
         } else {
@@ -1146,7 +1158,7 @@ impl LoginScreen {
                 draw_bg +: {
                     color: mod.widgets.RBX_BG_SURFACE
                     border_color: mod.widgets.RBX_STROKE_SOFT
-                    border_radius: mod.widgets.RBX_RADIUS_LG
+                    border_radius: mod.widgets.RBX_RADIUS_MD
                 }
             });
         }
@@ -2345,7 +2357,7 @@ mod tests {
     fn test_login_screen_source_uses_desktop_card_contract() {
         let src = include_str!("login_screen.rs");
         assert!(src.contains("max: 494"), "desktop login card should keep the wider reference-card max width");
-        assert!(src.contains("border_radius: (RBX_RADIUS_LG)"), "login card should use RBX_RADIUS_LG");
+        assert!(src.contains("border_radius: (RBX_RADIUS_MD)"), "login card should use RBX_RADIUS_MD");
         assert!(src.contains("login_button := RobrixIconButton"));
         assert!(src.contains("max: 422"), "primary form controls should align to the desktop content column max width");
 
