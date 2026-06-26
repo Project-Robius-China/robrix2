@@ -273,14 +273,14 @@ script_mod! {
             height: Fit
 
             show_bg: true
-            // Near-white bar surface (matches the design reference); the thin
-            // top hairline below provides the separation from the room list.
-            draw_bg.color: (RBX_BG_SURFACE_SUBTLE)
+            // White bar surface — app-bar, room list and this tab bar are all
+            // white; depth comes from the clear divider lines, not bg color.
+            draw_bg.color: (RBX_BG_SURFACE)
 
-            // Top border divider — LineH (a RoundedView) actually renders, unlike
-            // a plain View. A thin, light hairline like the design reference.
+            // Top divider — LineH (a RoundedView) actually renders, unlike a plain
+            // View. Clearer line (strong stroke, 1.5px) for depth over the list.
             LineH {
-                width: Fill, height: 1.0
+                width: Fill, height: 1.5
                 draw_bg.color: (RBX_STROKE_STRONG)
             }
 

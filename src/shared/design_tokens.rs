@@ -195,14 +195,15 @@ script_mod! {
     //     visually with the room composer / input bar (which uses XS = 6). Keep
     //     cards calm and crisp rather than pill-soft.
     // =========================================================================
-    mod.widgets.RBX_RADIUS_XS   = 6.0
-    mod.widgets.RBX_RADIUS_SM   = 8.0
-    // Card / sheet default. Lowered from 12 -> 8 to match the composer's tight
-    // corners (the room input bar uses RBX_RADIUS_XS). Shares SM's value on
-    // purpose: small surfaces and cards use one calm radius.
-    mod.widgets.RBX_RADIUS_MD   = 8.0
-    mod.widgets.RBX_RADIUS_LG   = 16.0
-    mod.widgets.RBX_RADIUS_XL   = 20.0
+    // Tightened scale (squarer look, per design direction): every surface gets
+    // smaller corners than the original 6/8/8/16/20.
+    mod.widgets.RBX_RADIUS_XS   = 4.0
+    mod.widgets.RBX_RADIUS_SM   = 6.0
+    // Card / sheet default. Shares SM's value on purpose: small surfaces and
+    // cards use one calm, tight radius.
+    mod.widgets.RBX_RADIUS_MD   = 6.0
+    mod.widgets.RBX_RADIUS_LG   = 12.0
+    mod.widgets.RBX_RADIUS_XL   = 16.0
     // Fully-rounded (pill) — use on badges / chips.
     mod.widgets.RBX_RADIUS_PILL = 100.0
 

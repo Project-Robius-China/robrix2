@@ -24,7 +24,7 @@ script_mod! {
             flow: Down, spacing: 5
             width: Fill, height: Fill
 
-            draw_bg.color: (COLOR_PRIMARY_DARKER)
+            draw_bg.color: (RBX_BG_SURFACE)
 
             CachedWidget {
                 rooms_list_header := RoomsListHeader {}
@@ -38,63 +38,16 @@ script_mod! {
             width: Fill, height: Fill
             flow: Down,
             
-            RoundedShadowView {
+            // White app-bar: title row + filter field. A clear bottom divider
+            // (below) gives depth over the white room list, mirroring the bottom
+            // tab bar's top divider.
+            SolidView {
                 width: Fill, height: Fit
                 padding: Inset{top: 15, left: 15, right: 15, bottom: 10}
                 flow: Down,
 
                 show_bg: true
-                draw_bg +: {
-                    color: (COLOR_PRIMARY_DARKER)
-                    border_radius: 4.0
-                    border_size: 0.0
-                    shadow_color: #0005
-                    shadow_radius: 12.0
-                    shadow_offset: vec2(0.0, 0.0)
-
-                    pixel: fn() {
-                        let sdf = Sdf2d.viewport(self.pos * self.rect_size3)
-
-                        let mut fill_color = self.color
-                        if self.color_2.x > -0.5 {
-                            let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
-                            let dir = if self.gradient_fill_horizontal > 0.5 self.pos.x else self.pos.y
-                            fill_color = mix(self.color self.color_2 dir + dither)
-                        }
-
-                        let mut stroke_color = self.border_color
-                        if self.border_color_2.x > -0.5 {
-                            let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
-                            let dir = if self.gradient_border_horizontal > 0.5 self.pos.x else self.pos.y
-                            stroke_color = mix(self.border_color self.border_color_2 dir + dither)
-                        }
-
-                        sdf.box(
-                            self.sdf_rect_pos.x
-                            self.sdf_rect_pos.y
-                            self.sdf_rect_size.x
-                            self.sdf_rect_size.y
-                            max(1.0 self.border_radius)
-                        )
-                        if sdf.shape > -1.0 {
-                            let m = self.shadow_radius
-                            let o = self.shadow_offset + self.rect_shift
-                            let v = GaussShadow.rounded_box_shadow(vec2(m) + o self.rect_size2+o self.pos * (self.rect_size3+vec2(m)) self.shadow_radius*0.5 self.border_radius*2.0)
-                            // Only draw shadow on the bottom half of the view
-                            let pixel_y = self.pos.y * self.rect_size3.y
-                            let mid_y = self.sdf_rect_pos.y + self.sdf_rect_size.y * 0.5
-                            let bottom_mask = smoothstep(mid_y - m * 0.3 mid_y + m * 0.3 pixel_y)
-                            sdf.clear(self.shadow_color * v * bottom_mask)
-                        }
-
-                        sdf.fill_keep(fill_color)
-
-                        if self.border_size > 0.0 {
-                            sdf.stroke(stroke_color self.border_size)
-                        }
-                        return sdf.result
-                    }
-                }
+                draw_bg.color: (RBX_BG_SURFACE)
 
                 rooms_list_header := RoomsListHeader {
                     spacing: 10
@@ -113,7 +66,7 @@ script_mod! {
                     height: 45,
                     flow: Right
                     padding: Inset{top: 5, bottom: 2}
-                    spacing: 5 
+                    spacing: 5
                     align: Align{y: 0.5}
 
                     CachedWidget {
@@ -123,8 +76,19 @@ script_mod! {
                 }
             }
 
-            View {
+            // App-bar bottom divider — clearer line for depth (symmetric with the
+            // tab bar's top divider).
+            LineH {
+                width: Fill, height: 1.5
+                draw_bg.color: (RBX_STROKE_STRONG)
+            }
+
+            SolidView {
+                width: Fill, height: Fill
                 padding: Inset{left: 15, right: 15}
+                show_bg: true
+                // White room list between the gray app-bar and gray tab bar.
+                draw_bg.color: (RBX_BG_SURFACE)
 
                 CachedWidget {
                     rooms_list := RoomsList {}
