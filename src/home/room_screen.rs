@@ -4583,9 +4583,28 @@ struct RoomInfoPaneInfo {
     my_role: String,
     room_avatar_uri: Option<OwnedMxcUri>,
     room_avatar_fallback_text: String,
-    people_entries: Vec<RoomInfoPeopleEntryInfo>,
+    /// The sorted member rows, shared via `Arc` so the (potentially huge) list is
+    /// built/sorted at most once per member-list change and cheaply reference-
+    /// counted into every subsequent Signal-driven refresh.
+    people_entries: Arc<Vec<RoomInfoPeopleEntryInfo>>,
     people_count_text: String,
     show_people_loading: bool,
+}
+
+/// Cache for the expensive member-row build. Keyed by the room and the identity
+/// (`Arc` pointer) of `TimelineUiState::room_members`, which is replaced wholesale
+/// whenever the member list changes — so a pointer match means "members unchanged,
+/// reuse the prebuilt rows" and we skip rebuilding + re-sorting all members on
+/// every sync Signal (critical for very large rooms).
+struct RoomInfoMembersCache {
+    room_id: OwnedRoomId,
+    /// The exact `room_members` `Arc` the cached rows were built from. Held so the
+    /// allocation can't be freed and its address reused (an ABA false-hit), and so
+    /// validity is a cheap `Arc::ptr_eq` against the current `room_members`.
+    members: Arc<Vec<RoomMember>>,
+    entries: Arc<Vec<RoomInfoPeopleEntryInfo>>,
+    is_agent_enabled: bool,
+    my_role: String,
 }
 
 #[derive(Clone, Debug)]
@@ -5491,6 +5510,10 @@ pub struct RoomScreen {
     #[rust] timeline_kind: Option<TimelineKind>,
     /// The persistent UI-relevant states for the room that this widget is currently displaying.
     #[rust] tl_state: Option<TimelineUiState>,
+    /// Cached, prebuilt member rows for the room-info People list (see
+    /// [`RoomInfoMembersCache`]). Avoids rebuilding/sorting the full member list
+    /// on every Signal-driven info refresh.
+    #[rust] room_info_members_cache: Option<RoomInfoMembersCache>,
     /// The set of pinned events in this room.
     #[rust] pinned_events: Vec<OwnedEventId>,
     /// Whether this room has been successfully loaded (received from the homeserver).
@@ -9332,7 +9355,7 @@ impl RoomScreen {
     /// Build the room-info payload from current state, or `None` if no room is
     /// displayed. Shared by both the sliding info pane and the inline "Info"
     /// tab body so the two presentations stay in sync.
-    fn build_room_info_pane_info(&self) -> Option<RoomInfoPaneInfo> {
+    fn build_room_info_pane_info(&mut self) -> Option<RoomInfoPaneInfo> {
         let room_id = self.room_id().cloned()?;
         let room_name = self.room_name_id.as_ref()
             .map(ToString::to_string)
@@ -9375,93 +9398,95 @@ impl RoomScreen {
             ));
 
         let my_user_id = current_user_id();
-        let (people_entries, people_count_text, show_people_loading, member_count, is_agent_enabled, my_role) = self.tl_state.as_ref()
-            .map(|tl| {
-                let Some(room_members) = tl.room_members.as_ref() else {
-                    return (
-                        Vec::new(),
-                        String::from("People"),
-                        true,
-                        0,
-                        false,
-                        String::new(),
-                    );
-                };
+        // Clone the members `Arc` out first (cheap) so the `tl_state` borrow is
+        // released before we (mutably) touch the cache below.
+        let members_arc = self.tl_state.as_ref().and_then(|tl| tl.room_members.clone());
 
-                let my_role = room_members.iter()
-                    .find(|member| my_user_id.as_deref() == Some(member.user_id()))
-                    .map(|member| match member.suggested_role_for_power_level() {
-                        RoomMemberRole::Creator => "Owner",
-                        RoomMemberRole::Administrator => "Admin",
-                        RoomMemberRole::Moderator => "Moderator",
-                        RoomMemberRole::User => "Member",
-                    })
-                    .unwrap_or("")
-                    .to_string();
+        let (people_entries, show_people_loading, member_count, is_agent_enabled, my_role) =
+            if let Some(members) = members_arc {
+                let cache_valid = self.room_info_members_cache.as_ref().is_some_and(|c|
+                    c.room_id == room_id && Arc::ptr_eq(&c.members, &members)
+                );
+                if !cache_valid {
+                    // Expensive path — only when the member list actually changed.
+                    let my_role = members.iter()
+                        .find(|member| my_user_id.as_deref() == Some(member.user_id()))
+                        .map(|member| match member.suggested_role_for_power_level() {
+                            RoomMemberRole::Creator => "Owner",
+                            RoomMemberRole::Administrator => "Admin",
+                            RoomMemberRole::Moderator => "Moderator",
+                            RoomMemberRole::User => "Member",
+                        })
+                        .unwrap_or("")
+                        .to_string();
 
-                let mut people_entries: Vec<RoomInfoPeopleEntryInfo> = room_members.iter()
-                    .map(|member| {
-                        let display_name = member.display_name()
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| member.user_id().to_string());
-                        let is_bot = is_likely_bot_member(member, None);
-                        let level = match member.suggested_role_for_power_level() {
-                            RoomMemberRole::Creator => String::from("Creator"),
-                            RoomMemberRole::Administrator => String::from("Admin"),
-                            RoomMemberRole::Moderator => String::from("Moderator"),
-                            RoomMemberRole::User => String::new(),
-                        };
-                        let avatar_fallback_text = utils::user_name_first_letter(&display_name)
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| String::from("?"));
-                        RoomInfoPeopleEntryInfo {
-                            user_id: member.user_id().to_owned(),
-                            display_name,
-                            level,
-                            is_bot,
-                            avatar_uri: member.avatar_url().map(ToOwned::to_owned),
-                            avatar_fallback_text,
+                    let level_weight = |level: &str| -> u8 {
+                        match level {
+                            "Creator" => 0,
+                            "Admin" => 1,
+                            "Moderator" => 2,
+                            _ => 3,
                         }
-                    })
-                    .collect();
+                    };
+                    // Build with a precomputed (role-weight, lowercased-name) sort
+                    // key so sorting doesn't allocate a String per comparison.
+                    let mut keyed: Vec<(u8, String, RoomInfoPeopleEntryInfo)> = members.iter()
+                        .map(|member| {
+                            let display_name = member.display_name()
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_else(|| member.user_id().to_string());
+                            let is_bot = is_likely_bot_member(member, None);
+                            let level = match member.suggested_role_for_power_level() {
+                                RoomMemberRole::Creator => String::from("Creator"),
+                                RoomMemberRole::Administrator => String::from("Admin"),
+                                RoomMemberRole::Moderator => String::from("Moderator"),
+                                RoomMemberRole::User => String::new(),
+                            };
+                            let avatar_fallback_text = utils::user_name_first_letter(&display_name)
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_else(|| String::from("?"));
+                            let weight = level_weight(&level);
+                            let sort_name = display_name.to_lowercase();
+                            (weight, sort_name, RoomInfoPeopleEntryInfo {
+                                user_id: member.user_id().to_owned(),
+                                display_name,
+                                level,
+                                is_bot,
+                                avatar_uri: member.avatar_url().map(ToOwned::to_owned),
+                                avatar_fallback_text,
+                            })
+                        })
+                        .collect();
+                    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                    let entries: Vec<RoomInfoPeopleEntryInfo> =
+                        keyed.into_iter().map(|(_, _, entry)| entry).collect();
 
-                let level_weight = |level: &str| -> u8 {
-                    match level {
-                        "Creator" => 0,
-                        "Admin" => 1,
-                        "Moderator" => 2,
-                        _ => 3,
-                    }
-                };
-                people_entries.sort_by(|a, b| {
-                    level_weight(&a.level)
-                        .cmp(&level_weight(&b.level))
-                        .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
-                });
+                    // A room is "Agent-enabled" if any of its members is detected
+                    // as a bot (mirrors `is_likely_bot_member`).
+                    let is_agent_enabled = entries.iter().any(|entry| entry.is_bot);
+                    let entries = Arc::new(entries);
+                    self.room_info_members_cache = Some(RoomInfoMembersCache {
+                        room_id: room_id.clone(),
+                        members: Arc::clone(&members),
+                        entries,
+                        is_agent_enabled,
+                        my_role,
+                    });
+                }
 
-                // A room is "Agent-enabled" if any of its members is detected as
-                // a bot (mirrors `is_likely_bot_member`, the same heuristic the
-                // timeline uses to tag bot senders).
-                let is_agent_enabled = people_entries.iter().any(|entry| entry.is_bot);
-
-                let member_count = room_members.len();
+                // The cache is now valid for this (room, member-list) pair; reuse
+                // the prebuilt rows via a cheap `Arc` clone.
+                let cache = self.room_info_members_cache.as_ref().expect("just populated");
                 (
-                    people_entries,
-                    format!("{member_count} Members"),
+                    Arc::clone(&cache.entries),
                     false,
-                    member_count,
-                    is_agent_enabled,
-                    my_role,
+                    cache.entries.len(),
+                    cache.is_agent_enabled,
+                    cache.my_role.clone(),
                 )
-            })
-            .unwrap_or_else(|| (
-                Vec::new(),
-                String::from("People"),
-                true,
-                0,
-                false,
-                String::new(),
-            ));
+            } else {
+                (Arc::new(Vec::new()), true, 0, false, String::new())
+            };
 
         // Prefer the actually-loaded member-list length so the header count, the
         // avatar-stack "+N", and the People sub-page list all agree. Fall back to
@@ -9469,7 +9494,7 @@ impl RoomScreen {
         // (gives an accurate number immediately instead of a "0" flash).
         let member_count = if member_count > 0 { member_count } else { joined_count };
         let people_count_text = if show_people_loading {
-            people_count_text
+            String::from("People")
         } else {
             format!("{member_count} Members")
         };
@@ -9823,6 +9848,10 @@ impl RoomScreen {
         // (in case this room is never re-opened).
         tl.room_members = None;
         tl.room_members_sort = None;
+        // Drop the room-info member-row cache too — it holds its own clone of the
+        // (potentially huge) member Arc, which would otherwise survive this
+        // memory reclaim until the next room's info pane is built.
+        self.room_info_members_cache = None;
         // Store this Timeline's `TimelineUiState` in the global map of states.
         TIMELINE_STATES.with_borrow_mut(|ts| ts.insert(tl.kind.clone(), tl));
     }
