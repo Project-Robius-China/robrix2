@@ -440,7 +440,7 @@ script_mod! {
                         oidc_info_title := Label {
                             width: Fill, height: Fit
                             draw_text +: {
-                                color: (COLOR_TEXT)
+                                color: (RBX_FG_PRIMARY)
                                 text_style: TITLE_TEXT {font_size: 11.0}
                             }
                             text: "Browser sign-in required"
@@ -467,7 +467,7 @@ script_mod! {
                             visible: false
                             width: Fill, height: Fit
                             draw_text +: {
-                                color: (COLOR_TEXT)
+                                color: (RBX_FG_PRIMARY)
                                 text_style: REGULAR_TEXT {font_size: 10.0}
                             }
                             text: ""
