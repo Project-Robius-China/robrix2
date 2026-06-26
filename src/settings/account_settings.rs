@@ -6,7 +6,7 @@ use makepad_widgets::{text::selection::Cursor, *};
 use rfd::FileDialog;
 use matrix_sdk::{encryption::VerificationState, ruma::OwnedUserId};
 
-use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{get_client, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, submit_async_request}, utils, verification::VerificationStateAction};
+use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, styles::*}, sliding_sync::{get_client, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, submit_async_request}, utils, verification::VerificationStateAction};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use crate::{app::ConfirmDeleteAction, shared::confirmation_modal::ConfirmationModalContent};
 
@@ -677,11 +677,18 @@ impl MatchEvent for AccountSettings {
                         AccessTokenCopyError::NoSession => "settings.account.popup.access_token_no_session",
                         AccessTokenCopyError::Unavailable => "settings.account.popup.access_token_unavailable",
                     };
-                    enqueue_popup_notification(
-                        tr_key(self.app_language, error_key),
-                        PopupKind::Error,
-                        Some(4.0),
-                    );
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't get access token".into()),
+                        message: tr_key(self.app_language, error_key).into(),
+                        actions: vec![
+                            NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                submit_async_request(MatrixRequest::GetAccessTokenForCopy);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(4.0),
+                        ..Default::default()
+                    });
                     continue;
                 }
                 _ => {}
@@ -721,11 +728,19 @@ impl MatchEvent for AccountSettings {
                         self.own_profile.as_ref().is_some_and(|p| p.avatar_state.has_avatar()),
                         &delete_avatar_button
                     );
-                    enqueue_popup_notification(
-                        err_msg.clone(),
-                        PopupKind::Error,
-                        Some(4.0),
-                    );
+                    let err = err_msg.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't upload avatar".into()),
+                        message: err.clone().into(),
+                        actions: vec![
+                            NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&err);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(4.0),
+                        ..Default::default()
+                    });
                     continue;
                 }
                 Some(AccountDataAction::DisplayNameChanged(new_name)) => {
@@ -758,11 +773,19 @@ impl MatchEvent for AccountSettings {
                     display_name_input.set_is_read_only(cx, false);
                     display_name_input.set_disabled(cx, false);
                     Self::enable_display_name_buttons(cx, true, &accept_display_name_button, &cancel_display_name_button);
-                    enqueue_popup_notification(
-                        err_msg.clone(),
-                        PopupKind::Error,
-                        Some(4.0),
-                    );
+                    let err = err_msg.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't update display name".into()),
+                        message: err.clone().into(),
+                        actions: vec![
+                            NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&err);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(4.0),
+                        ..Default::default()
+                    });
                     continue;
                 }
                 Some(AccountDataAction::OwnDeviceFetched(device)) => {

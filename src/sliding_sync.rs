@@ -53,7 +53,7 @@ use crate::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
     }, proxy_config::{self, build_policy_reqwest_client, resolve_effective_proxy_url}, room::{FetchedRoomAvatar, FetchedRoomPreview, RoomPreviewAction}, shared::{
-        avatar::AvatarState, jump_to_bottom_button::UnreadMessageCount, popup_list::{PopupKind, enqueue_popup_notification}
+        avatar::AvatarState, jump_to_bottom_button::UnreadMessageCount, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}
     }, space_service_sync::space_service_loop, utils::{self, AVATAR_THUMBNAIL_FORMAT, RoomNameId, VecDiff, avatar_from_room_name}, verification::add_verification_event_handlers_and_sync_client
 };
 
@@ -2876,11 +2876,24 @@ async fn matrix_worker_task(
                                     .pending_thread_timelines
                                     .remove(&thread_root_event_id);
                             }
-                            enqueue_popup_notification(
-                                format!("Failed to create thread-focused timeline. Please retry opening the thread again later.\n\nError: {error}"),
-                                PopupKind::Error,
-                                None,
-                            );
+                            let error_detail = format!("{error}");
+                            let room_id_retry = room_id.clone();
+                            let thread_root_event_id_retry = thread_root_event_id.clone();
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Couldn't create thread timeline".into()),
+                                message: format!("Failed to create thread-focused timeline.\n\nError: {error_detail}").into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        submit_async_request(MatrixRequest::CreateThreadTimeline {
+                                            room_id: room_id_retry.clone(),
+                                            thread_root_event_id: thread_root_event_id_retry.clone(),
+                                        });
+                                    }),
+                                ],
+                                auto_dismissal_duration: None,
+                                ..Default::default()
+                            });
                         }
                     }
                 });
@@ -4021,15 +4034,27 @@ async fn matrix_worker_task(
                 let Some(client) = get_client() else { continue };
                 let _set_room_name_task = Handle::current().spawn(async move {
                     if let Some(room) = client.get_room(&room_id) {
-                        match room.set_name(name).await {
+                        match room.set_name(name.clone()).await {
                             Ok(_) => log!("Room name set successfully."),
                             Err(e) => {
                                 error!("Failed to set room name: {e:?}");
-                                enqueue_popup_notification(
-                                    "Failed to set room name",
-                                    crate::shared::popup_list::PopupKind::Error,
-                                    Some(5.0),
-                                );
+                                let name_retry = name.clone();
+                                let room_id_retry = room_id.clone();
+                                enqueue_notification(NotificationItem {
+                                    kind: PopupKind::Error,
+                                    title: Some("Couldn't set room name".into()),
+                                    message: "Failed to set room name".into(),
+                                    actions: vec![
+                                        NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                            submit_async_request(MatrixRequest::SetRoomName {
+                                                room_id: room_id_retry.clone(),
+                                                name: name_retry.clone(),
+                                            });
+                                        }),
+                                    ],
+                                    auto_dismissal_duration: Some(5.0),
+                                    ..Default::default()
+                                });
                             }
                         }
                     }

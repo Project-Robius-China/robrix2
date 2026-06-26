@@ -21,7 +21,7 @@ use matrix_sdk::room::reply::{EnforceThread, Reply};
 use ruma::events::room::message::AddMentions;
 use matrix_sdk_ui::timeline::{EmbeddedEvent, EventTimelineItem, TimelineEventItemId};
 use ruma::{events::room::message::{LocationMessageEventContent, MessageType, ReplyWithinThread, RoomMessageEventContent}, OwnedRoomId, OwnedUserId, UserId};
-use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, SlashCommandDiscoveryContext, classify_known_slash_command_for_submission_in_context, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
+use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, SlashCommandDiscoveryContext, classify_known_slash_command_for_submission_in_context, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::shared::file_upload_modal::{FilePreviewerMetaData, ThumbnailData};
 
@@ -1641,11 +1641,18 @@ impl RoomInputBar {
             self.view.view(cx, ids!(more_actions_popup)).set_visible(cx, false);
             if let Err(_e) = init_location_subscriber(cx) {
                 error!("Failed to initialize location subscriber");
-                enqueue_popup_notification(
-                    "Failed to initialize location services.",
-                    PopupKind::Error,
-                    None,
-                );
+                enqueue_notification(NotificationItem {
+                    kind: PopupKind::Error,
+                    title: Some("Couldn't initialize location services".into()),
+                    message: "Failed to initialize location services.".into(),
+                    actions: vec![
+                        NotificationAction::new("Retry", NotifActionStyle::Primary, move |cx| {
+                            let _ = init_location_subscriber(cx);
+                        }),
+                    ],
+                    auto_dismissal_duration: None,
+                    ..Default::default()
+                });
             }
             self.view.location_preview(cx, ids!(location_preview)).show();
             self.redraw(cx);
@@ -2130,11 +2137,20 @@ impl RoomInputBar {
             Ok(metadata) => metadata,
             Err(e) => {
                 makepad_widgets::error!("Failed to read file metadata: {e}");
-                enqueue_popup_notification(
-                    format!("Unable to access file: {e}"),
-                    PopupKind::Error,
-                    None,
-                );
+                let error_msg = format!("Unable to access file: {e}");
+                let error_msg_copy = error_msg.clone();
+                enqueue_notification(NotificationItem {
+                    kind: PopupKind::Error,
+                    title: Some("File access failed".into()),
+                    message: error_msg.into(),
+                    actions: vec![
+                        NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                            cx.copy_to_clipboard(&error_msg_copy);
+                        }),
+                    ],
+                    auto_dismissal_duration: None,
+                    ..Default::default()
+                });
                 return;
             }
         };

@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -5953,13 +5953,29 @@ impl Widget for RoomScreen {
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
                         self.pending_invited_users.remove(user_id);
                         let error_text = error.to_string();
-                        enqueue_popup_notification(
-                            tr_fmt(self.app_language, "room_screen.popup.invite.failed", &[
+                        let error_display = error_text.clone();
+                        let room_id_retry = room_id.clone();
+                        let user_id_retry = user_id.clone();
+                        enqueue_notification(NotificationItem {
+                            kind: PopupKind::Error,
+                            title: Some("Invite failed".into()),
+                            message: tr_fmt(self.app_language, "room_screen.popup.invite.failed", &[
                                 ("error", error_text.as_str()),
-                            ]),
-                            PopupKind::Error,
-                            None,
-                        );
+                            ]).into(),
+                            actions: vec![
+                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                    submit_async_request(MatrixRequest::InviteUser {
+                                        room_id: room_id_retry.clone(),
+                                        user_id: user_id_retry.clone(),
+                                    });
+                                }),
+                                NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                    cx.copy_to_clipboard(&error_display);
+                                }),
+                            ],
+                            auto_dismissal_duration: None,
+                            ..Default::default()
+                        });
                     }
                 }
                 if let Some(ReportRoomResultAction::Sent { room_id }) = action.downcast_ref() {
@@ -5973,11 +5989,19 @@ impl Widget for RoomScreen {
                 }
                 if let Some(ReportRoomResultAction::Failed { room_id, error }) = action.downcast_ref() {
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
-                        enqueue_popup_notification(
-                            format!("Failed to report room.\n\nError: {error}"),
-                            PopupKind::Error,
-                            Some(5.0),
-                        );
+                        let error_display = error.to_string();
+                        enqueue_notification(NotificationItem {
+                            kind: PopupKind::Error,
+                            title: Some("Report failed".into()),
+                            message: format!("Failed to report room.\n\nError: {error}").into(),
+                            actions: vec![
+                                NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                    cx.copy_to_clipboard(&error_display);
+                                }),
+                            ],
+                            auto_dismissal_duration: Some(5.0),
+                            ..Default::default()
+                        });
                     }
                 }
                 if let Some(ActionResponseResultAction::Failed { room_id, source_event_id, error }) = action.downcast_ref() {
@@ -8010,16 +8034,33 @@ impl RoomScreen {
                     }
                     error!("Pagination error ({direction}) in {:?}: {error:?}", self.room_name_id);
                     let room_name = self.room_name_id.as_ref().map(|r| r.to_string());
-                    enqueue_popup_notification(
-                        utils::stringify_pagination_error(
-                            &error,
-                            room_name
-                                .as_deref()
-                                .unwrap_or(tr_key(self.app_language, "room_screen.fallback.unnamed_room")),
-                        ),
-                        PopupKind::Error,
-                        Some(10.0),
+                    let error_display = utils::stringify_pagination_error(
+                        &error,
+                        room_name
+                            .as_deref()
+                            .unwrap_or(tr_key(self.app_language, "room_screen.fallback.unnamed_room")),
                     );
+                    let tl_kind_retry = tl.kind.clone();
+                    let direction_retry = direction.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Pagination failed".into()),
+                        message: error_display.clone().into(),
+                        actions: vec![
+                            NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: tl_kind_retry.clone(),
+                                    num_events: 30,
+                                    direction: direction_retry.clone(),
+                                });
+                            }),
+                            NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&error_display);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(10.0),
+                        ..Default::default()
+                    });
                     done_loading = true;
                 }
                 TimelineUpdate::PaginationIdle { fully_paginated, direction } => {
@@ -9606,11 +9647,29 @@ impl RoomScreen {
         if self.threads_pane_state.entries.is_empty() {
             self.threads_pane_state.status_text = format!("Failed to load threads.\n\nError: {error}");
         } else {
-            enqueue_popup_notification(
-                format!("Failed to load more threads.\n\nError: {error}"),
-                PopupKind::Error,
-                Some(5.0),
-            );
+            let error_display = error.to_string();
+            let room_id_retry = self.threads_pane_state.room_id.clone();
+            let from_retry = self.threads_pane_state.prev_batch_token.clone();
+            enqueue_notification(NotificationItem {
+                kind: PopupKind::Error,
+                title: Some("Load threads failed".into()),
+                message: format!("Failed to load more threads.\n\nError: {error}").into(),
+                actions: vec![
+                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                        if let Some(room_id) = room_id_retry.clone() {
+                            submit_async_request(MatrixRequest::ListRoomThreads {
+                                room_id,
+                                from: from_retry.clone(),
+                            });
+                        }
+                    }),
+                    NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                        cx.copy_to_clipboard(&error_display);
+                    }),
+                ],
+                auto_dismissal_duration: Some(5.0),
+                ..Default::default()
+            });
         }
         self.refresh_threads_pane(cx);
         self.redraw(cx);
