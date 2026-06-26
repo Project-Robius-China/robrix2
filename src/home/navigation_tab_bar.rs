@@ -707,7 +707,15 @@ impl Widget for NavigationTabBar {
         // Keep the mobile bar clear of the bottom safe-area (iOS home indicator).
         // `safe_area_spacer` only exists in the Mobile variant; on Desktop the
         // query returns an empty ref and we skip.
-        let bottom_inset = cx.display_context.safe_area_insets.bottom;
+        //
+        // Clamp the inset: it is only ever a small home-indicator / gesture-nav
+        // gap (~34px on iOS, 0 on most devices). Some Android backends report an
+        // implausibly large value here; applied verbatim it inflates the bar and
+        // pushes the transparent, Fill-height tab buttons up over the room list,
+        // so a tap on the blank area lands on the middle "Add Room" tab. The
+        // ceiling sits well above any real iOS inset, so notch devices are
+        // unaffected.
+        let bottom_inset = cx.display_context.safe_area_insets.bottom.clamp(0.0, 48.0);
         if (bottom_inset - self.applied_safe_bottom).abs() > 0.5 {
             let mut spacer = self.view.view(cx, ids!(safe_area_spacer));
             if spacer.borrow().is_some() {
