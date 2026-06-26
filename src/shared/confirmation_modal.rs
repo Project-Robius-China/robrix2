@@ -13,15 +13,18 @@ script_mod! {
     // A confirmation modal with no icons in the buttons.
     // The accept button is blue and the cancel button is gray.
     mod.widgets.ConfirmationModal = #(ConfirmationModal::register_widget(vm)) {
-        width: Fit
+        // Responsive: caps at 520 on desktop, shrinks to fit narrow / mobile
+        // widths so the action buttons never overflow off-screen.
+        width: Fill { max: 520 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
         wrapper := RoundedView {
-            width: 560
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
-            padding: Inset{top: 30, right: 40, bottom: 20, left: 40}
+            padding: Inset{top: 28, right: 28, bottom: 18, left: 28}
 
             show_bg: true
             draw_bg +: {
@@ -60,11 +63,10 @@ script_mod! {
 
             buttons_view := View {
                 width: Fill, height: Fit
-                flow: Right,
-                padding: Inset{top: 20, bottom: 20}
-                margin: Inset{right: -15}
+                flow: Flow.Right{wrap: true},
+                padding: Inset{top: 18, bottom: 12}
                 align: Align{x: 1.0, y: 0.5}
-                spacing: 20
+                spacing: 12
 
                 cancel_button := RobrixNeutralIconButton {
                     width: 120,

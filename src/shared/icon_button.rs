@@ -125,4 +125,52 @@ script_mod! {
             color_down: (COLOR_TEXT)
         }
     }
+
+    // Teal primary button for the settings screen (accent CTA — Upload, Save,
+    // Check for Updates, etc.). Uses the RBX_ACCENT brand color instead of the
+    // legacy blue so settings stays on-theme.
+    mod.widgets.SettingsPrimaryButton = mod.widgets.RobrixIconButton {
+        draw_bg +: {
+            color: (RBX_ACCENT)
+            color_hover: (RBX_ACCENT_HOVER)
+            color_down: (RBX_ACCENT_PRESSED)
+            color_disabled: (RBX_BG_DISABLED)
+            border_color: #0000
+            border_color_hover: #0000
+            border_color_down: #0000
+            border_radius: (RBX_RADIUS_SM)
+        }
+        draw_icon.color: (RBX_FG_ON_ACCENT)
+        draw_text +: {
+            color: (RBX_FG_ON_ACCENT)
+            color_hover: (RBX_FG_ON_ACCENT)
+            color_down: (RBX_FG_ON_ACCENT)
+        }
+    }
+
+    // Leading round icon badge for a settings card header / row. Soft accent
+    // tint by default — override `draw_bg.color` for a different tint, and drop
+    // an `Icon { ... }` child inside per use.
+    mod.widgets.SettingsIconCircle = CircleView {
+        width: 34, height: 34
+        align: Align{x: 0.5, y: 0.5}
+        show_bg: true
+        draw_bg +: { color: (RBX_ACCENT_SOFT) }
+    }
+
+    // Status pill: soft-tinted, fully-rounded badge with a bold label. Neutral by
+    // default — override draw_bg.color + badge_label's color for success / warning
+    // / danger / info / accent states.
+    mod.widgets.SettingsStatusBadge = RoundedView {
+        width: Fit, height: Fit
+        align: Align{x: 0.5, y: 0.5}
+        padding: Inset{left: 10, right: 10, top: 4, bottom: 4}
+        show_bg: true
+        draw_bg +: { color: (RBX_NEUTRAL_BG), border_radius: (RBX_RADIUS_PILL) }
+        badge_label := Label {
+            width: Fit, height: Fit
+            draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_NEUTRAL_FG) }
+            text: ""
+        }
+    }
 }

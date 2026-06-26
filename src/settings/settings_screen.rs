@@ -2,9 +2,51 @@
 use makepad_widgets::*;
 use url::Url;
 
-use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}, styles::{apply_neutral_button_style, apply_primary_button_style}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
+use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
 
 const CONTRIBUTE_REPO_URL: &str = "https://github.com/Project-Robius-China/robrix2";
+
+/// Teal "selected" style for a settings category tab (solid RBX_ACCENT + white
+/// text), matching the segmented-tab look of the design spec.
+fn apply_settings_tab_selected(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            color: mod.widgets.RBX_ACCENT,
+            color_hover: mod.widgets.RBX_ACCENT_HOVER,
+            color_down: mod.widgets.RBX_ACCENT_PRESSED,
+            border_size: 0.0,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_FG_ON_ACCENT,
+            color_hover: mod.widgets.RBX_FG_ON_ACCENT,
+            color_down: mod.widgets.RBX_FG_ON_ACCENT,
+        }
+    });
+}
+
+/// Ghost "unselected" style for a settings category tab (transparent fill,
+/// secondary text, subtle hover wash).
+fn apply_settings_tab_unselected(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            color: #0000,
+            color_hover: mod.widgets.RBX_BG_HOVER,
+            color_down: mod.widgets.RBX_BG_PRESSED,
+            border_size: 0.0,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_FG_SECONDARY,
+            color_hover: mod.widgets.RBX_FG_SECONDARY,
+            color_down: mod.widgets.RBX_FG_SECONDARY,
+        }
+    });
+}
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -18,35 +60,50 @@ script_mod! {
         width: Fill, height: Fill,
         flow: Overlay
 
-        View {
-            padding: Inset{top: (SPACE_SM), left: (SETTINGS_CONTENT_PADDING), right: (SETTINGS_CONTENT_PADDING), bottom: (SETTINGS_CONTENT_PADDING)},
+        SolidView {
+            show_bg: true
+            draw_bg.color: (RBX_BG_CANVAS)
+            padding: Inset{top: (SPACE_SM), left: (SETTINGS_CONTENT_PADDING), right: (SETTINGS_CONTENT_PADDING) },
             flow: Down
 
-            // The settings header shows a title, with a close button to the right.
+            // Header: "Settings" title + close button.
             settings_header := View {
                 flow: Right,
                 width: Fill, height: Fit
-                margin: Inset{top: (SPACE_SM), left: (SPACE_XS), right: (SPACE_XS)}
+                margin: Inset{top: (SPACE_SM), left: 0, right: (SPACE_XS)}
                 spacing: (SPACE_SM),
+                align: Align{y: 0.5}
 
                 settings_header_title := TitleLabel {
+                    width: Fill
                     padding: 0,
-                    margin: Inset{ left: 0, top: (SPACE_SM) },
-                    text: "Add/Explore Rooms"
+                    margin: 0,
+                    text: "Settings"
                     draw_text +: {
-                        text_style: theme.font_regular {font_size: 18},
+                        text_style: RBX_TEXT_PAGE_TITLE {},
+                        color: (RBX_FG_PRIMARY)
                     }
                 }
 
-                // The "X" close button on the top right
+                // The "X" close button on the top right — bare icon, no fill.
                 close_button := RobrixNeutralIconButton {
                     width: Fit,
                     height: Fit,
                     spacing: 0,
                     margin: 0,
-                    padding: (SPACE_LG),
-                    draw_icon.svg: (ICON_CLOSE)
-                    icon_walk: Walk{width: 12, height: 12}
+                    padding: (SPACE_MD),
+                    draw_bg +: {
+                        color: #0000
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_size: 0.0
+                        border_color: #0000
+                        border_color_hover: #0000
+                        border_color_down: #0000
+                        border_radius: (RBX_RADIUS_XS)
+                    }
+                    draw_icon +: { svg: (ICON_CLOSE), color: (RBX_FG_SECONDARY) }
+                    icon_walk: Walk{width: 14, height: 14}
                 }
             }
 
@@ -65,7 +122,7 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Account"
                 }
 
@@ -74,7 +131,7 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Preferences"
                 }
 
@@ -83,7 +140,7 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Devices"
                 }
 
@@ -92,7 +149,7 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Labs"
                 }
 
@@ -101,7 +158,7 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Contribute"
                 }
             }
@@ -145,13 +202,33 @@ script_mod! {
                             margin: Inset{top: (SPACE_XS)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
 
-                            preferences_application_language_label := SubsectionLabel {
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_SM)
                                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                                text: "Application language"
+
+                                SettingsIconCircle {
+                                    width: 30, height: 30
+                                    draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                                    Icon {
+                                        width: 16, height: 16
+                                        draw_icon +: { svg: (ICON_GLOBE), color: (RBX_ACCENT) }
+                                        icon_walk: Walk{width: 16, height: 16}
+                                    }
+                                }
+                                preferences_application_language_label := SubsectionLabel {
+                                    width: Fill
+                                    margin: 0
+                                    text: "Application language"
+                                }
                             }
 
                             // Custom language selector: button + popup list
@@ -259,8 +336,10 @@ script_mod! {
                             flow: Down
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
                             margin: Inset{top: (SPACE_XS)}
@@ -268,9 +347,21 @@ script_mod! {
                             View {
                                 width: Fill, height: Fit
                                 flow: Right
-                                align: Align{x: 1.0, y: 0.5}
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_SM)
+
+                                SettingsIconCircle {
+                                    width: 30, height: 30
+                                    draw_bg +: { color: (RBX_INFO_BG) }
+                                    Icon {
+                                        width: 16, height: 16
+                                        draw_icon +: { svg: (ICON_SHIELD), color: (RBX_INFO_FG) }
+                                        icon_walk: Walk{width: 16, height: 16}
+                                    }
+                                }
 
                                 preferences_proxy_use_label := SubsectionLabel {
+                                    width: Fill
                                     margin: Inset{top: 0, bottom: 0}
                                     text: "Use proxy"
                                 }
@@ -283,8 +374,8 @@ script_mod! {
                                     active: false
                                     draw_bg +: {
                                         size: 20.0
-                                        color_active: (COLOR_ACTIVE_PRIMARY)
-                                        border_color_active: (COLOR_ACTIVE_PRIMARY)
+                                        color_active: (RBX_ACCENT)
+                                        border_color_active: (RBX_ACCENT)
                                         mark_color_active: #fff
                                     }
                                 }
@@ -412,7 +503,7 @@ script_mod! {
                                 align: Align{x: 0.0, y: 0.5}
                                 margin: Inset{top: (SPACE_SM)}
 
-                                preferences_proxy_save_button := RobrixIconButton {
+                                preferences_proxy_save_button := SettingsPrimaryButton {
                                     width: Fit, height: Fit
                                     padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
                                     align: Align{x: 0.5, y: 0.5}
@@ -451,8 +542,10 @@ script_mod! {
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
                             bot_settings := BotSettings {}
                         }
@@ -464,8 +557,10 @@ script_mod! {
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
                             translation_settings := TranslationSettings {}
                         }
@@ -477,8 +572,10 @@ script_mod! {
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
                             // The TSP wallet settings section.
                             tsp_settings_screen := TspSettingsScreen {}
@@ -502,13 +599,33 @@ script_mod! {
                             margin: Inset{top: (SPACE_XS)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
 
-                            contribute_title := SubsectionLabel {
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_SM)
                                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                                text: "Contribute"
+
+                                SettingsIconCircle {
+                                    width: 30, height: 30
+                                    draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                                    Icon {
+                                        width: 16, height: 16
+                                        draw_icon +: { svg: (ICON_LINK), color: (RBX_ACCENT) }
+                                        icon_walk: Walk{width: 16, height: 16}
+                                    }
+                                }
+                                contribute_title := SubsectionLabel {
+                                    width: Fill
+                                    margin: 0
+                                    text: "Contribute"
+                                }
                             }
 
                             contribute_description := Label {
@@ -531,7 +648,7 @@ script_mod! {
                                 icon_walk: Walk{width: 0, height: 0}
                                 draw_text +: {
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
-                                    color: #x0000EE,
+                                    color: (RBX_LINK),
                                     color_hover: (COLOR_LINK_HOVER),
                                 }
                                 text: "https://github.com/Project-Robius-China/robrix2"
@@ -544,13 +661,33 @@ script_mod! {
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
 
-                            about_title := SubsectionLabel {
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_SM)
                                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                                text: "About Robrix"
+
+                                SettingsIconCircle {
+                                    width: 30, height: 30
+                                    draw_bg +: { color: (RBX_INFO_BG) }
+                                    Icon {
+                                        width: 16, height: 16
+                                        draw_icon +: { svg: (ICON_INFO), color: (RBX_INFO_FG) }
+                                        icon_walk: Walk{width: 16, height: 16}
+                                    }
+                                }
+                                about_title := SubsectionLabel {
+                                    width: Fill
+                                    margin: 0
+                                    text: "About Robrix"
+                                }
                             }
 
                             about_description := Label {
@@ -577,13 +714,13 @@ script_mod! {
                                 text: "Current version: 0.0.0"
                             }
 
-                            contribute_check_update_button := RobrixIconButton {
+                            contribute_check_update_button := SettingsPrimaryButton {
                                 width: Fit, height: Fit,
                                 margin: Inset{left: (ICON_BUTTON_LEFT_PAD)}
                                 padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                                 spacing: 0,
                                 icon_walk: Walk{width: 0, height: 0, margin: 0}
-                                draw_bg +: { border_radius: (RADIUS_MD) }
+                                draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                                 text: "Check for Updates"
                             }
                         }
@@ -1180,29 +1317,29 @@ impl SettingsScreen {
         let mut category_contribute_button = self.view.button(cx, ids!(category_contribute_button));
 
         if show_account {
-            apply_primary_button_style(cx, &mut category_account_button);
+            apply_settings_tab_selected(cx, &mut category_account_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_account_button);
+            apply_settings_tab_unselected(cx, &mut category_account_button);
         }
         if show_preferences {
-            apply_primary_button_style(cx, &mut category_preferences_button);
+            apply_settings_tab_selected(cx, &mut category_preferences_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_preferences_button);
+            apply_settings_tab_unselected(cx, &mut category_preferences_button);
         }
         if show_devices {
-            apply_primary_button_style(cx, &mut category_devices_button);
+            apply_settings_tab_selected(cx, &mut category_devices_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_devices_button);
+            apply_settings_tab_unselected(cx, &mut category_devices_button);
         }
         if show_labs {
-            apply_primary_button_style(cx, &mut category_labs_button);
+            apply_settings_tab_selected(cx, &mut category_labs_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_labs_button);
+            apply_settings_tab_unselected(cx, &mut category_labs_button);
         }
         if show_contribute {
-            apply_primary_button_style(cx, &mut category_contribute_button);
+            apply_settings_tab_selected(cx, &mut category_contribute_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_contribute_button);
+            apply_settings_tab_unselected(cx, &mut category_contribute_button);
         }
 
         category_account_button.reset_hover(cx);

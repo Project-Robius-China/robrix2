@@ -40,10 +40,10 @@ script_mod! {
         margin: Inset{top: 6, bottom: 6}
         show_bg: true
         draw_bg +: {
-            color: #xFFFFFF
-            border_radius: 8.0
+            color: (RBX_BG_SURFACE)
+            border_radius: (RBX_RADIUS_SM)
             border_size: 1.0
-            border_color: #xE5E5EA
+            border_color: (RBX_STROKE_SOFT)
         }
         spacing: 6
 
@@ -54,17 +54,22 @@ script_mod! {
             spacing: 12
             align: Align{y: 0.5}
 
-            // Generic device glyph. Matrix's `/devices` endpoint doesn't
-            // expose a device type, so we don't try to guess laptop vs
-            // phone vs browser — one icon for all.
-            device_card_icon := Label {
-                width: 36, height: 36
+            // Generic device glyph in a soft-tint circle. Matrix's `/devices`
+            // endpoint doesn't expose a device type, so we don't try to guess
+            // laptop vs phone vs browser — one icon for all.
+            device_card_icon_circle := CircleView {
+                width: 40, height: 40
                 align: Align{x: 0.5, y: 0.5}
-                draw_text +: {
-                    color: #x606066
-                    text_style: theme.font_regular { font_size: 22.0 }
+                show_bg: true
+                draw_bg +: { color: (RBX_INFO_BG) }
+                device_card_icon := Label {
+                    width: Fit, height: Fit
+                    align: Align{x: 0.5, y: 0.5}
+                    draw_text +: {
+                        text_style: theme.font_regular { font_size: 19.0 }
+                    }
+                    text: "💻"
                 }
-                text: "💻"
             }
 
             device_card_name_col := View {
@@ -76,7 +81,7 @@ script_mod! {
                     width: Fill, height: Fit
                     text: "Unknown device"
                     draw_text +: {
-                        color: #x101012
+                        color: (RBX_FG_PRIMARY)
                         text_style: theme.font_bold { font_size: 14.0 }
                     }
                 }
@@ -84,7 +89,7 @@ script_mod! {
                     width: Fill, height: Fit
                     text: ""
                     draw_text +: {
-                        color: #x606066
+                        color: (RBX_FG_SECONDARY)
                         text_style: theme.font_regular { font_size: 11.0 }
                     }
                 }
@@ -113,14 +118,14 @@ script_mod! {
                 device_card_last_active_label := Label {
                     text: "Last Active"
                     draw_text +: {
-                        color: #x606066
+                        color: (RBX_FG_SECONDARY)
                         text_style: theme.font_regular { font_size: 11.0 }
                     }
                 }
                 device_card_last_active_value := Label {
                     text: "—"
                     draw_text +: {
-                        color: #x101012
+                        color: (RBX_FG_PRIMARY)
                         text_style: theme.font_regular { font_size: 12.0 }
                     }
                 }
@@ -132,14 +137,14 @@ script_mod! {
                 device_card_id_label := Label {
                     text: "Device ID"
                     draw_text +: {
-                        color: #x606066
+                        color: (RBX_FG_SECONDARY)
                         text_style: theme.font_regular { font_size: 11.0 }
                     }
                 }
                 device_card_id_value := Label {
                     text: "—"
                     draw_text +: {
-                        color: #x101012
+                        color: (RBX_FG_PRIMARY)
                         text_style: theme.font_regular { font_size: 12.0 }
                     }
                 }
@@ -165,7 +170,7 @@ script_mod! {
                 width: Fill, height: Fit
                 text: "Where you're signed in"
                 draw_text +: {
-                    color: #x101012
+                    color: (RBX_FG_PRIMARY)
                     text_style: theme.font_bold { font_size: 16.0 }
                 }
             }
@@ -181,7 +186,7 @@ script_mod! {
             text: "0 devices"
             margin: Inset{top: 4}
             draw_text +: {
-                color: #x606066
+                color: (RBX_FG_SECONDARY)
                 text_style: theme.font_regular { font_size: 12.0 }
             }
         }
@@ -193,7 +198,7 @@ script_mod! {
             margin: Inset{top: 16, bottom: 16}
             align: Align{x: 0.5, y: 0.5}
             draw_text +: {
-                color: #x808080
+                color: (RBX_FG_TERTIARY)
                 text_style: theme.font_regular { font_size: 13.0 }
             }
         }
