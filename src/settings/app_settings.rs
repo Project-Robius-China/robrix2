@@ -245,26 +245,58 @@ script_mod! {
                 width: Fill, height: Fit
                 flow: Right
                 align: Align{y: 0.5}
-                spacing: 6
+                spacing: 8
 
                 ui_zoom_minus_button := RobrixNeutralIconButton {
-                    width: 28, height: 28,
+                    width: 32, height: 32,
                     padding: 0
                     align: Align{x: 0.5, y: 0.5}
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_size: 1.0
+                        border_radius: (RBX_RADIUS_XS)
+                        border_color: (RBX_STROKE_STRONG)
+                        border_color_hover: (RBX_ACCENT)
+                        border_color_down: (RBX_ACCENT)
+                    }
+                    draw_text +: {
+                        color: (RBX_FG_PRIMARY)
+                        color_hover: (RBX_FG_PRIMARY)
+                        color_down: (RBX_FG_PRIMARY)
+                        text_style: BOLD_TEXT { font_size: 14 }
+                    }
                     text: "-"
                 }
 
                 ui_zoom_input := RobrixTextInput {
-                    width: 80, height: Fit
-                    align: Align {y: 0.5}
+                    width: 72, height: 32
+                    align: Align {x: 0.5, y: 0.5}
                     padding: Inset{left: 8, right: 8, top: 5, bottom: 5}
                     empty_text: "100%"
                 }
 
                 ui_zoom_plus_button := RobrixNeutralIconButton {
-                    width: 28, height: 28,
+                    width: 32, height: 32,
                     padding: 0
                     align: Align{x: 0.5, y: 0.5}
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_size: 1.0
+                        border_radius: (RBX_RADIUS_XS)
+                        border_color: (RBX_STROKE_STRONG)
+                        border_color_hover: (RBX_ACCENT)
+                        border_color_down: (RBX_ACCENT)
+                    }
+                    draw_text +: {
+                        color: (RBX_FG_PRIMARY)
+                        color_hover: (RBX_FG_PRIMARY)
+                        color_down: (RBX_FG_PRIMARY)
+                        text_style: BOLD_TEXT { font_size: 14 }
+                    }
                     text: "+"
                 }
             }
@@ -334,8 +366,8 @@ script_mod! {
             }
 
             agent_chat_enable_toggle := ToggleFlat {
+                width: Fit, height: Fit
                 margin: Inset{left: 6.5, top: 5, bottom: 5}
-                padding: Inset { left: 15}
                 active: false,
                 draw_bg +: { size: 21 }
                 text: ""

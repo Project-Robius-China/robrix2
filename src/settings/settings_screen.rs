@@ -85,15 +85,25 @@ script_mod! {
                     }
                 }
 
-                // The "X" close button on the top right
+                // The "X" close button on the top right — bare icon, no fill.
                 close_button := RobrixNeutralIconButton {
                     width: Fit,
                     height: Fit,
                     spacing: 0,
                     margin: 0,
-                    padding: (SPACE_LG),
-                    draw_icon.svg: (ICON_CLOSE)
-                    icon_walk: Walk{width: 12, height: 12}
+                    padding: (SPACE_MD),
+                    draw_bg +: {
+                        color: #0000
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_size: 0.0
+                        border_color: #0000
+                        border_color_hover: #0000
+                        border_color_down: #0000
+                        border_radius: (RBX_RADIUS_XS)
+                    }
+                    draw_icon +: { svg: (ICON_CLOSE), color: (RBX_FG_SECONDARY) }
+                    icon_walk: Walk{width: 14, height: 14}
                 }
             }
 
