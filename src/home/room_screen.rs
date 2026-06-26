@@ -3001,45 +3001,81 @@ script_mod! {
     mod.widgets.RoomInfoPeopleEntry = #(RoomInfoPeopleEntry::register_widget(vm)) {
         width: Fill
         height: Fit
-        flow: Right
-        align: Align{y: 0.5}
-        spacing: 9
-        padding: Inset{left: 10, right: 10, top: 10, bottom: 10}
-        margin: Inset{left: 0, right: 0, top: 0, bottom: 6}
+        flow: Down
         cursor: MouseCursor.Hand
 
-        show_bg: true
-        draw_bg +: {
-            color: #F8FAFD
-            border_radius: 4.0
-            border_size: 1.0
-            border_color: #D8E0EA
-        }
-
-        avatar := Avatar {
-            width: 34
-            height: 34
-        }
-
-        display_name := Label {
+        row := View {
             width: Fill
             height: Fit
-            flow: Flow.Right{wrap: true}
-            draw_text +: {
-                text_style: USERNAME_TEXT_STYLE { font_size: 11.2 }
-                color: #1F1F1F
+            flow: Right
+            align: Align{y: 0.5}
+            spacing: 12
+            padding: Inset{left: 14, right: 14, top: 11, bottom: 11}
+
+            avatar := Avatar {
+                width: 38
+                height: 38
             }
-            text: ""
+
+            name_wrap := View {
+                width: Fill
+                height: Fit
+                flow: Flow.Right{wrap: true}
+                align: Align{y: 0.5}
+                spacing: 6
+
+                display_name := Label {
+                    width: Fit
+                    height: Fit
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        text_style: RBX_TEXT_BODY_STRONG {}
+                        color: (RBX_FG_PRIMARY)
+                    }
+                    text: ""
+                }
+
+                // Shown only for bot members (in place of the old " [bot]" suffix).
+                bot_badge := RoundedView {
+                    visible: false
+                    width: Fit
+                    height: Fit
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: Inset{left: 7, right: 7, top: 2, bottom: 2}
+                    show_bg: true
+                    draw_bg +: { color: (RBX_ACCENT_SOFT), border_radius: (RBX_RADIUS_PILL) }
+                    Label {
+                        width: Fit, height: Fit
+                        draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_ACCENT) }
+                        text: "Bot"
+                    }
+                }
+            }
+
+            // Role chip (Creator / Admin / Moderator) — hidden for plain members.
+            level_chip := RoundedView {
+                visible: false
+                width: Fit
+                height: Fit
+                align: Align{x: 0.5, y: 0.5}
+                padding: Inset{left: 9, right: 9, top: 3, bottom: 3}
+                show_bg: true
+                draw_bg +: { color: (RBX_INFO_BG), border_radius: (RBX_RADIUS_PILL) }
+                level := Label {
+                    width: Fit
+                    height: Fit
+                    draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_INFO_FG) }
+                    text: ""
+                }
+            }
         }
 
-        level := Label {
-            width: Fit
-            height: Fit
-            draw_text +: {
-                text_style: MESSAGE_TEXT_STYLE { font_size: 10.2 }
-                color: #6D7682
-            }
-            text: ""
+        member_divider := RoundedView {
+            width: Fill
+            height: 1.0
+            margin: Inset{left: 64}
+            show_bg: true
+            draw_bg +: { color: (RBX_STROKE_SOFT) }
         }
     }
 
@@ -3081,9 +3117,36 @@ script_mod! {
                     width: Fit,
                     height: Fit,
                     spacing: 0,
-                    padding: 12,
-                    draw_icon.svg: (ICON_JUMP)
-                    icon_walk: Walk{width: 14, height: 14}
+                    // Left inset matches the room top bar's back icon (header pad
+                    // 6 + button pad 6 = 12) so the two arrows line up vertically.
+                    padding: Inset{left: 12, right: 3, top: 8, bottom: 8}
+                    draw_bg +: {
+                        color: #0000
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_size: 0.0
+                        border_color: #0000
+                        border_color_hover: #0000
+                        border_color_down: #0000
+                        border_radius: (RBX_RADIUS_XS)
+                    }
+                    draw_icon +: { svg: (ICON_JUMP), color: (RBX_FG_SECONDARY) }
+                    icon_walk: Walk{width: 16, height: 16}
+                    text: ""
+                }
+
+                // People sub-page count, shown inline with the back button so the
+                // two are horizontally aligned (also visible in the inline tab,
+                // where `title` is hidden).
+                members_header_count := Label {
+                    visible: false
+                    width: Fit
+                    height: Fit
+                    margin: Inset{left: 0}
+                    draw_text +: {
+                        text_style: RBX_TEXT_SECTION_TITLE {}
+                        color: (RBX_FG_PRIMARY)
+                    }
                     text: ""
                 }
 
@@ -3773,26 +3836,16 @@ script_mod! {
                 width: Fill
                 height: Fill
                 flow: Down
-                spacing: 6
-                padding: Inset{left: 12, right: 12, top: 12, bottom: 10}
-
-                member_count := Label {
-                    width: Fill
-                    height: Fit
-                    draw_text +: {
-                        text_style: USERNAME_TEXT_STYLE { font_size: 10.5 }
-                        color: #4A4A4A
-                    }
-                    text: ""
-                }
+                spacing: 10
+                padding: Inset{left: 12, right: 12, top: 12, bottom: 12}
 
                 loading_label := Label {
                     visible: false
                     width: Fill
                     height: Fit
                     draw_text +: {
-                        text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                        color: #6D7682
+                        text_style: RBX_TEXT_BODY {}
+                        color: (RBX_FG_SECONDARY)
                     }
                     text: "Loading members..."
                 }
@@ -3802,19 +3855,35 @@ script_mod! {
                     width: Fill
                     height: Fit
                     draw_text +: {
-                        text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                        color: #6D7682
+                        text_style: RBX_TEXT_BODY {}
+                        color: (RBX_FG_SECONDARY)
                     }
                     text: "No members found."
                 }
 
-                people_list := PortalList {
+                // The member rows grouped into one card (rows + hairline dividers).
+                members_list_card := RoundedView {
                     width: Fill
                     height: Fill
                     flow: Down
-                    max_pull_down: 0.0
+                    clip_x: true
+                    clip_y: true
+                    show_bg: true
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        border_radius: (RBX_RADIUS_MD)
+                        border_size: 1.0
+                        border_color: (RBX_STROKE_SOFT)
+                    }
 
-                    PersonEntry := mod.widgets.RoomInfoPeopleEntry {}
+                    people_list := PortalList {
+                        width: Fill
+                        height: Fill
+                        flow: Down
+                        max_pull_down: 0.0
+
+                        PersonEntry := mod.widgets.RoomInfoPeopleEntry {}
+                    }
                 }
             }
         }
@@ -4626,14 +4695,10 @@ impl Widget for RoomInfoPeopleEntry {
 impl RoomInfoPeopleEntry {
     fn set_entry(&mut self, cx: &mut Cx, entry: &RoomInfoPeopleEntryInfo) {
         self.user_id = Some(entry.user_id.clone());
-        let display_name = if entry.is_bot {
-            format!("{} [bot]", entry.display_name)
-        } else {
-            entry.display_name.clone()
-        };
-        self.label(cx, ids!(display_name)).set_text(cx, &display_name);
+        self.label(cx, ids!(display_name)).set_text(cx, &entry.display_name);
+        self.view(cx, ids!(bot_badge)).set_visible(cx, entry.is_bot);
         self.label(cx, ids!(level)).set_text(cx, &entry.level);
-        self.label(cx, ids!(level)).set_visible(cx, !entry.level.is_empty());
+        self.view(cx, ids!(level_chip)).set_visible(cx, !entry.level.is_empty());
 
         let avatar = self.avatar(cx, ids!(avatar));
         if let Some(uri) = entry.avatar_uri.as_ref()
@@ -4973,6 +5038,10 @@ impl Widget for RoomInfoSlidingPane {
             self.people_display_count = self.info.as_ref()
                 .map(|info| info.people_entries.len().min(40))
                 .unwrap_or(0);
+            // Always open the People list scrolled to the top (the PortalList
+            // otherwise keeps its previous scroll offset).
+            self.portal_list(cx, ids!(people_view.members_list_card.people_list))
+                .set_first_id_and_scroll(0, 0.0);
             cx.widget_action(
                 self.widget_uid(),
                 RoomInfoPaneAction::ShowPeoplePage,
@@ -5067,7 +5136,7 @@ impl Widget for RoomInfoSlidingPane {
                 && let Some(info) = self.info.as_ref()
                 && self.people_display_count < info.people_entries.len()
             {
-                let people_list = self.portal_list(cx, ids!(people_view.people_list));
+                let people_list = self.portal_list(cx, ids!(people_view.members_list_card.people_list));
                 if people_list.scrolled(actions) {
                     let threshold = self.people_display_count.saturating_sub(5);
                     if people_list.first_id() + people_list.visible_items() >= threshold {
@@ -5106,7 +5175,10 @@ impl Widget for RoomInfoSlidingPane {
         }
 
         self.button(cx, ids!(header.back_button)).set_visible(cx, self.show_people_page);
-        self.label(cx, ids!(header.title)).set_text(cx, if self.show_people_page { "People" } else { "Info" });
+        // On the People sub-page the header shows the member count inline next to
+        // the back arrow; the plain "Info" title is blanked so they don't double up.
+        self.label(cx, ids!(header.title)).set_text(cx, if self.show_people_page { "" } else { "Info" });
+        self.label(cx, ids!(header.members_header_count)).set_visible(cx, self.show_people_page);
         self.view(cx, ids!(content_scroll)).set_visible(cx, !self.show_people_page);
         self.view(cx, ids!(content_scroll.info_view)).set_visible(cx, !self.show_people_page);
         self.view(cx, ids!(people_view)).set_visible(cx, self.show_people_page);
@@ -5178,10 +5250,10 @@ impl Widget for RoomInfoSlidingPane {
             self.people_display_count = info.people_entries.len().min(40);
         }
         let visible_people_count = self.people_display_count.min(info.people_entries.len());
-        self.label(cx, ids!(people_view.member_count)).set_text(cx, &info.people_count_text);
+        self.label(cx, ids!(header.members_header_count)).set_text(cx, &info.people_count_text);
         self.view(cx, ids!(people_view.loading_label)).set_visible(cx, info.show_people_loading);
         self.view(cx, ids!(people_view.empty_label)).set_visible(cx, !info.show_people_loading && info.people_entries.is_empty());
-        self.view(cx, ids!(people_view.people_list)).set_visible(cx, visible_people_count > 0);
+        self.view(cx, ids!(people_view.members_list_card)).set_visible(cx, visible_people_count > 0);
 
         while let Some(widget) = self.view.draw_walk(cx, scope, walk).step() {
             let portal_list_ref = widget.as_portal_list();
@@ -5205,6 +5277,20 @@ impl RoomInfoSlidingPane {
     }
 
     fn set_info(&mut self, cx: &mut Cx, mut info: RoomInfoPaneInfo) {
+        // Switching to a DIFFERENT room must reset the sub-page state — otherwise
+        // a reused RoomScreen/pane lands on the previous room's People list
+        // (which is empty until the new room's members load). Always fall back to
+        // the Info view (and clear the topic-expand / paging state) on room change.
+        let room_changed = self.info.as_ref()
+            .is_some_and(|current| current.owned_room_id != info.owned_room_id);
+        if room_changed {
+            self.show_people_page = false;
+            self.people_display_count = 0;
+            self.topic_expanded = false;
+            self.portal_list(cx, ids!(people_view.members_list_card.people_list))
+                .set_first_id_and_scroll(0, 0.0);
+        }
+
         // Preserve an in-flight optimistic favourite toggle across the frequent
         // Signal-driven rebuilds: keep the optimistic value until the freshly
         // built `info` (which re-reads `room.is_favourite()`) catches up, then
