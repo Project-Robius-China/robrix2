@@ -1426,6 +1426,30 @@ fn collect_room_bot_user_ids(
     room_bot_user_ids
 }
 
+/// Returns the set of MXIDs the timeline should treat as bots: the union of the
+/// app-service known-bot list (only when app-service is enabled) and every agent
+/// registered in the global [`AgentRegistry`] (always, independent of app-service).
+fn timeline_known_bot_user_ids(app_state: &AppState) -> Vec<OwnedUserId> {
+    let mut bot_user_ids = if app_state.bot_settings.enabled {
+        app_state.bot_settings.known_bot_user_ids()
+    } else {
+        Vec::new()
+    };
+    for agent_user_id in app_state.agent_registry.agent_user_ids() {
+        if bot_user_ids
+            .iter()
+            .all(|existing| existing.as_str() != agent_user_id.as_str())
+        {
+            bot_user_ids.push(agent_user_id);
+        }
+    }
+    bot_user_ids
+}
+
+fn room_props_known_bot_user_ids(app_state: &AppState) -> Vec<OwnedUserId> {
+    timeline_known_bot_user_ids(app_state)
+}
+
 fn compute_timeline_bot_context(
     app_state: Option<&AppState>,
     room_id: &OwnedRoomId,
@@ -1447,11 +1471,10 @@ fn compute_timeline_bot_context(
             } else {
                 None
             };
-            let known_bot_user_ids = if app_service_enabled {
-                app_state.bot_settings.known_bot_user_ids()
-            } else {
-                Vec::new()
-            };
+            // Union of the (app-service-gated) known-bot list and the global
+            // AgentRegistry, so registry agents are recognized even when the
+            // app-service integration is disabled.
+            let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
             let room_bot_user_ids = room_members
                 .map(|members|
                     collect_room_bot_user_ids(
@@ -7192,11 +7215,7 @@ impl RoomScreen {
                     } else {
                         None
                     };
-                    let known_bot_user_ids = if app_service_enabled {
-                        app_state.bot_settings.known_bot_user_ids()
-                    } else {
-                        Vec::new()
-                    };
+                    let known_bot_user_ids = room_props_known_bot_user_ids(app_state);
                     let has_persisted_management_binding = resolved_parent_bot_user_id
                         .as_ref()
                         .is_some_and(|resolved_parent_bot_user_id|
@@ -13870,6 +13889,55 @@ mod tests {
             &room_bot_user_ids,
             &known_bot_user_ids,
         ));
+    }
+
+    #[test]
+    fn test_registry_agent_detected_as_bot_sender() {
+        // An agent known only via the global AgentRegistry (not the app-service
+        // known-bot list, and with a non-bot-like localpart) is still detected.
+        let agent_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state
+            .agent_registry
+            .register(agent_id.clone(), crate::app::AgentEntry::default());
+
+        let known_bot_user_ids = timeline_known_bot_user_ids(&app_state);
+        assert!(is_known_or_likely_bot(agent_id.as_ref(), None, &known_bot_user_ids));
+    }
+
+    #[test]
+    fn test_room_props_known_bot_user_ids_include_registry_agents() {
+        let agent_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state
+            .agent_registry
+            .register(agent_id.clone(), crate::app::AgentEntry::default());
+
+        let known_bot_user_ids = room_props_known_bot_user_ids(&app_state);
+
+        assert!(known_bot_user_ids.iter().any(|id| id == &agent_id));
+    }
+
+    #[test]
+    fn test_non_agent_user_not_detected_as_bot() {
+        // Empty registry, empty known-bot list, app-service disabled.
+        let app_state = AppState::default();
+        let human_id: OwnedUserId = "@human:example.org".try_into().unwrap();
+
+        let known_bot_user_ids = timeline_known_bot_user_ids(&app_state);
+        assert!(!is_known_or_likely_bot(human_id.as_ref(), None, &known_bot_user_ids));
+    }
+
+    #[test]
+    fn test_empty_registry_and_no_known_bots_shows_no_bot_card() {
+        let app_state = AppState::default();
+        let known_bot_user_ids = timeline_known_bot_user_ids(&app_state);
+        assert!(known_bot_user_ids.is_empty());
+
+        let sender_id: OwnedUserId = "@someone:example.org".try_into().unwrap();
+        let is_bot_sender = is_known_or_likely_bot(sender_id.as_ref(), None, &known_bot_user_ids);
+        let render_state = compute_bot_timeline_render_state("hello", is_bot_sender);
+        assert!(!render_state.show_card);
     }
 
     #[test]
