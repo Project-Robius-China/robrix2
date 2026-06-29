@@ -79,6 +79,16 @@ tracing-subscriber = "0.3.17"
 unicode-segmentation = "1.11.0"
 percent-encoding = "2.3"
 url = "2.5.0"
+## Hand reqwest a preconfigured webpki-roots TLS config so certificate
+## verification never routes through `rustls-platform-verifier`, which on Android
+## is uninitialized (no JNI init + no bundled Kotlin verifier class in a
+## cargo-makepad APK) and panics on the first https request — making login/add
+## homeserver hang forever on "checking". Pin the same rustls 0.23 + `ring`
+## crypto provider that matrix-sdk/reqwest already use so the config type matches
+## and we avoid a "no process-level CryptoProvider" panic. See
+## src/proxy_config.rs::webpki_rustls_config.
+rustls = { version = "0.23.37", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1.0"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 rfd = "0.15"
