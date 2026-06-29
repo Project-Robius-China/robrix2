@@ -2,7 +2,7 @@
 use makepad_widgets::*;
 use url::Url;
 
-use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
+use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
 
 const CONTRIBUTE_REPO_URL: &str = "https://github.com/Project-Robius-China/robrix2";
 
@@ -535,20 +535,11 @@ script_mod! {
                         flow: Down
                         spacing: (SPACE_SM)
 
-                        // --- App Service card ---
-                        RoundedView {
-                            width: Fill, height: Fit
-                            flow: Down
-                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
-                            show_bg: true
-                            draw_bg +: {
-                                color: (RBX_BG_SURFACE)
-                                border_radius: (RBX_RADIUS_SM)
-                                border_size: 1.0
-                                border_color: (RBX_STROKE_SOFT)
-                            }
-                            bot_settings := BotSettings {}
-                        }
+                        // --- Agents card (Agent Registry) ---
+                        // Self-styled full card; the Octos AppService config now lives
+                        // inside the "Add an agent" → Octos flow rather than a standalone
+                        // App Service card.
+                        agent_settings := AgentSettings {}
 
                         // --- Translation card ---
                         RoundedView {
@@ -1113,9 +1104,6 @@ impl SettingsScreen {
             .account_settings(cx, ids!(account_settings))
             .set_app_language(cx, self.app_language);
         self.view
-            .bot_settings(cx, ids!(bot_settings))
-            .set_app_language(cx, self.app_language);
-        self.view
             .translation_settings(cx, ids!(translation_settings))
             .set_app_language(cx, self.app_language);
         self.sync_tsp_settings_card_visibility(cx);
@@ -1438,14 +1426,13 @@ impl SettingsScreen {
     }
 
     /// Fetches the current user's profile and uses it to populate the settings screen.
-    pub fn populate(&mut self, cx: &mut Cx, own_profile: Option<UserProfile>, bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_prefs: &AppPreferences, app_language: AppLanguage) {
+    pub fn populate(&mut self, cx: &mut Cx, own_profile: Option<UserProfile>, _bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_prefs: &AppPreferences, app_language: AppLanguage) {
         if let Some(profile) = own_profile.or_else(|| get_own_profile(cx)) {
             self.view.account_settings(cx, ids!(account_settings)).populate(cx, profile);
         } else {
             error!("Failed to get own profile for settings screen.");
         }
         self.view.app_settings(cx, ids!(app_settings)).populate(cx, app_prefs, app_language);
-        self.view.bot_settings(cx, ids!(bot_settings)).populate(cx, bot_settings);
         self.load_saved_proxy_to_preferences_form(cx);
         self.view.translation_settings(cx, ids!(translation_settings)).populate(cx, translation_config);
         #[cfg(feature = "tsp")]
@@ -1467,6 +1454,15 @@ impl SettingsScreenRef {
     pub fn populate(&self, cx: &mut Cx, own_profile: Option<UserProfile>, bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_prefs: &AppPreferences, app_language: AppLanguage) {
         let Some(mut inner) = self.borrow_mut() else { return; };
         inner.populate(cx, own_profile, bot_settings, translation_config, app_prefs, app_language);
+    }
+
+    /// Whether the Settings screen is currently showing the Labs ▸ Agent Access
+    /// category. Used by the bottom navigation to route its "+" action to the
+    /// "Add an agent" sheet while the Agent Registry is on screen.
+    pub fn is_showing_agent_access(&self) -> bool {
+        self.borrow()
+            .map(|inner| inner.selected_category == SettingsCategory::Labs)
+            .unwrap_or(false)
     }
 }
 
