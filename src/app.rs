@@ -2534,9 +2534,14 @@ impl App {
             room_to_close,
         );
 
-        // Before we navigate to the room, if the AddRoom tab is currently shown,
-        // then we programmatically navigate to the Home tab to show the actual room.
-        if matches!(self.app_state.selected_tab, SelectedTab::AddRoom) {
+        // Before we navigate to the room, if a non-room tab is currently shown
+        // (AddRoom, or Settings — e.g. tapping "Open chat" on a registered agent
+        // in Settings ▸ Labs), programmatically navigate to the Home tab so the
+        // actual room becomes visible. On mobile the pushed StackNavigation view
+        // covers everything regardless; but on desktop the layout is driven by
+        // `selected_tab`, so without this the room opens in the dock *behind* the
+        // still-shown Settings page and nothing appears to happen.
+        if matches!(self.app_state.selected_tab, SelectedTab::AddRoom | SelectedTab::Settings) {
             cx.action(NavigationBarAction::GoToHome);
         }
         cx.widget_action(

@@ -2880,7 +2880,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.56.0",
 ]
 
 [[package]]
@@ -3344,7 +3344,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.53.4",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -3913,7 +3913,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk"
 version = "0.16.0"
-source = "git+https://github.com/project-robius/matrix-rust-sdk?branch=space_room_suggested#627563bb87e4746c0758560efe2c3fdc034faac6"
+source = "git+https://github.com/Project-Robius-China/matrix-rust-sdk?branch=space_room_suggested-event-cache-no-panic#9ca2c265d4ca2db322160428fa6a269d281257f0"
 dependencies = [
  "anymap2",
  "aquamarine",
@@ -3976,7 +3976,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-base"
 version = "0.16.0"
-source = "git+https://github.com/project-robius/matrix-rust-sdk?branch=space_room_suggested#627563bb87e4746c0758560efe2c3fdc034faac6"
+source = "git+https://github.com/Project-Robius-China/matrix-rust-sdk?branch=space_room_suggested-event-cache-no-panic#9ca2c265d4ca2db322160428fa6a269d281257f0"
 dependencies = [
  "as_variant",
  "async-trait",
@@ -4002,7 +4002,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-common"
 version = "0.16.0"
-source = "git+https://github.com/project-robius/matrix-rust-sdk?branch=space_room_suggested#627563bb87e4746c0758560efe2c3fdc034faac6"
+source = "git+https://github.com/Project-Robius-China/matrix-rust-sdk?branch=space_room_suggested-event-cache-no-panic#9ca2c265d4ca2db322160428fa6a269d281257f0"
 dependencies = [
  "eyeball-im",
  "futures-core",
@@ -4025,7 +4025,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-crypto"
 version = "0.16.0"
-source = "git+https://github.com/project-robius/matrix-rust-sdk?branch=space_room_suggested#627563bb87e4746c0758560efe2c3fdc034faac6"
+source = "git+https://github.com/Project-Robius-China/matrix-rust-sdk?branch=space_room_suggested-event-cache-no-panic#9ca2c265d4ca2db322160428fa6a269d281257f0"
 dependencies = [
  "aes",
  "aquamarine",
@@ -4065,7 +4065,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-indexeddb"
 version = "0.16.0"
-source = "git+https://github.com/project-robius/matrix-rust-sdk?branch=space_room_suggested#627563bb87e4746c0758560efe2c3fdc034faac6"
+source = "git+https://github.com/Project-Robius-China/matrix-rust-sdk?branch=space_room_suggested-event-cache-no-panic#9ca2c265d4ca2db322160428fa6a269d281257f0"
 dependencies = [
  "async-trait",
  "base64",
@@ -4096,7 +4096,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-sqlite"
 version = "0.16.0"
-source = "git+https://github.com/project-robius/matrix-rust-sdk?branch=space_room_suggested#627563bb87e4746c0758560efe2c3fdc034faac6"
+source = "git+https://github.com/Project-Robius-China/matrix-rust-sdk?branch=space_room_suggested-event-cache-no-panic#9ca2c265d4ca2db322160428fa6a269d281257f0"
 dependencies = [
  "as_variant",
  "async-trait",
@@ -4123,7 +4123,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-store-encryption"
 version = "0.16.0"
-source = "git+https://github.com/project-robius/matrix-rust-sdk?branch=space_room_suggested#627563bb87e4746c0758560efe2c3fdc034faac6"
+source = "git+https://github.com/Project-Robius-China/matrix-rust-sdk?branch=space_room_suggested-event-cache-no-panic#9ca2c265d4ca2db322160428fa6a269d281257f0"
 dependencies = [
  "base64",
  "blake3",
@@ -4143,7 +4143,7 @@ dependencies = [
 [[package]]
 name = "matrix-sdk-ui"
 version = "0.16.0"
-source = "git+https://github.com/project-robius/matrix-rust-sdk?branch=space_room_suggested#627563bb87e4746c0758560efe2c3fdc034faac6"
+source = "git+https://github.com/Project-Robius-China/matrix-rust-sdk?branch=space_room_suggested-event-cache-no-panic#9ca2c265d4ca2db322160428fa6a269d281257f0"
 dependencies = [
  "as_variant",
  "async-rx",
@@ -8165,7 +8165,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.1",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
