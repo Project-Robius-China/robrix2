@@ -537,6 +537,48 @@ script_mod! {
                     text: "Endpoint not configured"
                 }
             }
+
+            appservice_actions_row := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                spacing: 8
+                margin: Inset{top: 6}
+
+                appservice_bind_button := RobrixIconButton {
+                    width: Fill
+                    height: (RBX_CONTROL_H_MD)
+                    padding: Inset{top: 8, bottom: 8, left: 12, right: 12}
+                    icon_walk: Walk{width: 0, height: 0}
+                    spacing: 0
+                    text: "Bind Octos Bot"
+                    draw_bg +: {
+                        color: (RBX_ACCENT)
+                        color_hover: (RBX_ACCENT_HOVER)
+                        color_down: (RBX_ACCENT_PRESSED)
+                        border_radius: (RBX_RADIUS_XXS)
+                    }
+                    draw_text +: { color: (RBX_FG_ON_ACCENT), color_hover: (RBX_FG_ON_ACCENT), color_down: (RBX_FG_ON_ACCENT) }
+                }
+                appservice_edit_button := RobrixIconButton {
+                    width: Fill
+                    height: (RBX_CONTROL_H_MD)
+                    padding: Inset{top: 8, bottom: 8, left: 12, right: 12}
+                    icon_walk: Walk{width: 0, height: 0}
+                    spacing: 0
+                    text: "Edit AppService"
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_radius: (RBX_RADIUS_XXS)
+                        border_size: 1.0
+                        border_color: (RBX_INFO_FG)
+                    }
+                    draw_text +: { color: (RBX_INFO_FG), color_hover: (RBX_INFO_FG), color_down: (RBX_INFO_FG) }
+                }
+            }
         }
 
         registry_card := RoundedView {
@@ -634,6 +676,8 @@ script_mod! {
 pub enum AgentSettingsAction {
     /// The user tapped "Add an agent" — the host should open the add-agent modal.
     OpenAddAgent,
+    /// The user wants to configure or bind Octos from the AppService summary.
+    OpenOctosSetup,
 }
 
 /// Emitted by an [`AgentRegistryRow`] when one of its row buttons is clicked.
@@ -797,6 +841,10 @@ pub struct AgentSettings {
     #[rust]
     last_synced_agent_ids: Vec<OwnedUserId>,
     #[rust]
+    last_synced_appservice_enabled: bool,
+    #[rust]
+    last_synced_octos_service_url: String,
+    #[rust]
     has_synced_agents: bool,
     #[rust]
     octos_health: OctosHealthState,
@@ -887,6 +935,12 @@ impl WidgetMatchEvent for AgentSettings {
             cx.action(AgentSettingsAction::OpenAddAgent);
             return;
         }
+        if self.view.button(cx, ids!(appservice_summary_card.appservice_actions_row.appservice_bind_button)).clicked(actions)
+            || self.view.button(cx, ids!(appservice_summary_card.appservice_actions_row.appservice_edit_button)).clicked(actions)
+        {
+            cx.action(AgentSettingsAction::OpenOctosSetup);
+            return;
+        }
 
         // Row actions arrive as `AgentRowAction`s emitted by each
         // `AgentRegistryRow`, carrying the row's own MXID (mirrors how
@@ -975,11 +1029,19 @@ impl AgentSettings {
     }
 
     fn sync_agents_from_scope_if_needed(&mut self, cx: &mut Cx, scope: &mut Scope) {
-        let current_ids = match scope.data.get::<AppState>() {
-            Some(app_state) => app_state.agent_registry.agent_user_ids(),
+        let (current_ids, appservice_enabled, octos_service_url) = match scope.data.get::<AppState>() {
+            Some(app_state) => (
+                app_state.agent_registry.agent_user_ids(),
+                app_state.bot_settings.enabled,
+                app_state.bot_settings.resolved_octos_service_url().to_string(),
+            ),
             None => return,
         };
-        if self.has_synced_agents && self.last_synced_agent_ids == current_ids {
+        if self.has_synced_agents
+            && self.last_synced_agent_ids == current_ids
+            && self.last_synced_appservice_enabled == appservice_enabled
+            && self.last_synced_octos_service_url == octos_service_url
+        {
             return;
         }
         if let Some(app_state) = scope.data.get::<AppState>() {
@@ -995,6 +1057,8 @@ impl AgentSettings {
         let agent_ids = app_state.agent_registry.agent_user_ids();
         self.has_synced_agents = true;
         self.last_synced_agent_ids = agent_ids.clone();
+        self.last_synced_appservice_enabled = app_state.bot_settings.enabled;
+        self.last_synced_octos_service_url = app_state.bot_settings.resolved_octos_service_url().to_string();
 
         let any = !agent_ids.is_empty();
         self.view.view(cx, ids!(registry_card.agents_list)).set_visible(cx, any);
@@ -1033,16 +1097,35 @@ impl AgentSettings {
                 format!("{octos_count}/{octos_count} online")
             }
             OctosHealthStatus::Unreachable if octos_count > 0 => format!("0/{octos_count} online"),
+            _ if app_state.bot_settings.enabled && octos_count == 0 => "No Octos bound".to_string(),
             _ => format!("{octos_count} Octos"),
         };
         self.view.label(cx, ids!(appservice_summary_card.appservice_summary_header.appservice_online_pill.appservice_online_label))
             .set_text(cx, &label);
+        let body = if app_state.bot_settings.enabled && octos_count == 0 {
+            "AppService URL is saved. Bind an Octos Matrix ID to make it usable in Agent Access."
+        } else {
+            "Robrix stays a normal Matrix client. It binds local Octos services and runs the matching slash commands."
+        };
+        self.view.label(cx, ids!(appservice_summary_card.appservice_summary_body))
+            .set_text(cx, body);
         self.view.label(cx, ids!(appservice_summary_card.appservice_config_row.appservice_endpoint_value))
             .set_text(cx, app_state.bot_settings.resolved_octos_service_url());
 
         let config_label = if app_state.bot_settings.enabled { "Enabled" } else { "Disabled" };
         self.view.label(cx, ids!(appservice_summary_card.appservice_config_row.appservice_config_state_pill.appservice_config_state_label))
             .set_text(cx, config_label);
+        let bind_label = if !app_state.bot_settings.enabled {
+            "Configure Octos"
+        } else if octos_count == 0 {
+            "Bind Octos Bot"
+        } else {
+            "Change Octos Bot"
+        };
+        self.view.button(cx, ids!(appservice_summary_card.appservice_actions_row.appservice_bind_button))
+            .set_text(cx, bind_label);
+        self.view.button(cx, ids!(appservice_summary_card.appservice_actions_row.appservice_edit_button))
+            .set_visible(cx, app_state.bot_settings.enabled);
 
         let mut dot = self.view.view(cx, ids!(appservice_summary_card.appservice_summary_header.appservice_online_pill.appservice_online_dot));
         let mut config_pill = self.view.view(cx, ids!(appservice_summary_card.appservice_config_row.appservice_config_state_pill));
@@ -1301,6 +1384,52 @@ mod tests {
         assert!(src.contains("octos_agents_stat"));
         assert!(src.contains("appservice_endpoint_value"));
         assert!(src.contains("appservice_config_state_label"));
+    }
+
+    #[test]
+    fn test_appservice_summary_explains_saved_url_still_needs_bound_octos_agent() {
+        let src = production_src(include_str!("agent_settings.rs"));
+
+        assert!(
+            src.contains("AppService URL is saved. Bind an Octos Matrix ID to make it usable in Agent Access."),
+            "Agent Access should not imply that saving the AppService URL alone creates a usable Octos agent",
+        );
+    }
+
+    #[test]
+    fn test_agent_access_summary_refreshes_when_only_appservice_config_changes() {
+        let src = production_src(include_str!("agent_settings.rs"));
+
+        assert!(src.contains("last_synced_appservice_enabled"));
+        assert!(src.contains("last_synced_octos_service_url"));
+        assert!(
+            src.contains("&& self.last_synced_appservice_enabled == appservice_enabled")
+                && src.contains("&& self.last_synced_octos_service_url == octos_service_url"),
+            "Agent Access summary refresh must include AppService config changes, not only AgentRegistry IDs",
+        );
+    }
+
+    #[test]
+    fn test_appservice_summary_has_direct_octos_setup_actions() {
+        let src = production_src(include_str!("agent_settings.rs"));
+
+        assert!(src.contains("appservice_bind_button"));
+        assert!(src.contains("appservice_edit_button"));
+        assert!(src.contains("Bind Octos Bot"));
+        assert!(src.contains("Edit AppService"));
+        assert!(src.contains("OpenOctosSetup"));
+    }
+
+    #[test]
+    fn test_appservice_summary_buttons_open_octos_setup() {
+        let src = production_src(include_str!("agent_settings.rs"));
+
+        assert!(
+            src.contains("self.view.button(cx, ids!(appservice_summary_card.appservice_actions_row.appservice_bind_button)).clicked(actions)")
+                && src.contains("self.view.button(cx, ids!(appservice_summary_card.appservice_actions_row.appservice_edit_button)).clicked(actions)")
+                && src.contains("cx.action(AgentSettingsAction::OpenOctosSetup);"),
+            "Octos summary actions should open the Octos setup flow directly instead of the generic framework picker",
+        );
     }
 
     #[test]

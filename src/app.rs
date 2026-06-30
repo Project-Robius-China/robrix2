@@ -965,6 +965,29 @@ impl MatchEvent for App {
                 self.ui.modal(cx, ids!(add_agent_modal)).open(cx);
                 continue;
             }
+            if let Some(AgentSettingsAction::OpenOctosSetup) = action.downcast_ref() {
+                let app_language = self.app_state.app_language;
+                let octos_service_url = self.app_state.bot_settings.resolved_octos_service_url().to_string();
+                let existing_octos_agent = self.app_state
+                    .agent_registry
+                    .agent_user_ids()
+                    .into_iter()
+                    .find(|user_id| {
+                        self.app_state
+                            .agent_registry
+                            .get(user_id.as_ref())
+                            .is_some_and(|entry| entry.framework == AgentFramework::Octos)
+                    });
+                let existing_octos_agent_user_id = existing_octos_agent.as_ref().map(|user_id| user_id.as_str());
+                self.ui.add_agent_modal(cx, ids!(add_agent_modal_inner)).show_octos(
+                    cx,
+                    app_language,
+                    &octos_service_url,
+                    existing_octos_agent_user_id,
+                );
+                self.ui.modal(cx, ids!(add_agent_modal)).open(cx);
+                continue;
+            }
             match action.downcast_ref::<AddAgentModalAction>() {
                 Some(AddAgentModalAction::Close) => {
                     self.ui.modal(cx, ids!(add_agent_modal)).close(cx);
@@ -1880,7 +1903,7 @@ impl MatchEvent for App {
                         .show(
                             cx,
                             room_name_id.clone(),
-                            &self.app_state.bot_settings,
+                            &self.app_state,
                             self.app_state.app_language,
                         );
                     self.ui.modal(cx, ids!(bot_binding_modal)).open(cx);
