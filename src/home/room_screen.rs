@@ -2837,14 +2837,14 @@ script_mod! {
 
     // Floating circular button that opens the `ThreadsSlidingPane`.
     // Mirrors `SearchMessagesButton`'s layout (Fill/Fill overlay aligned
-    // top-right) but reserves 65px on the right so the search button keeps
-    // the rightmost slot and the threads button sits just before it.
+    // top-right) but reserves 96px on the right so it sits to the left of the
+    // search (48px) and info (rightmost) buttons.
     mod.widgets.ThreadsButton = #(ThreadsButton::register_widget(vm)) {
         width: Fill,
         height: Fill,
         flow: Overlay,
         align: Align{x: 1.0, y: 0.0},
-        padding: Inset{right: 65},
+        padding: Inset{right: 96},
         visible: true,
 
         View {
@@ -2860,6 +2860,49 @@ script_mod! {
 
                 draw_icon +: {
                     svg: (ICON_THREADS),
+                    color: #555,
+                }
+                icon_walk: Walk{width: 18, height: 18}
+
+                draw_bg +: {
+                    background_color: #edededce,
+                    background_color_hover: #d0d0d0ce,
+                    pixel: fn() {
+                        let sdf = Sdf2d.viewport(self.pos * self.rect_size);
+                        let c = self.rect_size * 0.5;
+                        sdf.circle(c.x, c.x, c.x);
+                        sdf.fill_keep(mix(self.background_color, self.background_color_hover, self.hover));
+                        return sdf.result
+                    }
+                }
+            }
+        }
+    }
+
+    // Floating circular button that opens the `RoomInfoSlidingPane` (desktop
+    // only — mobile reaches room info via the RoomTopBar "Info" tab). Sits at
+    // the rightmost slot (no right inset); the search (48px) and threads (96px)
+    // buttons sit to its left.
+    mod.widgets.InfoButton = #(InfoButton::register_widget(vm)) {
+        width: Fill,
+        height: Fill,
+        flow: Overlay,
+        align: Align{x: 1.0, y: 0.0},
+        visible: true,
+
+        View {
+            width: 65, height: 65,
+            align: Align{x: 0.5, y: 0.0},
+            flow: Overlay,
+
+            inner_button := RobrixIconButton {
+                spacing: 0,
+                width: 40, height: 40,
+                align: Align{x: 0.5, y: 0.5},
+                margin: Inset{top: 8},
+
+                draw_icon +: {
+                    svg: (ICON_INFO),
                     color: #555,
                 }
                 icon_walk: Walk{width: 18, height: 18}
@@ -3333,13 +3376,18 @@ script_mod! {
                                     }
                                 }
 
-                                // visibility · members · encryption — one horizontal
-                                // line, left-aligned directly under the room id.
+                                // visibility · members · encryption — left-aligned
+                                // directly under the room id. Wraps to the next
+                                // line when the meta area (constrained by the
+                                // avatar on the left) is too narrow to fit all
+                                // three on one row, so the encryption item is no
+                                // longer clipped at the right edge.
                                 meta_row := View {
                                     width: Fill
                                     height: Fit
-                                    flow: Right
+                                    flow: Flow.Right{wrap: true}
                                     spacing: 12
+                                    wrap_spacing: 6
                                     align: Align{y: 0.5}
                                     margin: Inset{top: 3}
 
@@ -4262,8 +4310,12 @@ script_mod! {
         // when the timeline is not at the bottom.
         jump_to_bottom_button := JumpToBottomButton { }
 
-        // Floating threads button at the top-right, sitting just before the
-        // search button. Clicking it opens the `threads_sliding_pane`.
+        // Floating info button at the top-right, occupying the rightmost slot.
+        // Clicking it opens the `room_info_sliding_pane` (desktop only).
+        info_button := mod.widgets.InfoButton { }
+
+        // Floating threads button at the top-right, sitting left of the search
+        // and info buttons. Clicking it opens the `threads_sliding_pane`.
         threads_button := mod.widgets.ThreadsButton { }
 
         // Floating search button at the top-right (mirrors jump-to-bottom).
@@ -4546,6 +4598,20 @@ impl ActionDefaultRef for ThreadsButtonAction {
 }
 
 #[derive(Clone, Default, Debug)]
+pub enum InfoButtonAction {
+    OpenRequested,
+    #[default]
+    None,
+}
+
+impl ActionDefaultRef for InfoButtonAction {
+    fn default_ref() -> &'static Self {
+        static DEFAULT: InfoButtonAction = InfoButtonAction::None;
+        &DEFAULT
+    }
+}
+
+#[derive(Clone, Default, Debug)]
 pub enum RoomInfoPaneAction {
     InviteUser,
     ShowPeoplePage,
@@ -4800,6 +4866,48 @@ impl Widget for ThreadsButton {
         if let Event::Actions(actions) = event {
             if self.button(cx, ids!(inner_button)).clicked(actions) {
                 cx.widget_action(self.widget_uid(), ThreadsButtonAction::OpenRequested);
+            }
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct InfoButton {
+    #[deref] view: View,
+}
+
+impl Widget for InfoButton {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let button_area = self.button(cx, ids!(inner_button)).area();
+        match event.hits(cx, button_area) {
+            Hit::FingerHoverIn(_) | Hit::FingerLongPress(_) => {
+                cx.widget_action(
+                    self.widget_uid(),
+                    TooltipAction::HoverIn {
+                        text: String::from("Room Info"),
+                        widget_rect: button_area.rect(cx),
+                        options: CalloutTooltipOptions {
+                            position: TooltipPosition::Left,
+                            ..Default::default()
+                        },
+                    },
+                );
+            }
+            Hit::FingerHoverOut(_) => {
+                cx.widget_action(self.widget_uid(), TooltipAction::HoverOut);
+            }
+            _ => {}
+        }
+
+        self.view.handle_event(cx, event, scope);
+
+        if let Event::Actions(actions) = event {
+            if self.button(cx, ids!(inner_button)).clicked(actions) {
+                cx.widget_action(self.widget_uid(), InfoButtonAction::OpenRequested);
             }
         }
     }
@@ -6198,6 +6306,15 @@ impl Widget for RoomScreen {
                 }
             }
 
+            // Floating info button click → open the room info sliding pane
+            // (desktop only — the button is hidden on mobile).
+            for action in actions {
+                if let InfoButtonAction::OpenRequested = action.as_widget_action().cast_ref() {
+                    self.show_room_info_pane(cx);
+                    break;
+                }
+            }
+
             // Server-side search results dispatched from sliding_sync.rs.
             self.handle_search_messages_results(cx, actions);
 
@@ -6707,6 +6824,7 @@ impl Widget for RoomScreen {
         let is_desktop = effective_is_desktop(cx);
         self.view.widget(cx, ids!(timeline.search_messages_button)).set_visible(cx, is_desktop);
         self.view.widget(cx, ids!(timeline.threads_button)).set_visible(cx, is_desktop);
+        self.view.widget(cx, ids!(timeline.info_button)).set_visible(cx, is_desktop);
 
         // Drive the Robrix-owned mobile room header (RoomTopBar) and the
         // Chat/Info body switch. The top bar is mobile-only; desktop keeps its
