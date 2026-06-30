@@ -129,17 +129,31 @@ fn agent_registry_summary(app_state: &AppState) -> AgentRegistrySummary {
     summary
 }
 
-const AGENT_ROW_COUNT: usize = 30;
 const AGENT_SETTINGS_OCTOS_HEALTH_REQUEST_ID: LiveId = live_id!(agent_settings_octos_health);
+
+/// Everything an [`AgentRegistryRow`] needs to fully render itself and know its
+/// own identity, passed in through `scope.props` on each redraw. Health state
+/// for the per-row dot and whether to show "Re-check" lives in [`AgentSettings`]
+/// (its `octos_health` + `app_state.agent_registry`), not in `AgentEntry`, so we
+/// fold it into this props struct rather than passing the bare `AgentEntry`.
+#[derive(Clone, Debug)]
+pub struct AgentRowProps {
+    pub user_id: OwnedUserId,
+    pub display_name: String,
+    pub framework: AgentFramework,
+    pub health: Option<OctosHealthStatus>,
+    pub shows_recheck: bool,
+}
 
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
     // A registered-agent card (design handoff §1 "Agent row"): framework tile +
-    // name/mxid + framework badge, with a footer of row actions.
-    let AgentRegistryRow = RoundedView {
-        visible: false
+    // name/mxid + framework badge, with a footer of row actions. Registered as a
+    // Widget so the registry list can drive it from a FlatList (one item per
+    // agent), mirroring DeviceCard in devices_settings.rs.
+    mod.widgets.AgentRegistryRow = #(AgentRegistryRow::register_widget(vm)) {
         width: Fill
         height: Fit
         flow: Down
@@ -610,42 +624,15 @@ script_mod! {
                 }
             }
 
-            agents_list := View {
+            agents_list := FlatList {
                 width: Fill
                 height: Fit
                 flow: Down
                 spacing: 0
+                grab_key_focus: false
+                scroll_bars +: { show_scroll_x: false, show_scroll_y: true }
 
-                agent_row_0 := AgentRegistryRow {}
-                agent_row_1 := AgentRegistryRow {}
-                agent_row_2 := AgentRegistryRow {}
-                agent_row_3 := AgentRegistryRow {}
-                agent_row_4 := AgentRegistryRow {}
-                agent_row_5 := AgentRegistryRow {}
-                agent_row_6 := AgentRegistryRow {}
-                agent_row_7 := AgentRegistryRow {}
-                agent_row_8 := AgentRegistryRow {}
-                agent_row_9 := AgentRegistryRow {}
-                agent_row_10 := AgentRegistryRow {}
-                agent_row_11 := AgentRegistryRow {}
-                agent_row_12 := AgentRegistryRow {}
-                agent_row_13 := AgentRegistryRow {}
-                agent_row_14 := AgentRegistryRow {}
-                agent_row_15 := AgentRegistryRow {}
-                agent_row_16 := AgentRegistryRow {}
-                agent_row_17 := AgentRegistryRow {}
-                agent_row_18 := AgentRegistryRow {}
-                agent_row_19 := AgentRegistryRow {}
-                agent_row_20 := AgentRegistryRow {}
-                agent_row_21 := AgentRegistryRow {}
-                agent_row_22 := AgentRegistryRow {}
-                agent_row_23 := AgentRegistryRow {}
-                agent_row_24 := AgentRegistryRow {}
-                agent_row_25 := AgentRegistryRow {}
-                agent_row_26 := AgentRegistryRow {}
-                agent_row_27 := AgentRegistryRow {}
-                agent_row_28 := AgentRegistryRow {}
-                agent_row_29 := AgentRegistryRow {}
+                agent_item := AgentRegistryRow {}
             }
         }
     }
@@ -658,15 +645,164 @@ pub enum AgentSettingsAction {
     OpenAddAgent,
 }
 
+/// Emitted by an [`AgentRegistryRow`] when one of its row buttons is clicked.
+/// The parent [`AgentSettings`] listens and runs the open-chat / re-check /
+/// unbind logic using the carried `user_id`. Mirrors `DeviceRowAction`.
+#[derive(Clone, Debug, Default)]
+pub enum AgentRowAction {
+    #[default]
+    None,
+    /// "Open chat" — open or create a DM with this agent.
+    OpenChat(OwnedUserId),
+    /// "Re-check" — re-probe the Octos AppService health (Octos rows only).
+    Recheck(OwnedUserId),
+    /// "Unbind" — remove this agent from the registry.
+    Unbind(OwnedUserId),
+}
+
+// ─────────────────────────── AgentRegistryRow ────────────────────────────
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct AgentRegistryRow {
+    #[deref]
+    view: View,
+    /// Set on every redraw from the parent's scope props; resolves row clicks.
+    #[rust]
+    user_id: Option<OwnedUserId>,
+}
+
+impl Widget for AgentRegistryRow {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+        if let Event::Actions(actions) = event {
+            let Some(user_id) = self.user_id.clone() else { return };
+            if self
+                .view
+                .button(cx, ids!(agent_actions_row.agent_open_chat_button))
+                .clicked(actions)
+            {
+                cx.action(AgentRowAction::OpenChat(user_id.clone()));
+            }
+            if self
+                .view
+                .button(cx, ids!(agent_actions_row.agent_recheck_button))
+                .clicked(actions)
+            {
+                cx.action(AgentRowAction::Recheck(user_id.clone()));
+            }
+            if self
+                .view
+                .button(cx, ids!(agent_actions_row.agent_unbind_button))
+                .clicked(actions)
+            {
+                cx.action(AgentRowAction::Unbind(user_id));
+            }
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        if let Some(props) = scope.props.get::<AgentRowProps>() {
+            self.user_id = Some(props.user_id.clone());
+            let framework = props.framework;
+
+            self.view
+                .label(cx, ids!(agent_top_row.agent_text_col.agent_name_row.agent_name_label))
+                .set_text(cx, &props.display_name);
+            self.view
+                .label(cx, ids!(agent_top_row.agent_text_col.agent_mxid_label))
+                .set_text(cx, props.user_id.as_str());
+            self.view
+                .label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono))
+                .set_text(cx, framework_mono(framework));
+            self.view
+                .label(cx, ids!(agent_top_row.agent_framework_badge.agent_framework_label))
+                .set_text(cx, framework_label(framework));
+
+            self.apply_framework_colors(cx, framework);
+
+            // Health dot: Octos rows only, colored by the probed health status.
+            let mut dot = self.view.view(cx, ids!(
+                agent_top_row.agent_text_col.agent_name_row.agent_health_dot
+            ));
+            dot.set_visible(cx, framework == AgentFramework::Octos);
+            if framework == AgentFramework::Octos {
+                match props.health.unwrap_or(OctosHealthStatus::Unknown) {
+                    OctosHealthStatus::Checking => {
+                        script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_WARNING_FG } });
+                    }
+                    OctosHealthStatus::Reachable => {
+                        script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_SUCCESS_FG } });
+                    }
+                    OctosHealthStatus::Unreachable => {
+                        script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_DANGER_FG } });
+                    }
+                    OctosHealthStatus::Unknown => {
+                        script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_FG } });
+                    }
+                }
+            }
+
+            // Re-check button: Octos rows only. While a probe is in flight the
+            // button reads "Checking..." and is disabled, matching the old
+            // imperative `sync_recheck_buttons` behavior.
+            let recheck = self.view.button(cx, ids!(agent_actions_row.agent_recheck_button));
+            recheck.set_visible(cx, props.shows_recheck);
+            if props.shows_recheck {
+                let checking = props.health == Some(OctosHealthStatus::Checking);
+                recheck.set_enabled(cx, !checking);
+                recheck.set_text(cx, if checking { "Checking..." } else { "Re-check" });
+            }
+        }
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl AgentRegistryRow {
+    /// Colors this row's framework tile + badge by framework (literal tokens per
+    /// branch, since `script_apply_eval!` cannot take runtime token values).
+    fn apply_framework_colors(&mut self, cx: &mut Cx, framework: AgentFramework) {
+        let mut tile = self.view.view(cx, ids!(agent_top_row.agent_tile));
+        let mut mono = self.view.label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono));
+        let mut badge = self.view.view(cx, ids!(agent_top_row.agent_framework_badge));
+        let mut label = self.view.label(cx, ids!(agent_top_row.agent_framework_badge.agent_framework_label));
+        match framework {
+            AgentFramework::Octos => {
+                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
+                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
+                script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+            }
+            AgentFramework::Hermes => {
+                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
+                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
+                script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
+            }
+            AgentFramework::OpenClaw => {
+                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
+                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
+                script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
+            }
+            AgentFramework::Unknown => {
+                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE_SUBTLE } });
+                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
+                script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
+            }
+        }
+    }
+}
+
 #[derive(Script, ScriptHook, Widget)]
 pub struct AgentSettings {
     #[deref]
     view: View,
     #[rust]
     app_language: AppLanguage,
-    /// The agent MXIDs currently rendered, in row order (resolves row clicks).
-    #[rust]
-    displayed_agent_ids: Vec<OwnedUserId>,
+    /// The agent MXIDs the summary was last synced against; lets us skip the
+    /// summary/empty-state recompute when the registry hasn't changed. The
+    /// FlatList itself is rebuilt from scope every frame in `draw_walk`.
     #[rust]
     last_synced_agent_ids: Vec<OwnedUserId>,
     #[rust]
@@ -702,8 +838,10 @@ impl Widget for AgentSettings {
                         }
                         if let Some(app_state) = scope.data.get::<AppState>() {
                             self.sync_octos_summary_ui(cx, app_state);
-                            self.sync_recheck_buttons(cx, app_state);
                         }
+                        // Re-draw so each row picks up the new health status
+                        // (dot color + Re-check button state) from props.
+                        self.view.redraw(cx);
                     }
                     NetworkResponse::HttpError { request_id, .. }
                         if *request_id == AGENT_SETTINGS_OCTOS_HEALTH_REQUEST_ID =>
@@ -716,8 +854,8 @@ impl Widget for AgentSettings {
                         }
                         if let Some(app_state) = scope.data.get::<AppState>() {
                             self.sync_octos_summary_ui(cx, app_state);
-                            self.sync_recheck_buttons(cx, app_state);
                         }
+                        self.view.redraw(cx);
                     }
                     _ => {}
                 }
@@ -731,7 +869,24 @@ impl Widget for AgentSettings {
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         self.sync_agents_from_scope_if_needed(cx, scope);
-        self.view.draw_walk(cx, scope, walk)
+
+        // Build one props bundle per registered agent from the scope's AppState,
+        // folding in this widget's Octos health so each row can render its dot
+        // and Re-check state, then drive the FlatList (mirrors DevicesScreen).
+        let rows = self.build_agent_rows(scope);
+        while let Some(subview) = self.view.draw_walk(cx, scope, walk).step() {
+            let flat_list_ref = subview.as_flat_list();
+            let Some(mut list) = flat_list_ref.borrow_mut() else {
+                continue;
+            };
+            for (index, props) in rows.iter().enumerate() {
+                let item_id = LiveId(index as u64);
+                let item = list.item(cx, item_id, id!(agent_item)).unwrap();
+                let mut scope = Scope::with_props(props);
+                item.draw_all(cx, &mut scope);
+            }
+        }
+        DrawStep::done()
     }
 }
 
@@ -742,76 +897,91 @@ impl WidgetMatchEvent for AgentSettings {
             return;
         }
 
-        // Row actions: Open chat (DM) / Unbind (remove from registry).
-        let row_ids: Vec<OwnedUserId> = self.displayed_agent_ids.clone();
-        for (index, row_id) in Self::AGENT_ROW_IDS.iter().enumerate() {
-            let Some(user_id) = row_ids.get(index) else { break };
-            let list_view = self.view.view(cx, ids!(registry_card.agents_list));
-            let open_chat = list_view
-                .button(cx, &[*row_id, live_id!(agent_actions_row), live_id!(agent_open_chat_button)])
-                .clicked(actions);
-            let recheck = list_view
-                .button(cx, &[*row_id, live_id!(agent_actions_row), live_id!(agent_recheck_button)])
-                .clicked(actions);
-            let unbind = list_view
-                .button(cx, &[*row_id, live_id!(agent_actions_row), live_id!(agent_unbind_button)])
-                .clicked(actions);
-
-            if open_chat {
-                let display_name = user_id.localpart().to_string();
-                submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
-                    user_profile: UserProfile {
-                        user_id: user_id.clone(),
-                        username: Some(display_name),
-                        avatar_state: AvatarState::Unknown,
-                    },
-                    allow_create: true,
-                    create_encrypted: false,
-                });
-                return;
-            }
-            if recheck {
-                if let Some(app_state) = scope.data.get::<AppState>() {
-                    let framework = app_state
-                        .agent_registry
-                        .get(user_id)
-                        .map(|entry| entry.framework)
-                        .unwrap_or_default();
-                    if framework == AgentFramework::Octos {
-                        self.begin_octos_recheck(cx, app_state);
-                    }
+        // Row actions arrive as `AgentRowAction`s emitted by each
+        // `AgentRegistryRow`, carrying the row's own MXID (mirrors how
+        // DevicesScreen reads `DeviceRowAction`).
+        for action in actions {
+            match action.downcast_ref::<AgentRowAction>() {
+                Some(AgentRowAction::OpenChat(user_id)) => {
+                    let display_name = user_id.localpart().to_string();
+                    submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
+                        user_profile: UserProfile {
+                            user_id: user_id.clone(),
+                            username: Some(display_name),
+                            avatar_state: AvatarState::Unknown,
+                        },
+                        allow_create: true,
+                        create_encrypted: false,
+                    });
+                    return;
                 }
-                return;
-            }
-            if unbind {
-                if let Some(app_state) = scope.data.get_mut::<AppState>() {
-                    app_state.agent_registry.unregister(user_id);
-                    if let Some(account_user_id) = current_user_id() {
-                        if let Err(e) = persistence::save_app_state(app_state.clone(), account_user_id) {
-                            error!("Failed to persist agent registry. Error: {e}");
+                Some(AgentRowAction::Recheck(user_id)) => {
+                    if let Some(app_state) = scope.data.get::<AppState>() {
+                        let framework = app_state
+                            .agent_registry
+                            .get(user_id)
+                            .map(|entry| entry.framework)
+                            .unwrap_or_default();
+                        if framework == AgentFramework::Octos {
+                            self.begin_octos_recheck(cx, app_state);
                         }
                     }
-                    self.refresh_agents_list(cx, app_state);
+                    return;
                 }
-                return;
+                Some(AgentRowAction::Unbind(user_id)) => {
+                    if let Some(app_state) = scope.data.get_mut::<AppState>() {
+                        app_state.agent_registry.unregister(user_id);
+                        if let Some(account_user_id) = current_user_id() {
+                            if let Err(e) = persistence::save_app_state(app_state.clone(), account_user_id) {
+                                error!("Failed to persist agent registry. Error: {e}");
+                            }
+                        }
+                        self.refresh_agents_list(cx, app_state);
+                    }
+                    return;
+                }
+                _ => {}
             }
         }
     }
 }
 
 impl AgentSettings {
-    const AGENT_ROW_IDS: [LiveId; AGENT_ROW_COUNT] = [
-        live_id!(agent_row_0), live_id!(agent_row_1), live_id!(agent_row_2),
-        live_id!(agent_row_3), live_id!(agent_row_4), live_id!(agent_row_5),
-        live_id!(agent_row_6), live_id!(agent_row_7), live_id!(agent_row_8),
-        live_id!(agent_row_9), live_id!(agent_row_10), live_id!(agent_row_11),
-        live_id!(agent_row_12), live_id!(agent_row_13), live_id!(agent_row_14),
-        live_id!(agent_row_15), live_id!(agent_row_16), live_id!(agent_row_17),
-        live_id!(agent_row_18), live_id!(agent_row_19), live_id!(agent_row_20),
-        live_id!(agent_row_21), live_id!(agent_row_22), live_id!(agent_row_23),
-        live_id!(agent_row_24), live_id!(agent_row_25), live_id!(agent_row_26),
-        live_id!(agent_row_27), live_id!(agent_row_28), live_id!(agent_row_29),
-    ];
+    /// Builds one [`AgentRowProps`] per registered agent from the scope's
+    /// `AppState`, folding in this widget's Octos health so each row can render
+    /// its dot + Re-check state. Returns an empty Vec when scope has no AppState.
+    fn build_agent_rows(&self, scope: &mut Scope) -> Vec<AgentRowProps> {
+        let Some(app_state) = scope.data.get::<AppState>() else {
+            return Vec::new();
+        };
+        app_state
+            .agent_registry
+            .agent_user_ids()
+            .into_iter()
+            .map(|user_id| {
+                let entry = app_state.agent_registry.get(&user_id);
+                let display_name = entry
+                    .and_then(|e| e.display_name.clone())
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| user_id.localpart().to_string());
+                let framework = entry.map(|e| e.framework).unwrap_or_default();
+                let shows_recheck = agent_row_shows_recheck(framework);
+                // Only Octos rows carry a health status (the dot they show).
+                let health = if framework == AgentFramework::Octos {
+                    Some(self.octos_health.status)
+                } else {
+                    None
+                };
+                AgentRowProps {
+                    user_id,
+                    display_name,
+                    framework,
+                    health,
+                    shows_recheck,
+                }
+            })
+            .collect()
+    }
 
     fn sync_agents_from_scope_if_needed(&mut self, cx: &mut Cx, scope: &mut Scope) {
         let current_ids = match scope.data.get::<AppState>() {
@@ -826,44 +996,20 @@ impl AgentSettings {
         }
     }
 
+    /// Recomputes the registry summary + empty-state visibility when the set of
+    /// registered agents changes. The per-row content (name, mxid, tile,
+    /// framework colors, health dot, Re-check state) is no longer poked here —
+    /// each `AgentRegistryRow` renders itself from props in its own `draw_walk`.
     fn refresh_agents_list(&mut self, cx: &mut Cx, app_state: &AppState) {
         let agent_ids = app_state.agent_registry.agent_user_ids();
         self.has_synced_agents = true;
         self.last_synced_agent_ids = agent_ids.clone();
-        self.displayed_agent_ids = agent_ids.clone();
 
-        let list_view = self.view.view(cx, ids!(registry_card.agents_list));
-        for (index, row_id) in Self::AGENT_ROW_IDS.iter().enumerate() {
-            let row = list_view.view(cx, &[*row_id]);
-            if let Some(user_id) = agent_ids.get(index) {
-                let entry = app_state.agent_registry.get(user_id);
-                let display = entry
-                    .and_then(|e| e.display_name.clone())
-                    .filter(|name| !name.trim().is_empty())
-                    .unwrap_or_else(|| user_id.localpart().to_string());
-                let framework = entry.map(|e| e.framework).unwrap_or_default();
-                row.label(cx, ids!(agent_top_row.agent_text_col.agent_name_row.agent_name_label)).set_text(cx, &display);
-                row.label(cx, ids!(agent_top_row.agent_text_col.agent_mxid_label)).set_text(cx, user_id.as_str());
-                row.label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono)).set_text(cx, framework_mono(framework));
-                row.label(cx, ids!(agent_top_row.agent_framework_badge.agent_framework_label))
-                    .set_text(cx, framework_label(framework));
-                self.apply_row_framework_colors(cx, &[*row_id], framework);
-                row.button(cx, ids!(agent_actions_row.agent_recheck_button))
-                    .set_visible(cx, agent_row_shows_recheck(framework));
-                row.set_visible(cx, true);
-            } else {
-                row.button(cx, ids!(agent_actions_row.agent_recheck_button))
-                    .set_visible(cx, false);
-                row.set_visible(cx, false);
-            }
-        }
         let any = !agent_ids.is_empty();
         self.view.view(cx, ids!(registry_card.agents_list)).set_visible(cx, any);
         self.view.view(cx, ids!(registry_card.agents_empty_state)).set_visible(cx, !any);
         self.sync_center_summary_ui(cx, app_state);
         self.sync_octos_summary_ui(cx, app_state);
-        self.sync_agent_health_dots(cx, app_state);
-        self.sync_recheck_buttons(cx, app_state);
         self.view.redraw(cx);
     }
 
@@ -931,67 +1077,6 @@ impl AgentSettings {
                 script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_FG } });
             }
         }
-        self.sync_agent_health_dots(cx, app_state);
-        self.view.redraw(cx);
-    }
-
-    fn sync_agent_health_dots(&mut self, cx: &mut Cx, app_state: &AppState) {
-        let list_view = self.view.view(cx, ids!(registry_card.agents_list));
-        for (index, row_id) in Self::AGENT_ROW_IDS.iter().enumerate() {
-            let Some(user_id) = self.displayed_agent_ids.get(index) else { break };
-            let framework = app_state
-                .agent_registry
-                .get(user_id)
-                .map(|entry| entry.framework)
-                .unwrap_or_default();
-            let mut dot = list_view.view(cx, &[
-                *row_id,
-                live_id!(agent_top_row),
-                live_id!(agent_text_col),
-                live_id!(agent_name_row),
-                live_id!(agent_health_dot),
-            ]);
-            dot.set_visible(cx, framework == AgentFramework::Octos);
-            if framework == AgentFramework::Octos {
-                match self.octos_health.status {
-                    OctosHealthStatus::Checking => {
-                        script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_WARNING_FG } });
-                    }
-                    OctosHealthStatus::Reachable => {
-                        script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_SUCCESS_FG } });
-                    }
-                    OctosHealthStatus::Unreachable => {
-                        script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_DANGER_FG } });
-                    }
-                    OctosHealthStatus::Unknown => {
-                        script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_FG } });
-                    }
-                }
-            }
-        }
-    }
-
-    fn sync_recheck_buttons(&mut self, cx: &mut Cx, app_state: &AppState) {
-        let list_view = self.view.view(cx, ids!(registry_card.agents_list));
-        for (index, row_id) in Self::AGENT_ROW_IDS.iter().enumerate() {
-            let Some(user_id) = self.displayed_agent_ids.get(index) else { break };
-            let framework = app_state
-                .agent_registry
-                .get(user_id)
-                .map(|entry| entry.framework)
-                .unwrap_or_default();
-            let visible = agent_row_shows_recheck(framework);
-            let button = list_view.button(cx, &[*row_id, live_id!(agent_actions_row), live_id!(agent_recheck_button)]);
-            button.set_visible(cx, visible);
-            if visible {
-                button.set_enabled(cx, !self.octos_health.in_flight);
-                if self.octos_health.in_flight {
-                    button.set_text(cx, "Checking...");
-                } else {
-                    button.set_text(cx, "Re-check");
-                }
-            }
-        }
         self.view.redraw(cx);
     }
 
@@ -1002,14 +1087,15 @@ impl AgentSettings {
             self.octos_health.status = OctosHealthStatus::Unreachable;
             self.octos_probe_base_url = None;
             self.sync_octos_summary_ui(cx, app_state);
-            self.sync_recheck_buttons(cx, app_state);
+            // Re-draw so each Octos row reflects the new health from props.
+            self.view.redraw(cx);
             return;
         }
 
         if let Some(probe) = self.octos_health.begin_check(&service_url) {
             self.octos_probe_base_url = Some(service_url);
             self.sync_octos_summary_ui(cx, app_state);
-            self.sync_recheck_buttons(cx, app_state);
+            self.view.redraw(cx);
             self.send_octos_health_request(cx, &probe);
         }
     }
@@ -1017,45 +1103,6 @@ impl AgentSettings {
     fn send_octos_health_request(&self, cx: &mut Cx, url: &str) {
         let req = HttpRequest::new(url.to_string(), HttpMethod::GET);
         cx.http_request(AGENT_SETTINGS_OCTOS_HEALTH_REQUEST_ID, req);
-    }
-
-    /// Colors a row's framework tile + badge by framework (literal tokens per
-    /// branch, since `script_apply_eval!` cannot take runtime token values).
-    fn apply_row_framework_colors(&mut self, cx: &mut Cx, row_path: &[LiveId], framework: AgentFramework) {
-        let tile_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_tile)];
-        let mono_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_tile), live_id!(agent_tile_mono)];
-        let badge_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_framework_badge)];
-        let label_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_framework_badge), live_id!(agent_framework_label)];
-        let mut tile = self.view.view(cx, &tile_path);
-        let mut mono = self.view.label(cx, &mono_path);
-        let mut badge = self.view.view(cx, &badge_path);
-        let mut label = self.view.label(cx, &label_path);
-        match framework {
-            AgentFramework::Octos => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
-                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-                script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
-            }
-            AgentFramework::Hermes => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
-                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-                script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
-            }
-            AgentFramework::OpenClaw => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
-                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-                script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
-            }
-            AgentFramework::Unknown => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE_SUBTLE } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
-                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
-                script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
-            }
-        }
     }
 
     fn sync_static_texts(&mut self, cx: &mut Cx) {
@@ -1270,7 +1317,7 @@ mod tests {
         let src = include_str!("agent_settings.rs");
 
         for block_name in [
-            "let AgentRegistryRow = RoundedView {",
+            "mod.widgets.AgentRegistryRow = #(AgentRegistryRow::register_widget(vm)) {",
             "agent_tile := RoundedView {",
             "agent_framework_badge := RoundedView {",
             "appservice_summary_card := RoundedView {",
@@ -1295,16 +1342,44 @@ mod tests {
         let src = production_src(include_str!("agent_settings.rs"));
 
         assert!(
-            src.contains("agent_tile := RoundedView {\n                width: 44\n                height: 44"),
-            "framework tile should match the 44px handoff tile"
+            src.contains("agent_tile := RoundedView {\n                width: 38\n                height: 38"),
+            "framework tile should match the compacted 38px tile"
         );
         assert!(
-            src.contains("agent_actions_divider := View"),
-            "registered-agent rows should separate content from row actions"
+            src.contains("agent_actions_row := View"),
+            "registered-agent rows should carry a row-actions section"
         );
         assert!(
             src.contains("agents_empty_state := RoundedView"),
             "empty state should render as a bounded handoff-style state, not bare text"
+        );
+    }
+
+    #[test]
+    fn test_registry_list_is_dynamic_flat_list() {
+        // The registry list is a dynamic FlatList driven from AppState's
+        // AgentRegistry (mirrors the Devices screen), not a fixed set of rows.
+        let src = production_src(include_str!("agent_settings.rs"));
+        assert!(
+            src.contains("agents_list := FlatList {"),
+            "registered agents should render in a dynamic FlatList",
+        );
+        assert!(
+            src.contains("agent_item := AgentRegistryRow {}"),
+            "the FlatList should template a single AgentRegistryRow item",
+        );
+        assert!(
+            src.contains("mod.widgets.AgentRegistryRow = #(AgentRegistryRow::register_widget(vm))"),
+            "AgentRegistryRow should be a registered widget so the list can drive it",
+        );
+        // The old fixed-row scaffolding must be gone.
+        assert!(
+            !src.contains("AGENT_ROW_IDS"),
+            "fixed-row id table should be removed after the FlatList conversion",
+        );
+        assert!(
+            !src.contains("agent_row_0 := AgentRegistryRow"),
+            "the 30 fixed AgentRegistryRow instances should be removed",
         );
     }
 
@@ -1314,7 +1389,9 @@ mod tests {
 
         assert!(src.contains("agent_name_row := View"));
         assert!(src.contains("agent_health_dot := RoundedView"));
-        assert!(src.contains("fn sync_agent_health_dots"));
+        // Health-dot logic now lives in AgentRegistryRow's own draw_walk,
+        // driven by the per-row health folded into AgentRowProps.
+        assert!(src.contains("props.health"));
         assert!(src.contains("dot.set_visible(cx, framework == AgentFramework::Octos)"));
         assert!(src.contains("OctosHealthStatus::Reachable"));
         assert!(src.contains("mod.widgets.RBX_SUCCESS_FG"));
