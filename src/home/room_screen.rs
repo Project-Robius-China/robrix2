@@ -4615,6 +4615,15 @@ impl ActionDefaultRef for InfoButtonAction {
 pub enum RoomInfoPaneAction {
     InviteUser,
     ShowPeoplePage,
+    /// Emitted ONLY by a `RoomInfoPeopleEntry` row when its person is tapped.
+    /// The owning `RoomInfoSlidingPane` instance re-bubbles this as
+    /// `OpenPeopleProfile` (tagged with the pane's own widget uid) so the
+    /// `RoomScreen` handler can pick it up. Kept distinct from
+    /// `OpenPeopleProfile` so that pane instances never react to each other's
+    /// re-emitted action — otherwise the desktop overlay pane and the inline
+    /// (mobile) pane, which both receive every broadcast `Event::Actions`,
+    /// would ping-pong the action between themselves forever and freeze the app.
+    PersonClicked(OwnedUserId),
     OpenPeopleProfile(OwnedUserId),
     ReportRoom,
     LeaveRoom,
@@ -4788,7 +4797,7 @@ impl Widget for RoomInfoPeopleEntry {
             Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
                 cx.widget_action(
                     self.widget_uid(),
-                    RoomInfoPaneAction::OpenPeopleProfile(user_id),
+                    RoomInfoPaneAction::PersonClicked(user_id),
                 );
             }
             _ => {}
@@ -5233,15 +5242,25 @@ impl Widget for RoomInfoSlidingPane {
         }
 
         if let Event::Actions(actions) = event {
-            for action in actions {
-                if action.as_widget_action().widget_uid_eq(self.widget_uid()).is_none()
-                    && let RoomInfoPaneAction::OpenPeopleProfile(user_id) = action.as_widget_action().cast()
-                {
-                    cx.widget_action(
-                        self.widget_uid(),
-                        RoomInfoPaneAction::OpenPeopleProfile(user_id.clone()),
-                    );
-                    break;
+            // Re-bubble a person tap from one of OUR people rows as
+            // `OpenPeopleProfile` tagged with this pane's own widget uid, so the
+            // `RoomScreen` handler (which filters by pane uid) can pick it up.
+            //
+            // Gate on `show_people_page` so ONLY the instance currently showing
+            // its People page bubbles. Both the desktop overlay pane and the
+            // inline (mobile) pane receive every broadcast `Event::Actions`, and
+            // `PersonClicked` is deliberately a distinct variant that no pane
+            // ever emits — together this guarantees the two instances can never
+            // ping-pong the action between themselves (which froze the app).
+            if self.show_people_page {
+                for action in actions {
+                    if let RoomInfoPaneAction::PersonClicked(user_id) = action.as_widget_action().cast() {
+                        cx.widget_action(
+                            self.widget_uid(),
+                            RoomInfoPaneAction::OpenPeopleProfile(user_id.clone()),
+                        );
+                        break;
+                    }
                 }
             }
 
@@ -6246,6 +6265,9 @@ impl Widget for RoomScreen {
                     RoomInfoPaneAction::LeaveRoom => {
                         self.open_leave_room_confirm_modal(cx);
                     }
+                    // Bubbled by the pane itself into `OpenPeopleProfile`
+                    // (handled above); nothing to do here.
+                    RoomInfoPaneAction::PersonClicked(_) => {}
                     RoomInfoPaneAction::None => {}
                 }
 
