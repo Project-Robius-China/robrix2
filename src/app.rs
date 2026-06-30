@@ -968,10 +968,12 @@ impl MatchEvent for App {
             match action.downcast_ref::<AddAgentModalAction>() {
                 Some(AddAgentModalAction::Close) => {
                     self.ui.modal(cx, ids!(add_agent_modal)).close(cx);
+                    self.ui.add_agent_modal(cx, ids!(add_agent_modal_inner)).clear_waiting_state();
                     continue;
                 }
                 Some(AddAgentModalAction::Registered(name)) => {
                     self.ui.modal(cx, ids!(add_agent_modal)).close(cx);
+                    self.ui.add_agent_modal(cx, ids!(add_agent_modal_inner)).clear_waiting_state();
                     enqueue_popup_notification(
                         format!("{name} registered"),
                         PopupKind::Success,

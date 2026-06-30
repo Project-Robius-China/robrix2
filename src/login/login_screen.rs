@@ -1131,37 +1131,32 @@ impl LoginScreen {
     fn apply_login_surface_style(&mut self, cx: &mut Cx, mobile: bool) {
         let mut login_scroll = self.view.view(cx, ids!(login_scroll));
         let mut login_card = self.view.view(cx, ids!(login_card));
-        if mobile {
-            script_apply_eval!(cx, login_scroll, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_CANVAS
-                }
-            });
-            script_apply_eval!(cx, login_card, {
-                margin: Inset{left: 28, right: 28}
-                padding: Inset{top: 24, bottom: 24, left: 22, right: 22}
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_SURFACE
-                    border_color: mod.widgets.RBX_STROKE_SOFT
-                    border_radius: mod.widgets.RBX_RADIUS_MD
-                }
-            });
+        // `Inset{}` constructors aren't in `script_apply_eval!`'s runtime scope
+        // (pitfall #41), so build them in Rust and interpolate with `#(...)`.
+        let card_margin = if mobile {
+            Inset { left: 28.0, right: 28.0, top: 0.0, bottom: 0.0 }
         } else {
-            script_apply_eval!(cx, login_scroll, {
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_CANVAS
-                }
-            });
-            script_apply_eval!(cx, login_card, {
-                margin: Inset{left: 16, right: 16}
-                padding: Inset{top: 24, bottom: 24, left: 36, right: 36}
-                draw_bg +: {
-                    color: mod.widgets.RBX_BG_SURFACE
-                    border_color: mod.widgets.RBX_STROKE_SOFT
-                    border_radius: mod.widgets.RBX_RADIUS_MD
-                }
-            });
-        }
+            Inset { left: 16.0, right: 16.0, top: 0.0, bottom: 0.0 }
+        };
+        let card_padding = if mobile {
+            Inset { top: 24.0, bottom: 24.0, left: 22.0, right: 22.0 }
+        } else {
+            Inset { top: 24.0, bottom: 24.0, left: 36.0, right: 36.0 }
+        };
+        script_apply_eval!(cx, login_scroll, {
+            draw_bg +: {
+                color: mod.widgets.RBX_BG_CANVAS
+            }
+        });
+        script_apply_eval!(cx, login_card, {
+            margin: #(card_margin)
+            padding: #(card_padding)
+            draw_bg +: {
+                color: mod.widgets.RBX_BG_SURFACE
+                border_color: mod.widgets.RBX_STROKE_SOFT
+                border_radius: mod.widgets.RBX_RADIUS_MD
+            }
+        });
     }
 
     fn apply_login_text_style(&mut self, cx: &mut Cx, mobile: bool) {
@@ -1246,11 +1241,17 @@ impl LoginScreen {
             confirm_password_input,
             homeserver_input
         );
+        // Pitfall #41: build the Inset in Rust, interpolate with `#(...)`.
+        let input_padding = if mobile {
+            Inset { top: 10.0, bottom: 10.0, left: 16.0, right: 16.0 }
+        } else {
+            Inset { top: 10.0, bottom: 10.0, left: 14.0, right: 14.0 }
+        };
         for input_ref in self.view_set(cx, input_ids).iter() {
             let Some(mut input) = input_ref.borrow_mut() else { continue };
             if mobile {
                 script_apply_eval!(cx, input, {
-                    padding: Inset{top: 10, bottom: 10, left: 16, right: 16}
+                    padding: #(input_padding)
                     draw_bg +: {
                         color: mod.widgets.RBX_BG_SURFACE
                         color_hover: mod.widgets.RBX_BG_SURFACE
@@ -1278,7 +1279,7 @@ impl LoginScreen {
                 });
             } else {
                 script_apply_eval!(cx, input, {
-                    padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
+                    padding: #(input_padding)
                     draw_bg +: {
                         color: mod.widgets.RBX_BG_SURFACE
                         color_hover: mod.widgets.RBX_BG_SURFACE

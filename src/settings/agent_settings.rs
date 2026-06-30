@@ -129,7 +129,7 @@ fn agent_registry_summary(app_state: &AppState) -> AgentRegistrySummary {
     summary
 }
 
-const AGENT_ROW_COUNT: usize = 12;
+const AGENT_ROW_COUNT: usize = 30;
 const AGENT_SETTINGS_OCTOS_HEALTH_REQUEST_ID: LiveId = live_id!(agent_settings_octos_health);
 
 script_mod! {
@@ -144,8 +144,8 @@ script_mod! {
         height: Fit
         flow: Down
         spacing: 0
-        margin: Inset{top: 6, bottom: 6}
-        padding: Inset{left: 13, right: 13, top: 12, bottom: 12}
+        margin: Inset{top: 3, bottom: 3}
+        padding: Inset{left: 12, right: 12, top: 10, bottom: 10}
         new_batch: true
         show_bg: true
         draw_bg +: {
@@ -163,8 +163,8 @@ script_mod! {
             spacing: 11
 
             agent_tile := RoundedView {
-                width: 44
-                height: 44
+                width: 38
+                height: 38
                 align: Align{x: 0.5, y: 0.5}
                 new_batch: true
                 show_bg: true
@@ -240,12 +240,6 @@ script_mod! {
                     color: (RBX_ACCENT_SOFT)
                     border_radius: (RBX_RADIUS_XXS)
                 }
-                agent_framework_dot := RoundedView {
-                    width: 6
-                    height: 6
-                    show_bg: true
-                    draw_bg +: { color: (RBX_ACCENT), border_radius: (RBX_RADIUS_PILL) }
-                }
                 agent_framework_label := Label {
                     width: Fit
                     height: Fit
@@ -258,19 +252,12 @@ script_mod! {
                 }
             }
 
-            agent_actions_divider := View {
-                width: Fill
-                height: 1.0
-                margin: Inset{top: 11, bottom: 10}
-                show_bg: true
-                draw_bg +: { color: (RBX_STROKE_SOFT) }
-            }
-
             agent_actions_row := View {
                 width: Fill
                 height: Fit
                 flow: Right
                 spacing: 8
+                margin: Inset{top: 10}
                 show_bg: true
                 draw_bg +: { color: (RBX_TRANSPARENT) }
 
@@ -641,6 +628,24 @@ script_mod! {
                 agent_row_9 := AgentRegistryRow {}
                 agent_row_10 := AgentRegistryRow {}
                 agent_row_11 := AgentRegistryRow {}
+                agent_row_12 := AgentRegistryRow {}
+                agent_row_13 := AgentRegistryRow {}
+                agent_row_14 := AgentRegistryRow {}
+                agent_row_15 := AgentRegistryRow {}
+                agent_row_16 := AgentRegistryRow {}
+                agent_row_17 := AgentRegistryRow {}
+                agent_row_18 := AgentRegistryRow {}
+                agent_row_19 := AgentRegistryRow {}
+                agent_row_20 := AgentRegistryRow {}
+                agent_row_21 := AgentRegistryRow {}
+                agent_row_22 := AgentRegistryRow {}
+                agent_row_23 := AgentRegistryRow {}
+                agent_row_24 := AgentRegistryRow {}
+                agent_row_25 := AgentRegistryRow {}
+                agent_row_26 := AgentRegistryRow {}
+                agent_row_27 := AgentRegistryRow {}
+                agent_row_28 := AgentRegistryRow {}
+                agent_row_29 := AgentRegistryRow {}
             }
         }
     }
@@ -800,6 +805,12 @@ impl AgentSettings {
         live_id!(agent_row_3), live_id!(agent_row_4), live_id!(agent_row_5),
         live_id!(agent_row_6), live_id!(agent_row_7), live_id!(agent_row_8),
         live_id!(agent_row_9), live_id!(agent_row_10), live_id!(agent_row_11),
+        live_id!(agent_row_12), live_id!(agent_row_13), live_id!(agent_row_14),
+        live_id!(agent_row_15), live_id!(agent_row_16), live_id!(agent_row_17),
+        live_id!(agent_row_18), live_id!(agent_row_19), live_id!(agent_row_20),
+        live_id!(agent_row_21), live_id!(agent_row_22), live_id!(agent_row_23),
+        live_id!(agent_row_24), live_id!(agent_row_25), live_id!(agent_row_26),
+        live_id!(agent_row_27), live_id!(agent_row_28), live_id!(agent_row_29),
     ];
 
     fn sync_agents_from_scope_if_needed(&mut self, cx: &mut Cx, scope: &mut Scope) {
@@ -1014,40 +1025,34 @@ impl AgentSettings {
         let tile_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_tile)];
         let mono_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_tile), live_id!(agent_tile_mono)];
         let badge_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_framework_badge)];
-        let dot_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_framework_badge), live_id!(agent_framework_dot)];
         let label_path = [row_path[0], live_id!(agent_top_row), live_id!(agent_framework_badge), live_id!(agent_framework_label)];
         let mut tile = self.view.view(cx, &tile_path);
         let mut mono = self.view.label(cx, &mono_path);
         let mut badge = self.view.view(cx, &badge_path);
-        let mut dot = self.view.view(cx, &dot_path);
         let mut label = self.view.label(cx, &label_path);
         match framework {
             AgentFramework::Octos => {
                 script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
                 script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-                script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
             }
             AgentFramework::Hermes => {
                 script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
                 script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-                script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_FG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
             }
             AgentFramework::OpenClaw => {
                 script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
                 script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-                script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
             }
             AgentFramework::Unknown => {
                 script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE_SUBTLE } });
                 script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
-                script_apply_eval!(cx, dot, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_FG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
             }
         }

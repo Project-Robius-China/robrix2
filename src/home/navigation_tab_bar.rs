@@ -35,7 +35,7 @@ use crate::{
         user_profile::UserProfile,
         user_profile_cache::{self, UserProfileUpdate},
     }, home::spaces_bar::SpacesBarWidgetExt, shared::{
-        avatar::{AvatarState, AvatarWidgetExt}, design_tokens::{RBX_ACCENT, RBX_FG_SECONDARY}, styles::*, verification_badge::VerificationBadgeWidgetExt
+        avatar::{AvatarState, AvatarWidgetExt}, styles::*, verification_badge::VerificationBadgeWidgetExt
     }, settings::app_preferences::{effective_is_desktop, AppPreferencesGlobal, AppPreferencesAction, ViewModeOverride}, sliding_sync::{current_user_id, AccountDataAction, AccountSwitchAction}, utils::{self, RoomNameId}
 };
 
@@ -613,26 +613,20 @@ impl NavigationTabBar {
         }
         self.applied_selected_tab = Some(tab.clone());
 
-        // Only the mobile bar recolors its icons (Desktop shows selection via a
-        // background pill driven by the radio animator, which we leave alone).
-        let set_icon_color = !effective_is_desktop(cx);
-        self.apply_tab_active(cx, ids!(home_button), matches!(tab, SelectedTab::Home), set_icon_color);
-        self.apply_tab_active(cx, ids!(add_room_button), matches!(tab, SelectedTab::AddRoom), set_icon_color);
-        self.apply_tab_active(cx, ids!(settings_button), matches!(tab, SelectedTab::Settings), set_icon_color);
+        // Both bars drive icon + label color from the radio animator's `active`
+        // state, so we only need to set which tab is active.
+        self.apply_tab_active(cx, ids!(home_button), matches!(tab, SelectedTab::Home));
+        self.apply_tab_active(cx, ids!(add_room_button), matches!(tab, SelectedTab::AddRoom));
+        self.apply_tab_active(cx, ids!(settings_button), matches!(tab, SelectedTab::Settings));
     }
 
-    fn apply_tab_active(&mut self, cx: &mut Cx, path: &[LiveId], active: bool, set_icon_color: bool) {
+    fn apply_tab_active(&mut self, cx: &mut Cx, path: &[LiveId], active: bool) {
         let radio_button = self.view.radio_button(cx, path);
+        // `set_active` plays the radio animator's `active` state, which already
+        // drives both draw_text and draw_icon colors (see the MobileTabButton
+        // animator). No imperative draw_icon recolor is needed — and
+        // `script_apply_eval!` fails on these tab buttons anyway (pitfall #40).
         radio_button.set_active(cx, active, Animate::No);
-        if set_icon_color {
-            // DrawSvg has no per-state color, so set the icon color to match the
-            // active/inactive text color imperatively.
-            let icon_color = if active { RBX_ACCENT } else { RBX_FG_SECONDARY };
-            let mut radio_button = radio_button.clone();
-            script_apply_eval!(cx, radio_button, {
-                draw_icon +: { color: #(icon_color) }
-            });
-        }
     }
 }
 

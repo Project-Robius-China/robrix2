@@ -1391,12 +1391,27 @@ impl AddAgentModal {
         self.sync_steps(cx);
         self.view.redraw(cx);
     }
+
+    /// Clears the friend-binding state once the modal closes, so it no longer
+    /// "owns" DM results for its last target. Without this, App's
+    /// `suppress_add_agent_direct_message_action` keeps swallowing the navigation
+    /// when you later tap "Open chat" on an already-bound agent.
+    pub fn clear_waiting_state(&mut self) {
+        self.friend_state = FriendState::Idle;
+        self.target_user_id = None;
+    }
 }
 
 impl AddAgentModalRef {
     pub fn show(&self, cx: &mut Cx, app_language: AppLanguage) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.show(cx, app_language);
+    }
+
+    pub fn clear_waiting_state(&self) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.clear_waiting_state();
+        }
     }
 
     pub fn is_waiting_for_direct_message_result(&self, user_id: &OwnedUserId) -> bool {
