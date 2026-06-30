@@ -632,7 +632,7 @@ script_mod! {
                 grab_key_focus: false
                 scroll_bars +: { show_scroll_x: false, show_scroll_y: true }
 
-                agent_item := AgentRegistryRow {}
+                agent_item := mod.widgets.AgentRegistryRow {}
             }
         }
     }
