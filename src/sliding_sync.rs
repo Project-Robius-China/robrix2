@@ -446,7 +446,10 @@ async fn build_client(
             backup_download_strategy: matrix_sdk::encryption::BackupDownloadStrategy::OneShot,
             auto_enable_backups: true,
         })
-        .with_enable_share_history_on_invite(true)
+        // Off: palpo's key backup 404s, so share_room_history() (MSC3061) aborts
+        // every invite — encrypted or not — before /invite is sent. Re-enable when
+        // the homeserver's key backup works.
+        .with_enable_share_history_on_invite(false)
         .handle_refresh_tokens();
 
     // Use a 60 second timeout for all requests to the homeserver.
