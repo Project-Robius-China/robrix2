@@ -2022,10 +2022,20 @@ impl Widget for RoomsList {
                         list.item(cx, portal_list_index, id!(empty)).draw_all(cx, &mut item_scope);
                     }
                 }
-                // Draw the status label as the bottom entry.
+                // Draw the status label as the bottom entry. While the room list is
+                // still empty (initial sync, before any rooms have arrived), show a
+                // loading spinner + message instead of a blank panel; once rooms
+                // appear this becomes the normal bottom status line.
                 else if portal_list_index == status_label_id {
                     let item = list.item(cx, portal_list_index, id!(status_label));
-                    item.label(cx, ids!(label)).set_text(cx, &self.status);
+                    let is_empty = status_label_id == 0;
+                    item.view(cx, ids!(loading_spinner)).set_visible(cx, is_empty);
+                    let status_text = if is_empty && self.status.is_empty() {
+                        "Loading rooms…".to_string()
+                    } else {
+                        self.status.clone()
+                    };
+                    item.label(cx, ids!(label)).set_text(cx, &status_text);
                     item.draw_all(cx, &mut item_scope);
                 }
                 // Draw a filler entry to take up space at the bottom of the portal list.
