@@ -582,7 +582,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: #fff
-                border_radius: 24.0
+                border_radius: 4.0
             }
 
             title_view := View {
@@ -661,7 +661,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: #fff
-                border_radius: 24.0
+                border_radius: 4.0
             }
 
             title_view := View {
