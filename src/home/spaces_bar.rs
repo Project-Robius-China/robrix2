@@ -13,7 +13,7 @@ use matrix_sdk::{RoomDisplayName, RoomState};
 use ruma::{OwnedRoomAliasId, OwnedRoomId, room::JoinRuleSummary};
 
 use crate::{
-    app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, settings::app_preferences::{effective_is_desktop, AppPreferencesAction, ViewModeOverride}, shared::{avatar::AvatarWidgetRefExt, design_tokens::{RBX_FG_SECONDARY, RBX_NAV_FG}, room_filter_input_bar::MainFilterAction}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
+    app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, i18n::{AppLanguage, tr_fmt, tr_key}, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, settings::app_preferences::{effective_is_desktop, AppPreferencesAction, ViewModeOverride}, shared::{avatar::AvatarWidgetRefExt, design_tokens::{RBX_FG_SECONDARY, RBX_NAV_FG}, room_filter_input_bar::MainFilterAction}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
 };
 
 script_mod! {
@@ -705,14 +705,12 @@ impl Widget for SpacesBar {
                     continue;
                 }
 
-                // Handle login success - clear and redraw spaces
-                if let Some(LoginAction::LoginSuccess) = action.downcast_ref() {
-                    self.all_joined_spaces.clear();
-                    self.displayed_spaces.clear();
-                    self.selected_space = None;
-                    self.redraw(cx);
-                    continue;
-                }
+                // NOTE: LoginSuccess intentionally does NOT clear the spaces here.
+                // On a restored session the space service has usually already loaded
+                // the spaces (via the diff stream) by the time the LoginSuccess action
+                // is delivered to the UI, so clearing wiped freshly-loaded spaces with
+                // no reload — the "spaces appear then vanish / show none" bug. Logout
+                // is handled by ClearAppState above; account switch is handled below.
 
                 // Handle account switch - clear and redraw spaces
                 if let Some(AccountSwitchAction::Switched(_)) = action.downcast_ref() {
