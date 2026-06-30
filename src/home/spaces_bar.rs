@@ -13,7 +13,7 @@ use matrix_sdk::{RoomDisplayName, RoomState};
 use ruma::{OwnedRoomAliasId, OwnedRoomId, room::JoinRuleSummary};
 
 use crate::{
-    app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, settings::app_preferences::{effective_is_desktop, AppPreferencesAction, ViewModeOverride}, shared::{avatar::AvatarWidgetRefExt, room_filter_input_bar::MainFilterAction}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
+    app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, settings::app_preferences::{effective_is_desktop, AppPreferencesAction, ViewModeOverride}, shared::{avatar::AvatarWidgetRefExt, design_tokens::{RBX_FG_SECONDARY, RBX_NAV_FG}, room_filter_input_bar::MainFilterAction}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
 };
 
 script_mod! {
@@ -41,8 +41,12 @@ script_mod! {
             active: instance(0.0)
 
             color: instance(#0000)
-            color_hover: instance((COLOR_NAVIGATION_TAB_BG_HOVER))
-            color_active: instance((COLOR_NAVIGATION_TAB_BG_ACTIVE))
+            // Teal selection wash, kept translucent so it reads on BOTH the dark
+            // desktop rail AND the light mobile spaces strip (this entry template is
+            // shared by both). The strong selection signal is the teal bar below.
+            color_hover: instance(#x119FB324)
+            color_active: instance(#x119FB33D)
+            accent_color: instance((RBX_ACCENT))
 
             border_color: instance(#0000)
             border_size: uniform(0.0)
@@ -74,6 +78,16 @@ script_mod! {
                 if self.border_size > 0.0 {
                     sdf.stroke(self.border_color, self.border_size)
                 }
+                // Teal selection bar on the left edge, shown only when active.
+                let bar_inset = 16.0
+                sdf.box(
+                    0.0,
+                    bar_inset,
+                    3.0,
+                    self.rect_size.y - bar_inset * 2.0,
+                    1.5
+                )
+                sdf.fill(mix(vec4(0.0, 0.0, 0.0, 0.0), self.accent_color, self.active))
                 return sdf.result;
             }
         }
@@ -81,9 +95,10 @@ script_mod! {
         avatar := Avatar {
             width: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_SIZE
             height: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_SIZE
-            // If no avatar picture, use white text on a dark background.
+            // If no avatar picture, use white text on the teal identity square
+            // (RBX_IDENTITY_TEAL) — reads well on both the dark rail and light strip.
             text_view +: {
-                draw_bg.color: (COLOR_FG_DISABLED),
+                draw_bg.color: (RBX_IDENTITY_TEAL),
                 text +: {
                     draw_text +: {
                         text_style: theme.font_regular { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
@@ -107,9 +122,9 @@ script_mod! {
                 hover: instance(0.0)
                 down: instance(0.0)
 
-                color: (COLOR_NAVIGATION_TAB_FG)
-                color_hover: uniform(COLOR_NAVIGATION_TAB_FG_HOVER)
-                color_active: uniform(COLOR_NAVIGATION_TAB_FG_ACTIVE)
+                color: (RBX_NAV_FG)
+                color_hover: uniform(RBX_NAV_FG_ACTIVE)
+                color_active: uniform(RBX_NAV_FG_ACTIVE)
 
                 // text_style: theme.font_bold {font_size: 9}
                 text_style: REGULAR_TEXT {font_size: 9}
@@ -188,7 +203,10 @@ script_mod! {
             flow: Flow.Right{wrap: true},
             align: Align{ x: 0.5, y: 0.5 }
             draw_text +: {
-                color: (MESSAGE_TEXT_COLOR),
+                // Default to the light nav-rail foreground (desktop). The mobile
+                // strip overrides this to a darker tone at runtime in draw_walk,
+                // since this status label is shared across both view modes.
+                color: (RBX_NAV_FG),
                 text_style: REGULAR_TEXT {font_size: 9}
             }
         }
@@ -218,7 +236,10 @@ script_mod! {
         Desktop := View {
             align: Align{x: 0.5, y: 0.5}
             padding: 0,
-            width: (NAVIGATION_TAB_BAR_SIZE), 
+            // Fill the rail's content width (rail is NAVIGATION_TAB_BAR_SIZE wide with
+            // SPACE_XS padding); a fixed NAVIGATION_TAB_BAR_SIZE here overflows that
+            // padded area and pushes the avatars off-center vs the Home/Add buttons.
+            width: Fill,
             height: Fill
 
             CachedWidget {
@@ -607,6 +628,17 @@ impl Widget for SpacesBar {
         let app_language = scope.data.get::<AppState>()
             .map(|app_state| app_state.app_language)
             .unwrap_or_default();
+        let is_desktop = effective_is_desktop(cx);
+
+        // Safety net for the intermittent "no joined spaces" bug. Space updates are
+        // normally drained in handle_event on Event::Signal, but if they were enqueued
+        // before this (cached) widget was ready to receive that Signal, they can sit
+        // undrained in the queue until some later update happens to fire another Signal
+        // — leaving the bar stuck on "no joined spaces". If the queue still has items
+        // at draw time, re-arm the UI signal so they get drained next frame.
+        if !PENDING_SPACE_UPDATES.is_empty() {
+            SignalToUI::set_ui_signal();
+        }
 
         while let Some(widget_to_draw) = self.view.draw_walk(cx, scope, walk).step() {
             // We only care about drawing the portal list.
@@ -615,7 +647,7 @@ impl Widget for SpacesBar {
 
             // AdaptiveView + CachedWidget does not properly handle DSL-level style overrides,
             // so we must manually apply the different style choices here when drawing it.
-            if effective_is_desktop(cx) {
+            if is_desktop {
                 script_apply_eval!(cx, list, {
                     flow: #(Flow::Down),
                 });
@@ -639,10 +671,23 @@ impl Widget for SpacesBar {
                                 tr_key(app_language, "spaces_bar.status.none_joined")
                             }
                         );
+                        // Status text is shared across view modes: light on the dark
+                        // desktop rail, darker on the light mobile strip.
+                        let mut status_label = item.label(cx, ids!(label));
+                        let status_color = if effective_is_desktop(cx) { RBX_NAV_FG } else { RBX_FG_SECONDARY };
+                        script_apply_eval!(cx, status_label, { draw_text +: { color: #(status_color) } });
                         item
                     } else {
                         list.item(cx, portal_list_index, id!(BottomFiller))
                     };
+                    // Desktop: stretch each item to the rail content width so its
+                    // centered avatar/label aligns with the Home/Add buttons (PortalList
+                    // does not center fixed-width items on the cross axis). Mobile keeps
+                    // the template's fixed width for the horizontal strip.
+                    if is_desktop {
+                        let mut item_w = item.clone();
+                        script_apply_eval!(cx, item_w, { width: #(Size::fill()) });
+                    }
                     item.draw_all(cx, scope);
                 }
             }
@@ -719,11 +764,24 @@ impl Widget for SpacesBar {
                             }
                         };
                         item.label(cx, ids!(label)).set_text(cx, &text);
+                        // Status text is shared across view modes: light on the dark
+                        // desktop rail, darker on the light mobile strip.
+                        let mut status_label = item.label(cx, ids!(label));
+                        let status_color = if effective_is_desktop(cx) { RBX_NAV_FG } else { RBX_FG_SECONDARY };
+                        script_apply_eval!(cx, status_label, { draw_text +: { color: #(status_color) } });
                         item
                     }
                     else {
                         list.item(cx, portal_list_index, id!(BottomFiller))
                     };
+                    // Desktop: stretch each item to the rail content width so its
+                    // centered avatar/label aligns with the Home/Add buttons (PortalList
+                    // does not center fixed-width items on the cross axis). Mobile keeps
+                    // the template's fixed width for the horizontal strip.
+                    if is_desktop {
+                        let mut item_w = item.clone();
+                        script_apply_eval!(cx, item_w, { width: #(Size::fill()) });
+                    }
                     item.draw_all(cx, scope);
                 }
             }
@@ -767,12 +825,17 @@ impl SpacesBar {
                 SpacesListUpdate::AddJoinedSpace(joined_space) => {
                     let space_id = joined_space.space_name_id.room_id().clone();
                     let should_display = (self.display_filter)(&joined_space);
-                    let replaced = self.all_joined_spaces.insert(space_id.clone(), joined_space);
-                    if replaced.is_none() {
-                        adjust_displayed_spaces(false, should_display, space_id, &mut self.displayed_spaces);
-                    } else {
-                        error!("BUG: Added joined space {space_id} that already existed");
-                    }
+                    // Idempotent upsert. A space is legitimately (re-)added while it
+                    // already exists: the space service calls add_new_space() again on
+                    // state-settle Set diffs (e.g. None -> Joined) and on the SDK's
+                    // clear()+append() recomputes that can arrive without an intervening
+                    // ClearSpaces. The previous code logged a BUG and DROPPED the re-add,
+                    // which left the space in `all_joined_spaces` but missing from
+                    // `displayed_spaces` (the Vec that draw_walk iterates) — i.e. the
+                    // intermittent "spaces don't show" bug. So reconcile every time.
+                    let was_displayed = self.displayed_spaces.contains(&space_id);
+                    self.all_joined_spaces.insert(space_id.clone(), joined_space);
+                    adjust_displayed_spaces(was_displayed, should_display, space_id, &mut self.displayed_spaces);
                 }
 
                 SpacesListUpdate::UpdateCanonicalAlias { space_id, new_canonical_alias } => {
