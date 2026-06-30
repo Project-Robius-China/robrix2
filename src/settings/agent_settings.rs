@@ -159,7 +159,7 @@ script_mod! {
         flow: Down
         spacing: 0
         margin: Inset{top: 3, bottom: 3}
-        padding: Inset{left: 12, right: 12, top: 10, bottom: 10}
+        padding: Inset{left: 12, right: 12, top: 8, bottom: 8}
         new_batch: true
         show_bg: true
         draw_bg +: {
@@ -177,8 +177,8 @@ script_mod! {
             spacing: 11
 
             agent_tile := RoundedView {
-                width: 38
-                height: 38
+                width: 30
+                height: 30
                 align: Align{x: 0.5, y: 0.5}
                 new_batch: true
                 show_bg: true
@@ -271,14 +271,14 @@ script_mod! {
                 height: Fit
                 flow: Right
                 spacing: 8
-                margin: Inset{top: 10}
+                margin: Inset{top: 7}
                 show_bg: true
                 draw_bg +: { color: (RBX_TRANSPARENT) }
 
             agent_open_chat_button := RobrixIconButton {
                 width: Fill
                 height: Fit
-                padding: Inset{top: 7, bottom: 7, left: 8, right: 8}
+                padding: Inset{top: 5, bottom: 5, left: 8, right: 8}
                 icon_walk: Walk{width: 0, height: 0}
                 spacing: 0
                 text: "Open chat"
@@ -293,7 +293,7 @@ script_mod! {
             agent_recheck_button := RobrixIconButton {
                 width: Fill
                 height: Fit
-                padding: Inset{top: 7, bottom: 7, left: 8, right: 8}
+                padding: Inset{top: 5, bottom: 5, left: 8, right: 8}
                 icon_walk: Walk{width: 0, height: 0}
                 spacing: 0
                 text: "Re-check"
@@ -308,7 +308,7 @@ script_mod! {
             agent_unbind_button := RobrixIconButton {
                 width: Fill
                 height: Fit
-                padding: Inset{top: 7, bottom: 7, left: 8, right: 8}
+                padding: Inset{top: 5, bottom: 5, left: 8, right: 8}
                 icon_walk: Walk{width: 0, height: 0}
                 spacing: 0
                 text: "Unbind"
@@ -361,16 +361,7 @@ script_mod! {
         width: Fill
         height: Fit
         flow: Down
-        spacing: (SPACE_MD)
-        new_batch: true
-        show_bg: true
-        padding: Inset{left: (SPACE_LG), right: (SPACE_LG), top: (SPACE_LG), bottom: (SPACE_LG)}
-        draw_bg +: {
-            color: (RBX_BG_SURFACE)
-            border_radius: (RBX_RADIUS_XXS)
-            border_size: 1.0
-            border_color: (RBX_STROKE_STRONG)
-        }
+        spacing: (SPACE_SM)
 
         agents_header := View {
             width: Fill
@@ -1342,8 +1333,8 @@ mod tests {
         let src = production_src(include_str!("agent_settings.rs"));
 
         assert!(
-            src.contains("agent_tile := RoundedView {\n                width: 38\n                height: 38"),
-            "framework tile should match the compacted 38px tile"
+            src.contains("agent_tile := RoundedView {\n                width: 30\n                height: 30"),
+            "framework tile should match the compacted 30px tile"
         );
         assert!(
             src.contains("agent_actions_row := View"),
@@ -1365,7 +1356,7 @@ mod tests {
             "registered agents should render in a dynamic FlatList",
         );
         assert!(
-            src.contains("agent_item := AgentRegistryRow {}"),
+            src.contains("agent_item := mod.widgets.AgentRegistryRow {}"),
             "the FlatList should template a single AgentRegistryRow item",
         );
         assert!(
