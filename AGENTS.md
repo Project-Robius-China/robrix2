@@ -21,6 +21,10 @@ This project does not use automatic Rust formatting. Do not run `cargo fmt`, `ru
 
 Present changes for testing first. Wait for user confirmation before committing or opening a PR.
 
+### Check i18n for new features
+
+When designing or implementing new features, always check whether i18n translation keys and UI text alignment need updates so translated content is not missing or visually inconsistent.
+
 ### Makepad 2.0 only
 
 - Use `script_mod!`, not `live_design!`
