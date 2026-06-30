@@ -188,6 +188,104 @@ script_mod! {
         }
     }
 
+    // A full-width "workspace row" for the mobile Workspace tab's vertical spaces
+    // list: [avatar] [space name (Fill)] [room count] [chevron]. It is a SECOND
+    // template of the SpacesBarEntry widget, so it reuses the same tap handling
+    // (SpacesBarAction::ButtonClicked -> GoToSpace) and selection animator contract
+    // — only the layout differs from the desktop rail's avatar-box entry.
+    mod.widgets.SpacesListRow = #(SpacesBarEntry::register_widget(vm)) {
+        width: Fill,
+        height: 56,
+        flow: Right,
+        align: Align{x: 0.0, y: 0.5}
+        padding: Inset{left: 14, right: 12}
+        margin: 0,
+        cursor: MouseCursor.Hand
+
+        show_bg: true
+        draw_bg +: {
+            hover: instance(0.0)
+            active: instance(0.0)
+            down: instance(0.0)
+            // Transparent default; a faint dark wash on hover/press (reads on the
+            // white mobile surface), plus a teal accent bar on the left edge.
+            color: instance(#0000)
+            color_hover: instance(#x00000010)
+            accent_color: instance((RBX_ACCENT))
+
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.rect(0.0, 0.0, self.rect_size.x, self.rect_size.y)
+                sdf.fill(mix(self.color, self.color_hover, self.hover))
+                let bar_inset = 14.0
+                sdf.box(
+                    0.0,
+                    bar_inset,
+                    3.0,
+                    self.rect_size.y - bar_inset * 2.0,
+                    1.5
+                )
+                sdf.fill(mix(vec4(0.0, 0.0, 0.0, 0.0), self.accent_color, self.active))
+                return sdf.result;
+            }
+        }
+
+        avatar := Avatar {
+            width: 36, height: 36,
+            text_view +: {
+                draw_bg.color: (RBX_IDENTITY_TEAL),
+                text +: {
+                    draw_text +: {
+                        text_style: theme.font_regular { font_size: 15 },
+                        color: (COLOR_PRIMARY),
+                    }
+                }
+            }
+        }
+
+        space_name := Label {
+            width: Fill, height: Fit,
+            margin: Inset{left: 12}
+            max_lines: 1,
+            text_overflow: Ellipsis,
+            draw_text +: {
+                color: (RBX_FG_PRIMARY)
+                text_style: theme.font_bold { font_size: 11.5 }
+            }
+            text: ""
+        }
+
+        room_count := Label {
+            width: Fit, height: Fit,
+            margin: Inset{left: 8, right: 8}
+            draw_text +: {
+                color: (RBX_FG_SECONDARY)
+                text_style: REGULAR_TEXT { font_size: 9.5 }
+            }
+            text: ""
+        }
+
+        chevron := Icon {
+            width: 16, height: 16,
+            draw_icon +: { svg: (ICON_CHEVRON_RIGHT), color: (RBX_FG_TERTIARY) }
+            icon_walk: Walk{ width: 16, height: 16 }
+        }
+
+        animator: Animator {
+            hover: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.15}} apply: { draw_bg: {down: snap(0.0), hover: 0.0} } }
+                on: AnimatorState { from: {all: Snap} apply: { draw_bg: {down: snap(0.0), hover: 1.0} } }
+                down: AnimatorState { from: {all: Forward {duration: 0.1}} apply: { draw_bg: {down: snap(1.0), hover: 1.0} } }
+            }
+            active: {
+                default: @off
+                off: AnimatorState { from: {all: Snap} apply: { draw_bg: {active: 0.0} } }
+                on: AnimatorState { from: {all: Snap} apply: { draw_bg: {active: 1.0} } }
+            }
+        }
+    }
+
     mod.widgets.SpacesStatusLabel = View {
         width: (NAVIGATION_TAB_BAR_SIZE),
         height: (NAVIGATION_TAB_BAR_SIZE),
@@ -225,6 +323,7 @@ script_mod! {
         }
 
         spaces_bar_entry := mod.widgets.SpacesBarEntry {}
+        spaces_list_row := mod.widgets.SpacesListRow {}
         StatusLabel := mod.widgets.SpacesStatusLabel {}
         BottomFiller := View {
             width: (NAVIGATION_TAB_BAR_SIZE)
@@ -247,11 +346,14 @@ script_mod! {
             }
         }
 
+        // Mobile: a full-height VERTICAL list of workspace rows (the Workspace tab
+        // body on the home screen). Was previously a short horizontal avatar strip
+        // toggled by a header icon; it is now a proper tab pane.
         Mobile := View {
-            align: Align{x: 0.5, y: 0.5}
+            align: Align{x: 0.5, y: 0.0}
             padding: 0,
             width: Fill,
-            height: (NAVIGATION_TAB_BAR_SIZE)
+            height: Fill
 
             CachedWidget {
                 spaces_list := mod.widgets.SpacesList { }
@@ -646,16 +748,11 @@ impl Widget for SpacesBar {
             let Some(mut list) = portal_list_ref.borrow_mut() else { continue };
 
             // AdaptiveView + CachedWidget does not properly handle DSL-level style overrides,
-            // so we must manually apply the different style choices here when drawing it.
-            if is_desktop {
-                script_apply_eval!(cx, list, {
-                    flow: #(Flow::Down),
-                });
-            } else {
-                script_apply_eval!(cx, list, {
-                    flow: #(Flow::right()),
-                });
-            }
+            // so we apply it here. Both the desktop rail and the mobile Workspace tab
+            // now render the spaces VERTICALLY (the old mobile horizontal strip is gone).
+            script_apply_eval!(cx, list, {
+                flow: #(Flow::Down),
+            });
 
             let len = self.displayed_spaces.len();
             if len == 0 {
@@ -680,11 +777,9 @@ impl Widget for SpacesBar {
                     } else {
                         list.item(cx, portal_list_index, id!(BottomFiller))
                     };
-                    // Desktop: stretch each item to the rail content width so its
-                    // centered avatar/label aligns with the Home/Add buttons (PortalList
-                    // does not center fixed-width items on the cross axis). Mobile keeps
-                    // the template's fixed width for the horizontal strip.
-                    if is_desktop {
+                    // Stretch every item to fill the list width: desktop avatar boxes
+                    // center their avatar within the rail; mobile rows span full width.
+                    {
                         let mut item_w = item.clone();
                         script_apply_eval!(cx, item_w, { width: #(Size::fill()) });
                     }
@@ -698,10 +793,25 @@ impl Widget for SpacesBar {
                         .get(portal_list_index)
                         .and_then(|space_id| self.all_joined_spaces.get(space_id))
                     {
-                        let item = list.item(cx, portal_list_index, id!(spaces_bar_entry));
-                        // Populate the space name and avatar (although this isn't visible by default).
+                        // Desktop rail uses the compact avatar-box entry; the mobile
+                        // Workspace tab uses the full-width row (avatar + name + count
+                        // + chevron). Both are SpacesBarEntry widgets, so the avatar /
+                        // space_name population and set_metadata below work for either.
+                        let item = if is_desktop {
+                            list.item(cx, portal_list_index, id!(spaces_bar_entry))
+                        } else {
+                            list.item(cx, portal_list_index, id!(spaces_list_row))
+                        };
+                        // Populate the space name (zero-height on the desktop entry,
+                        // visible on the mobile row) and, on mobile, the room count.
                         let space_name = space.space_name_id.to_string();
                         item.label(cx, ids!(space_name)).set_text(cx, &space_name);
+                        if !is_desktop {
+                            item.label(cx, ids!(room_count)).set_text(
+                                cx,
+                                &format!("{} rooms", space.children_count),
+                            );
+                        }
                         let avatar_ref = item.avatar(cx, ids!(avatar));
                         match &space.space_avatar {
                             FetchedRoomAvatar::Text(text) => {
@@ -774,11 +884,9 @@ impl Widget for SpacesBar {
                     else {
                         list.item(cx, portal_list_index, id!(BottomFiller))
                     };
-                    // Desktop: stretch each item to the rail content width so its
-                    // centered avatar/label aligns with the Home/Add buttons (PortalList
-                    // does not center fixed-width items on the cross axis). Mobile keeps
-                    // the template's fixed width for the horizontal strip.
-                    if is_desktop {
+                    // Stretch every item to fill the list width: desktop avatar boxes
+                    // center their avatar within the rail; mobile rows span full width.
+                    {
                         let mut item_w = item.clone();
                         script_apply_eval!(cx, item_w, { width: #(Size::fill()) });
                     }

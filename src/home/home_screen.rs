@@ -416,15 +416,8 @@ script_mod! {
                             }
                         }
 
-                        // Show the SpacesBar right above the navigation tab bar.
-                        // We wrap it in the SpacesBarWrapper in order to animate it in or out,
-                        // and wrap *that* in a CachedWidget in order to maintain its shown/hidden state
-                        // across AdaptiveView transitions between Mobile view mode and Desktop view mode.
-                        //
-                        // ... Then we wrap *that* in a ... <https://www.youtube.com/watch?v=evUWersr7pc>
-                        CachedWidget {
-                            spaces_bar_wrapper := mod.widgets.SpacesBarWrapper {}
-                        }
+                        // (The toggled SpacesBar strip was removed: the SpacesBar now
+                        // lives in the home screen's `Workspace` tab — see RoomsSideBar.)
 
                         // At the bottom of the root view, show the navigation tab bar horizontally.
                         CachedWidget {

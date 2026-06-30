@@ -48,50 +48,8 @@ script_mod! {
             }
         },
 
-        // Spaces toggle (shows/hides the SpacesBar). Only shown in the Mobile
-        // layout — see `RoomsSideBar` (Desktop always shows the SpacesBar in its
-        // left rail, so it overrides this to `visible: false`).
-        toggle_spaces_bar_button := View {
-            visible: false,
-            width: Fit,
-            height: Fit
-            margin: Inset{right: 1}
-            flow: Overlay,
-
-            Icon {
-                draw_icon +: {
-                    svg: (ICON_SQUARES)
-                    color: (RBX_FG_SECONDARY)
-                }
-                icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
-            }
-
-            spaces_click_area := Button {
-                width: Fill,
-                height: Fill
-                padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
-                spacing: 0,
-                text: ""
-                draw_bg +: {
-                    color: #0000
-                    color_hover: #0000
-                    color_down: #0000
-                    border_color: #0000
-                    border_color_hover: #0000
-                    border_color_down: #0000
-                    border_color_focus: #0000
-                    border_size: 0.0
-                    border_radius: 0.0
-                }
-                draw_text +: {
-                    color: #0000
-                    color_hover: #0000
-                    color_down: #0000
-                    color_focus: #0000
-                }
-                icon_walk: Walk{width: 0, height: 0}
-            }
-        }
+        // (The mobile "spaces" toggle icon was removed: switching to spaces is now
+        // the `Workspace` tab in the home screen's tab row — see `RoomsSideBar`.)
 
         open_directory_button := View {
             width: Fit,
@@ -235,9 +193,6 @@ impl Widget for RoomsListHeader {
             self.set_app_language(cx, app_language);
         }
         if let Event::Actions(actions) = event {
-            if self.view.button(cx, ids!(toggle_spaces_bar_button.spaces_click_area)).clicked(actions) {
-                cx.action(NavigationBarAction::ToggleSpacesBar);
-            }
             if self.view.button(cx, ids!(open_directory_button.directory_click_area)).clicked(actions) {
                 cx.action(NavigationBarAction::GoToDirectory);
             }

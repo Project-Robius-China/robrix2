@@ -116,12 +116,16 @@ pub fn script_mod(vm: &mut ScriptVm) {
     invite_screen::script_mod(vm);
     tombstone_footer::script_mod(vm);
     room_screen::script_mod(vm);
+    // `spaces_bar` must be registered BEFORE `rooms_sidebar` and `navigation_tab_bar`,
+    // which both reference `mod.widgets.SpacesBar` in their DSL (the Workspace tab and
+    // the desktop rail). Registering it after would fail with "property SpacesBar not
+    // found in prototype chain".
+    spaces_bar::script_mod(vm);
     rooms_sidebar::script_mod(vm);
     welcome_screen::script_mod(vm);
     light_themed_dock::script_mod(vm);
     main_mobile_ui::script_mod(vm);
     main_desktop_ui::script_mod(vm);
-    spaces_bar::script_mod(vm);
     navigation_tab_bar::script_mod(vm);
     // Note: upload_progress::script_mod is called earlier in app.rs
     // because RoomInputBar depends on it.
