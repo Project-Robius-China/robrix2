@@ -1,7 +1,7 @@
 use std::{io::ErrorKind, path::{Path, PathBuf}, sync::OnceLock, time::Duration};
 
 use makepad_widgets::{log, warning};
-use matrix_sdk::reqwest::{Client, ClientBuilder, NoProxy, Proxy, tls};
+use matrix_sdk::reqwest::{Client, ClientBuilder, NoProxy, Proxy};
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
@@ -243,15 +243,49 @@ pub fn apply_policy_to_reqwest_builder(
     }
 }
 
+/// Build a rustls [`ClientConfig`](rustls::ClientConfig) that trusts the
+/// compiled-in webpki (Mozilla) CA roots, using the `ring` crypto provider.
+///
+/// Why this exists: `matrix-sdk`'s `rustls-tls` feature routes certificate
+/// verification through `rustls-platform-verifier`. On Android that verifier
+/// needs a JNI init *and* a Kotlin `org.rustls.platformverifier.CertificateVerifier`
+/// class bundled in the APK — neither of which a `cargo-makepad`-built Robrix APK
+/// has — so the FIRST https handshake panics on a tokio worker and login /
+/// homeserver discovery hang forever (the UI sticks on "checking"). Handing
+/// reqwest a preconfigured webpki-roots config via `use_preconfigured_tls`
+/// sidesteps the platform verifier entirely, with identical behavior on desktop
+/// and Android.
+///
+/// `ring` is selected explicitly because both `ring` and `aws-lc-rs` are present
+/// in the dependency graph; relying on a process-default `CryptoProvider` would
+/// otherwise risk a "no process-level CryptoProvider available" runtime panic.
+fn webpki_rustls_config() -> rustls::ClientConfig {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    rustls::ClientConfig::builder_with_provider(
+        std::sync::Arc::new(rustls::crypto::ring::default_provider()),
+    )
+    .with_safe_default_protocol_versions()
+    .expect("ring provider supports TLS 1.2 + 1.3 safe defaults")
+    .with_root_certificates(roots)
+    .with_no_client_auth()
+}
+
 pub fn build_policy_reqwest_client(
     proxy_url: Option<&str>,
     timeout: Option<Duration>,
 ) -> anyhow::Result<Client> {
     // Restore the security/operational defaults that matrix_sdk's HttpSettings
     // used to enforce before we switched ClientBuilder.proxy() → .http_client().
+    //
+    // Use a preconfigured webpki-roots TLS config (see `webpki_rustls_config`)
+    // so cert verification never routes through `rustls-platform-verifier`,
+    // which is uninitialized on Android and panics on the first https request.
+    // Its safe-default protocol versions (TLS 1.2 + 1.3) preserve the previous
+    // `min_tls_version(TLS_1_2)` floor.
     let mut builder = Client::builder()
         .user_agent(POLICY_USER_AGENT)
-        .min_tls_version(tls::Version::TLS_1_2);
+        .use_preconfigured_tls(webpki_rustls_config());
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
     }
