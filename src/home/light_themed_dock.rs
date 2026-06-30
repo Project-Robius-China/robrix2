@@ -132,17 +132,20 @@ script_mod! {
         draw_text +: {
             text_style: theme.font_regular {}
 
-            color: #000
-            color_hover: #fe8610
-            color_active: COLOR_PRIMARY
+            // Unified palette: dark text on the neutral unselected tab, white on the
+            // teal selected tab. (No more orange hover text.)
+            color: (RBX_FG_PRIMARY)
+            color_hover: (RBX_FG_PRIMARY)
+            color_active: (COLOR_PRIMARY)
         }
 
         draw_bg +: {
-            // Light blue-ish color, de-saturated from COLOR_ACTIVE_PRIMARY
-            color: #E1EEFA
-            // A slightly darker shade of the tab color for hover visibility
-            color_hover: #C8DDEF
-            color_active: COLOR_ACTIVE_PRIMARY
+            // Unselected tabs: subtle neutral surface. Selected tab: teal accent
+            // (RBX_ACCENT) — the unified UI selection color, replacing the legacy
+            // bright blue COLOR_ACTIVE_PRIMARY.
+            color: (RBX_BG_SURFACE_SUBTLE)
+            color_hover: (RBX_BG_HOVER)
+            color_active: (RBX_ACCENT)
             // Remove the border and rounded corners from the default Tab style
             border_size: 0.0
             border_radius: 3.0
@@ -225,6 +228,18 @@ script_mod! {
 
         round_corner +: {
             color: COLOR_SECONDARY
+
+            // Flat dock: draw NO rounded-corner slivers. The panels stay flush
+            // rectangles (rooms list butts square against the navy rail; the
+            // main/timeline panel is square too). The round-corner trick paints a
+            // small corner sliver in the BACKDROP color to fake rounding — but that
+            // only works when the sliver color matches whatever is behind the panel.
+            // Once the desktop backdrop went navy, the grey slivers showed up as
+            // grey notches at the panel corners (e.g. the tab bar's top-right corner
+            // against navy). Drawing nothing keeps every corner clean on any backdrop.
+            pixel: fn() {
+                return #x00000000
+            }
         }
 
         padding: Inset{left: theme.dock_border_size, top: 0, right: theme.dock_border_size, bottom: theme.dock_border_size}

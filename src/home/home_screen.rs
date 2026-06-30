@@ -303,6 +303,10 @@ script_mod! {
 
                 show_bg: true
                 draw_bg +: {
+                    // Neutral desktop backdrop (NOT navy — a navy backdrop showed
+                    // through as a dark ring around the content). The rail covers its
+                    // own column edge-to-edge (SolidView) and the dock sits flush
+                    // against it, so this backdrop is barely visible.
                     color: (COLOR_SECONDARY)
                 }
 

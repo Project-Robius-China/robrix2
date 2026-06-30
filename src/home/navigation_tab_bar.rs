@@ -65,37 +65,100 @@ script_mod! {
         spacing: 0,
 
         draw_bg +: {
-            color: (COLOR_NAVIGATION_TAB_BG)
-            color_hover: (COLOR_NAVIGATION_TAB_BG_HOVER)
-            color_down: (COLOR_NAVIGATION_TAB_BG_HOVER)
-            color_active: (COLOR_NAVIGATION_TAB_BG_ACTIVE)
-            color_focus: (COLOR_NAVIGATION_TAB_BG_ACTIVE)
+            // Dark navy nav-rail item (visual spec §5.6 / RBX_NAV_* tokens):
+            // transparent when idle so the navy rail shows through, a navy "pill"
+            // on hover/active, plus a teal accent bar on the left of the *active*
+            // item to echo the app-wide teal selection language.
+            color: #0000
+            color_hover: (RBX_NAV_ITEM_HOVER_BG)
+            color_down: (RBX_NAV_ITEM_HOVER_BG)
+            color_active: (RBX_NAV_ITEM_ACTIVE_BG)
+            color_focus: #0000
+            accent_color: instance((RBX_ACCENT))
 
             border_size: 0.0
-            border_radius: (RADIUS_MD)
+            border_radius: (RBX_RADIUS_SM)
             border_color: #0000
             border_color_hover: #0000
             border_color_down: #0000
             border_color_active: #0000
             border_color_focus: #0000
+
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.box(
+                    self.border_size,
+                    self.border_size,
+                    self.rect_size.x - self.border_size * 2.0,
+                    self.rect_size.y - self.border_size * 2.0,
+                    self.border_radius
+                )
+                let color_fill = self.color
+                    .mix(self.color_focus, self.focus)
+                    .mix(self.color_active, self.active)
+                    .mix(self.color_hover, self.hover)
+                    .mix(self.color_down, self.down)
+                sdf.fill(color_fill)
+                // Teal selection bar on the left edge, shown only when active.
+                let bar_inset = 12.0
+                sdf.box(
+                    0.0,
+                    bar_inset,
+                    3.0,
+                    self.rect_size.y - bar_inset * 2.0,
+                    1.5
+                )
+                sdf.fill(mix(vec4(0.0, 0.0, 0.0, 0.0), self.accent_color, self.active))
+                return sdf.result
+            }
         }
 
         draw_text +: {
-            color: (COLOR_NAVIGATION_TAB_FG)
-            color_hover: (COLOR_NAVIGATION_TAB_FG_HOVER)
-            color_down: (COLOR_NAVIGATION_TAB_FG_HOVER)
-            color_active: (COLOR_NAVIGATION_TAB_FG_ACTIVE)
-            color_focus: (COLOR_NAVIGATION_TAB_FG_ACTIVE)
+            // Labels are hidden on the desktop rail (label_walk is zero-sized),
+            // but keep the colors on the nav palette for correctness.
+            color: (RBX_NAV_FG)
+            color_hover: (RBX_NAV_FG_ACTIVE)
+            color_down: (RBX_NAV_FG_ACTIVE)
+            color_active: (RBX_NAV_FG_ACTIVE)
+            color_focus: (RBX_NAV_FG)
 
             text_style: theme.font_bold {font_size: 9}
         }
 
         draw_icon +: {
-            color: (COLOR_NAVIGATION_TAB_FG)
-            color_hover: (COLOR_NAVIGATION_TAB_FG_HOVER)
-            color_down: (COLOR_NAVIGATION_TAB_FG_HOVER)
-            color_active: (COLOR_NAVIGATION_TAB_FG_ACTIVE)
-            color_focus: (COLOR_NAVIGATION_TAB_FG_ACTIVE)
+            // DrawSvg has no per-state color mixing, so the active/idle icon color
+            // is driven by the animator's `active` apply blocks below (white when
+            // selected, muted grey otherwise) — mirrors MobileTabButton.
+            color: (RBX_NAV_FG)
+        }
+
+        // Custom animator: drive the pill (draw_bg amounts), the (hidden) label and
+        // — crucially — the icon color from the active/hover states. Selecting a tab
+        // snaps the icon to white (RBX_NAV_FG_ACTIVE); deselecting returns it to the
+        // muted RBX_NAV_FG. Mirrors the base RadioButton animator + MobileTabButton's
+        // draw_icon trick.
+        animator: Animator {
+            disabled: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {disabled: 0.0} draw_text: {disabled: 0.0} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {disabled: 1.0} draw_text: {disabled: 1.0} } }
+            }
+            hover: {
+                default: @off
+                off:  AnimatorState { from: {all: Forward {duration: 0.15}} apply: { draw_bg: {down: snap(0.0), hover: 0.0} draw_text: {down: snap(0.0), hover: 0.0} } }
+                on:   AnimatorState { from: {all: Snap} apply: { draw_bg: {down: snap(0.0), hover: 1.0} draw_text: {down: snap(0.0), hover: 1.0} } }
+                down: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {down: snap(1.0), hover: 1.0} draw_text: {down: snap(1.0), hover: 1.0} } }
+            }
+            active: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {active: 0.0} draw_text: {active: 0.0} draw_icon: {color: (RBX_NAV_FG)} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {active: 1.0} draw_text: {active: 1.0} draw_icon: {color: (RBX_NAV_FG_ACTIVE)} } }
+            }
+            focus: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {focus: 0.0} draw_text: {focus: 0.0} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {focus: 1.0} draw_text: {focus: 1.0} } }
+            }
         }
     }
 
@@ -223,20 +286,22 @@ script_mod! {
         draw_icon +: { svg: (ICON_ADD) }
     }
 
-    mod.widgets.Separator = LineH { margin: (SPACE_SM) }
+    mod.widgets.Separator = LineH { margin: (SPACE_SM), draw_bg.color: (RBX_NAV_DIVIDER) }
 
     mod.widgets.NavigationTabBar = #(NavigationTabBar::register_widget(vm)) {
-        Desktop := RoundedView {
+        Desktop := SolidView {
             flow: Down,
             align: Align{x: 0.5}
             padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_XS), right: (SPACE_XS)}
-            width: (NAVIGATION_TAB_BAR_SIZE), 
+            width: (NAVIGATION_TAB_BAR_SIZE),
             height: Fill
 
-            draw_bg +: {
-                color: (COLOR_SECONDARY)
-                border_radius: (RADIUS_LG)
-            }
+            show_bg: true
+            // Dark navy anchor rail (visual spec §2/§5.6). SolidView fills its column
+            // edge-to-edge (no rounded-SDF anti-aliased border), so the navy is
+            // perfectly flush to the window's left edge AND to the rooms list — no
+            // stray hairline gap on either side.
+            draw_bg.color: (RBX_NAV_BG)
 
             CachedWidget {
                 profile_icon := mod.widgets.ProfileIcon {}
