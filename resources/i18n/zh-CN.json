@@ -379,6 +379,10 @@
   "settings.labs.app_service.validation.invalid_botfather_user_id": "BotFather 用户 ID 无效。\n\n{error}",
   "settings.labs.app_service.button.save": "保存",
   "settings.labs.app_service.popup.saved": "已保存 Matrix 应用服务设置。",
+  "settings.labs.agents.title": "Agent Access",
+  "settings.labs.agents.description": "绑定一个 Matrix 账号,标记它使用的 agent framework,并让 Robrix 在房间中识别它。",
+  "settings.labs.agents.empty": "还没有 agent。添加一个并绑定它的 Matrix 账号。",
+  "settings.labs.agents.add_button": "添加 agent",
 
   "settings.labs.translation.title": "实时翻译",
   "settings.labs.translation.description": "在输入栏中配置兼容 OpenAI API 的实时消息翻译服务。",

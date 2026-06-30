@@ -66,6 +66,10 @@ script_mod! {
     mod.widgets.RBX_BG_PRESSED        = #xE7ECF3
     // Disabled control surface.
     mod.widgets.RBX_BG_DISABLED       = #xF0F2F6
+    // Fully transparent + press/hover overlay washes (used by Agent Registry tiles).
+    mod.widgets.RBX_TRANSPARENT       = #x00000000
+    mod.widgets.RBX_HIT_HOVER         = #x00000008
+    mod.widgets.RBX_HIT_DOWN          = #x00000012
 
     // =========================================================================
     // 2. FOREGROUND — text & icons on light surfaces
@@ -142,6 +146,15 @@ script_mod! {
     mod.widgets.RBX_NEUTRAL_FG = #x5A6B86
     mod.widgets.RBX_NEUTRAL_BG = #xEEF1F6
 
+    // Agent framework badge colors (fg = label text, bg = pill fill). One pair
+    // per supported framework, used by the Agent Registry tag pills.
+    mod.widgets.RBX_FW_OCTOS_FG    = #x1488B5
+    mod.widgets.RBX_FW_OCTOS_BG    = #xE6F2F9
+    mod.widgets.RBX_FW_HERMES_FG   = #xC47D1E
+    mod.widgets.RBX_FW_HERMES_BG   = #xFBF1E3
+    mod.widgets.RBX_FW_OPENCLAW_FG = #x6A52C4
+    mod.widgets.RBX_FW_OPENCLAW_BG = #xEEE9FB
+
     // =========================================================================
     // 7. DARK SURFACES — desktop nav rail + mobile login (the only dark zones
     //    in this round). Kept explicit rather than as a full theme.
@@ -201,6 +214,8 @@ script_mod! {
     // =========================================================================
     // Tightened scale (squarer look, per design direction): every surface gets
     // smaller corners than the original 6/8/8/16/20.
+    // Extra-extra-small: tightest radius, used by Agent Registry cards/sheets.
+    mod.widgets.RBX_RADIUS_XXS  = 4.0
     mod.widgets.RBX_RADIUS_XS   = 4.0
     mod.widgets.RBX_RADIUS_SM   = 6.0
     // Card / sheet default. Shares SM's value on purpose: small surfaces and

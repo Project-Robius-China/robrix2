@@ -32,6 +32,8 @@ use crate::shared::video_message_player_modal::WindowFullscreenAction;
 use crate::home::global_message_search::{GlobalMessageSearchUiAction, GlobalMessageSearchWidgetRefExt};
 use crate::home::sticker_modal::StickerModalWidgetRefExt;
 use crate::sliding_sync::GlobalMessageSearchAction;
+use crate::settings::agent_add_modal::{AddAgentModalAction, AddAgentModalWidgetRefExt};
+use crate::settings::agent_settings::AgentSettingsAction;
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -142,6 +144,17 @@ script_mod! {
                         invite_modal := Modal {
                             content +: {
                                 invite_modal_inner := InviteModal {}
+                            }
+                        }
+
+                        // The "Add an agent" bottom sheet (Agent Registry). Hosted at the
+                        // app root so its scrim covers the whole screen — including the
+                        // bottom navigation bar — preventing taps from leaking through.
+                        add_agent_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 1.0},
+                                add_agent_modal_inner := mod.widgets.AddAgentModal {}
                             }
                         }
 
@@ -941,6 +954,35 @@ impl MatchEvent for App {
                     *from_auto_check,
                 );
                 continue;
+            }
+
+            // Agent Registry "Add an agent" bottom sheet, hosted at the app root so its
+            // scrim covers the whole screen. The open request is emitted by the
+            // AgentSettings screen (Settings ▸ Labs) and bubbles up here.
+            if let Some(AgentSettingsAction::OpenAddAgent) = action.downcast_ref() {
+                let app_language = self.app_state.app_language;
+                self.ui.add_agent_modal(cx, ids!(add_agent_modal_inner)).show(cx, app_language);
+                self.ui.modal(cx, ids!(add_agent_modal)).open(cx);
+                continue;
+            }
+            match action.downcast_ref::<AddAgentModalAction>() {
+                Some(AddAgentModalAction::Close) => {
+                    self.ui.modal(cx, ids!(add_agent_modal)).close(cx);
+                    self.ui.add_agent_modal(cx, ids!(add_agent_modal_inner)).clear_waiting_state();
+                    continue;
+                }
+                Some(AddAgentModalAction::Registered(name)) => {
+                    self.ui.modal(cx, ids!(add_agent_modal)).close(cx);
+                    self.ui.add_agent_modal(cx, ids!(add_agent_modal_inner)).clear_waiting_state();
+                    enqueue_popup_notification(
+                        format!("{name} registered"),
+                        PopupKind::Success,
+                        Some(2.6),
+                    );
+                    self.ui.redraw(cx);
+                    continue;
+                }
+                None => {}
             }
 
             match action.downcast_ref::<WindowFullscreenAction>() {
@@ -1915,6 +1957,13 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            // Agent Registry binding: if the "Add an agent" sheet is waiting for this
+            // DM result, let the sheet finish the bind inline instead of letting the
+            // global handler navigate to / toast the newly-created direct room.
+            if self.suppress_add_agent_direct_message_action(cx, action) {
+                continue;
+            }
+
             // Handle DirectMessageRoomActions
             match action.downcast_ref() {
                 Some(DirectMessageRoomAction::FoundExisting { user_id, room_name_id }) => {
@@ -2100,6 +2149,24 @@ impl AppMain for App {
 }
 
 impl App {
+    /// Returns `true` if the "Add an agent" sheet is waiting for this DM result
+    /// (it created the direct room to bind an agent). When it is, the global
+    /// DirectMessage handler should be skipped so the user stays in the sheet
+    /// instead of being navigated to the new chat.
+    fn suppress_add_agent_direct_message_action(&mut self, cx: &mut Cx, action: &Action) -> bool {
+        let target_user_id: &OwnedUserId = match action.downcast_ref() {
+            Some(DirectMessageRoomAction::FoundExisting { user_id, .. }) => user_id,
+            Some(DirectMessageRoomAction::DidNotExist { user_profile }) => &user_profile.user_id,
+            Some(DirectMessageRoomAction::FailedToCreate { user_profile, .. }) => &user_profile.user_id,
+            Some(DirectMessageRoomAction::NewlyCreated { user_profile, .. }) => &user_profile.user_id,
+            _ => return false,
+        };
+
+        self.ui
+            .add_agent_modal(cx, ids!(add_agent_modal_inner))
+            .is_waiting_for_direct_message_result(target_user_id)
+    }
+
     fn handle_lifecycle_event(&mut self, cx: &mut Cx, event: &Event) {
         match event {
             Event::QuitRequested(e) => {
@@ -2722,6 +2789,24 @@ impl AgentRegistry {
                 true
             }
             Entry::Occupied(_) => false,
+        }
+    }
+
+    /// Removes the agent registered under `user_id`.
+    ///
+    /// Returns `true` if an entry was removed, `false` if none was registered.
+    pub fn unregister(&mut self, user_id: &UserId) -> bool {
+        let key = self
+            .agents
+            .keys()
+            .find(|registered| registered.as_str() == user_id.as_str())
+            .cloned();
+        match key {
+            Some(k) => {
+                self.agents.remove(&k);
+                true
+            }
+            None => false,
         }
     }
 
