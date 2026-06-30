@@ -46,11 +46,14 @@ script_mod! {
     //
     // Mirrors `JumpToBottomButton`'s layout: a Fill/Fill overlay-flow View
     // aligned to the top-right corner, containing a circular icon button.
+    // Reserves 48px on the right so it sits between the info button (rightmost)
+    // and the threads button (96px).
     mod.widgets.SearchMessagesButton = #(SearchMessagesButton::register_widget(vm)) {
         width: Fill,
         height: Fill,
         flow: Overlay,
         align: Align{x: 1.0, y: 0.0},
+        padding: Inset{right: 48},
         visible: true,
 
         View {
