@@ -1736,7 +1736,6 @@ script_mod! {
             height: Fit
             flow: Overlay
             padding: 0.0
-            new_batch: true
             show_bg: true
             draw_bg +: {
                 color: (mod.widgets.COLOR_BOT_CODE_BG)
@@ -2043,7 +2042,6 @@ script_mod! {
                         width: Fit
                         height: #(BOT_BADGE_HEIGHT)
                         align: Align{x: 0.5, y: 0.5}
-                        new_batch: true
                         padding: Inset{left: #(BOT_BADGE_HORIZONTAL_PADDING), right: #(BOT_BADGE_HORIZONTAL_PADDING)}
                         show_bg: true
                         draw_bg +: {
@@ -2078,7 +2076,6 @@ script_mod! {
                         visible: false
                         width: Fit
                         height: Fit
-                        new_batch: true
                         padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
                         show_bg: true
                         draw_bg +: {
@@ -2101,7 +2098,6 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Down
-                        new_batch: true
                         padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
@@ -2166,7 +2162,6 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Down
-                        new_batch: true
                         spacing: 4.0
                         padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
                         show_bg: true
@@ -2270,7 +2265,6 @@ script_mod! {
                         visible: false
                         width: Fit
                         height: Fit
-                        new_batch: true
                         padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
                         show_bg: true
                         draw_bg +: {
@@ -2293,7 +2287,6 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Down
-                        new_batch: true
                         padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
@@ -2357,7 +2350,6 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Down
-                        new_batch: true
                         spacing: 4.0
                         padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
                         show_bg: true
