@@ -10,7 +10,7 @@ license = "MIT"
 readme = "README.md"
 categories = ["gui"]
 repository = "https://github.com/Project-Robius-China/robrix2"
-version = "1.0.0-alpha.2"
+version = "1.0.0"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
 [dependencies]
@@ -308,7 +308,7 @@ minimum_system_version = "11.0"
 frameworks = []
 info_plist_path = "./packaging/Info.plist"
 entitlements = "./packaging/Entitlements.plist"
-signing_identity = "Developer ID Application: GOSIM FOUNDATION LTD. (HMX6XGJZ3R)"
+signing_identity = "-"
 
 
 ## Configuration for `cargo packager`'s generation of a macOS `.dmg`.
