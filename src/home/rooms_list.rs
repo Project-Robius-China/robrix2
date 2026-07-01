@@ -2049,7 +2049,7 @@ impl Widget for RoomsList {
                     // the spinner and show the empty message instead. For the all-rooms
                     // view we can't yet reliably detect completion, so keep the prior
                     // "spinner until the first room arrives" behavior.
-                    let still_loading = self.selected_space.as_ref().map_or(true, |space| {
+                    let still_loading = self.selected_space.as_ref().is_none_or(|space| {
                         !self.space_map.get(space.room_id())
                             .is_some_and(|smv| smv.is_fully_paginated)
                     });
