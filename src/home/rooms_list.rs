@@ -1428,13 +1428,16 @@ impl RoomsList {
                 let is_fully_paginated = matches!(state, SpaceRoomListPaginationState::Idle { end_reached: true });
                 // Only re-fetch the list of rooms in this space if it was not already fully paginated.
                 let should_fetch_rooms: bool;
+                let was_fully_paginated: bool;
                 match self.space_map.entry(space_id.clone()) {
                     Entry::Occupied(mut occ) => {
                         let value_mut = occ.get_mut();
+                        was_fully_paginated = value_mut.is_fully_paginated;
                         should_fetch_rooms = !value_mut.is_fully_paginated;
                         value_mut.is_fully_paginated = is_fully_paginated;
                     }
                     Entry::Vacant(vac) => {
+                        was_fully_paginated = false;
                         vac.insert_entry(SpaceMapValue {
                             is_fully_paginated,
                             parent_chain: parent_chain.clone(),
@@ -1442,6 +1445,16 @@ impl RoomsList {
                         });
                         should_fetch_rooms = true;
                     }
+                }
+                // If the currently-selected space just finished paginating, redraw so
+                // an empty space can drop the loading spinner in favor of the real
+                // "No joined or invited rooms found in this space." message.
+                if is_fully_paginated && !was_fully_paginated
+                    && self.selected_space.as_ref().is_some_and(|sel|
+                        sel.room_id() == space_id || parent_chain.contains(sel.room_id())
+                    )
+                {
+                    self.redraw(cx);
                 }
                 let Some(sender) = self.space_request_sender.as_ref() else {
                     error!("BUG: RoomsList: no space request sender was available after pagination state update.");
@@ -2029,8 +2042,24 @@ impl Widget for RoomsList {
                 else if portal_list_index == status_label_id {
                     let item = list.item(cx, portal_list_index, id!(status_label));
                     let is_empty = status_label_id == 0;
-                    item.view(cx, ids!(loading_spinner)).set_visible(cx, is_empty);
-                    let status_text = if is_empty && self.status.is_empty() {
+                    // Only show the loading spinner while rooms are genuinely still
+                    // loading. For a selected space, "loading" means its direct-child
+                    // list has not been fully paginated yet; once it has, an empty
+                    // result is a real "no rooms" state (not a loading one), so we drop
+                    // the spinner and show the empty message instead. For the all-rooms
+                    // view we can't yet reliably detect completion, so keep the prior
+                    // "spinner until the first room arrives" behavior.
+                    let still_loading = self.selected_space.as_ref().map_or(true, |space| {
+                        !self.space_map.get(space.room_id())
+                            .is_some_and(|smv| smv.is_fully_paginated)
+                    });
+                    let show_spinner = is_empty && still_loading;
+                    item.view(cx, ids!(loading_spinner)).set_visible(cx, show_spinner);
+                    let status_text = if show_spinner && self.selected_space.is_some() {
+                        // Still paginating this space: "Loading rooms…" is clearer than
+                        // the transient "no rooms found" computed from the partial list.
+                        "Loading rooms…".to_string()
+                    } else if is_empty && self.status.is_empty() {
                         "Loading rooms…".to_string()
                     } else {
                         self.status.clone()

@@ -15,6 +15,7 @@ use crate::{
     i18n::{AppLanguage, tr_key},
     profile::user_profile_cache,
     room_preview_cache,
+    settings::app_preferences::effective_is_desktop,
     shared::{
         image_viewer::{ImageViewerAction, ImageViewerError, LoadState},
         popup_list::{PopupKind, enqueue_popup_notification},
@@ -33,6 +34,52 @@ script_mod! {
         flow: Right,
         align: Align{y: 0.5}
         spacing: 3,
+
+        // Back button — mobile only. Shown when a space is selected so the user
+        // can leave the space and return to the full "All Rooms" list (on desktop
+        // the spaces rail handles this, so it stays hidden there). Visibility is
+        // driven imperatively from `handle_event` on `TabSelected`.
+        back_button := View {
+            visible: false,
+            width: Fit,
+            height: Fit
+            margin: Inset{left: 2, right: 1}
+            flow: Overlay,
+
+            Icon {
+                draw_icon +: {
+                    svg: (ICON_ARROW_BACK)
+                    color: (RBX_FG_SECONDARY)
+                }
+                icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
+            }
+
+            back_click_area := Button {
+                width: Fill,
+                height: Fill
+                padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
+                spacing: 0,
+                text: ""
+                draw_bg +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    border_color: #0000
+                    border_color_hover: #0000
+                    border_color_down: #0000
+                    border_color_focus: #0000
+                    border_size: 0.0
+                    border_radius: 0.0
+                }
+                draw_text +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    color_focus: #0000
+                }
+                icon_walk: Walk{width: 0, height: 0}
+            }
+        }
 
         header_title := Label {
             width: Fill,
@@ -193,6 +240,10 @@ impl Widget for RoomsListHeader {
             self.set_app_language(cx, app_language);
         }
         if let Event::Actions(actions) = event {
+            if self.view.button(cx, ids!(back_button.back_click_area)).clicked(actions) {
+                // Leave the currently-selected space and return to the full rooms list.
+                cx.action(NavigationBarAction::GoToHome);
+            }
             if self.view.button(cx, ids!(open_directory_button.directory_click_area)).clicked(actions) {
                 cx.action(NavigationBarAction::GoToDirectory);
             }
@@ -257,16 +308,22 @@ impl Widget for RoomsListHeader {
 
                 if let Some(NavigationBarAction::TabSelected(tab)) = action.downcast_ref() {
                     let header_title = self.view.label(cx, ids!(header_title));
-                    match tab {
+                    let show_back = match tab {
                         SelectedTab::Space { space_name_id } => {
                             header_title.set_text(cx, &space_name_id.to_string());
                             self.showing_space_title = true;
+                            // On mobile there's no spaces rail to step out of a space,
+                            // so surface a back button that returns to "All Rooms".
+                            !effective_is_desktop(cx)
                         }
                         _ => {
                             header_title.set_text(cx, tr_key(self.app_language, "rooms_list_header.title.all_rooms"));
                             self.showing_space_title = false;
+                            false
                         }
-                    }
+                    };
+                    self.view.view(cx, ids!(back_button)).set_visible(cx, show_back);
+                    self.redraw(cx);
                     continue;
                 }
             }
