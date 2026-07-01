@@ -244,6 +244,45 @@ script_mod! {
                         draw_bg +: { color: (COLOR_SECONDARY) }
                     }
 
+                    // ── Advanced ────────────────────────────────────
+                    advanced_heading := Label {
+                        width: Fill
+                        height: Fit
+                        margin: Inset{bottom: 10}
+                        draw_text +: {
+                            text_style: RBX_TEXT_SECTION_TITLE {}
+                            color: (RBX_FG_PRIMARY)
+                        }
+                        text: "Advanced"
+                    }
+
+                    room_id_label := Label {
+                        width: Fill
+                        height: Fit
+                        margin: Inset{bottom: 4}
+                        draw_text +: {
+                            text_style: RBX_TEXT_BODY {}
+                            color: (RBX_FG_SECONDARY)
+                        }
+                        text: "Room ID"
+                    }
+
+                    room_id_input := RobrixTextInput {
+                        width: Fill
+                        height: 36
+                        is_read_only: true
+                        empty_text: "!room:server"
+                    }
+
+                    // ── Section separator ────────────────────────────
+                    View {
+                        width: Fill
+                        height: 1
+                        margin: Inset{top: 20, bottom: 16}
+                        show_bg: true
+                        draw_bg +: { color: (COLOR_SECONDARY) }
+                    }
+
                     // ── Room Addresses ───────────────────────────────
                     addresses_heading := Label {
                         width: Fill
@@ -680,6 +719,7 @@ impl RoomSettingsModal {
         room_topic: &str,
         canonical_alias: Option<&str>,
     ) {
+        let room_id_text = room_id.as_str().to_string();
         self.room_id = Some(room_id);
         self.original_name = room_name.to_string();
         self.original_topic = room_topic.to_string();
@@ -694,6 +734,10 @@ impl RoomSettingsModal {
             .set_text(cx, room_name);
         self.view.text_input(cx, ids!(room_topic_input))
             .set_text(cx, room_topic);
+        self.view.text_input(cx, ids!(room_id_input))
+            .set_text(cx, &room_id_text);
+        self.view.text_input(cx, ids!(room_id_input))
+            .set_is_read_only(cx, true);
 
         // Canonical alias
         let alias_text = canonical_alias
@@ -763,5 +807,29 @@ impl RoomSettingsModalRef {
     pub fn apply_avatar(&self, cx: &mut Cx, image_data: &[u8]) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.apply_avatar(cx, image_data);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const SOURCE: &str = include_str!("room_settings_modal.rs");
+
+    #[test]
+    fn advanced_section_declares_read_only_room_id_input() {
+        assert!(SOURCE.contains(concat!("advanced_", "heading := Label")));
+        assert!(SOURCE.contains(concat!("text: \"", "Advanced", "\"")));
+        assert!(SOURCE.contains(concat!("room_id_", "label := Label")));
+        assert!(SOURCE.contains(concat!("text: \"", "Room ID", "\"")));
+        assert!(SOURCE.contains(concat!("room_id_", "input := RobrixTextInput")));
+        assert!(SOURCE.contains(concat!("is_read_", "only: true")));
+        assert!(SOURCE.contains(concat!("empty_text: \"", "!room:server", "\"")));
+    }
+
+    #[test]
+    fn show_populates_room_id_input_from_room_id() {
+        assert!(SOURCE.contains(concat!("let room_id_", "text = room_id.as_str().to_string();")));
+        assert!(SOURCE.contains(concat!("self.room_id = Some(room_id", ");")));
+        assert!(SOURCE.contains(concat!("ids!(room_id_", "input))")));
+        assert!(SOURCE.contains(concat!(".set_text(cx, &room_id_", "text);")));
     }
 }

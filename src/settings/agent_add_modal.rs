@@ -273,77 +273,6 @@ script_mod! {
         }
     }
 
-    let MatrixIdField = View {
-        width: Fill
-        height: Fit
-        flow: Down
-        spacing: 5
-        field_label := Label {
-            width: Fill
-            height: Fit
-            draw_text +: {
-                color: (RBX_FG_SECONDARY)
-                text_style: RBX_TEXT_META {}
-            }
-            text: "Agent Matrix ID"
-        }
-        field_control := RoundedView {
-            width: Fill
-            height: Fit
-            flow: Right
-            align: Align{y: 0.5}
-            spacing: 0
-            padding: Inset{left: 11, right: 4, top: 2, bottom: 2}
-            new_batch: true
-            show_bg: true
-            draw_bg +: {
-                color: (RBX_BG_SURFACE_SUBTLE)
-                border_radius: (RBX_RADIUS_XXS)
-                border_size: 1.0
-                border_color: (RBX_STROKE_SOFT)
-            }
-            at_prefix := Label {
-                width: Fit
-                height: Fit
-                margin: Inset{right: 2}
-                draw_text +: {
-                    color: (RBX_FG_TERTIARY)
-                    text_style: RBX_TEXT_BODY_STRONG {}
-                }
-                text: "@"
-            }
-            field_input := RobrixTextInput {
-                width: Fill
-                height: Fit
-                padding: Inset{left: 2, right: 8, top: 8, bottom: 8}
-                empty_text: "agent:server"
-                draw_bg +: {
-                    color: (RBX_TRANSPARENT)
-                    color_hover: (RBX_TRANSPARENT)
-                    color_focus: (RBX_TRANSPARENT)
-                    color_down: (RBX_TRANSPARENT)
-                    color_empty: (RBX_TRANSPARENT)
-                    color_disabled: (RBX_TRANSPARENT)
-                    border_size: 0.0
-                    border_color: (RBX_TRANSPARENT)
-                    border_color_hover: (RBX_TRANSPARENT)
-                    border_color_focus: (RBX_TRANSPARENT)
-                    border_color_down: (RBX_TRANSPARENT)
-                    border_color_empty: (RBX_TRANSPARENT)
-                    border_color_disabled: (RBX_TRANSPARENT)
-                }
-                // Dark real input vs light-grey placeholder, so the hint reads
-                // as a hint rather than an entered ID.
-                draw_text +: {
-                    color: (RBX_FG_PRIMARY)
-                    color_empty: (RBX_FG_TERTIARY)
-                    color_empty_hover: (RBX_FG_TERTIARY)
-                    color_empty_focus: (RBX_FG_TERTIARY)
-                }
-            }
-        }
-    }
-
     mod.widgets.AddAgentModal = #(AddAgentModal::register_widget(vm)) {
         // Fill/Fit root: the hosting Modal content provides a real width and
         // bottom alignment. The sheet is capped below, so narrow phones get
@@ -370,6 +299,9 @@ script_mod! {
             // Without this, those taps fall through the sheet to the buttons
             // behind the modal. (A View only hit-tests when it has a cursor or an
             // animator — see widgets/src/view.rs.)
+            // View handles child events first, then its own hit-test. Keep the
+            // sheet from taking keyboard focus back after a TextInput receives it.
+            grab_key_focus: false
             capture_overload: true
             cursor: MouseCursor.Default
             padding: Inset{left: 16, right: 16, top: 10, bottom: 16}
@@ -644,7 +576,10 @@ script_mod! {
                         }
                     }
 
-                    id_field := MatrixIdField {}
+                    id_field := AgentField {
+                        field_label.text: "Agent Matrix ID"
+                        field_input.empty_text: "@agent:server or agent:server"
+                    }
 
                     add_friend_button := RobrixIconButton {
                         width: Fill
@@ -908,7 +843,7 @@ impl WidgetMatchEvent for AddAgentModal {
         }
 
         if self.step == 2 {
-            let id_changed = self.view.text_input(cx, ids!(id_field.field_control.field_input)).changed(actions).is_some();
+            let id_changed = self.view.text_input(cx, ids!(id_field.field_input)).changed(actions).is_some();
             let octos_url_changed = self.is_octos()
                 && self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).changed(actions).is_some();
             if octos_url_changed {
@@ -1018,7 +953,7 @@ impl AddAgentModal {
     }
 
     fn add_friend(&mut self, cx: &mut Cx) {
-        let raw = self.view.text_input(cx, ids!(id_field.field_control.field_input)).text();
+        let raw = self.view.text_input(cx, ids!(id_field.field_input)).text();
         match parse_agent_user_id(&raw) {
             Ok(user_id) => {
                 self.target_user_id = Some(user_id.clone());
@@ -1110,6 +1045,12 @@ impl AddAgentModal {
         err.set_visible(cx, false);
         self.view.button(cx, ids!(octos_section.save_appservice_button))
             .set_text(cx, "Saved");
+        if self.friend_state == FriendState::Idle {
+            let id_input = self.view.text_input(cx, ids!(id_field.field_input));
+            id_input.set_is_read_only(cx, false);
+            id_input.set_key_focus(cx);
+        }
+        self.sync_bind_button(cx);
         self.view.redraw(cx);
     }
 
@@ -1118,7 +1059,7 @@ impl AddAgentModal {
     }
 
     fn sync_bind_button(&mut self, cx: &mut Cx) {
-        let agent_id_raw = self.view.text_input(cx, ids!(id_field.field_control.field_input)).text();
+        let agent_id_raw = self.view.text_input(cx, ids!(id_field.field_input)).text();
         let (text, enabled) = bind_button_state(
             self.friend_state,
             self.is_octos(),
@@ -1285,7 +1226,7 @@ impl AddAgentModal {
         self.view.view(cx, ids!(friend_added_strip)).set_visible(cx, added);
         self.view.view(cx, ids!(octos_section)).set_visible(cx, self.is_octos());
         // The Matrix ID field locks once a friend request is in flight / done.
-        self.view.text_input(cx, ids!(id_field.field_control.field_input)).set_is_read_only(cx, self.friend_state != FriendState::Idle);
+        self.view.text_input(cx, ids!(id_field.field_input)).set_is_read_only(cx, self.friend_state != FriendState::Idle);
 
         if self.is_octos() {
             self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).set_is_read_only(cx, false);
@@ -1381,14 +1322,50 @@ impl AddAgentModal {
         self.octos_health = OctosHealthState::default();
         self.octos_probe_base_url = None;
 
-        self.view.text_input(cx, ids!(id_field.field_control.field_input)).set_text(cx, "");
-        self.view.text_input(cx, ids!(id_field.field_control.field_input)).set_is_read_only(cx, false);
+        self.view.text_input(cx, ids!(id_field.field_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(id_field.field_input)).set_is_read_only(cx, false);
         self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).set_text(cx, BotSettingsState::DEFAULT_OCTOS_SERVICE_URL);
         self.view.button(cx, ids!(octos_section.save_appservice_button)).set_text(cx, "Save AppService");
         self.set_add_friend_label(cx, "Add friend & bind");
         self.populate_framework_cards(cx);
         self.update_framework_cards(cx);
         self.sync_steps(cx);
+        self.view.redraw(cx);
+    }
+
+    pub fn show_octos(
+        &mut self,
+        cx: &mut Cx,
+        app_language: AppLanguage,
+        octos_service_url: &str,
+        existing_octos_agent_user_id: Option<&str>,
+    ) {
+        self.show(cx, app_language);
+        let trimmed = octos_service_url.trim();
+        let url = if trimmed.is_empty() {
+            BotSettingsState::DEFAULT_OCTOS_SERVICE_URL.to_string()
+        } else {
+            trimmed.to_string()
+        };
+
+        self.selected_framework = Some(AgentFramework::Octos);
+        self.step = 2;
+        self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input))
+            .set_text(cx, &url);
+        self.view.button(cx, ids!(octos_section.save_appservice_button))
+            .set_text(cx, "Save AppService");
+        self.update_framework_cards(cx);
+        self.sync_steps(cx);
+        let id_input = self.view.text_input(cx, ids!(id_field.field_input));
+        if let Some(existing_octos_agent_user_id) = existing_octos_agent_user_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            id_input.set_text(cx, existing_octos_agent_user_id);
+        }
+        id_input.set_is_read_only(cx, false);
+        id_input.set_key_focus(cx);
+        self.sync_bind_button(cx);
         self.view.redraw(cx);
     }
 
@@ -1406,6 +1383,17 @@ impl AddAgentModalRef {
     pub fn show(&self, cx: &mut Cx, app_language: AppLanguage) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.show(cx, app_language);
+    }
+
+    pub fn show_octos(
+        &self,
+        cx: &mut Cx,
+        app_language: AppLanguage,
+        octos_service_url: &str,
+        existing_octos_agent_user_id: Option<&str>,
+    ) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show_octos(cx, app_language, octos_service_url, existing_octos_agent_user_id);
     }
 
     pub fn clear_waiting_state(&self) {
@@ -1491,7 +1479,7 @@ mod tests {
             .find("octos_section := RoundedView")
             .expect("Octos step should expose an AppService section");
         let matrix_pos = src
-            .find("id_field := MatrixIdField")
+            .find("id_field := AgentField")
             .expect("Octos step should still include Matrix ID binding");
 
         assert!(octos_pos < matrix_pos, "Octos AppService URL should be configured before Matrix ID binding");
@@ -1506,6 +1494,105 @@ mod tests {
         assert!(!src.contains("let appservice_unlocked = self.friend_state == FriendState::Added;"));
         assert!(!src.contains("if self.friend_state != FriendState::Added {\n                return;\n            }"));
         assert!(src.contains("fn save_octos_appservice_settings"));
+    }
+
+    #[test]
+    fn test_saving_octos_appservice_focuses_matrix_id_binding_field() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+        let save_fn_pos = src
+            .find("fn save_octos_appservice_settings")
+            .expect("Octos AppService save handler should exist");
+        let save_fn = &src[save_fn_pos..];
+
+        assert!(
+            save_fn.contains("let id_input = self.view.text_input(cx, ids!(id_field.field_input));"),
+            "after saving the AppService URL, the handler should select the Matrix ID field",
+        );
+        assert!(
+            save_fn.contains("id_input.set_key_focus(cx);"),
+            "after saving the AppService URL, focus should move to the Matrix ID field for the bind step",
+        );
+    }
+
+    #[test]
+    fn test_saving_octos_appservice_does_not_steal_matrix_id_focus_while_friend_request_in_flight() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+        let save_fn_pos = src
+            .find("fn save_octos_appservice_settings")
+            .expect("Octos AppService save handler should exist");
+        let save_fn = &src[save_fn_pos..];
+
+        assert!(
+            save_fn.contains("if self.friend_state == FriendState::Idle {"),
+            "saving the AppService URL must not unlock or steal focus into the Matrix ID field while a friend/bind request is in flight or already done, since sync_step2 locks that field on FriendState::Pending/Added",
+        );
+    }
+
+    #[test]
+    fn test_add_modal_can_open_directly_to_octos_setup_with_saved_url() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+        let show_fn_pos = src
+            .find("pub fn show_octos")
+            .expect("AddAgentModal should expose a direct Octos setup entry point");
+        let show_fn = &src[show_fn_pos..];
+
+        assert!(show_fn.contains("self.selected_framework = Some(AgentFramework::Octos);"));
+        assert!(show_fn.contains("self.step = 2;"));
+        assert!(
+            show_fn.contains("octos_service_url")
+                && show_fn.contains("octos_section.octos_url_field.field_input")
+                && show_fn.contains("set_text(cx, &url);"),
+            "direct Octos setup should prefill the saved AppService URL instead of resetting to localhost",
+        );
+    }
+
+    #[test]
+    fn test_direct_octos_setup_focuses_matrix_id_input() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+        let show_fn_pos = src
+            .find("pub fn show_octos")
+            .expect("AddAgentModal should expose a direct Octos setup entry point");
+        let show_fn = &src[show_fn_pos..];
+
+        assert!(
+            show_fn.contains("let id_input = self.view.text_input(cx, ids!(id_field.field_input));")
+                && show_fn.contains("id_input.set_is_read_only(cx, false);")
+                && show_fn.contains("id_input.set_key_focus(cx);"),
+            "opening the saved Octos setup directly should focus the Matrix ID field so the user can start typing the bot id",
+        );
+    }
+
+    #[test]
+    fn test_direct_octos_setup_prefills_existing_octos_agent_id() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+        let show_fn_pos = src
+            .find("pub fn show_octos")
+            .expect("AddAgentModal should expose a direct Octos setup entry point");
+        let show_fn = &src[show_fn_pos..];
+
+        assert!(show_fn.contains("existing_octos_agent_user_id"));
+        assert!(
+            show_fn.contains("if let Some(existing_octos_agent_user_id) = existing_octos_agent_user_id")
+                && show_fn.contains("id_input.set_text(cx, existing_octos_agent_user_id);"),
+            "opening Change Octos Bot should show the currently registered Octos bot instead of an empty Matrix ID field",
+        );
+        assert!(
+            show_fn.contains("self.sync_bind_button(cx);"),
+            "programmatic Matrix ID prefill should refresh the bind button state",
+        );
+    }
+
+    #[test]
+    fn test_app_routes_octos_setup_action_with_saved_appservice_url() {
+        let app_src = include_str!("../app.rs");
+
+        assert!(app_src.contains("AgentSettingsAction::OpenOctosSetup"));
+        assert!(app_src.contains("resolved_octos_service_url().to_string()"));
+        assert!(app_src.contains("find(|user_id|"));
+        assert!(app_src.contains("entry.framework == AgentFramework::Octos"));
+        assert!(app_src.contains(".show_octos("));
+        assert!(app_src.contains("&octos_service_url"));
+        assert!(app_src.contains("existing_octos_agent_user_id"));
     }
 
     #[test]
@@ -1616,6 +1703,21 @@ mod tests {
     }
 
     #[test]
+    fn test_add_modal_sheet_does_not_steal_text_input_focus() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+        let sheet_pos = src.find("sheet := RoundedView").expect("modal should have a sheet");
+        let body_pos = src.find("body_scroll := ScrollYView").expect("modal should have a body");
+        let sheet_block = &src[sheet_pos..body_pos];
+
+        assert!(sheet_block.contains("cursor: MouseCursor.Default"));
+        assert!(sheet_block.contains("capture_overload: true"));
+        assert!(
+            sheet_block.contains("grab_key_focus: false"),
+            "sheet absorbs pointer hits but must not take keyboard focus back from TextInput children",
+        );
+    }
+
+    #[test]
     fn test_framework_picker_matches_handoff_order_and_tile_size() {
         let src = production_src(include_str!("agent_add_modal.rs"));
         let hermes_pos = src.find("hermes_card := FrameworkCard").expect("Hermes card should exist");
@@ -1640,14 +1742,16 @@ mod tests {
 
 
     #[test]
-    fn test_matrix_id_field_matches_handoff_at_adornment() {
+    fn test_matrix_id_field_uses_plain_text_input_without_at_adornment() {
         let src = production_src(include_str!("agent_add_modal.rs"));
 
-        assert!(src.contains("let MatrixIdField = View"));
-        assert!(src.contains("at_prefix := Label"));
-        assert!(src.contains("text: \"@\""));
-        assert!(src.contains("empty_text: \"agent:server\""));
-        assert!(!src.contains("field_input.empty_text: \"@agent:server\""));
+        assert!(
+            src.contains("id_field := AgentField"),
+            "Matrix ID should use the same plain RobrixTextInput field pattern as working user/bot id inputs",
+        );
+        assert!(!src.contains("let MatrixIdField = View"));
+        assert!(!src.contains("at_prefix := Label"));
+        assert!(src.contains("field_input.empty_text: \"@agent:server or agent:server\""));
     }
 
     #[test]
