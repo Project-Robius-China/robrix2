@@ -126,7 +126,9 @@ script_mod! {
 
         align: Align{x: 0.0, y: 0.5}
         padding: 9
-        margin: 0
+        // 1px bottom inset so the tab bar's bottom border line runs
+        // continuously beneath every tab (including the active one).
+        margin: Inset{bottom: 1}
 
         close_button: mod.widgets.RobrixTabCloseButton {}
         draw_text +: {
@@ -203,11 +205,34 @@ script_mod! {
             draw_depth: 10
             color: #x0
         }
+        // Both layers are drawn FLAT with a 1px bottom border, replacing the
+        // theme's built-in bottom "shadow" (the base TabBar's draw_fill fades
+        // to transparent black at its bottom edge via color_2: #0000).
+        // draw_bg covers the whole bar; draw_fill covers the area after the
+        // last tab — so both need the same fill + border for a seamless bar.
         draw_fill +: {
-            color: COLOR_PRIMARY * 0.96
+            color: (RBX_BG_SURFACE_SUBTLE)
+            border_color: (RBX_STROKE_STRONG)
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.rect(0., 0., self.rect_size.x, self.rect_size.y)
+                sdf.fill(self.color)
+                sdf.rect(0., self.rect_size.y - 1.0, self.rect_size.x, 1.0)
+                sdf.fill(self.border_color)
+                return sdf.result
+            }
         }
         draw_bg +: {
-            color: COLOR_PRIMARY * 0.96
+            color: (RBX_BG_SURFACE_SUBTLE)
+            border_color: (RBX_STROKE_STRONG)
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.rect(0., 0., self.rect_size.x, self.rect_size.y)
+                sdf.fill(self.color)
+                sdf.rect(0., self.rect_size.y - 1.0, self.rect_size.x, 1.0)
+                sdf.fill(self.border_color)
+                return sdf.result
+            }
         }
 
         width: Fill
