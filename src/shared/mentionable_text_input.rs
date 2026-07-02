@@ -432,7 +432,7 @@ fn prefix_contains_only_leading_mentions(
             return false;
         };
         let Some(ch) = remaining.chars().next() else {
-            break;
+            return false;
         };
 
         if ch.is_whitespace() {
@@ -440,14 +440,21 @@ fn prefix_contains_only_leading_mentions(
             continue;
         }
 
-        if let Some(mention) = tracked_visible_mentions.iter().find(|mention| {
-            mention.start == cursor
-                && mention.end <= prefix_end
+        if let Some(mention) = tracked_visible_mentions
+            .iter()
+            .find(|mention| mention.start == cursor && mention.start < prefix_end)
+        {
+            let mention_matches = mention.end <= prefix_end
                 && mention.start < mention.end
-                && text.get(mention.start..mention.end) == Some(mention.visible_text.as_str())
-        }) {
-            cursor = mention.end;
-            continue;
+                && text.get(mention.start..mention.end) == Some(mention.visible_text.as_str());
+            debug_assert!(
+                mention_matches,
+                "tracked visible mention span no longer matches text while scanning slash command prefix"
+            );
+            if mention_matches {
+                cursor = mention.end;
+                continue;
+            }
         }
 
         let token_end = remaining
@@ -2053,7 +2060,7 @@ impl MentionableTextInput {
         #[cfg(not(feature = "agent_chat"))]
         let workflow_enabled = false;
         if !bot_enabled && !workflow_enabled {
-            if self.is_slash_command_popup_active() {
+            if self.active_popup_mode != PopupMode::None {
                 self.close_mention_popup(cx);
             }
             return;
