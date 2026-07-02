@@ -415,7 +415,62 @@ fn bot_command_popup_enabled(
     )
 }
 
+#[cfg(test)]
 fn find_slash_command_trigger_position(text: &str, cursor_pos: usize) -> Option<usize> {
+    find_slash_command_trigger_position_with_visible_mentions(text, cursor_pos, &[])
+}
+
+fn prefix_contains_only_leading_mentions(
+    text: &str,
+    prefix_start: usize,
+    prefix_end: usize,
+    tracked_visible_mentions: &[TrackedVisibleMention],
+) -> bool {
+    let mut cursor = prefix_start;
+    while cursor < prefix_end {
+        let Some(remaining) = text.get(cursor..prefix_end) else {
+            return false;
+        };
+        let Some(ch) = remaining.chars().next() else {
+            break;
+        };
+
+        if ch.is_whitespace() {
+            cursor += ch.len_utf8();
+            continue;
+        }
+
+        if let Some(mention) = tracked_visible_mentions.iter().find(|mention| {
+            mention.start == cursor
+                && mention.end <= prefix_end
+                && mention.start < mention.end
+                && text.get(mention.start..mention.end) == Some(mention.visible_text.as_str())
+        }) {
+            cursor = mention.end;
+            continue;
+        }
+
+        let token_end = remaining
+            .char_indices()
+            .find_map(|(idx, ch)| ch.is_whitespace().then_some(cursor + idx))
+            .unwrap_or(prefix_end);
+        let Some(token) = text.get(cursor..token_end) else {
+            return false;
+        };
+        if !token.starts_with('@') {
+            return false;
+        }
+        cursor = token_end;
+    }
+
+    true
+}
+
+fn find_slash_command_trigger_position_with_visible_mentions(
+    text: &str,
+    cursor_pos: usize,
+    tracked_visible_mentions: &[TrackedVisibleMention],
+) -> Option<usize> {
     if cursor_pos == 0 || cursor_pos > text.len() {
         return None;
     }
@@ -434,10 +489,15 @@ fn find_slash_command_trigger_position(text: &str, cursor_pos: usize) -> Option<
     // Trigger when the command is at the start of the line (`/cmd`) OR follows only a
     // leading run of @mentions — the demo pattern `@wf_coordinator /create-issue`.
     // Anything else before the command (plain words, paths like `see /tmp`) must NOT
-    // trigger the popup. (Mentions with spaces in their display text aren't supported as
-    // a prefix here; type the command at line start in that case.)
-    let prefix = &line[..token_start];
-    if !prefix.split_whitespace().all(|word| word.starts_with('@')) {
+    // trigger the popup. Tracked visible mentions are treated as atomic mention tokens
+    // so display names with spaces, emoji, etc. can still prefix workflow commands.
+    let prefix_end = line_start + token_start;
+    if !prefix_contains_only_leading_mentions(
+        text,
+        line_start,
+        prefix_end,
+        tracked_visible_mentions,
+    ) {
         return None;
     }
 
@@ -2287,7 +2347,11 @@ impl MentionableTextInput {
         let current_text = text_input_ref.text();
         let head = text_input_ref.borrow().map_or(0, |p| p.cursor().index);
 
-        if let Some(start_idx) = find_slash_command_trigger_position(&current_text, head) {
+        if let Some(start_idx) = find_slash_command_trigger_position_with_visible_mentions(
+            &current_text,
+            head,
+            &self.tracked_visible_mentions,
+        ) {
             let command_to_insert = format!("{command} ");
             let (new_text, new_pos) = apply_text_replacement_preserving_mentions(
                 &current_text,
@@ -2372,10 +2436,20 @@ impl MentionableTextInput {
             }
         }
 
-        if self.active_popup_mode == PopupMode::SlashCommand
-            && find_slash_command_trigger_position(&text, cursor_pos).is_none()
-        {
+        let slash_trigger_pos = find_slash_command_trigger_position_with_visible_mentions(
+            &text,
+            cursor_pos,
+            &self.tracked_visible_mentions,
+        );
+        if self.active_popup_mode == PopupMode::SlashCommand && slash_trigger_pos.is_none() {
             self.close_mention_popup(cx);
+        }
+
+        if let Some(trigger_pos) = slash_trigger_pos {
+            let search_text =
+                utils::safe_substring_by_byte_indices(&text, trigger_pos + 1, cursor_pos);
+            self.update_slash_command_list(cx, scope, &search_text);
+            return;
         }
 
         // Look for trigger position for @ menu
@@ -2414,10 +2488,6 @@ impl MentionableTextInput {
 
             // Redraw to ensure UI updates are visible
             self.redraw(cx);
-        } else if let Some(trigger_pos) = find_slash_command_trigger_position(&text, cursor_pos) {
-            let search_text =
-                utils::safe_substring_by_byte_indices(&text, trigger_pos + 1, cursor_pos);
-            self.update_slash_command_list(cx, scope, &search_text);
         } else if self.is_searching() || self.is_slash_command_popup_active() {
             self.close_mention_popup(cx);
         }
@@ -3416,6 +3486,66 @@ mod tests {
         assert_eq!(
             find_slash_command_trigger_position(text2, text2.len()),
             Some("@wf_coordinator @wf_reviewer ".len())
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_is_found_after_tracked_visible_mention_with_spaces() {
+        let text = "@🤖 wf_coordinator /";
+        let tracked_mentions = vec![TrackedVisibleMention {
+            user_id: "@wf_coordinator:example.org".try_into().unwrap(),
+            visible_text: "@🤖 wf_coordinator".to_string(),
+            start: 0,
+            end: "@🤖 wf_coordinator".len(),
+        }];
+
+        assert_eq!(
+            find_slash_command_trigger_position_with_visible_mentions(
+                text,
+                text.len(),
+                &tracked_mentions,
+            ),
+            Some("@🤖 wf_coordinator ".len())
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_after_tracked_visible_mention_rejects_plain_words() {
+        let text = "@🤖 wf_coordinator see /tmp";
+        let tracked_mentions = vec![TrackedVisibleMention {
+            user_id: "@wf_coordinator:example.org".try_into().unwrap(),
+            visible_text: "@🤖 wf_coordinator".to_string(),
+            start: 0,
+            end: "@🤖 wf_coordinator".len(),
+        }];
+
+        assert_eq!(
+            find_slash_command_trigger_position_with_visible_mentions(
+                text,
+                text.len(),
+                &tracked_mentions,
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_preempts_active_mention_after_leading_mention() {
+        // Manual typing keeps the @mention search state active until a command
+        // trigger takes over. The workflow pattern must switch popups here.
+        let text = "@wf_coordinator /";
+        assert_eq!(
+            find_slash_command_trigger_position_with_visible_mentions(text, text.len(), &[]),
+            Some("@wf_coordinator ".len()),
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_does_not_preempt_active_mention_for_mid_sentence_slash() {
+        let text = "@wf_coordinator see /tmp";
+        assert_eq!(
+            find_slash_command_trigger_position_with_visible_mentions(text, text.len(), &[]),
+            None,
         );
     }
 
