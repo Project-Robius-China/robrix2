@@ -60,6 +60,30 @@ script_mod! {
         text: "[Room name unknown]"
     }
 
+    // A small blue "bot" pill shown after the room name for agent-bound rooms.
+    // Reproduces the timeline's bot badge look (room_screen.rs) locally so this
+    // file doesn't depend on room_screen's private constants/widgets.
+    mod.widgets.RoomsListBotPill = RoundedView {
+        visible: false
+        width: Fit
+        height: 16.0
+        align: Align{x: 0.5, y: 0.5}
+        padding: Inset{left: 6.0, right: 6.0}
+        show_bg: true
+        draw_bg +: {
+            color: (COLOR_ACTIVE_PRIMARY)
+            border_radius: 3.0
+        }
+        Label {
+            width: Fit, height: Fit, padding: 0
+            draw_text +: {
+                text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
+                color: #fff
+            }
+            text: "bot"
+        }
+    }
+
     mod.widgets.RoomsListEntryTimestamp = Label {
         padding: Inset{top: 1},
         width: Fit, height: Fit
@@ -214,7 +238,19 @@ script_mod! {
                 padding: 5.
                 align: Align{x: 0.5, y: 0.5}
                 avatar := Avatar {}
-                room_name := mod.widgets.RoomName {}
+                name_wrap := View {
+                    width: Fill, height: Fit
+                    flow: Right
+                    align: Align{y: 0.5}
+                    spacing: 6
+                    // Hug the name text so the bot pill packs snug right after it,
+                    // instead of Fill's turtle-advance pushing the pill to the row's
+                    // right edge. Capped so long names still ellipsize; IconAndName
+                    // is only shown at sidebar widths <= 200px, so a smaller cap
+                    // than FullPreview leaves room for the pill.
+                    room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Abs(130.0)} }
+                    bot_pill := mod.widgets.RoomsListBotPill {}
+                }
                 unread_badge := UnreadBadge {}
                 encryption_icon := mod.widgets.EncryptionIcon {}
                 tombstone_icon := mod.widgets.TombstoneIcon {}
@@ -230,7 +266,16 @@ script_mod! {
                         width: Fill, height: Fit,
                         spacing: 3,
                         flow: Right,
-                        room_name := mod.widgets.RoomName {}
+                        name_wrap := View {
+                            width: Fill, height: Fit
+                            flow: Right
+                            align: Align{y: 0.5}
+                            spacing: 6
+                            // Same fix as IconAndName above, but with a larger cap since
+                            // FullPreview is shown on desktop/wider sidebars.
+                            room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Abs(200.0)} }
+                            bot_pill := mod.widgets.RoomsListBotPill {}
+                        }
                         timestamp := mod.widgets.RoomsListEntryTimestamp { }
                     }
                     bottom := View {
@@ -370,11 +415,19 @@ impl Widget for RoomsListEntryContent {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        let app_language = scope.data.get::<AppState>()
+        let app_state = scope.data.get::<AppState>();
+        let app_language = app_state
             .map(|app_state| app_state.app_language)
             .unwrap_or_default();
         if let Some(joined_room_info) = scope.props.get::<JoinedRoomInfo>() {
-            self.draw_joined_room(cx, joined_room_info);
+            let show_agent_badge = app_state.is_some_and(|app_state| {
+                room_shows_agent_badge(
+                    app_state,
+                    joined_room_info.room_name_id.room_id(),
+                    joined_room_info.dm_target.as_deref(),
+                )
+            });
+            self.draw_joined_room(cx, joined_room_info, show_agent_badge);
         } else if let Some(invited_room_info) = scope.props.get::<InvitedRoomInfo>() {
             self.draw_invited_room(cx, invited_room_info, app_language);
         }
@@ -389,6 +442,7 @@ impl RoomsListEntryContent {
         &mut self,
         cx: &mut Cx,
         room_info: &JoinedRoomInfo,
+        show_agent_badge: bool,
     ) {
         self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
         if let Some((ts, msg)) = room_info.latest.as_ref() {
@@ -412,6 +466,7 @@ impl RoomsListEntryContent {
             cx,
             should_show_encryption_icon(room_info.is_encrypted, room_info.is_tombstoned),
         );
+        self.view.view(cx, ids!(bot_pill)).set_visible(cx, show_agent_badge);
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, room_info.is_tombstoned);
     }
 
@@ -465,6 +520,7 @@ impl RoomsListEntryContent {
             .update_counts(false, 1, 0);
 
         self.view.view(cx, ids!(encryption_icon)).set_visible(cx, false);
+        self.view.view(cx, ids!(bot_pill)).set_visible(cx, false);
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, false);
         self.draw_common(cx, &room_info.room_avatar, room_info.is_selected);
     }
