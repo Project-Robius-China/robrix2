@@ -3080,12 +3080,16 @@ script_mod! {
                 height: Fit
                 flow: Flow.Right{wrap: true}
                 align: Align{y: 0.5}
-                spacing: 6
 
                 display_name := Label {
                     width: Fit
                     height: Fit
                     flow: Flow.Right{wrap: true}
+                    // Gap to the badge lives here (not as container `spacing`)
+                    // so a wrapped bot_badge starts flush at the row's left
+                    // edge instead of inheriting an extra leading offset from
+                    // the wrap-flow container's spacing bookkeeping.
+                    margin: Inset{right: 6}
                     draw_text +: {
                         text_style: RBX_TEXT_BODY_STRONG {}
                         color: (RBX_FG_PRIMARY)
@@ -3280,15 +3284,57 @@ script_mod! {
                                     align: Align{y: 0.5}
                                     spacing: 6
 
-                                    room_name_value := Label {
+                                    // Room name + bot pill live together in a Fill
+                                    // sub-row so the pill trails the (capped,
+                                    // ellipsized) name text directly, the same way
+                                    // the rooms list packs its bot pill snug against
+                                    // the name instead of at the row's far edge.
+                                    // This sub-row keeps the same Fill role that
+                                    // room_name_value used to play here, so
+                                    // favorite_button's pinned-right position is
+                                    // unaffected.
+                                    title_wrap := View {
                                         width: Fill
                                         height: Fit
-                                        flow: Flow.Right{wrap: true}
-                                        draw_text +: {
-                                            text_style: RBX_TEXT_SECTION_TITLE {}
-                                            color: (RBX_FG_PRIMARY)
+                                        flow: Right
+                                        align: Align{y: 0.5}
+                                        spacing: 6
+
+                                        room_name_value := Label {
+                                            width: Fit{max: FitBound.Abs(150.0)}
+                                            height: Fit
+                                            flow: Flow.Right{wrap: false}
+                                            max_lines: 1
+                                            text_overflow: Ellipsis
+                                            draw_text +: {
+                                                text_style: RBX_TEXT_SECTION_TITLE {}
+                                                color: (RBX_FG_PRIMARY)
+                                            }
+                                            text: ""
                                         }
-                                        text: ""
+
+                                        // Bot indicator pill, styled to match the
+                                        // rooms-list / timeline bot pill exactly.
+                                        title_bot_pill := RoundedView {
+                                            visible: false
+                                            width: Fit
+                                            height: 16.0
+                                            align: Align{x: 0.5, y: 0.5}
+                                            padding: Inset{left: 6.0, right: 6.0}
+                                            show_bg: true
+                                            draw_bg +: {
+                                                color: (COLOR_ACTIVE_PRIMARY)
+                                                border_radius: 3.0
+                                            }
+                                            Label {
+                                                width: Fit, height: Fit, padding: 0
+                                                draw_text +: {
+                                                    text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
+                                                    color: #fff
+                                                }
+                                                text: "bot"
+                                            }
+                                        }
                                     }
 
                                     favorite_button := View {
@@ -5345,7 +5391,10 @@ impl Widget for RoomInfoSlidingPane {
         self.view(cx, ids!(people_view)).set_visible(cx, self.show_people_page);
 
         // ----- Hero: name, room id, favourite star -----
-        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.room_name_value)).set_text(cx, &info.room_name);
+        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.title_wrap.room_name_value)).set_text(cx, &info.room_name);
+        // Bot pill trailing the room name, mirroring the rooms-list bot pill;
+        // driven by the same is_agent_enabled flag as the Agent-enabled badge below.
+        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.title_wrap.title_bot_pill)).set_visible(cx, info.is_agent_enabled);
         self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.room_id_row.room_id_value)).set_text(cx, &info.room_id);
         self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button.star_outline)).set_visible(cx, !info.is_favorite);
         self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button.star_filled)).set_visible(cx, info.is_favorite);
@@ -5993,7 +6042,7 @@ impl Widget for RoomScreen {
                 }
             }
 
-            self.handle_message_actions(cx, actions, &portal_list, &loading_pane);
+            self.handle_message_actions(cx, actions, &portal_list, &loading_pane, scope);
 
             for action in actions {
                 // Mobile RoomTopBar (header + Chat/Info tabs) actions.
@@ -6020,7 +6069,7 @@ impl Widget for RoomScreen {
                                     });
                                 }
                             }
-                            self.refresh_inline_room_info(cx);
+                            self.refresh_inline_room_info(cx, scope.data.get::<AppState>());
                         }
                         self.redraw(cx);
                     }
@@ -6324,7 +6373,7 @@ impl Widget for RoomScreen {
             // (desktop only — the button is hidden on mobile).
             for action in actions {
                 if let InfoButtonAction::OpenRequested = action.as_widget_action().cast_ref() {
-                    self.show_room_info_pane(cx);
+                    self.show_room_info_pane(cx, scope.data.get::<AppState>());
                     break;
                 }
             }
@@ -6385,12 +6434,12 @@ impl Widget for RoomScreen {
                 self.refresh_threads_pane(cx);
             }
             if room_info_sliding_pane.is_currently_shown(cx) {
-                self.refresh_room_info_pane(cx);
+                self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
             }
             // Keep the inline "Info" tab body current as room data (members,
             // topic, etc.) arrives, mirroring the overlay pane above.
             if matches!(self.active_room_tab, RoomTab::Info) {
-                self.refresh_inline_room_info(cx);
+                self.refresh_inline_room_info(cx, scope.data.get::<AppState>());
             }
 
             // Ideally we would do this elsewhere on the main thread, because it's not room-specific,
@@ -8700,6 +8749,7 @@ impl RoomScreen {
         actions: &ActionsBuf,
         portal_list: &PortalListRef,
         loading_pane: &LoadingPaneRef,
+        scope: &mut Scope,
     ) {
         if let Some(clicked_context) = self.octos_action_button_contexts
             .iter()
@@ -9036,7 +9086,7 @@ impl RoomScreen {
                     self.show_threads_pane(cx);
                 }
                 MessageAction::ShowRoomInfoPane => {
-                    self.show_room_info_pane(cx);
+                    self.show_room_info_pane(cx, scope.data.get::<AppState>());
                 }
                 MessageAction::ToggleTranslationLangPopup { button_rect } => {
                     self.toggle_translation_lang_popup(cx, *button_rect);
@@ -9547,7 +9597,12 @@ impl RoomScreen {
     /// Build the room-info payload from current state, or `None` if no room is
     /// displayed. Shared by both the sliding info pane and the inline "Info"
     /// tab body so the two presentations stay in sync.
-    fn build_room_info_pane_info(&mut self) -> Option<RoomInfoPaneInfo> {
+    ///
+    /// `app_state`, when available, makes the member list's "Bot" marker
+    /// registry-aware (AgentRegistry ∪ app-service known bots), mirroring the
+    /// timeline. Callers without a reachable `AppState` (no `Scope` in hand)
+    /// pass `None`, which falls back to the name-only heuristic.
+    fn build_room_info_pane_info(&mut self, app_state: Option<&AppState>) -> Option<RoomInfoPaneInfo> {
         let room_id = self.room_id().cloned()?;
         let room_name = self.room_name_id.as_ref()
             .map(ToString::to_string)
@@ -9620,6 +9675,23 @@ impl RoomScreen {
                             _ => 3,
                         }
                     };
+
+                    // Registry-aware bot detection, mirroring the timeline's
+                    // `is_timeline_sender_bot`: the union of the AgentRegistry
+                    // and (app-service-gated) known-bot list, plus the
+                    // resolved parent BotFather MXID. Computed once here
+                    // (not per member) since it's the same for every entry.
+                    let known_bot_user_ids = app_state
+                        .map(timeline_known_bot_user_ids)
+                        .unwrap_or_default();
+                    let resolved_parent_bot_user_id = app_state.and_then(|s| {
+                        if s.bot_settings.enabled {
+                            s.bot_settings.resolved_bot_user_id(my_user_id.as_deref()).ok()
+                        } else {
+                            None
+                        }
+                    });
+
                     // Build with a precomputed (role-weight, lowercased-name) sort
                     // key so sorting doesn't allocate a String per comparison.
                     let mut keyed: Vec<(u8, String, RoomInfoPeopleEntryInfo)> = members.iter()
@@ -9627,7 +9699,11 @@ impl RoomScreen {
                             let display_name = member.display_name()
                                 .map(ToOwned::to_owned)
                                 .unwrap_or_else(|| member.user_id().to_string());
-                            let is_bot = is_likely_bot_member(member, None);
+                            let is_bot = is_known_or_likely_bot(
+                                    member.user_id(),
+                                    resolved_parent_bot_user_id.as_deref(),
+                                    &known_bot_user_ids,
+                                ) || is_likely_bot_member(member, resolved_parent_bot_user_id.as_deref());
                             let level = match member.suggested_role_for_power_level() {
                                 RoomMemberRole::Creator => String::from("Creator"),
                                 RoomMemberRole::Administrator => String::from("Admin"),
@@ -9711,23 +9787,23 @@ impl RoomScreen {
         })
     }
 
-    fn refresh_room_info_pane(&mut self, cx: &mut Cx) {
-        if let Some(info) = self.build_room_info_pane_info() {
+    fn refresh_room_info_pane(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
+        if let Some(info) = self.build_room_info_pane_info(app_state) {
             self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).set_info(cx, info);
         }
     }
 
     /// Populate the inline "Info" tab body (a second `RoomInfoSlidingPane`
     /// instance mounted inline inside `keyboard_view`).
-    fn refresh_inline_room_info(&mut self, cx: &mut Cx) {
-        if let Some(info) = self.build_room_info_pane_info() {
+    fn refresh_inline_room_info(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
+        if let Some(info) = self.build_room_info_pane_info(app_state) {
             self.room_info_sliding_pane(cx, ids!(info_content)).set_info(cx, info);
         }
     }
 
-    fn show_room_info_pane(&mut self, cx: &mut Cx) {
+    fn show_room_info_pane(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
         self.hide_threads_pane(cx);
-        self.refresh_room_info_pane(cx);
+        self.refresh_room_info_pane(cx, app_state);
         self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).show(cx);
         self.redraw(cx);
     }
