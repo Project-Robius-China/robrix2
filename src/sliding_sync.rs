@@ -7327,6 +7327,17 @@ async fn add_new_room(
     let room_name_id = RoomNameId::from((new_room.display_name.clone(), new_room.room_id.clone()));
     // Start with a basic text avatar; the avatar image will be fetched asynchronously below.
     let room_avatar = avatar_from_room_name(room_name_id.name_for_avatar());
+    // The DM counterparty MXID, only for 1:1 direct rooms (used for agent badges).
+    let dm_target = if new_room.is_direct {
+        let targets = new_room.room.direct_targets();
+        if targets.len() == 1 {
+            targets.into_iter().next().and_then(|id| id.into_user_id())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     rooms_list::enqueue_rooms_list_update(RoomsListUpdate::AddJoinedRoom(JoinedRoomInfo {
         latest,
         tags: new_room.tags.clone().unwrap_or_default(),
@@ -7345,6 +7356,7 @@ async fn add_new_room(
         has_been_paginated: false,
         is_selected: false,
         is_direct: new_room.is_direct,
+        dm_target,
         is_encrypted,
         is_tombstoned: new_room.is_tombstoned,
     }));

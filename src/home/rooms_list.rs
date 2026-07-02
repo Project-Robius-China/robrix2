@@ -320,6 +320,9 @@ pub struct JoinedRoomInfo {
     pub is_selected: bool,
     /// Whether this a direct room.
     pub is_direct: bool,
+    /// The DM counterparty's MXID when this is a 1:1 direct room, else `None`.
+    /// Used to decide whether to show an agent badge (see `room_shows_agent_badge`).
+    pub dm_target: Option<OwnedUserId>,
     /// Whether this room is end-to-end encrypted.
     ///
     /// `None` means the encryption state is not known yet or failed to load.
@@ -652,6 +655,7 @@ impl RoomsList {
                     has_been_paginated: false,
                     is_selected: false,
                     is_direct: false,
+                    dm_target: None,
                     is_encrypted: None,
                     is_tombstoned: false,
                 });
@@ -876,6 +880,9 @@ impl RoomsList {
 
                         // Update the room. If it should be displayed, add it to the proper list.
                         room.is_direct = is_direct;
+                        if !is_direct {
+                            room.dm_target = None;
+                        }
                         let has_favorite_tag = room.tags.contains_key(&TagName::Favorite);
                         let has_low_priority_tag = room.tags.contains_key(&TagName::LowPriority);
                         if should_display_room!(self, &room_id, room) {
