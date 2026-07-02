@@ -1,5 +1,5 @@
 use makepad_widgets::*;
-use matrix_sdk::ruma::OwnedRoomId;
+use matrix_sdk::ruma::{OwnedRoomId, RoomId, UserId};
 
 use crate::{
     app::AppState,
@@ -563,9 +563,25 @@ pub fn should_show_encryption_icon(is_encrypted: Option<bool>, is_tombstoned: bo
     matches!(is_encrypted, Some(true)) && !is_tombstoned
 }
 
+/// Whether the rooms-list row for `room_id` should display an agent badge.
+///
+/// True when the room is bound to a bot (app-service binding) OR it is a 1:1 DM
+/// whose counterparty is a registered agent. Derived live from `AppState`, so it
+/// updates as soon as an agent is registered or unregistered.
+pub fn room_shows_agent_badge(
+    app_state: &AppState,
+    room_id: &RoomId,
+    dm_target: Option<&UserId>,
+) -> bool {
+    app_state.bot_settings.is_room_bound(room_id)
+        || dm_target.is_some_and(|user_id| app_state.agent_registry.contains(user_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{AgentEntry, AppState};
+    use matrix_sdk::ruma::{OwnedRoomId, OwnedUserId};
 
     #[test]
     fn test_room_list_icon_visible_when_encrypted() {
@@ -585,5 +601,66 @@ mod tests {
     #[test]
     fn test_room_list_icon_yields_to_tombstone() {
         assert!(!should_show_encryption_icon(Some(true), true));
+    }
+
+    #[test]
+    fn test_agent_badge_shown_when_room_bound() {
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state
+            .bot_settings
+            .record_known_bot_user_ids(["@bot:example.org".try_into().unwrap()]);
+        // Bind the bot to the room so is_room_bound() is true.
+        app_state.bot_settings.room_bindings.push(crate::app::RoomBotBindingState {
+            room_id: room_id.clone(),
+            bot_user_id: "@bot:example.org".try_into().unwrap(),
+            remark: String::new(),
+        });
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+    }
+
+    #[test]
+    fn test_agent_badge_shown_when_dm_target_is_registered_agent() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_for_human_dm() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let human: OwnedUserId = "@human:example.org".try_into().unwrap();
+        let app_state = AppState::default();
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(human.as_ref())));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_for_unbound_group_room() {
+        let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
+        let app_state = AppState::default();
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_when_dm_target_none() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let app_state = AppState::default();
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+    }
+
+    #[test]
+    fn test_agent_badge_idempotent_when_bound_and_agent_dm() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        app_state.bot_settings.room_bindings.push(crate::app::RoomBotBindingState {
+            room_id: room_id.clone(),
+            bot_user_id: agent.clone(),
+            remark: String::new(),
+        });
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
     }
 }
