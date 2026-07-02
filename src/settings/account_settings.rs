@@ -6,7 +6,7 @@ use makepad_widgets::{text::selection::Cursor, *};
 use rfd::FileDialog;
 use matrix_sdk::{encryption::VerificationState, ruma::OwnedUserId};
 
-use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, styles::*}, sliding_sync::{get_client, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, submit_async_request}, utils, verification::VerificationStateAction};
+use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, styles::*}, sliding_sync::{get_client, current_user_id, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, PasswordChangeFailure, submit_async_request}, utils, verification::VerificationStateAction};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use crate::{app::ConfirmDeleteAction, shared::confirmation_modal::ConfirmationModalContent};
 
@@ -514,12 +514,12 @@ script_mod! {
                 align: Align{y: 0.5},
                 spacing: (SPACE_SM)
 
-                manage_account_button := SettingsPrimaryButton {
+                change_password_button := SettingsPrimaryButton {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                     draw_bg +: { border_radius: (RADIUS_MD) }
-                    draw_icon.svg: (ICON_EXTERNAL_LINK)
+                    draw_icon.svg: (ICON_LOCK)
                     icon_walk: Walk{width: 16, height: 16}
-                    text: "Manage Account"
+                    text: "Change Password"
                 }
 
                 copy_access_token_button := RobrixNeutralIconButton {
@@ -538,6 +538,100 @@ script_mod! {
                     text: "Log out"
                 }
             }
+
+            change_password_panel := RoundedView {
+                visible: false
+                width: Fill, height: Fit
+                flow: Down
+                spacing: (SPACE_SM)
+                margin: Inset{top: (SPACE_MD)}
+                padding: Inset{top: (SPACE_MD), bottom: (SPACE_MD), left: (SPACE_MD), right: (SPACE_MD)}
+                show_bg: true
+                new_batch: true
+                draw_bg +: {
+                    color: (RBX_BG_SURFACE_SUBTLE)
+                    border_radius: (RBX_RADIUS_SM)
+                    border_size: 1.0
+                    border_color: (RBX_STROKE_SOFT)
+                }
+
+                change_password_title_label := Label {
+                    width: Fill, height: Fit
+                    draw_text +: {
+                        color: (RBX_FG_PRIMARY)
+                        text_style: theme.font_bold { font_size: 12.0 }
+                    }
+                    text: "Change Password"
+                }
+
+                View {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true}
+                    spacing: (SPACE_SM)
+
+                    old_password_input := RobrixTextInput {
+                        width: 260, height: 40
+                        empty_text: "Current password"
+                        is_password: true
+                    }
+
+                    new_password_input := RobrixTextInput {
+                        width: 260, height: 40
+                        empty_text: "New password"
+                        is_password: true
+                    }
+
+                    confirm_password_input := RobrixTextInput {
+                        width: 260, height: 40
+                        empty_text: "Confirm new password"
+                        is_password: true
+                    }
+                }
+
+                change_password_error_label := Label {
+                    visible: false
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        color: (RBX_DANGER_FG)
+                        text_style: REGULAR_TEXT { font_size: 10.5 }
+                    }
+                    text: ""
+                }
+
+                View {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true}
+                    align: Align{y: 0.5}
+                    spacing: (SPACE_SM)
+
+                    save_password_button := SettingsPrimaryButton {
+                        width: Fit, height: Fit
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                        margin: 0
+                        draw_bg +: { border_radius: (RADIUS_MD) }
+                        draw_icon.svg: (ICON_CHECKMARK)
+                        icon_walk: Walk{width: 16, height: 16}
+                        text: "Save Password"
+                    }
+
+                    cancel_password_change_button := RobrixNeutralIconButton {
+                        width: Fit, height: Fit
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                        margin: 0
+                        draw_bg +: { border_radius: (RADIUS_MD) }
+                        draw_icon.svg: (ICON_FORBIDDEN)
+                        icon_walk: Walk{width: 16, height: 16}
+                        text: "Cancel"
+                    }
+
+                    change_password_spinner := LoadingSpinner {
+                        width: 16, height: 16
+                        visible: false
+                        draw_bg.color: (RBX_ACCENT)
+                    }
+                }
+            }
         }
     }
 }
@@ -548,9 +642,12 @@ pub struct AccountSettings {
     #[deref] view: View,
 
     #[rust] own_profile: Option<UserProfile>,
+    #[rust] own_profile_is_fallback: bool,
     #[rust(VerificationState::Unknown)] verification_state: VerificationState,
     #[rust] own_device: Option<OwnDeviceInfo>,
     #[rust] app_language: AppLanguage,
+    #[rust] password_change_panel_open: bool,
+    #[rust] password_change_in_flight: bool,
     /// List of other account user IDs (not the currently active one)
     #[rust] other_accounts: Vec<OwnedUserId>,
 }
@@ -563,6 +660,7 @@ impl Widget for AccountSettings {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        self.sync_current_account_from_runtime(cx);
         self.match_event(cx, event);
 
         let copy_user_id_button = self.view.button(cx, ids!(copy_user_id_button));
@@ -600,27 +698,15 @@ impl Widget for AccountSettings {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        self.sync_current_account_from_runtime(cx);
         self.view.draw_walk(cx, scope, walk)
     }
 }
 
 impl MatchEvent for AccountSettings {
     fn handle_signal(&mut self, cx: &mut Cx) {
-        // If we don't have a profile yet, try to get it
-        if self.own_profile.is_none() {
-            user_profile_cache::process_user_profile_updates(cx);
-            if let Some(new_profile) = get_own_profile(cx) {
-                self.own_profile = Some(new_profile.clone());
-                self.own_device = None;
-                self.view.label(cx, ids!(user_id))
-                    .set_text(cx, new_profile.user_id.as_str());
-                self.view.text_input(cx, ids!(display_name_input))
-                    .set_text(cx, new_profile.username.as_deref().unwrap_or_default());
-                self.populate_avatar_views(cx);
-                self.populate_account_list(cx);
-                self.refresh_verification_state(cx);
-                self.view.redraw(cx);
-            }
+        self.sync_current_account_from_runtime(cx);
+        if self.own_profile_is_fallback || self.own_profile.is_none() {
             return;
         }
         // Process avatar updates from the cache
@@ -644,6 +730,11 @@ impl MatchEvent for AccountSettings {
         let display_name_input = self.view.text_input(cx, ids!(display_name_input));
         let delete_avatar_button = self.view.button(cx, ids!(delete_avatar_button));
         let upload_avatar_button = self.view.button(cx, ids!(upload_avatar_button));
+        let old_password_input = self.view.text_input(cx, ids!(old_password_input));
+        let new_password_input = self.view.text_input(cx, ids!(new_password_input));
+        let confirm_password_input = self.view.text_input(cx, ids!(confirm_password_input));
+        let save_password_button = self.view.button(cx, ids!(save_password_button));
+        let cancel_password_change_button = self.view.button(cx, ids!(cancel_password_change_button));
 
         for action in actions {
             if let Some(VerificationStateAction::Update(state)) = action.downcast_ref() {
@@ -791,6 +882,27 @@ impl MatchEvent for AccountSettings {
                     });
                     continue;
                 }
+                Some(AccountDataAction::PasswordChanged) => {
+                    self.password_change_in_flight = false;
+                    self.set_password_change_form_enabled(cx, true);
+                    self.hide_password_change_panel(cx);
+                    enqueue_popup_notification(
+                        tr_key(self.app_language, "settings.account.popup.password_changed"),
+                        PopupKind::Success,
+                        Some(4.0),
+                    );
+                    continue;
+                }
+                Some(AccountDataAction::PasswordChangeFailed(reason)) => {
+                    self.password_change_in_flight = false;
+                    self.view.widget(cx, ids!(change_password_spinner)).set_visible(cx, false);
+                    self.set_password_change_form_enabled(cx, true);
+                    self.set_password_change_error(cx, Some(&password_change_failure_message(
+                        self.app_language,
+                        reason,
+                    )));
+                    continue;
+                }
                 Some(AccountDataAction::OwnDeviceFetched(device)) => {
                     self.own_device = device.clone();
                     self.update_verification_banner(cx);
@@ -823,6 +935,26 @@ impl MatchEvent for AccountSettings {
 
         if self.view.button(cx, ids!(copy_access_token_button)).clicked(actions) {
             submit_async_request(MatrixRequest::GetAccessTokenForCopy);
+        }
+
+        if self.view.button(cx, ids!(change_password_button)).clicked(actions) {
+            if self.password_change_panel_open {
+                self.hide_password_change_panel(cx);
+            } else {
+                self.show_password_change_panel(cx);
+            }
+        }
+
+        if cancel_password_change_button.clicked(actions) {
+            self.hide_password_change_panel(cx);
+        }
+
+        let submit_password_change = save_password_button.clicked(actions)
+            || old_password_input.returned(actions).is_some()
+            || new_password_input.returned(actions).is_some()
+            || confirm_password_input.returned(actions).is_some();
+        if submit_password_change {
+            self.submit_password_change(cx);
         }
 
         let Some(own_profile) = &self.own_profile else { return };
@@ -927,16 +1059,6 @@ impl MatchEvent for AccountSettings {
                 tr_key(self.app_language, "settings.account.popup.copied_user_id"),
                 PopupKind::Success,
                 Some(3.0),
-            );
-        }
-
-        if self.view.button(cx, ids!(manage_account_button)).clicked(actions) {
-            // TODO: support opening the user's account management page in a browser,
-            //       or perhaps in an in-app pane if that's what is needed for regular UN+PW login.
-            enqueue_popup_notification(
-                tr_key(self.app_language, "settings.account.popup.account_management_not_implemented"),
-                PopupKind::Warning,
-                Some(4.0),
             );
         }
 
@@ -1047,11 +1169,15 @@ impl AccountSettings {
         self.view
             .label(cx, ids!(user_id_section_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.section.your_user_id"));
-        if self.own_profile.is_none() {
-            self.view
-                .label(cx, ids!(user_id))
-                .set_text(cx, tr_key(self.app_language, "settings.account.user_id.not_logged_in"));
-        }
+        let fallback_user_id = current_user_id();
+        let user_id_text = user_id_label_text(
+            self.app_language,
+            self.own_profile.as_ref(),
+            fallback_user_id.as_ref(),
+        );
+        self.view
+            .label(cx, ids!(user_id))
+            .set_text(cx, &user_id_text);
         self.view
             .label(cx, ids!(multiple_accounts_section_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.section.multiple_accounts"));
@@ -1071,8 +1197,26 @@ impl AccountSettings {
             .label(cx, ids!(other_actions_section_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.section.other_actions"));
         self.view
-            .button(cx, ids!(manage_account_button))
-            .set_text(cx, tr_key(self.app_language, "settings.account.button.manage_account"));
+            .button(cx, ids!(change_password_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.change_password"));
+        self.view
+            .label(cx, ids!(change_password_title_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.change_password.title"));
+        self.view
+            .text_input(cx, ids!(old_password_input))
+            .set_empty_text(cx, tr_key(self.app_language, "settings.account.change_password.old_placeholder").to_string());
+        self.view
+            .text_input(cx, ids!(new_password_input))
+            .set_empty_text(cx, tr_key(self.app_language, "settings.account.change_password.new_placeholder").to_string());
+        self.view
+            .text_input(cx, ids!(confirm_password_input))
+            .set_empty_text(cx, tr_key(self.app_language, "settings.account.change_password.confirm_placeholder").to_string());
+        self.view
+            .button(cx, ids!(save_password_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.change_password.save"));
+        self.view
+            .button(cx, ids!(cancel_password_change_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.cancel"));
         self.view
             .button(cx, ids!(copy_access_token_button))
             .set_text(cx, tr_key(self.app_language, "settings.account.button.copy_access_token"));
@@ -1089,6 +1233,128 @@ impl AccountSettings {
             .label(cx, ids!(verification_unverified_hint_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.verification.unverified_hint"));
         self.populate_account_list(cx);
+        self.view.redraw(cx);
+    }
+
+    fn sync_current_account_from_runtime(&mut self, cx: &mut Cx) {
+        user_profile_cache::process_user_profile_updates(cx);
+
+        if let Some(new_profile) = get_own_profile(cx) {
+            if self.needs_profile_sync(&new_profile) {
+                self.apply_own_profile(cx, new_profile, true);
+            } else {
+                self.populate_account_list(cx);
+            }
+            return;
+        }
+
+        match current_user_id() {
+            Some(user_id) => {
+                if self.needs_fallback_profile_for(&user_id) {
+                    self.apply_fallback_profile(cx, user_id);
+                } else {
+                    self.populate_account_list(cx);
+                }
+            }
+            None => {
+                if self.own_profile.is_some() {
+                    self.clear_current_account_display(cx);
+                } else {
+                    self.populate_account_list(cx);
+                }
+            }
+        }
+    }
+
+    fn needs_profile_sync(&self, new_profile: &UserProfile) -> bool {
+        self.own_profile_is_fallback
+            || self.own_profile.as_ref().is_none_or(|profile|
+                profile.user_id != new_profile.user_id
+                    || profile.username != new_profile.username
+                    || profile.avatar_state.has_avatar() != new_profile.avatar_state.has_avatar()
+            )
+    }
+
+    fn needs_fallback_profile_for(&self, user_id: &OwnedUserId) -> bool {
+        self.own_profile.as_ref().is_none_or(|profile| profile.user_id != *user_id)
+    }
+
+    fn apply_own_profile(
+        &mut self,
+        cx: &mut Cx,
+        own_profile: UserProfile,
+        refresh_verification: bool,
+    ) {
+        self.view.label(cx, ids!(user_id))
+            .set_text(cx, own_profile.user_id.as_str());
+        self.view.text_input(cx, ids!(display_name_input))
+            .set_text(cx, own_profile.username.as_deref().unwrap_or_default());
+        Self::enable_display_name_buttons(
+            cx,
+            false,
+            &self.view.button(cx, ids!(accept_display_name_button)),
+            &self.view.button(cx, ids!(cancel_display_name_button)),
+        );
+
+        self.own_profile = Some(own_profile);
+        self.own_profile_is_fallback = false;
+        self.populate_avatar_views(cx);
+        if refresh_verification {
+            self.own_device = None;
+            self.refresh_verification_state(cx);
+        }
+        self.populate_account_list(cx);
+        self.view.redraw(cx);
+    }
+
+    fn apply_fallback_profile(&mut self, cx: &mut Cx, user_id: OwnedUserId) {
+        let fallback_profile = UserProfile {
+            user_id,
+            username: None,
+            avatar_state: AvatarState::Unknown,
+        };
+        self.view.text_input(cx, ids!(display_name_input)).set_text(cx, "");
+        self.own_profile = Some(fallback_profile);
+        self.own_profile_is_fallback = true;
+        if let Some(profile) = self.own_profile.as_ref() {
+            self.view.label(cx, ids!(user_id)).set_text(cx, profile.user_id.as_str());
+        }
+        Self::enable_display_name_buttons(
+            cx,
+            false,
+            &self.view.button(cx, ids!(accept_display_name_button)),
+            &self.view.button(cx, ids!(cancel_display_name_button)),
+        );
+        self.populate_avatar_views(cx);
+        self.own_device = None;
+        self.refresh_verification_state(cx);
+        self.populate_account_list(cx);
+        self.view.redraw(cx);
+    }
+
+    fn clear_current_account_display(&mut self, cx: &mut Cx) {
+        self.own_profile = None;
+        self.own_profile_is_fallback = false;
+        self.own_device = None;
+        self.verification_state = VerificationState::Unknown;
+        self.view
+            .label(cx, ids!(user_id))
+            .set_text(cx, tr_key(self.app_language, "settings.account.user_id.not_logged_in"));
+        self.view.text_input(cx, ids!(display_name_input)).set_text(cx, "");
+        Self::enable_display_name_buttons(
+            cx,
+            false,
+            &self.view.button(cx, ids!(accept_display_name_button)),
+            &self.view.button(cx, ids!(cancel_display_name_button)),
+        );
+        self.view.avatar(cx, ids!(our_own_avatar)).show_text(
+            cx,
+            Some(COLOR_ROBRIX_PURPLE),
+            None,
+            "?",
+        );
+        self.populate_account_list(cx);
+        self.update_verification_banner(cx);
         self.view.redraw(cx);
     }
 
@@ -1171,20 +1437,7 @@ impl AccountSettings {
 
     /// Show and initializes the account settings within the SettingsScreen.
     pub fn populate(&mut self, cx: &mut Cx, own_profile: UserProfile) {
-        self.view.label(cx, ids!(user_id))
-            .set_text(cx, own_profile.user_id.as_str());
-        self.view.text_input(cx, ids!(display_name_input))
-            .set_text(cx, own_profile.username.as_deref().unwrap_or_default());
-        Self::enable_display_name_buttons(
-            cx,
-            false,
-            &self.view.button(cx, ids!(accept_display_name_button)),
-            &self.view.button(cx, ids!(cancel_display_name_button)),
-        );
-
-        self.own_profile = Some(own_profile);
-        self.populate_avatar_views(cx);
-        self.refresh_verification_state(cx);
+        self.apply_own_profile(cx, own_profile, true);
         self.sync_app_language(cx);
 
         self.view.button(cx, ids!(upload_avatar_button)).reset_hover(cx);
@@ -1192,14 +1445,22 @@ impl AccountSettings {
         self.view.button(cx, ids!(accept_display_name_button)).reset_hover(cx);
         self.view.button(cx, ids!(cancel_display_name_button)).reset_hover(cx);
         self.view.button(cx, ids!(copy_user_id_button)).reset_hover(cx);
-        self.view.button(cx, ids!(manage_account_button)).reset_hover(cx);
+        self.view.button(cx, ids!(change_password_button)).reset_hover(cx);
+        self.hide_password_change_panel(cx);
         self.view.button(cx, ids!(logout_button)).reset_hover(cx);
         self.view.redraw(cx);
     }
 
     /// Populate the account list with logged-in accounts from the AccountManager.
     fn populate_account_list(&mut self, cx: &mut Cx) {
-        let count = account_manager::account_count();
+        let active_user_id = effective_active_account_user_id(
+            account_manager::get_active_user_id(),
+            current_user_id(),
+        );
+        let count = effective_account_count(
+            account_manager::account_count(),
+            active_user_id.as_ref(),
+        );
         let label_text = if count == 0 {
             tr_key(self.app_language, "settings.account.account_count.none").to_string()
         } else if count == 1 {
@@ -1212,9 +1473,6 @@ impl AccountSettings {
             )
         };
         self.view.label(cx, ids!(account_count_label)).set_text(cx, &label_text);
-
-        // Get the active account
-        let active_user_id = account_manager::get_active_user_id();
 
         // Show/hide active account view based on whether there's an active account
         let has_active = active_user_id.is_some();
@@ -1356,6 +1614,272 @@ impl AccountSettings {
                 color: #(cancel_fg),
             }
         });
+    }
+
+    fn show_password_change_panel(&mut self, cx: &mut Cx) {
+        if self.password_change_in_flight {
+            return;
+        }
+        self.password_change_panel_open = true;
+        self.view.view(cx, ids!(change_password_panel)).set_visible(cx, true);
+        self.view.text_input(cx, ids!(old_password_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(new_password_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(confirm_password_input)).set_text(cx, "");
+        self.set_password_change_error(cx, None);
+        self.set_password_change_form_enabled(cx, true);
+        self.view.redraw(cx);
+    }
+
+    fn hide_password_change_panel(&mut self, cx: &mut Cx) {
+        if self.password_change_in_flight {
+            return;
+        }
+        self.password_change_panel_open = false;
+        self.view.view(cx, ids!(change_password_panel)).set_visible(cx, false);
+        self.view.text_input(cx, ids!(old_password_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(new_password_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(confirm_password_input)).set_text(cx, "");
+        self.set_password_change_error(cx, None);
+        self.view.widget(cx, ids!(change_password_spinner)).set_visible(cx, false);
+        self.set_password_change_form_enabled(cx, true);
+        self.view.redraw(cx);
+    }
+
+    fn submit_password_change(&mut self, cx: &mut Cx) {
+        if self.password_change_in_flight {
+            return;
+        }
+
+        let old_password = self.view.text_input(cx, ids!(old_password_input)).text();
+        let new_password = self.view.text_input(cx, ids!(new_password_input)).text();
+        let confirm_password = self.view.text_input(cx, ids!(confirm_password_input)).text();
+        let submission = match validate_password_change_form(
+            &old_password,
+            &new_password,
+            &confirm_password,
+        ) {
+            Ok(submission) => submission,
+            Err(error) => {
+                self.set_password_change_error(cx, Some(tr_key(self.app_language, error.translation_key())));
+                return;
+            }
+        };
+
+        self.password_change_in_flight = true;
+        self.set_password_change_error(cx, None);
+        self.set_password_change_form_enabled(cx, false);
+        self.view.widget(cx, ids!(change_password_spinner)).set_visible(cx, true);
+        submit_async_request(MatrixRequest::ChangePassword {
+            old_password: submission.old_password,
+            new_password: submission.new_password,
+        });
+        enqueue_popup_notification(
+            tr_key(self.app_language, "settings.account.popup.changing_password"),
+            PopupKind::Info,
+            Some(4.0),
+        );
+    }
+
+    fn set_password_change_form_enabled(&mut self, cx: &mut Cx, enabled: bool) {
+        let old_password_input = self.view.text_input(cx, ids!(old_password_input));
+        let new_password_input = self.view.text_input(cx, ids!(new_password_input));
+        let confirm_password_input = self.view.text_input(cx, ids!(confirm_password_input));
+        old_password_input.set_is_read_only(cx, !enabled);
+        old_password_input.set_disabled(cx, !enabled);
+        new_password_input.set_is_read_only(cx, !enabled);
+        new_password_input.set_disabled(cx, !enabled);
+        confirm_password_input.set_is_read_only(cx, !enabled);
+        confirm_password_input.set_disabled(cx, !enabled);
+        self.view.button(cx, ids!(save_password_button)).set_enabled(cx, enabled);
+        self.view.button(cx, ids!(cancel_password_change_button)).set_enabled(cx, enabled);
+    }
+
+    fn set_password_change_error(&mut self, cx: &mut Cx, message: Option<&str>) {
+        let error_label = self.view.label(cx, ids!(change_password_error_label));
+        match message {
+            Some(message) => {
+                error_label.set_text(cx, message);
+                error_label.set_visible(cx, true);
+            }
+            None => {
+                error_label.set_text(cx, "");
+                error_label.set_visible(cx, false);
+            }
+        }
+    }
+}
+
+fn effective_active_account_user_id(
+    account_manager_active_user_id: Option<OwnedUserId>,
+    current_user_id: Option<OwnedUserId>,
+) -> Option<OwnedUserId> {
+    account_manager_active_user_id.or(current_user_id)
+}
+
+fn effective_account_count(
+    account_manager_count: usize,
+    active_user_id: Option<&OwnedUserId>,
+) -> usize {
+    if account_manager_count == 0 && active_user_id.is_some() {
+        1
+    } else {
+        account_manager_count
+    }
+}
+
+fn user_id_label_text(
+    app_language: AppLanguage,
+    own_profile: Option<&UserProfile>,
+    fallback_user_id: Option<&OwnedUserId>,
+) -> String {
+    if let Some(profile) = own_profile {
+        profile.user_id.to_string()
+    } else if let Some(user_id) = fallback_user_id {
+        user_id.to_string()
+    } else {
+        tr_key(app_language, "settings.account.user_id.not_logged_in").to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PasswordChangeFormError {
+    EmptyOldPassword,
+    EmptyPassword,
+    ConfirmationMismatch,
+}
+
+impl PasswordChangeFormError {
+    fn translation_key(self) -> &'static str {
+        match self {
+            PasswordChangeFormError::EmptyOldPassword => "settings.account.change_password.error.old_empty",
+            PasswordChangeFormError::EmptyPassword => "settings.account.change_password.error.empty",
+            PasswordChangeFormError::ConfirmationMismatch => "settings.account.change_password.error.mismatch",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PasswordChangeSubmission {
+    old_password: String,
+    new_password: String,
+}
+
+fn validate_password_change_form(
+    old_password: &str,
+    new_password: &str,
+    confirm_password: &str,
+) -> Result<PasswordChangeSubmission, PasswordChangeFormError> {
+    if old_password.is_empty() {
+        return Err(PasswordChangeFormError::EmptyOldPassword);
+    }
+    if new_password.is_empty() {
+        return Err(PasswordChangeFormError::EmptyPassword);
+    }
+    if new_password != confirm_password {
+        return Err(PasswordChangeFormError::ConfirmationMismatch);
+    }
+    Ok(PasswordChangeSubmission {
+        old_password: old_password.to_string(),
+        new_password: new_password.to_string(),
+    })
+}
+
+fn password_change_failure_message(
+    app_language: AppLanguage,
+    failure: &PasswordChangeFailure,
+) -> String {
+    match failure {
+        PasswordChangeFailure::NoSession => {
+            tr_key(app_language, "settings.account.change_password.error.no_session").to_string()
+        }
+        PasswordChangeFailure::NotSupported => {
+            tr_key(app_language, "settings.account.change_password.error.not_supported").to_string()
+        }
+        PasswordChangeFailure::ReauthRequired => {
+            tr_key(app_language, "settings.account.change_password.error.reauth_required").to_string()
+        }
+        PasswordChangeFailure::InvalidOldPassword => {
+            tr_key(app_language, "settings.account.change_password.error.invalid_old_password").to_string()
+        }
+        PasswordChangeFailure::WeakPassword(details) => tr_fmt(
+            app_language,
+            "settings.account.change_password.error.weak_password",
+            &[("details", details)],
+        ),
+        PasswordChangeFailure::Failed(details) => tr_fmt(
+            app_language,
+            "settings.account.change_password.error.failed",
+            &[("details", details)],
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matrix_sdk::ruma::UserId;
+
+    fn user_id(raw: &str) -> OwnedUserId {
+        UserId::parse(raw).unwrap().to_owned()
+    }
+
+    #[test]
+    fn effective_active_account_falls_back_to_current_user() {
+        let current = user_id("@alex:matrix.palpo.im");
+        assert_eq!(
+            effective_active_account_user_id(None, Some(current.clone())),
+            Some(current),
+        );
+    }
+
+    #[test]
+    fn effective_account_count_counts_current_user_when_manager_is_empty() {
+        let current = user_id("@alex:matrix.palpo.im");
+        assert_eq!(effective_account_count(0, Some(&current)), 1);
+    }
+
+    #[test]
+    fn user_id_label_uses_fallback_user_before_profile_loads() {
+        let current = user_id("@alex:matrix.palpo.im");
+        assert_eq!(
+            user_id_label_text(AppLanguage::English, None, Some(&current)),
+            "@alex:matrix.palpo.im",
+        );
+    }
+
+    #[test]
+    fn change_password_form_accepts_old_password_and_matching_new_password() {
+        assert_eq!(
+            validate_password_change_form("old-password", "new-password-123", "new-password-123"),
+            Ok(PasswordChangeSubmission {
+                old_password: "old-password".to_string(),
+                new_password: "new-password-123".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn change_password_form_rejects_empty_old_password() {
+        assert_eq!(
+            validate_password_change_form("", "new-password-123", "new-password-123"),
+            Err(PasswordChangeFormError::EmptyOldPassword),
+        );
+    }
+
+    #[test]
+    fn change_password_form_rejects_empty_new_password() {
+        assert_eq!(
+            validate_password_change_form("old-password", "", ""),
+            Err(PasswordChangeFormError::EmptyPassword),
+        );
+    }
+
+    #[test]
+    fn change_password_form_rejects_confirmation_mismatch() {
+        assert_eq!(
+            validate_password_change_form("old-password", "new-password-123", "different-password"),
+            Err(PasswordChangeFormError::ConfirmationMismatch),
+        );
     }
 }
 

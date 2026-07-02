@@ -19,7 +19,7 @@ use matrix_sdk::{
             profile::{AvatarUrl, DisplayName, set_avatar_url},
             receipt::create_receipt::v3::ReceiptType,
             search::search_events,
-            uiaa::{AuthData, AuthType, Dummy},
+            uiaa::{AuthData, AuthType, Dummy, Password},
         }}, directory::{Filter as PublicRoomsFilter, RoomTypeFilter}, events::{
             direct::DirectUserIdentifier,
             relation::RelationType,
@@ -732,6 +732,10 @@ pub enum AccountDataAction {
     DisplayNameChanged(Option<String>),
     /// Failed to update the user's display name.
     DisplayNameChangeFailed(String),
+    /// The user's password was successfully changed.
+    PasswordChanged,
+    /// Failed to change the user's password.
+    PasswordChangeFailed(PasswordChangeFailure),
     /// Result of [`MatrixRequest::GetOwnDevice`].
     /// * `None` if not logged in or the crypto store isn't ready yet.
     OwnDeviceFetched(Option<OwnDeviceInfo>),
@@ -1319,6 +1323,12 @@ pub enum MatrixRequest {
         /// * If `Some`, the display name will be set to the given value.
         /// * If `None`, the display name will be removed.
         new_display_name: Option<String>,
+    },
+    /// Request to change the current user's account password using the current
+    /// password as UIAA password auth.
+    ChangePassword {
+        old_password: String,
+        new_password: String,
     },
     /// Request to fetch our own [`Device`].
     /// The response is delivered via [`AccountDataAction::OwnDeviceFetched`].
@@ -2251,6 +2261,56 @@ pub enum AccessTokenCopyError {
     NoSession,
     /// A client is logged in but its session carries no access token.
     Unavailable,
+}
+
+/// Why a [`MatrixRequest::ChangePassword`] request failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PasswordChangeFailure {
+    /// No Matrix client is currently logged in.
+    NoSession,
+    /// The homeserver explicitly reports that password changes are disabled.
+    NotSupported,
+    /// The homeserver requires user-interactive authentication / re-auth.
+    ReauthRequired,
+    /// The homeserver rejected the current password used for UIAA.
+    InvalidOldPassword,
+    /// The homeserver rejected the new password as too weak.
+    WeakPassword(String),
+    /// Any other password change error.
+    Failed(String),
+}
+
+impl PasswordChangeFailure {
+    fn from_matrix_error(error: &Error) -> Self {
+        if let Some(uiaa_info) = error.as_uiaa_response() {
+            if uiaa_info.auth_error.is_some() {
+                return Self::InvalidOldPassword;
+            }
+            return Self::ReauthRequired;
+        }
+        if matches!(error.client_api_error_kind(), Some(ErrorKind::WeakPassword)) {
+            return Self::WeakPassword(error.to_string());
+        }
+        Self::Failed(error.to_string())
+    }
+}
+
+fn password_change_auth_data(
+    user_id: OwnedUserId,
+    old_password: String,
+    session: Option<String>,
+) -> AuthData {
+    let mut password = Password::new(user_id.into(), old_password);
+    password.session = session;
+    AuthData::Password(password)
+}
+
+fn password_change_retry_session(error: &Error) -> Option<String> {
+    let uiaa_info = error.as_uiaa_response()?;
+    if uiaa_info.auth_error.is_some() {
+        return None;
+    }
+    uiaa_info.session.clone()
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -3935,6 +3995,74 @@ async fn matrix_worker_task(
                         Err(e) => {
                             let err_msg = format!("Failed to {} display name: {e}", if is_removing { "remove" } else { "set" });
                             Cx::post_action(AccountDataAction::DisplayNameChangeFailed(err_msg));
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::ChangePassword { old_password, new_password } => {
+                let Some(client) = get_client() else {
+                    Cx::post_action(AccountDataAction::PasswordChangeFailed(
+                        PasswordChangeFailure::NoSession,
+                    ));
+                    continue;
+                };
+                let Some(user_id) = current_user_id() else {
+                    Cx::post_action(AccountDataAction::PasswordChangeFailed(
+                        PasswordChangeFailure::NoSession,
+                    ));
+                    continue;
+                };
+                let _change_password_task = Handle::current().spawn(async move {
+                    match client.homeserver_capabilities().can_change_password().await {
+                        Ok(false) => {
+                            Cx::post_action(AccountDataAction::PasswordChangeFailed(
+                                PasswordChangeFailure::NotSupported,
+                            ));
+                            return;
+                        }
+                        Ok(true) => {}
+                        Err(e) => {
+                            warning!("Failed to check whether password changes are supported: {e}");
+                        }
+                    }
+
+                    log!("Sending request to change account password...");
+                    let auth_data = password_change_auth_data(
+                        user_id.clone(),
+                        old_password.clone(),
+                        None,
+                    );
+                    let result = client
+                        .account()
+                        .change_password(&new_password, Some(auth_data))
+                        .await;
+                    let result = match result {
+                        Err(e) => match password_change_retry_session(&e) {
+                            Some(session) => {
+                                let auth_data = password_change_auth_data(
+                                    user_id,
+                                    old_password,
+                                    Some(session),
+                                );
+                                client
+                                    .account()
+                                    .change_password(&new_password, Some(auth_data))
+                                    .await
+                            }
+                            None => Err(e),
+                        },
+                        Ok(response) => Ok(response),
+                    };
+                    match result {
+                        Ok(_) => {
+                            log!("Successfully changed account password.");
+                            Cx::post_action(AccountDataAction::PasswordChanged);
+                        }
+                        Err(e) => {
+                            Cx::post_action(AccountDataAction::PasswordChangeFailed(
+                                PasswordChangeFailure::from_matrix_error(&e),
+                            ));
                         }
                     }
                 });
