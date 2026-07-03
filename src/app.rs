@@ -1623,6 +1623,10 @@ impl MatchEvent for App {
                     }
                     continue;
                 }
+                Some(AppStateAction::AgentRegistryUpdated) => {
+                    self.ui.redraw(cx);
+                    continue;
+                }
                 Some(AppStateAction::NavigateToRoom { room_to_close, destination_room }) => {
                     self.navigate_to_room(cx, room_to_close.as_ref(), destination_room);
                     continue;
@@ -2863,6 +2867,33 @@ impl AppState {
             }
         }
     }
+
+    /// Removes an AgentLab registration and the bot identity state that was
+    /// derived from that registration.
+    ///
+    /// Octos registration writes the same MXID into several legacy app-service
+    /// fields so slash commands and room binding keep working. Unbind must clear
+    /// those fields too, otherwise list/member bot markers keep rendering from
+    /// stale `known_bot_user_ids`, room bindings, or the configured BotFather ID.
+    pub fn unregister_agent_and_clear_bot_identity(
+        &mut self,
+        user_id: &UserId,
+        current_user_id: Option<&UserId>,
+    ) -> bool {
+        let removed_agent = self.agent_registry.unregister(user_id);
+        let removed_known_bot = self.bot_settings.remove_known_bot_user_id(user_id);
+        let removed_room_bindings = self
+            .bot_settings
+            .remove_room_bindings_where(|_, bot_user_id| bot_user_id == user_id);
+        let cleared_configured_bot = self
+            .bot_settings
+            .clear_configured_bot_if_matches(user_id, current_user_id);
+
+        removed_agent
+            || removed_known_bot
+            || removed_room_bindings > 0
+            || cleared_configured_bot
+    }
 }
 
 /// Local bot integration settings persisted per Matrix account.
@@ -3053,6 +3084,33 @@ impl BotSettingsState {
             self.known_bot_user_ids
                 .dedup_by(|lhs, rhs| lhs.as_str() == rhs.as_str());
         }
+        changed
+    }
+
+    pub fn remove_known_bot_user_id(&mut self, bot_user_id: &UserId) -> bool {
+        let original_len = self.known_bot_user_ids.len();
+        self.known_bot_user_ids
+            .retain(|known_bot_user_id| known_bot_user_id.as_str() != bot_user_id.as_str());
+        original_len != self.known_bot_user_ids.len()
+    }
+
+    pub fn clear_configured_bot_if_matches(
+        &mut self,
+        bot_user_id: &UserId,
+        current_user_id: Option<&UserId>,
+    ) -> bool {
+        let matches_configured_bot = self
+            .resolved_bot_user_id(current_user_id)
+            .ok()
+            .is_some_and(|resolved_bot_user_id| resolved_bot_user_id.as_str() == bot_user_id.as_str());
+        if !matches_configured_bot {
+            return false;
+        }
+
+        let changed = self.enabled
+            || self.botfather_user_id.trim() != Self::DEFAULT_BOTFATHER_LOCALPART;
+        self.enabled = false;
+        self.botfather_user_id = Self::DEFAULT_BOTFATHER_LOCALPART.to_string();
         changed
     }
 
@@ -3489,6 +3547,73 @@ mod tests {
     }
 
     #[test]
+    fn unregister_agent_clears_agentlab_bot_identity_surfaces() {
+        let current_user_id = UserId::parse("@alice:example.org").unwrap();
+        let agent_id: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let other_bot_id: OwnedUserId = "@other_bot:example.org".try_into().unwrap();
+        let agent_room_id: OwnedRoomId = "!agent-room:example.org".try_into().unwrap();
+        let other_room_id: OwnedRoomId = "!other-room:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent_id.clone(), AgentEntry {
+            framework: AgentFramework::Octos,
+            ..Default::default()
+        });
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = agent_id.to_string();
+        app_state.bot_settings.record_known_bot_user_ids([
+            agent_id.clone(),
+            other_bot_id.clone(),
+        ]);
+        app_state.bot_settings.room_bindings.push(RoomBotBindingState {
+            room_id: agent_room_id.clone(),
+            bot_user_id: agent_id.clone(),
+            remark: String::new(),
+        });
+        app_state.bot_settings.room_bindings.push(RoomBotBindingState {
+            room_id: other_room_id.clone(),
+            bot_user_id: other_bot_id.clone(),
+            remark: String::new(),
+        });
+
+        assert!(app_state.unregister_agent_and_clear_bot_identity(
+            agent_id.as_ref(),
+            Some(current_user_id.as_ref()),
+        ));
+
+        assert!(!app_state.agent_registry.contains(agent_id.as_ref()));
+        assert!(
+            !app_state
+                .bot_settings
+                .known_bot_user_ids()
+                .iter()
+                .any(|known_bot_user_id| known_bot_user_id.as_str() == agent_id.as_str())
+        );
+        assert!(
+            app_state
+                .bot_settings
+                .known_bot_user_ids()
+                .iter()
+                .any(|known_bot_user_id| known_bot_user_id.as_str() == other_bot_id.as_str())
+        );
+        assert!(!app_state.bot_settings.enabled);
+        assert_eq!(
+            app_state.bot_settings.botfather_user_id,
+            BotSettingsState::DEFAULT_BOTFATHER_LOCALPART,
+        );
+        assert!(
+            app_state
+                .bot_settings
+                .bound_bot_user_ids(agent_room_id.as_ref())
+                .is_empty()
+        );
+        assert_eq!(
+            app_state.bot_settings.bound_bot_user_ids(other_room_id.as_ref()),
+            vec![other_bot_id]
+        );
+    }
+
+    #[test]
     fn test_load_legacy_app_state_without_registry_field_defaults_empty() {
         // A previously-saved AppState JSON that predates the agent_registry field.
         let legacy_json =
@@ -3820,6 +3945,10 @@ pub enum AppStateAction {
     KnownBotUserIdsDiscovered {
         bot_user_ids: Vec<OwnedUserId>,
     },
+    /// The global AgentRegistry changed outside the top-level App handler.
+    /// Widgets that derive bot pills from registered-agent identity should
+    /// refresh from the already-mutated AppState.
+    AgentRegistryUpdated,
     /// The given room was successfully loaded from the homeserver
     /// and is now known to our client.
     ///

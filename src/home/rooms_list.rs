@@ -190,6 +190,11 @@ pub enum RoomsListUpdate {
         room_id: OwnedRoomId,
         is_direct: bool,
     },
+    /// Update the active member MXIDs known for the given room.
+    UpdateRoomMemberUserIds {
+        room_id: OwnedRoomId,
+        member_user_ids: Vec<OwnedUserId>,
+    },
     /// Update whether the given room is end-to-end encrypted.
     UpdateIsEncrypted {
         room_id: OwnedRoomId,
@@ -320,6 +325,12 @@ pub struct JoinedRoomInfo {
     pub is_selected: bool,
     /// Whether this a direct room.
     pub is_direct: bool,
+    /// The DM counterparty's MXID when this is a 1:1 direct room, else `None`.
+    /// Used to decide whether to show an agent badge (see `room_shows_agent_badge`).
+    pub dm_target: Option<OwnedUserId>,
+    /// Active room members known from RoomScreen member fetches.
+    /// Used for non-DM room agent badges.
+    pub member_user_ids: Vec<OwnedUserId>,
     /// Whether this room is end-to-end encrypted.
     ///
     /// `None` means the encryption state is not known yet or failed to load.
@@ -652,6 +663,8 @@ impl RoomsList {
                     has_been_paginated: false,
                     is_selected: false,
                     is_direct: false,
+                    dm_target: None,
+                    member_user_ids: Vec::new(),
                     is_encrypted: None,
                     is_tombstoned: false,
                 });
@@ -876,6 +889,9 @@ impl RoomsList {
 
                         // Update the room. If it should be displayed, add it to the proper list.
                         room.is_direct = is_direct;
+                        if !is_direct {
+                            room.dm_target = None;
+                        }
                         let has_favorite_tag = room.tags.contains_key(&TagName::Favorite);
                         let has_low_priority_tag = room.tags.contains_key(&TagName::LowPriority);
                         if should_display_room!(self, &room_id, room) {
@@ -891,6 +907,14 @@ impl RoomsList {
                         }
                     } else {
                         error!("Error: couldn't find room {room_id} to update is_direct");
+                    }
+                }
+                RoomsListUpdate::UpdateRoomMemberUserIds { room_id, member_user_ids } => {
+                    if let Some(room) = self.all_joined_rooms.get_mut(&room_id) {
+                        room.member_user_ids = member_user_ids;
+                        self.redraw(cx);
+                    } else {
+                        warning!("Warning: couldn't find room {room_id} to update room member user IDs");
                     }
                 }
                 RoomsListUpdate::UpdateIsEncrypted { room_id, is_encrypted } => {
@@ -1646,6 +1670,11 @@ impl Widget for RoomsList {
 
                 if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
                     self.set_current_active_room(cx, None);
+                    continue;
+                }
+
+                if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
+                    self.redraw(cx);
                     continue;
                 }
 

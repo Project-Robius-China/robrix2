@@ -1,5 +1,5 @@
 use makepad_widgets::*;
-use matrix_sdk::ruma::OwnedRoomId;
+use matrix_sdk::ruma::{OwnedRoomId, RoomId, UserId};
 
 use crate::{
     app::AppState,
@@ -58,6 +58,31 @@ script_mod! {
             text_style: RBX_TEXT_BODY_STRONG {}
         }
         text: "[Room name unknown]"
+    }
+
+    // A small blue "bot" pill shown after the room name for agent-bound rooms.
+    // Reproduces the timeline's bot badge look (room_screen.rs) locally so this
+    // file doesn't depend on room_screen's private constants/widgets.
+    mod.widgets.RoomsListBotPill = RoundedView {
+        visible: false
+        width: Fit
+        height: 16.0
+        align: Align{x: 0.5, y: 0.5}
+        padding: Inset{left: 6.0, right: 6.0}
+        show_bg: true
+        new_batch: true
+        draw_bg +: {
+            color: (COLOR_ACTIVE_PRIMARY)
+            border_radius: 3.0
+        }
+        Label {
+            width: Fit, height: Fit, padding: 0
+            draw_text +: {
+                text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
+                color: (RBX_FG_ON_ACCENT)
+            }
+            text: "bot"
+        }
     }
 
     mod.widgets.RoomsListEntryTimestamp = Label {
@@ -196,6 +221,11 @@ script_mod! {
         // (and its layout) based on the available space in the sidebar.
         adaptive_preview := AdaptiveView {
             height: Fit
+            // The wider variants contain `RoomsListBotPill`, a `new_batch`
+            // view that owns a child DrawList. Retain variants across resize
+            // swaps so ultra-narrow transitions do not drop DrawLists that the
+            // previous frame may still reference.
+            retain_unused_variants: true
 
             OnlyIcon := mod.widgets.RoomsListEntryContent {
                 align: Align{x: 0.5, y: 0.5}
@@ -214,7 +244,19 @@ script_mod! {
                 padding: 5.
                 align: Align{x: 0.5, y: 0.5}
                 avatar := Avatar {}
-                room_name := mod.widgets.RoomName {}
+                name_wrap := View {
+                    width: Fill, height: Fit
+                    flow: Right
+                    align: Align{y: 0.5}
+                    spacing: 6
+                    // Hug the name text so the bot pill packs snug right after it,
+                    // instead of Fill's turtle-advance pushing the pill to the row's
+                    // right edge. Capped so long names still ellipsize; IconAndName
+                    // is only shown at sidebar widths <= 200px, so a smaller cap
+                    // than FullPreview leaves room for the pill.
+                    room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.70}} }
+                    bot_pill := mod.widgets.RoomsListBotPill {}
+                }
                 unread_badge := UnreadBadge {}
                 encryption_icon := mod.widgets.EncryptionIcon {}
                 tombstone_icon := mod.widgets.TombstoneIcon {}
@@ -230,7 +272,16 @@ script_mod! {
                         width: Fill, height: Fit,
                         spacing: 3,
                         flow: Right,
-                        room_name := mod.widgets.RoomName {}
+                        name_wrap := View {
+                            width: Fill, height: Fit
+                            flow: Right
+                            align: Align{y: 0.5}
+                            spacing: 6
+                            // Same fix as IconAndName above, but with a larger cap since
+                            // FullPreview is shown on desktop/wider sidebars.
+                            room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.78}} }
+                            bot_pill := mod.widgets.RoomsListBotPill {}
+                        }
                         timestamp := mod.widgets.RoomsListEntryTimestamp { }
                     }
                     bottom := View {
@@ -370,11 +421,20 @@ impl Widget for RoomsListEntryContent {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        let app_language = scope.data.get::<AppState>()
+        let app_state = scope.data.get::<AppState>();
+        let app_language = app_state
             .map(|app_state| app_state.app_language)
             .unwrap_or_default();
         if let Some(joined_room_info) = scope.props.get::<JoinedRoomInfo>() {
-            self.draw_joined_room(cx, joined_room_info);
+            let show_agent_badge = app_state.is_some_and(|app_state| {
+                room_shows_agent_badge(
+                    app_state,
+                    joined_room_info.room_name_id.room_id(),
+                    joined_room_info.dm_target.as_deref(),
+                    joined_room_info.member_user_ids.iter().map(|user_id| user_id.as_ref()),
+                )
+            });
+            self.draw_joined_room(cx, joined_room_info, show_agent_badge);
         } else if let Some(invited_room_info) = scope.props.get::<InvitedRoomInfo>() {
             self.draw_invited_room(cx, invited_room_info, app_language);
         }
@@ -389,6 +449,7 @@ impl RoomsListEntryContent {
         &mut self,
         cx: &mut Cx,
         room_info: &JoinedRoomInfo,
+        show_agent_badge: bool,
     ) {
         self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
         if let Some((ts, msg)) = room_info.latest.as_ref() {
@@ -412,6 +473,7 @@ impl RoomsListEntryContent {
             cx,
             should_show_encryption_icon(room_info.is_encrypted, room_info.is_tombstoned),
         );
+        self.view.view(cx, ids!(bot_pill)).set_visible(cx, show_agent_badge);
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, room_info.is_tombstoned);
     }
 
@@ -465,6 +527,7 @@ impl RoomsListEntryContent {
             .update_counts(false, 1, 0);
 
         self.view.view(cx, ids!(encryption_icon)).set_visible(cx, false);
+        self.view.view(cx, ids!(bot_pill)).set_visible(cx, false);
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, false);
         self.draw_common(cx, &room_info.room_avatar, room_info.is_selected);
     }
@@ -517,32 +580,43 @@ impl RoomsListEntryContent {
         // Toggle the background color via the animator (handles selected/deselected bg).
         self.animator_toggle(cx, is_selected, Animate::No, ids!(selected.on), ids!(selected.off));
 
+        // NOTE: not every adaptive variant contains all of these widgets (e.g.
+        // `IconAndName` has no timestamp/message preview, `OnlyIcon` has no room
+        // name), and `script_apply_eval!` on an empty WidgetRef logs script-VM
+        // errors ("__script_source__ not found"), so guard each apply.
+
         // Update text colors for room name.
         let mut room_name_label = self.view.label(cx, ids!(room_name));
-        script_apply_eval!(cx, room_name_label, {
-            draw_text +: {
-                color: #(room_name_color)
-            }
-        });
+        if !room_name_label.is_empty() {
+            script_apply_eval!(cx, room_name_label, {
+                draw_text +: {
+                    color: #(room_name_color)
+                }
+            });
+        }
 
         // Update text colors for timestamp.
         let mut timestamp_label = self.view.label(cx, ids!(timestamp));
-        script_apply_eval!(cx, timestamp_label, {
-            draw_text +: {
-                color: #(timestamp_color)
-            }
-        });
+        if !timestamp_label.is_empty() {
+            script_apply_eval!(cx, timestamp_label, {
+                draw_text +: {
+                    color: #(timestamp_color)
+                }
+            });
+        }
 
         // Update text colors for the latest message preview (both HTML and plaintext variants).
         let mut html_widget = self.view.html(cx, ids!(latest_message.html_view.html));
-        script_apply_eval!(cx, html_widget, {
-            font_color: #(message_text_color),
-            draw_text +: { color: #(message_text_color) },
-            draw_block +: {
-                quote_bg_color: #(code_bg_color),
-                code_color: #(code_bg_color),
-            }
-        });
+        if !html_widget.is_empty() {
+            script_apply_eval!(cx, html_widget, {
+                font_color: #(message_text_color),
+                draw_text +: { color: #(message_text_color) },
+                draw_block +: {
+                    quote_bg_color: #(code_bg_color),
+                    code_color: #(code_bg_color),
+                }
+            });
+        }
 
         // Both states sit on a light surface (transparent / soft-teal wash), so
         // use the design-token link color in both cases for a consistent look.
@@ -551,11 +625,13 @@ impl RoomsListEntryContent {
             .set_link_color(cx, Some(crate::shared::design_tokens::RBX_LINK));
 
         let mut pt_label = self.view.label(cx, ids!(latest_message.plaintext_view.pt_label));
-        script_apply_eval!(cx, pt_label, {
-            draw_text +: {
-                color: #(message_text_color)
-            }
-        });
+        if !pt_label.is_empty() {
+            script_apply_eval!(cx, pt_label, {
+                draw_text +: {
+                    color: #(message_text_color)
+                }
+            });
+        }
     }
 }
 
@@ -563,9 +639,32 @@ pub fn should_show_encryption_icon(is_encrypted: Option<bool>, is_tombstoned: bo
     matches!(is_encrypted, Some(true)) && !is_tombstoned
 }
 
+/// Whether the rooms-list row for `room_id` should display an agent badge.
+/// Also the single source of truth for the room-info title pill, so the
+/// rooms list and the Info pane can never disagree.
+///
+/// True when the room is bound to a bot (app-service binding), OR it is a 1:1 DM
+/// whose counterparty is a registered agent, OR any of its members is a
+/// registered agent. Derived live from `AppState`, so it updates as soon as an
+/// agent is registered or unregistered.
+pub fn room_shows_agent_badge<'a>(
+    app_state: &AppState,
+    room_id: &RoomId,
+    dm_target: Option<&UserId>,
+    member_user_ids: impl IntoIterator<Item = &'a UserId>,
+) -> bool {
+    app_state.bot_settings.is_room_bound(room_id)
+        || dm_target.is_some_and(|user_id| app_state.agent_registry.contains(user_id))
+        || member_user_ids
+            .into_iter()
+            .any(|user_id| app_state.agent_registry.contains(user_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{AgentEntry, AppState};
+    use matrix_sdk::ruma::{OwnedRoomId, OwnedUserId};
 
     #[test]
     fn test_room_list_icon_visible_when_encrypted() {
@@ -585,5 +684,168 @@ mod tests {
     #[test]
     fn test_room_list_icon_yields_to_tombstone() {
         assert!(!should_show_encryption_icon(Some(true), true));
+    }
+
+    #[test]
+    fn test_agent_badge_shown_when_room_bound() {
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state
+            .bot_settings
+            .record_known_bot_user_ids(["@bot:example.org".try_into().unwrap()]);
+        // Bind the bot to the room so is_room_bound() is true.
+        app_state.bot_settings.room_bindings.push(crate::app::RoomBotBindingState {
+            room_id: room_id.clone(),
+            bot_user_id: "@bot:example.org".try_into().unwrap(),
+            remark: String::new(),
+        });
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_shown_when_dm_target_is_registered_agent() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_for_human_dm() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let human: OwnedUserId = "@human:example.org".try_into().unwrap();
+        let app_state = AppState::default();
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(human.as_ref()), std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_for_unbound_group_room() {
+        let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
+        let app_state = AppState::default();
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_shown_when_room_member_is_registered_agent() {
+        let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+
+        assert!(room_shows_agent_badge(
+            &app_state,
+            room_id.as_ref(),
+            None,
+            [agent.as_ref()],
+        ));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_when_dm_target_none() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let app_state = AppState::default();
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_idempotent_when_bound_and_agent_dm() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        app_state.bot_settings.room_bindings.push(crate::app::RoomBotBindingState {
+            room_id: room_id.clone(),
+            bot_user_id: agent.clone(),
+            remark: String::new(),
+        });
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_after_room_unbound() {
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let bot: OwnedUserId = "@bot:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(bot.clone()), true);
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
+
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(bot), false);
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_after_agent_registry_unbind() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), std::iter::empty()));
+
+        app_state.agent_registry.unregister(agent.as_ref());
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_after_agentlab_unbind_clears_binding() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = agent.to_string();
+        app_state.bot_settings.record_known_bot_user_ids([agent.clone()]);
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(agent.clone()), true);
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
+
+        app_state.unregister_agent_and_clear_bot_identity(
+            agent.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_after_agentlab_unbind_with_cached_member_id() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, [agent.as_ref()]));
+
+        app_state.unregister_agent_and_clear_bot_identity(
+            agent.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, [agent.as_ref()]));
+    }
+
+    #[test]
+    fn test_rooms_list_entry_retains_adaptive_variants_for_batched_bot_pill() {
+        let source = include_str!("rooms_list_entry.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        assert!(
+            production_source.contains("adaptive_preview := AdaptiveView {")
+                && production_source.contains("retain_unused_variants: true")
+                && production_source.contains("mod.widgets.RoomsListBotPill = RoundedView")
+                && production_source.contains("new_batch: true"),
+            "RoomsListEntry AdaptiveView must retain variants because bot pills own new_batch DrawLists",
+        );
     }
 }

@@ -9,7 +9,7 @@ use imbl::Vector;
 use makepad_widgets::{image_cache::ImageBuffer, *};
 use matrix_sdk::{
     OwnedServerName, media::{MediaFormat, MediaRequestParameters}, room::{RoomMember, RoomMemberRole}, ruma::{
-        EventId, MatrixToUri, MatrixUri, OwnedEventId, OwnedMxcUri, OwnedRoomId, UserId, events::{
+        EventId, MatrixToUri, MatrixUri, OwnedEventId, OwnedMxcUri, OwnedRoomId, RoomId, UserId, events::{
             receipt::Receipt,
             room::{
                 ImageInfo, MediaSource, message::{
@@ -39,6 +39,7 @@ use crate::{
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
+use crate::home::rooms_list_entry::room_shows_agent_badge;
 use crate::home::search_messages::{
     MessageSearchHit, SearchMessagesAction, SearchMessagesButtonWidgetExt,
     SearchMessagesSlidingPaneRef, SearchMessagesSlidingPaneWidgetExt,
@@ -3080,12 +3081,16 @@ script_mod! {
                 height: Fit
                 flow: Flow.Right{wrap: true}
                 align: Align{y: 0.5}
-                spacing: 6
 
                 display_name := Label {
                     width: Fit
                     height: Fit
                     flow: Flow.Right{wrap: true}
+                    // Gap to the badge lives here (not as container `spacing`)
+                    // so a wrapped bot_badge starts flush at the row's left
+                    // edge instead of inheriting an extra leading offset from
+                    // the wrap-flow container's spacing bookkeeping.
+                    margin: Inset{right: 6}
                     draw_text +: {
                         text_style: RBX_TEXT_BODY_STRONG {}
                         color: (RBX_FG_PRIMARY)
@@ -3280,15 +3285,58 @@ script_mod! {
                                     align: Align{y: 0.5}
                                     spacing: 6
 
-                                    room_name_value := Label {
+                                    // Room name + bot pill live together in a Fill
+                                    // sub-row so the pill trails the (capped,
+                                    // ellipsized) name text directly, the same way
+                                    // the rooms list packs its bot pill snug against
+                                    // the name instead of at the row's far edge.
+                                    // This sub-row keeps the same Fill role that
+                                    // room_name_value used to play here, so
+                                    // favorite_button's pinned-right position is
+                                    // unaffected.
+                                    title_wrap := View {
                                         width: Fill
                                         height: Fit
-                                        flow: Flow.Right{wrap: true}
-                                        draw_text +: {
-                                            text_style: RBX_TEXT_SECTION_TITLE {}
-                                            color: (RBX_FG_PRIMARY)
+                                        flow: Right
+                                        align: Align{y: 0.5}
+                                        spacing: 6
+
+                                        room_name_value := Label {
+                                            width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.82}}
+                                            height: Fit
+                                            flow: Flow.Right{wrap: false}
+                                            max_lines: 1
+                                            text_overflow: Ellipsis
+                                            draw_text +: {
+                                                text_style: RBX_TEXT_SECTION_TITLE {}
+                                                color: (RBX_FG_PRIMARY)
+                                            }
+                                            text: ""
                                         }
-                                        text: ""
+
+                                        // Bot indicator pill, styled to match the
+                                        // rooms-list / timeline bot pill exactly.
+                                        title_bot_pill := RoundedView {
+                                            visible: false
+                                            width: Fit
+                                            height: 16.0
+                                            align: Align{x: 0.5, y: 0.5}
+                                            padding: Inset{left: 6.0, right: 6.0}
+                                            show_bg: true
+                                            new_batch: true
+                                            draw_bg +: {
+                                                color: (COLOR_ACTIVE_PRIMARY)
+                                                border_radius: 3.0
+                                            }
+                                            Label {
+                                                width: Fit, height: Fit, padding: 0
+                                                draw_text +: {
+                                                    text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
+                                                    color: (RBX_FG_ON_ACCENT)
+                                                }
+                                                text: "bot"
+                                            }
+                                        }
                                     }
 
                                     favorite_button := View {
@@ -4667,6 +4715,10 @@ struct RoomInfoPaneInfo {
     /// Whether this room has a bot/agent participating (any member detected as a
     /// bot via `is_likely_bot_member`).
     is_agent_enabled: bool,
+    /// Whether the compact "bot" pill should trail the room title. This follows
+    /// the same user-facing badge semantics as the rooms list: room binding or a
+    /// registered-agent DM, not merely a bot-looking member in an unbound room.
+    show_title_bot_pill: bool,
     member_count: usize,
     /// The current user's role in this room: "Owner" / "Admin" / "Moderator" /
     /// "Member", or empty if members haven't loaded yet.
@@ -4681,17 +4733,81 @@ struct RoomInfoPaneInfo {
     show_people_loading: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RoomInfoBotIdentityFingerprint {
+    resolved_parent_bot_user_id: Option<OwnedUserId>,
+    known_bot_user_ids: Vec<OwnedUserId>,
+}
+
+fn room_info_bot_identity_fingerprint(
+    app_state: Option<&AppState>,
+    my_user_id: Option<&UserId>,
+) -> RoomInfoBotIdentityFingerprint {
+    app_state
+        .map(|app_state| {
+            let resolved_parent_bot_user_id = if app_state.bot_settings.enabled {
+                app_state
+                    .bot_settings
+                    .resolved_bot_user_id(my_user_id)
+                    .ok()
+            } else {
+                None
+            };
+            RoomInfoBotIdentityFingerprint {
+                resolved_parent_bot_user_id,
+                known_bot_user_ids: timeline_known_bot_user_ids(app_state),
+            }
+        })
+        .unwrap_or(RoomInfoBotIdentityFingerprint {
+            resolved_parent_bot_user_id: None,
+            known_bot_user_ids: Vec::new(),
+        })
+}
+
+/// Delegates to the rooms-list predicate (`room_shows_agent_badge`) so the
+/// Info-pane title pill and the rooms-list row pill always agree.
+fn room_info_title_shows_agent_badge<'a>(
+    app_state: Option<&AppState>,
+    room_id: &RoomId,
+    dm_target: Option<&UserId>,
+    member_user_ids: impl IntoIterator<Item = &'a UserId>,
+) -> bool {
+    app_state.is_some_and(|app_state|
+        room_shows_agent_badge(app_state, room_id, dm_target, member_user_ids)
+    )
+}
+
+fn room_info_dm_target_from_user_ids<'a>(
+    user_ids: impl IntoIterator<Item = &'a UserId>,
+    my_user_id: Option<&UserId>,
+) -> Option<OwnedUserId> {
+    let mut dm_target = None;
+    for user_id in user_ids {
+        if my_user_id.is_some_and(|my_user_id| my_user_id == user_id) {
+            continue;
+        }
+        if dm_target.is_some() {
+            return None;
+        }
+        dm_target = Some(user_id.to_owned());
+    }
+    dm_target
+}
+
 /// Cache for the expensive member-row build. Keyed by the room and the identity
 /// (`Arc` pointer) of `TimelineUiState::room_members`, which is replaced wholesale
 /// whenever the member list changes — so a pointer match means "members unchanged,
 /// reuse the prebuilt rows" and we skip rebuilding + re-sorting all members on
-/// every sync Signal (critical for very large rooms).
+/// every sync Signal (critical for very large rooms). Bot identity context is part
+/// of the key because registry / app-service updates can change row bot markers
+/// without changing the room member list.
 struct RoomInfoMembersCache {
     room_id: OwnedRoomId,
     /// The exact `room_members` `Arc` the cached rows were built from. Held so the
     /// allocation can't be freed and its address reused (an ABA false-hit), and so
     /// validity is a cheap `Arc::ptr_eq` against the current `room_members`.
     members: Arc<Vec<RoomMember>>,
+    bot_identity: RoomInfoBotIdentityFingerprint,
     entries: Arc<Vec<RoomInfoPeopleEntryInfo>>,
     is_agent_enabled: bool,
     my_role: String,
@@ -5345,7 +5461,9 @@ impl Widget for RoomInfoSlidingPane {
         self.view(cx, ids!(people_view)).set_visible(cx, self.show_people_page);
 
         // ----- Hero: name, room id, favourite star -----
-        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.room_name_value)).set_text(cx, &info.room_name);
+        self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.title_wrap.room_name_value)).set_text(cx, &info.room_name);
+        // Bot pill trailing the room name, mirroring the rooms-list bot pill.
+        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.title_wrap.title_bot_pill)).set_visible(cx, info.show_title_bot_pill);
         self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.room_id_row.room_id_value)).set_text(cx, &info.room_id);
         self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button.star_outline)).set_visible(cx, !info.is_favorite);
         self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button.star_filled)).set_visible(cx, info.is_favorite);
@@ -5993,7 +6111,7 @@ impl Widget for RoomScreen {
                 }
             }
 
-            self.handle_message_actions(cx, actions, &portal_list, &loading_pane);
+            self.handle_message_actions(cx, actions, &portal_list, &loading_pane, scope);
 
             for action in actions {
                 // Mobile RoomTopBar (header + Chat/Info tabs) actions.
@@ -6020,7 +6138,7 @@ impl Widget for RoomScreen {
                                     });
                                 }
                             }
-                            self.refresh_inline_room_info(cx);
+                            self.refresh_inline_room_info(cx, scope.data.get::<AppState>());
                         }
                         self.redraw(cx);
                     }
@@ -6042,6 +6160,15 @@ impl Widget for RoomScreen {
                 if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
                     self.close_report_room_modal(cx);
                     self.close_leave_room_confirm_modal(cx);
+                }
+                if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
+                    if room_info_sliding_pane.is_currently_shown(cx) {
+                        self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
+                    }
+                    if matches!(self.active_room_tab, RoomTab::Info) {
+                        self.refresh_inline_room_info(cx, scope.data.get::<AppState>());
+                    }
+                    self.redraw(cx);
                 }
 
                 // Handle actions related to restoring the previously-saved state of rooms.
@@ -6324,7 +6451,7 @@ impl Widget for RoomScreen {
             // (desktop only — the button is hidden on mobile).
             for action in actions {
                 if let InfoButtonAction::OpenRequested = action.as_widget_action().cast_ref() {
-                    self.show_room_info_pane(cx);
+                    self.show_room_info_pane(cx, scope.data.get::<AppState>());
                     break;
                 }
             }
@@ -6385,12 +6512,12 @@ impl Widget for RoomScreen {
                 self.refresh_threads_pane(cx);
             }
             if room_info_sliding_pane.is_currently_shown(cx) {
-                self.refresh_room_info_pane(cx);
+                self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
             }
             // Keep the inline "Info" tab body current as room data (members,
             // topic, etc.) arrives, mirroring the overlay pane above.
             if matches!(self.active_room_tab, RoomTab::Info) {
-                self.refresh_inline_room_info(cx);
+                self.refresh_inline_room_info(cx, scope.data.get::<AppState>());
             }
 
             // Ideally we would do this elsewhere on the main thread, because it's not room-specific,
@@ -8269,6 +8396,18 @@ impl RoomScreen {
                     });
                 }
                 TimelineUpdate::RoomMembersListFetched { members } => {
+                    if let TimelineKind::MainRoom { room_id } = &tl.kind {
+                        let member_user_ids = members
+                            .iter()
+                            .map(|member| member.user_id().to_owned())
+                            .collect();
+                        crate::home::rooms_list::enqueue_rooms_list_update(
+                            crate::home::rooms_list::RoomsListUpdate::UpdateRoomMemberUserIds {
+                                room_id: room_id.clone(),
+                                member_user_ids,
+                            }
+                        );
+                    }
                     let members = Arc::new(members);
                     if tl.awaiting_post_sync_member_refresh {
                         tl.room_members_sync_pending = false;
@@ -8700,6 +8839,7 @@ impl RoomScreen {
         actions: &ActionsBuf,
         portal_list: &PortalListRef,
         loading_pane: &LoadingPaneRef,
+        scope: &mut Scope,
     ) {
         if let Some(clicked_context) = self.octos_action_button_contexts
             .iter()
@@ -9036,7 +9176,7 @@ impl RoomScreen {
                     self.show_threads_pane(cx);
                 }
                 MessageAction::ShowRoomInfoPane => {
-                    self.show_room_info_pane(cx);
+                    self.show_room_info_pane(cx, scope.data.get::<AppState>());
                 }
                 MessageAction::ToggleTranslationLangPopup { button_rect } => {
                     self.toggle_translation_lang_popup(cx, *button_rect);
@@ -9547,7 +9687,16 @@ impl RoomScreen {
     /// Build the room-info payload from current state, or `None` if no room is
     /// displayed. Shared by both the sliding info pane and the inline "Info"
     /// tab body so the two presentations stay in sync.
-    fn build_room_info_pane_info(&mut self) -> Option<RoomInfoPaneInfo> {
+    ///
+    /// `app_state`, when available, makes the member list's "Bot" marker
+    /// registry-aware (AgentRegistry ∪ app-service known bots), mirroring the
+    /// timeline. Callers without a reachable `AppState` (no `Scope` in hand)
+    /// pass `None`, which falls back to the name-only heuristic.
+    fn build_room_info_pane_info(
+        &mut self,
+        app_state: Option<&AppState>,
+        is_direct_room: bool,
+    ) -> Option<RoomInfoPaneInfo> {
         let room_id = self.room_id().cloned()?;
         let room_name = self.room_name_id.as_ref()
             .map(ToString::to_string)
@@ -9590,14 +9739,35 @@ impl RoomScreen {
             ));
 
         let my_user_id = current_user_id();
+        let bot_identity = room_info_bot_identity_fingerprint(app_state, my_user_id.as_deref());
         // Clone the members `Arc` out first (cheap) so the `tl_state` borrow is
         // released before we (mutably) touch the cache below.
         let members_arc = self.tl_state.as_ref().and_then(|tl| tl.room_members.clone());
+        let room_info_dm_target = if is_direct_room {
+            members_arc.as_ref().and_then(|members|
+                room_info_dm_target_from_user_ids(
+                    members.iter().map(|member| member.user_id()),
+                    my_user_id.as_deref(),
+                )
+            )
+        } else {
+            None
+        };
+        let show_title_bot_pill = room_info_title_shows_agent_badge(
+            app_state,
+            room_id.as_ref(),
+            room_info_dm_target.as_deref(),
+            members_arc.iter()
+                .flat_map(|members| members.iter())
+                .map(|member| member.user_id()),
+        );
 
         let (people_entries, show_people_loading, member_count, is_agent_enabled, my_role) =
             if let Some(members) = members_arc {
                 let cache_valid = self.room_info_members_cache.as_ref().is_some_and(|c|
-                    c.room_id == room_id && Arc::ptr_eq(&c.members, &members)
+                    c.room_id == room_id
+                        && Arc::ptr_eq(&c.members, &members)
+                        && c.bot_identity == bot_identity
                 );
                 if !cache_valid {
                     // Expensive path — only when the member list actually changed.
@@ -9620,6 +9790,16 @@ impl RoomScreen {
                             _ => 3,
                         }
                     };
+
+                    // Registry-aware bot detection, mirroring the timeline's
+                    // `is_timeline_sender_bot`: the union of the AgentRegistry
+                    // and (app-service-gated) known-bot list, plus the
+                    // resolved parent BotFather MXID. Computed once here
+                    // (not per member) since it's the same for every entry.
+                    let known_bot_user_ids = &bot_identity.known_bot_user_ids;
+                    let resolved_parent_bot_user_id =
+                        bot_identity.resolved_parent_bot_user_id.as_deref();
+
                     // Build with a precomputed (role-weight, lowercased-name) sort
                     // key so sorting doesn't allocate a String per comparison.
                     let mut keyed: Vec<(u8, String, RoomInfoPeopleEntryInfo)> = members.iter()
@@ -9627,7 +9807,11 @@ impl RoomScreen {
                             let display_name = member.display_name()
                                 .map(ToOwned::to_owned)
                                 .unwrap_or_else(|| member.user_id().to_string());
-                            let is_bot = is_likely_bot_member(member, None);
+                            let is_bot = is_known_or_likely_bot(
+                                    member.user_id(),
+                                    resolved_parent_bot_user_id,
+                                    known_bot_user_ids,
+                                ) || is_likely_bot_member(member, resolved_parent_bot_user_id);
                             let level = match member.suggested_role_for_power_level() {
                                 RoomMemberRole::Creator => String::from("Creator"),
                                 RoomMemberRole::Administrator => String::from("Admin"),
@@ -9660,6 +9844,7 @@ impl RoomScreen {
                     self.room_info_members_cache = Some(RoomInfoMembersCache {
                         room_id: room_id.clone(),
                         members: Arc::clone(&members),
+                        bot_identity: bot_identity.clone(),
                         entries,
                         is_agent_enabled,
                         my_role,
@@ -9701,6 +9886,7 @@ impl RoomScreen {
             is_encrypted,
             is_favorite,
             is_agent_enabled,
+            show_title_bot_pill,
             member_count,
             my_role,
             room_avatar_uri,
@@ -9711,23 +9897,35 @@ impl RoomScreen {
         })
     }
 
-    fn refresh_room_info_pane(&mut self, cx: &mut Cx) {
-        if let Some(info) = self.build_room_info_pane_info() {
+    fn refresh_room_info_pane(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
+        let is_direct_room = self.current_room_is_direct(cx);
+        if let Some(info) = self.build_room_info_pane_info(app_state, is_direct_room) {
             self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).set_info(cx, info);
         }
     }
 
     /// Populate the inline "Info" tab body (a second `RoomInfoSlidingPane`
     /// instance mounted inline inside `keyboard_view`).
-    fn refresh_inline_room_info(&mut self, cx: &mut Cx) {
-        if let Some(info) = self.build_room_info_pane_info() {
+    fn refresh_inline_room_info(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
+        let is_direct_room = self.current_room_is_direct(cx);
+        if let Some(info) = self.build_room_info_pane_info(app_state, is_direct_room) {
             self.room_info_sliding_pane(cx, ids!(info_content)).set_info(cx, info);
         }
     }
 
-    fn show_room_info_pane(&mut self, cx: &mut Cx) {
+    fn current_room_is_direct(&self, cx: &mut Cx) -> bool {
+        let Some(room_id) = self.room_id() else { return false };
+        if !cx.has_global::<RoomsListRef>() {
+            return false;
+        }
+        cx.get_global::<RoomsListRef>()
+            .is_direct_room(room_id)
+            .unwrap_or(false)
+    }
+
+    fn show_room_info_pane(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
         self.hide_threads_pane(cx);
-        self.refresh_room_info_pane(cx);
+        self.refresh_room_info_pane(cx, app_state);
         self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).show(cx);
         self.redraw(cx);
     }
@@ -14048,6 +14246,229 @@ mod tests {
         let known_bot_user_ids = room_props_known_bot_user_ids(&app_state);
 
         assert!(known_bot_user_ids.iter().any(|id| id == &agent_id));
+    }
+
+    #[test]
+    fn test_room_info_bot_identity_fingerprint_tracks_registry_agents() {
+        let agent_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        let before = room_info_bot_identity_fingerprint(Some(&app_state), None);
+
+        app_state
+            .agent_registry
+            .register(agent_id.clone(), crate::app::AgentEntry::default());
+        let after = room_info_bot_identity_fingerprint(Some(&app_state), None);
+
+        assert_ne!(before, after);
+        assert!(after.known_bot_user_ids.iter().any(|id| id == &agent_id));
+    }
+
+    #[test]
+    fn test_room_info_bot_identity_fingerprint_tracks_appservice_known_bots() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.bot_settings.enabled = true;
+        let bot_id = app_state
+            .bot_settings
+            .resolved_bot_user_id(Some(current_user_id.as_ref()))
+            .unwrap();
+        let before = room_info_bot_identity_fingerprint(
+            Some(&app_state),
+            Some(current_user_id.as_ref()),
+        );
+
+        app_state.bot_settings.record_known_bot_user_ids([bot_id.clone()]);
+        let after = room_info_bot_identity_fingerprint(
+            Some(&app_state),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert_ne!(before, after);
+        assert_eq!(after.resolved_parent_bot_user_id.as_ref(), Some(&bot_id));
+        assert!(after.known_bot_user_ids.iter().any(|id| id == &bot_id));
+    }
+
+    #[test]
+    fn test_room_info_bot_marker_hidden_after_agentlab_unbind() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent_id.clone(), crate::app::AgentEntry {
+            framework: crate::app::AgentFramework::Octos,
+            ..Default::default()
+        });
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = agent_id.to_string();
+        app_state.bot_settings.record_known_bot_user_ids([agent_id.clone()]);
+
+        let before = room_info_bot_identity_fingerprint(
+            Some(&app_state),
+            Some(current_user_id.as_ref()),
+        );
+        assert!(is_known_or_likely_bot(
+            agent_id.as_ref(),
+            before.resolved_parent_bot_user_id.as_deref(),
+            &before.known_bot_user_ids,
+        ));
+
+        app_state.unregister_agent_and_clear_bot_identity(
+            agent_id.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+        let after = room_info_bot_identity_fingerprint(
+            Some(&app_state),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(after.resolved_parent_bot_user_id.is_none());
+        assert!(after.known_bot_user_ids.is_empty());
+        assert!(!is_known_or_likely_bot(
+            agent_id.as_ref(),
+            after.resolved_parent_bot_user_id.as_deref(),
+            &after.known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_room_members_fetch_updates_rooms_list_member_ids() {
+        let src = include_str!("room_screen.rs");
+
+        assert!(src.contains("TimelineUpdate::RoomMembersListFetched"));
+        assert!(src.contains("RoomsListUpdate::UpdateRoomMemberUserIds"));
+        assert!(src.contains("member.user_id().to_owned()"));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_hidden_after_room_unbound() {
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let bot_id: OwnedUserId = "@bot:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(bot_id.clone()), true);
+        assert!(room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
+        ));
+
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(bot_id), false);
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
+        ));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_shown_when_member_is_registered_agent() {
+        let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state
+            .agent_registry
+            .register(agent_id.clone(), crate::app::AgentEntry::default());
+        assert!(room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, [agent_id.as_ref()],
+        ));
+
+        app_state.agent_registry.unregister(agent_id.as_ref());
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, [agent_id.as_ref()],
+        ));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_hidden_after_agent_registry_unbind() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state
+            .agent_registry
+            .register(agent_id.clone(), crate::app::AgentEntry::default());
+        assert!(room_info_title_shows_agent_badge(
+            Some(&app_state),
+            room_id.as_ref(),
+            Some(agent_id.as_ref()),
+            std::iter::empty(),
+        ));
+
+        app_state.agent_registry.unregister(agent_id.as_ref());
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state),
+            room_id.as_ref(),
+            Some(agent_id.as_ref()),
+            std::iter::empty(),
+        ));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_hidden_after_agentlab_unbind_clears_binding() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent_id.clone(), crate::app::AgentEntry {
+            framework: crate::app::AgentFramework::Octos,
+            ..Default::default()
+        });
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = agent_id.to_string();
+        app_state.bot_settings.record_known_bot_user_ids([agent_id.clone()]);
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(agent_id.clone()), true);
+        assert!(room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
+        ));
+
+        app_state.unregister_agent_and_clear_bot_identity(
+            agent_id.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
+        ));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_ignores_known_bot_without_binding_or_agent_dm() {
+        let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
+        let bot_id: OwnedUserId = "@bot:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.bot_settings.record_known_bot_user_ids([bot_id.clone()]);
+
+        // A known bot that is neither bound, a DM target, nor a registered-agent
+        // member must not trigger the pill — even when it is a room member.
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, [bot_id.as_ref()],
+        ));
+    }
+
+    #[test]
+    fn test_room_info_dm_target_requires_single_non_self_member() {
+        let me: OwnedUserId = "@me:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let human_id: OwnedUserId = "@human:example.org".try_into().unwrap();
+
+        assert_eq!(
+            room_info_dm_target_from_user_ids(
+                [me.as_ref(), agent_id.as_ref()],
+                Some(me.as_ref()),
+            ),
+            Some(agent_id.clone()),
+        );
+        assert_eq!(
+            room_info_dm_target_from_user_ids(
+                [me.as_ref(), agent_id.as_ref(), human_id.as_ref()],
+                Some(me.as_ref()),
+            ),
+            None,
+        );
     }
 
     #[test]
