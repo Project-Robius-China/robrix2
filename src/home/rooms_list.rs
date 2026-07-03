@@ -342,6 +342,40 @@ pub struct JoinedRoomInfo {
     //       they are children of. One room can be in multiple spaces.
 }
 
+/// A lightweight snapshot of a recently-active joined room,
+/// used by the Home screen's "Recent conversations" section.
+#[derive(Clone)]
+pub struct RecentRoomInfo {
+    /// The displayable name of this room (includes room ID for fallback).
+    pub room_name_id: RoomNameId,
+    /// The timestamp and Html text content of the latest message in this room.
+    pub latest: Option<(MilliSecondsSinceUnixEpoch, String)>,
+    /// The avatar for this room.
+    pub room_avatar: FetchedRoomAvatar,
+    /// The number of unread messages in this room.
+    pub num_unread_messages: u64,
+    /// The number of unread mentions in this room.
+    pub num_unread_mentions: u64,
+    /// Whether the room is manually marked as unread.
+    pub is_marked_unread: bool,
+}
+impl PartialEq for RecentRoomInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.room_name_id == other.room_name_id
+            && self.latest == other.latest
+            && self.num_unread_messages == other.num_unread_messages
+            && self.num_unread_mentions == other.num_unread_mentions
+            && self.is_marked_unread == other.is_marked_unread
+            // Avatar contents are compared cheaply: image data is compared by
+            // pointer identity, since a new avatar always arrives as a new Arc.
+            && match (&self.room_avatar, &other.room_avatar) {
+                (FetchedRoomAvatar::Text(a), FetchedRoomAvatar::Text(b)) => a == b,
+                (FetchedRoomAvatar::Image(a), FetchedRoomAvatar::Image(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+}
+
 /// UI-related info about a room that the user has been invited to.
 ///
 /// This includes info needed display a preview of that room in the RoomsList
@@ -2133,6 +2167,34 @@ impl RoomsListRef {
     /// Returns whether the given joined room is end-to-end encrypted.
     pub fn joined_room_is_encrypted(&self, room_id: &OwnedRoomId) -> Option<Option<bool>> {
         self.borrow()?.joined_room_is_encrypted(room_id)
+    }
+
+    /// Returns up to `max_count` joined rooms sorted by latest activity (most recent first).
+    ///
+    /// Tombstoned rooms are excluded. Rooms without any known latest message
+    /// sort after all rooms that have one.
+    pub fn get_recent_rooms(&self, max_count: usize) -> Vec<RecentRoomInfo> {
+        let Some(inner) = self.borrow() else { return Vec::new(); };
+        let mut rooms: Vec<&JoinedRoomInfo> = inner.all_joined_rooms
+            .values()
+            .filter(|jr| !jr.is_tombstoned)
+            .collect();
+        rooms.sort_by(|a, b| {
+            let a_ts = a.latest.as_ref().map(|(ts, _)| *ts);
+            let b_ts = b.latest.as_ref().map(|(ts, _)| *ts);
+            b_ts.cmp(&a_ts)
+        });
+        rooms.into_iter()
+            .take(max_count)
+            .map(|jr| RecentRoomInfo {
+                room_name_id: jr.room_name_id.clone(),
+                latest: jr.latest.clone(),
+                room_avatar: jr.room_avatar.clone(),
+                num_unread_messages: jr.num_unread_messages,
+                num_unread_mentions: jr.num_unread_mentions,
+                is_marked_unread: jr.is_marked_unread,
+            })
+            .collect()
     }
 
     /// Returns the name of the given room, if it is known and loaded.

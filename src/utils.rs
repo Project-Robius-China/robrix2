@@ -1059,6 +1059,85 @@ pub fn avatar_from_room_name(room_name: Option<&str>) -> FetchedRoomAvatar {
 }
 
 
+/// Converts an HTML message snippet into a single line of plain text.
+///
+/// Strips all tags (treating each tag boundary as a word break), unescapes the
+/// most common HTML entities, and collapses whitespace runs into single spaces.
+/// Suitable for a one-line, ellipsized preview label (e.g., the Home screen's
+/// recent-conversations list).
+pub fn html_preview_text(html: &str) -> String {
+    let mut stripped = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                // A tag boundary (e.g. `</p><p>`, `<br/>`) acts as a word break.
+                stripped.push(' ');
+            }
+            _ if in_tag => {}
+            c if c.is_whitespace() => stripped.push(' '),
+            c => stripped.push(c),
+        }
+    }
+
+    // Unescape the entities that commonly appear in Matrix HTML bodies.
+    // `&amp;` must be handled last so that e.g. `&amp;lt;` yields `&lt;`.
+    let unescaped = stripped
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&amp;", "&");
+
+    // Collapse consecutive spaces and trim the ends.
+    let mut result = String::with_capacity(unescaped.len());
+    let mut prev_was_space = true; // starting true also trims leading spaces
+    for c in unescaped.chars() {
+        if c == ' ' {
+            if !prev_was_space {
+                result.push(' ');
+            }
+            prev_was_space = true;
+        } else {
+            result.push(c);
+            prev_was_space = false;
+        }
+    }
+    result.truncate(result.trim_end().len());
+    result
+}
+
+
+#[cfg(test)]
+mod tests_html_preview_text {
+    use super::html_preview_text;
+
+    #[test]
+    fn strips_tags_and_collapses_whitespace() {
+        assert_eq!(
+            html_preview_text("<p>Hello <b>world</b>!</p>\n<p>Second   paragraph.</p>"),
+            "Hello world ! Second paragraph."
+        );
+    }
+
+    #[test]
+    fn unescapes_common_entities() {
+        assert_eq!(
+            html_preview_text("a &amp;&nbsp;b &lt;tag&gt; &quot;q&quot; &#39;s&#x27;"),
+            "a & b <tag> \"q\" 's'"
+        );
+    }
+
+    #[test]
+    fn plain_text_passes_through() {
+        assert_eq!(html_preview_text("just a plain message"), "just a plain message");
+    }
+}
+
 #[cfg(test)]
 mod tests_room_name {
     use super::*;
