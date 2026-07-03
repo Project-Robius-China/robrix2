@@ -6158,6 +6158,15 @@ impl Widget for RoomScreen {
                     self.close_report_room_modal(cx);
                     self.close_leave_room_confirm_modal(cx);
                 }
+                if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
+                    if room_info_sliding_pane.is_currently_shown(cx) {
+                        self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
+                    }
+                    if matches!(self.active_room_tab, RoomTab::Info) {
+                        self.refresh_inline_room_info(cx, scope.data.get::<AppState>());
+                    }
+                    self.redraw(cx);
+                }
 
                 // Handle actions related to restoring the previously-saved state of rooms.
                 if let Some(AppStateAction::RoomLoadedSuccessfully { room_name_id, ..}) = action.downcast_ref() {

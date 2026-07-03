@@ -17,7 +17,7 @@ use makepad_widgets::*;
 use ruma::OwnedUserId;
 
 use crate::{
-    app::{AgentEntry, AgentFramework, AppState, BotSettingsState},
+    app::{AgentEntry, AgentFramework, AppState, AppStateAction, BotSettingsState},
     i18n::{AppLanguage, tr_key},
     persistence,
     profile::user_profile::UserProfile,
@@ -975,7 +975,9 @@ impl WidgetMatchEvent for AgentSettings {
                 }
                 Some(AgentRowAction::Unbind(user_id)) => {
                     if let Some(app_state) = scope.data.get_mut::<AppState>() {
-                        app_state.agent_registry.unregister(user_id);
+                        if app_state.agent_registry.unregister(user_id) {
+                            cx.action(AppStateAction::AgentRegistryUpdated);
+                        }
                         if let Some(account_user_id) = current_user_id() {
                             if let Err(e) = persistence::save_app_state(app_state.clone(), account_user_id) {
                                 error!("Failed to persist agent registry. Error: {e}");
@@ -1515,6 +1517,15 @@ mod tests {
         assert!(src.contains("dot.set_visible(cx, framework == AgentFramework::Octos)"));
         assert!(src.contains("OctosHealthStatus::Reachable"));
         assert!(src.contains("mod.widgets.RBX_SUCCESS_FG"));
+    }
+
+    #[test]
+    fn test_agent_unbind_notifies_agent_badge_surfaces() {
+        let src = production_src(include_str!("agent_settings.rs"));
+
+        assert!(src.contains("AgentRowAction::Unbind"));
+        assert!(src.contains("agent_registry.unregister(user_id)"));
+        assert!(src.contains("AppStateAction::AgentRegistryUpdated"));
     }
 
     #[test]

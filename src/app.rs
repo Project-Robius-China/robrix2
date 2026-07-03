@@ -1623,6 +1623,10 @@ impl MatchEvent for App {
                     }
                     continue;
                 }
+                Some(AppStateAction::AgentRegistryUpdated) => {
+                    self.ui.redraw(cx);
+                    continue;
+                }
                 Some(AppStateAction::NavigateToRoom { room_to_close, destination_room }) => {
                     self.navigate_to_room(cx, room_to_close.as_ref(), destination_room);
                     continue;
@@ -3820,6 +3824,10 @@ pub enum AppStateAction {
     KnownBotUserIdsDiscovered {
         bot_user_ids: Vec<OwnedUserId>,
     },
+    /// The global AgentRegistry changed outside the top-level App handler.
+    /// Widgets that derive bot pills from registered-agent identity should
+    /// refresh from the already-mutated AppState.
+    AgentRegistryUpdated,
     /// The given room was successfully loaded from the homeserver
     /// and is now known to our client.
     ///

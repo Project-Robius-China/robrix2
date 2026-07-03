@@ -1656,6 +1656,11 @@ impl Widget for RoomsList {
                     continue;
                 }
 
+                if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
+                    self.redraw(cx);
+                    continue;
+                }
+
                 // Clear widget state upon logout.
                 if let Some(LogoutAction::ClearAppState { .. }) = action.downcast_ref() {
                     while PENDING_ROOM_UPDATES.pop().is_some() {}
