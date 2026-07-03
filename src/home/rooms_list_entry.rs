@@ -573,32 +573,43 @@ impl RoomsListEntryContent {
         // Toggle the background color via the animator (handles selected/deselected bg).
         self.animator_toggle(cx, is_selected, Animate::No, ids!(selected.on), ids!(selected.off));
 
+        // NOTE: not every adaptive variant contains all of these widgets (e.g.
+        // `IconAndName` has no timestamp/message preview, `OnlyIcon` has no room
+        // name), and `script_apply_eval!` on an empty WidgetRef logs script-VM
+        // errors ("__script_source__ not found"), so guard each apply.
+
         // Update text colors for room name.
         let mut room_name_label = self.view.label(cx, ids!(room_name));
-        script_apply_eval!(cx, room_name_label, {
-            draw_text +: {
-                color: #(room_name_color)
-            }
-        });
+        if !room_name_label.is_empty() {
+            script_apply_eval!(cx, room_name_label, {
+                draw_text +: {
+                    color: #(room_name_color)
+                }
+            });
+        }
 
         // Update text colors for timestamp.
         let mut timestamp_label = self.view.label(cx, ids!(timestamp));
-        script_apply_eval!(cx, timestamp_label, {
-            draw_text +: {
-                color: #(timestamp_color)
-            }
-        });
+        if !timestamp_label.is_empty() {
+            script_apply_eval!(cx, timestamp_label, {
+                draw_text +: {
+                    color: #(timestamp_color)
+                }
+            });
+        }
 
         // Update text colors for the latest message preview (both HTML and plaintext variants).
         let mut html_widget = self.view.html(cx, ids!(latest_message.html_view.html));
-        script_apply_eval!(cx, html_widget, {
-            font_color: #(message_text_color),
-            draw_text +: { color: #(message_text_color) },
-            draw_block +: {
-                quote_bg_color: #(code_bg_color),
-                code_color: #(code_bg_color),
-            }
-        });
+        if !html_widget.is_empty() {
+            script_apply_eval!(cx, html_widget, {
+                font_color: #(message_text_color),
+                draw_text +: { color: #(message_text_color) },
+                draw_block +: {
+                    quote_bg_color: #(code_bg_color),
+                    code_color: #(code_bg_color),
+                }
+            });
+        }
 
         // Both states sit on a light surface (transparent / soft-teal wash), so
         // use the design-token link color in both cases for a consistent look.
@@ -607,11 +618,13 @@ impl RoomsListEntryContent {
             .set_link_color(cx, Some(crate::shared::design_tokens::RBX_LINK));
 
         let mut pt_label = self.view.label(cx, ids!(latest_message.plaintext_view.pt_label));
-        script_apply_eval!(cx, pt_label, {
-            draw_text +: {
-                color: #(message_text_color)
-            }
-        });
+        if !pt_label.is_empty() {
+            script_apply_eval!(cx, pt_label, {
+                draw_text +: {
+                    color: #(message_text_color)
+                }
+            });
+        }
     }
 }
 
