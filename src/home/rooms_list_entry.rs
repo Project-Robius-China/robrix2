@@ -1,5 +1,5 @@
 use makepad_widgets::*;
-use matrix_sdk::ruma::{OwnedRoomId, OwnedUserId, RoomId, UserId};
+use matrix_sdk::ruma::{OwnedRoomId, RoomId, UserId};
 
 use crate::{
     app::AppState,
@@ -431,7 +431,7 @@ impl Widget for RoomsListEntryContent {
                     app_state,
                     joined_room_info.room_name_id.room_id(),
                     joined_room_info.dm_target.as_deref(),
-                    &joined_room_info.member_user_ids,
+                    joined_room_info.member_user_ids.iter().map(|user_id| user_id.as_ref()),
                 )
             });
             self.draw_joined_room(cx, joined_room_info, show_agent_badge);
@@ -640,21 +640,24 @@ pub fn should_show_encryption_icon(is_encrypted: Option<bool>, is_tombstoned: bo
 }
 
 /// Whether the rooms-list row for `room_id` should display an agent badge.
+/// Also the single source of truth for the room-info title pill, so the
+/// rooms list and the Info pane can never disagree.
 ///
-/// True when the room is bound to a bot (app-service binding) OR it is a 1:1 DM
-/// whose counterparty is a registered agent. Derived live from `AppState`, so it
-/// updates as soon as an agent is registered or unregistered.
-pub fn room_shows_agent_badge(
+/// True when the room is bound to a bot (app-service binding), OR it is a 1:1 DM
+/// whose counterparty is a registered agent, OR any of its members is a
+/// registered agent. Derived live from `AppState`, so it updates as soon as an
+/// agent is registered or unregistered.
+pub fn room_shows_agent_badge<'a>(
     app_state: &AppState,
     room_id: &RoomId,
     dm_target: Option<&UserId>,
-    member_user_ids: &[OwnedUserId],
+    member_user_ids: impl IntoIterator<Item = &'a UserId>,
 ) -> bool {
     app_state.bot_settings.is_room_bound(room_id)
         || dm_target.is_some_and(|user_id| app_state.agent_registry.contains(user_id))
         || member_user_ids
-            .iter()
-            .any(|user_id| app_state.agent_registry.contains(user_id.as_ref()))
+            .into_iter()
+            .any(|user_id| app_state.agent_registry.contains(user_id))
 }
 
 #[cfg(test)]
@@ -696,7 +699,7 @@ mod tests {
             bot_user_id: "@bot:example.org".try_into().unwrap(),
             remark: String::new(),
         });
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
     }
 
     #[test]
@@ -705,7 +708,7 @@ mod tests {
         let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
         let mut app_state = AppState::default();
         app_state.agent_registry.register(agent.clone(), AgentEntry::default());
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), &[]));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), std::iter::empty()));
     }
 
     #[test]
@@ -713,14 +716,14 @@ mod tests {
         let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
         let human: OwnedUserId = "@human:example.org".try_into().unwrap();
         let app_state = AppState::default();
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(human.as_ref()), &[]));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(human.as_ref()), std::iter::empty()));
     }
 
     #[test]
     fn test_agent_badge_hidden_for_unbound_group_room() {
         let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
         let app_state = AppState::default();
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
     }
 
     #[test]
@@ -735,7 +738,7 @@ mod tests {
             &app_state,
             room_id.as_ref(),
             None,
-            &[agent],
+            [agent.as_ref()],
         ));
     }
 
@@ -743,7 +746,7 @@ mod tests {
     fn test_agent_badge_hidden_when_dm_target_none() {
         let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
         let app_state = AppState::default();
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
     }
 
     #[test]
@@ -757,7 +760,7 @@ mod tests {
             bot_user_id: agent.clone(),
             remark: String::new(),
         });
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), &[]));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), std::iter::empty()));
     }
 
     #[test]
@@ -769,12 +772,12 @@ mod tests {
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(bot.clone()), true);
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
 
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(bot), false);
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
     }
 
     #[test]
@@ -784,10 +787,10 @@ mod tests {
         let mut app_state = AppState::default();
 
         app_state.agent_registry.register(agent.clone(), AgentEntry::default());
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), &[]));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), std::iter::empty()));
 
         app_state.agent_registry.unregister(agent.as_ref());
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), &[]));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), std::iter::empty()));
     }
 
     #[test]
@@ -804,14 +807,14 @@ mod tests {
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(agent.clone()), true);
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
 
         app_state.unregister_agent_and_clear_bot_identity(
             agent.as_ref(),
             Some(current_user_id.as_ref()),
         );
 
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, std::iter::empty()));
     }
 
     #[test]
@@ -822,14 +825,14 @@ mod tests {
         let mut app_state = AppState::default();
 
         app_state.agent_registry.register(agent.clone(), AgentEntry::default());
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[agent.clone()]));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, [agent.as_ref()]));
 
         app_state.unregister_agent_and_clear_bot_identity(
             agent.as_ref(),
             Some(current_user_id.as_ref()),
         );
 
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[agent]));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, [agent.as_ref()]));
     }
 
     #[test]

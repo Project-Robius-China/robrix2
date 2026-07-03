@@ -39,6 +39,7 @@ use crate::{
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
+use crate::home::rooms_list_entry::room_shows_agent_badge;
 use crate::home::search_messages::{
     MessageSearchHit, SearchMessagesAction, SearchMessagesButtonWidgetExt,
     SearchMessagesSlidingPaneRef, SearchMessagesSlidingPaneWidgetExt,
@@ -4763,14 +4764,16 @@ fn room_info_bot_identity_fingerprint(
         })
 }
 
-fn room_info_title_shows_agent_badge(
+/// Delegates to the rooms-list predicate (`room_shows_agent_badge`) so the
+/// Info-pane title pill and the rooms-list row pill always agree.
+fn room_info_title_shows_agent_badge<'a>(
     app_state: Option<&AppState>,
     room_id: &RoomId,
     dm_target: Option<&UserId>,
+    member_user_ids: impl IntoIterator<Item = &'a UserId>,
 ) -> bool {
     app_state.is_some_and(|app_state|
-        app_state.bot_settings.is_room_bound(room_id)
-            || dm_target.is_some_and(|user_id| app_state.agent_registry.contains(user_id))
+        room_shows_agent_badge(app_state, room_id, dm_target, member_user_ids)
     )
 }
 
@@ -9754,6 +9757,9 @@ impl RoomScreen {
             app_state,
             room_id.as_ref(),
             room_info_dm_target.as_deref(),
+            members_arc.iter()
+                .flat_map(|members| members.iter())
+                .map(|member| member.user_id()),
         );
 
         let (people_entries, show_people_loading, member_count, is_agent_enabled, my_role) =
@@ -14342,12 +14348,35 @@ mod tests {
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(bot_id.clone()), true);
-        assert!(room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+        assert!(room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
+        ));
 
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(bot_id), false);
-        assert!(!room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
+        ));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_shown_when_member_is_registered_agent() {
+        let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state
+            .agent_registry
+            .register(agent_id.clone(), crate::app::AgentEntry::default());
+        assert!(room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, [agent_id.as_ref()],
+        ));
+
+        app_state.agent_registry.unregister(agent_id.as_ref());
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, [agent_id.as_ref()],
+        ));
     }
 
     #[test]
@@ -14363,6 +14392,7 @@ mod tests {
             Some(&app_state),
             room_id.as_ref(),
             Some(agent_id.as_ref()),
+            std::iter::empty(),
         ));
 
         app_state.agent_registry.unregister(agent_id.as_ref());
@@ -14370,6 +14400,7 @@ mod tests {
             Some(&app_state),
             room_id.as_ref(),
             Some(agent_id.as_ref()),
+            std::iter::empty(),
         ));
     }
 
@@ -14390,14 +14421,18 @@ mod tests {
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(agent_id.clone()), true);
-        assert!(room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+        assert!(room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
+        ));
 
         app_state.unregister_agent_and_clear_bot_identity(
             agent_id.as_ref(),
             Some(current_user_id.as_ref()),
         );
 
-        assert!(!room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
+        ));
     }
 
     #[test]
@@ -14405,9 +14440,13 @@ mod tests {
         let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
         let bot_id: OwnedUserId = "@bot:example.org".try_into().unwrap();
         let mut app_state = AppState::default();
-        app_state.bot_settings.record_known_bot_user_ids([bot_id]);
+        app_state.bot_settings.record_known_bot_user_ids([bot_id.clone()]);
 
-        assert!(!room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+        // A known bot that is neither bound, a DM target, nor a registered-agent
+        // member must not trigger the pill — even when it is a room member.
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state), room_id.as_ref(), None, [bot_id.as_ref()],
+        ));
     }
 
     #[test]
