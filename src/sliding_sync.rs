@@ -7357,6 +7357,7 @@ async fn add_new_room(
         is_selected: false,
         is_direct: new_room.is_direct,
         dm_target,
+        member_user_ids: Vec::new(),
         is_encrypted,
         is_tombstoned: new_room.is_tombstoned,
     }));

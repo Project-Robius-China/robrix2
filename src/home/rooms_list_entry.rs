@@ -1,5 +1,5 @@
 use makepad_widgets::*;
-use matrix_sdk::ruma::{OwnedRoomId, RoomId, UserId};
+use matrix_sdk::ruma::{OwnedRoomId, OwnedUserId, RoomId, UserId};
 
 use crate::{
     app::AppState,
@@ -431,6 +431,7 @@ impl Widget for RoomsListEntryContent {
                     app_state,
                     joined_room_info.room_name_id.room_id(),
                     joined_room_info.dm_target.as_deref(),
+                    &joined_room_info.member_user_ids,
                 )
             });
             self.draw_joined_room(cx, joined_room_info, show_agent_badge);
@@ -647,9 +648,13 @@ pub fn room_shows_agent_badge(
     app_state: &AppState,
     room_id: &RoomId,
     dm_target: Option<&UserId>,
+    member_user_ids: &[OwnedUserId],
 ) -> bool {
     app_state.bot_settings.is_room_bound(room_id)
         || dm_target.is_some_and(|user_id| app_state.agent_registry.contains(user_id))
+        || member_user_ids
+            .iter()
+            .any(|user_id| app_state.agent_registry.contains(user_id.as_ref()))
 }
 
 #[cfg(test)]
@@ -691,7 +696,7 @@ mod tests {
             bot_user_id: "@bot:example.org".try_into().unwrap(),
             remark: String::new(),
         });
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
     }
 
     #[test]
@@ -700,7 +705,7 @@ mod tests {
         let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
         let mut app_state = AppState::default();
         app_state.agent_registry.register(agent.clone(), AgentEntry::default());
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), &[]));
     }
 
     #[test]
@@ -708,21 +713,37 @@ mod tests {
         let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
         let human: OwnedUserId = "@human:example.org".try_into().unwrap();
         let app_state = AppState::default();
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(human.as_ref())));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(human.as_ref()), &[]));
     }
 
     #[test]
     fn test_agent_badge_hidden_for_unbound_group_room() {
         let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
         let app_state = AppState::default();
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+    }
+
+    #[test]
+    fn test_agent_badge_shown_when_room_member_is_registered_agent() {
+        let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+
+        assert!(room_shows_agent_badge(
+            &app_state,
+            room_id.as_ref(),
+            None,
+            &[agent],
+        ));
     }
 
     #[test]
     fn test_agent_badge_hidden_when_dm_target_none() {
         let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
         let app_state = AppState::default();
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
     }
 
     #[test]
@@ -736,7 +757,7 @@ mod tests {
             bot_user_id: agent.clone(),
             remark: String::new(),
         });
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), &[]));
     }
 
     #[test]
@@ -748,12 +769,12 @@ mod tests {
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(bot.clone()), true);
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
 
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(bot), false);
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
     }
 
     #[test]
@@ -763,10 +784,10 @@ mod tests {
         let mut app_state = AppState::default();
 
         app_state.agent_registry.register(agent.clone(), AgentEntry::default());
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), &[]));
 
         app_state.agent_registry.unregister(agent.as_ref());
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref()), &[]));
     }
 
     #[test]
@@ -783,14 +804,32 @@ mod tests {
         app_state
             .bot_settings
             .set_room_bound(room_id.clone(), Some(agent.clone()), true);
-        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
 
         app_state.unregister_agent_and_clear_bot_identity(
             agent.as_ref(),
             Some(current_user_id.as_ref()),
         );
 
-        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[]));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_after_agentlab_unbind_with_cached_member_id() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[agent.clone()]));
+
+        app_state.unregister_agent_and_clear_bot_identity(
+            agent.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None, &[agent]));
     }
 
     #[test]

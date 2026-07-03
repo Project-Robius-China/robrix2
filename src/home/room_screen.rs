@@ -8393,6 +8393,18 @@ impl RoomScreen {
                     });
                 }
                 TimelineUpdate::RoomMembersListFetched { members } => {
+                    if let TimelineKind::MainRoom { room_id } = &tl.kind {
+                        let member_user_ids = members
+                            .iter()
+                            .map(|member| member.user_id().to_owned())
+                            .collect();
+                        crate::home::rooms_list::enqueue_rooms_list_update(
+                            crate::home::rooms_list::RoomsListUpdate::UpdateRoomMemberUserIds {
+                                room_id: room_id.clone(),
+                                member_user_ids,
+                            }
+                        );
+                    }
                     let members = Arc::new(members);
                     if tl.awaiting_post_sync_member_refresh {
                         tl.room_members_sync_pending = false;
@@ -14310,6 +14322,15 @@ mod tests {
             after.resolved_parent_bot_user_id.as_deref(),
             &after.known_bot_user_ids,
         ));
+    }
+
+    #[test]
+    fn test_room_members_fetch_updates_rooms_list_member_ids() {
+        let src = include_str!("room_screen.rs");
+
+        assert!(src.contains("TimelineUpdate::RoomMembersListFetched"));
+        assert!(src.contains("RoomsListUpdate::UpdateRoomMemberUserIds"));
+        assert!(src.contains("member.user_id().to_owned()"));
     }
 
     #[test]
