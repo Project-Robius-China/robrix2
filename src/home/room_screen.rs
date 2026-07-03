@@ -3301,7 +3301,7 @@ script_mod! {
                                         spacing: 6
 
                                         room_name_value := Label {
-                                            width: Fit{max: FitBound.Abs(150.0)}
+                                            width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.82}}
                                             height: Fit
                                             flow: Flow.Right{wrap: false}
                                             max_lines: 1
@@ -3322,6 +3322,7 @@ script_mod! {
                                             align: Align{x: 0.5, y: 0.5}
                                             padding: Inset{left: 6.0, right: 6.0}
                                             show_bg: true
+                                            new_batch: true
                                             draw_bg +: {
                                                 color: (COLOR_ACTIVE_PRIMARY)
                                                 border_radius: 3.0
@@ -3330,7 +3331,7 @@ script_mod! {
                                                 width: Fit, height: Fit, padding: 0
                                                 draw_text +: {
                                                     text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
-                                                    color: #fff
+                                                    color: (RBX_FG_ON_ACCENT)
                                                 }
                                                 text: "bot"
                                             }
@@ -4727,17 +4728,51 @@ struct RoomInfoPaneInfo {
     show_people_loading: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RoomInfoBotIdentityFingerprint {
+    resolved_parent_bot_user_id: Option<OwnedUserId>,
+    known_bot_user_ids: Vec<OwnedUserId>,
+}
+
+fn room_info_bot_identity_fingerprint(
+    app_state: Option<&AppState>,
+    my_user_id: Option<&UserId>,
+) -> RoomInfoBotIdentityFingerprint {
+    app_state
+        .map(|app_state| {
+            let resolved_parent_bot_user_id = if app_state.bot_settings.enabled {
+                app_state
+                    .bot_settings
+                    .resolved_bot_user_id(my_user_id)
+                    .ok()
+            } else {
+                None
+            };
+            RoomInfoBotIdentityFingerprint {
+                resolved_parent_bot_user_id,
+                known_bot_user_ids: timeline_known_bot_user_ids(app_state),
+            }
+        })
+        .unwrap_or(RoomInfoBotIdentityFingerprint {
+            resolved_parent_bot_user_id: None,
+            known_bot_user_ids: Vec::new(),
+        })
+}
+
 /// Cache for the expensive member-row build. Keyed by the room and the identity
 /// (`Arc` pointer) of `TimelineUiState::room_members`, which is replaced wholesale
 /// whenever the member list changes — so a pointer match means "members unchanged,
 /// reuse the prebuilt rows" and we skip rebuilding + re-sorting all members on
-/// every sync Signal (critical for very large rooms).
+/// every sync Signal (critical for very large rooms). Bot identity context is part
+/// of the key because registry / app-service updates can change row bot markers
+/// without changing the room member list.
 struct RoomInfoMembersCache {
     room_id: OwnedRoomId,
     /// The exact `room_members` `Arc` the cached rows were built from. Held so the
     /// allocation can't be freed and its address reused (an ABA false-hit), and so
     /// validity is a cheap `Arc::ptr_eq` against the current `room_members`.
     members: Arc<Vec<RoomMember>>,
+    bot_identity: RoomInfoBotIdentityFingerprint,
     entries: Arc<Vec<RoomInfoPeopleEntryInfo>>,
     is_agent_enabled: bool,
     my_role: String,
@@ -9645,6 +9680,7 @@ impl RoomScreen {
             ));
 
         let my_user_id = current_user_id();
+        let bot_identity = room_info_bot_identity_fingerprint(app_state, my_user_id.as_deref());
         // Clone the members `Arc` out first (cheap) so the `tl_state` borrow is
         // released before we (mutably) touch the cache below.
         let members_arc = self.tl_state.as_ref().and_then(|tl| tl.room_members.clone());
@@ -9652,7 +9688,9 @@ impl RoomScreen {
         let (people_entries, show_people_loading, member_count, is_agent_enabled, my_role) =
             if let Some(members) = members_arc {
                 let cache_valid = self.room_info_members_cache.as_ref().is_some_and(|c|
-                    c.room_id == room_id && Arc::ptr_eq(&c.members, &members)
+                    c.room_id == room_id
+                        && Arc::ptr_eq(&c.members, &members)
+                        && c.bot_identity == bot_identity
                 );
                 if !cache_valid {
                     // Expensive path — only when the member list actually changed.
@@ -9681,16 +9719,9 @@ impl RoomScreen {
                     // and (app-service-gated) known-bot list, plus the
                     // resolved parent BotFather MXID. Computed once here
                     // (not per member) since it's the same for every entry.
-                    let known_bot_user_ids = app_state
-                        .map(timeline_known_bot_user_ids)
-                        .unwrap_or_default();
-                    let resolved_parent_bot_user_id = app_state.and_then(|s| {
-                        if s.bot_settings.enabled {
-                            s.bot_settings.resolved_bot_user_id(my_user_id.as_deref()).ok()
-                        } else {
-                            None
-                        }
-                    });
+                    let known_bot_user_ids = &bot_identity.known_bot_user_ids;
+                    let resolved_parent_bot_user_id =
+                        bot_identity.resolved_parent_bot_user_id.as_deref();
 
                     // Build with a precomputed (role-weight, lowercased-name) sort
                     // key so sorting doesn't allocate a String per comparison.
@@ -9701,9 +9732,9 @@ impl RoomScreen {
                                 .unwrap_or_else(|| member.user_id().to_string());
                             let is_bot = is_known_or_likely_bot(
                                     member.user_id(),
-                                    resolved_parent_bot_user_id.as_deref(),
-                                    &known_bot_user_ids,
-                                ) || is_likely_bot_member(member, resolved_parent_bot_user_id.as_deref());
+                                    resolved_parent_bot_user_id,
+                                    known_bot_user_ids,
+                                ) || is_likely_bot_member(member, resolved_parent_bot_user_id);
                             let level = match member.suggested_role_for_power_level() {
                                 RoomMemberRole::Creator => String::from("Creator"),
                                 RoomMemberRole::Administrator => String::from("Admin"),
@@ -9736,6 +9767,7 @@ impl RoomScreen {
                     self.room_info_members_cache = Some(RoomInfoMembersCache {
                         room_id: room_id.clone(),
                         members: Arc::clone(&members),
+                        bot_identity: bot_identity.clone(),
                         entries,
                         is_agent_enabled,
                         my_role,
@@ -14124,6 +14156,46 @@ mod tests {
         let known_bot_user_ids = room_props_known_bot_user_ids(&app_state);
 
         assert!(known_bot_user_ids.iter().any(|id| id == &agent_id));
+    }
+
+    #[test]
+    fn test_room_info_bot_identity_fingerprint_tracks_registry_agents() {
+        let agent_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        let before = room_info_bot_identity_fingerprint(Some(&app_state), None);
+
+        app_state
+            .agent_registry
+            .register(agent_id.clone(), crate::app::AgentEntry::default());
+        let after = room_info_bot_identity_fingerprint(Some(&app_state), None);
+
+        assert_ne!(before, after);
+        assert!(after.known_bot_user_ids.iter().any(|id| id == &agent_id));
+    }
+
+    #[test]
+    fn test_room_info_bot_identity_fingerprint_tracks_appservice_known_bots() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.bot_settings.enabled = true;
+        let bot_id = app_state
+            .bot_settings
+            .resolved_bot_user_id(Some(current_user_id.as_ref()))
+            .unwrap();
+        let before = room_info_bot_identity_fingerprint(
+            Some(&app_state),
+            Some(current_user_id.as_ref()),
+        );
+
+        app_state.bot_settings.record_known_bot_user_ids([bot_id.clone()]);
+        let after = room_info_bot_identity_fingerprint(
+            Some(&app_state),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert_ne!(before, after);
+        assert_eq!(after.resolved_parent_bot_user_id.as_ref(), Some(&bot_id));
+        assert!(after.known_bot_user_ids.iter().any(|id| id == &bot_id));
     }
 
     #[test]

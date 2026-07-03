@@ -70,6 +70,7 @@ script_mod! {
         align: Align{x: 0.5, y: 0.5}
         padding: Inset{left: 6.0, right: 6.0}
         show_bg: true
+        new_batch: true
         draw_bg +: {
             color: (COLOR_ACTIVE_PRIMARY)
             border_radius: 3.0
@@ -78,7 +79,7 @@ script_mod! {
             width: Fit, height: Fit, padding: 0
             draw_text +: {
                 text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
-                color: #fff
+                color: (RBX_FG_ON_ACCENT)
             }
             text: "bot"
         }
@@ -248,7 +249,7 @@ script_mod! {
                     // right edge. Capped so long names still ellipsize; IconAndName
                     // is only shown at sidebar widths <= 200px, so a smaller cap
                     // than FullPreview leaves room for the pill.
-                    room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Abs(130.0)} }
+                    room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.70}} }
                     bot_pill := mod.widgets.RoomsListBotPill {}
                 }
                 unread_badge := UnreadBadge {}
@@ -273,7 +274,7 @@ script_mod! {
                             spacing: 6
                             // Same fix as IconAndName above, but with a larger cap since
                             // FullPreview is shown on desktop/wider sidebars.
-                            room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Abs(200.0)} }
+                            room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.78}} }
                             bot_pill := mod.widgets.RoomsListBotPill {}
                         }
                         timestamp := mod.widgets.RoomsListEntryTimestamp { }
