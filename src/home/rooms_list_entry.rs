@@ -221,6 +221,11 @@ script_mod! {
         // (and its layout) based on the available space in the sidebar.
         adaptive_preview := AdaptiveView {
             height: Fit
+            // The wider variants contain `RoomsListBotPill`, a `new_batch`
+            // view that owns a child DrawList. Retain variants across resize
+            // swaps so ultra-narrow transitions do not drop DrawLists that the
+            // previous frame may still reference.
+            retain_unused_variants: true
 
             OnlyIcon := mod.widgets.RoomsListEntryContent {
                 align: Align{x: 0.5, y: 0.5}
@@ -732,5 +737,49 @@ mod tests {
             remark: String::new(),
         });
         assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_after_room_unbound() {
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let bot: OwnedUserId = "@bot:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(bot.clone()), true);
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(bot), false);
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+    }
+
+    #[test]
+    fn test_agent_badge_hidden_after_agent_registry_unbind() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
+
+        app_state.agent_registry.unregister(agent.as_ref());
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), Some(agent.as_ref())));
+    }
+
+    #[test]
+    fn test_rooms_list_entry_retains_adaptive_variants_for_batched_bot_pill() {
+        let source = include_str!("rooms_list_entry.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        assert!(
+            production_source.contains("adaptive_preview := AdaptiveView {")
+                && production_source.contains("retain_unused_variants: true")
+                && production_source.contains("mod.widgets.RoomsListBotPill = RoundedView")
+                && production_source.contains("new_batch: true"),
+            "RoomsListEntry AdaptiveView must retain variants because bot pills own new_batch DrawLists",
+        );
     }
 }

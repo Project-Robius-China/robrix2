@@ -9,7 +9,7 @@ use imbl::Vector;
 use makepad_widgets::{image_cache::ImageBuffer, *};
 use matrix_sdk::{
     OwnedServerName, media::{MediaFormat, MediaRequestParameters}, room::{RoomMember, RoomMemberRole}, ruma::{
-        EventId, MatrixToUri, MatrixUri, OwnedEventId, OwnedMxcUri, OwnedRoomId, UserId, events::{
+        EventId, MatrixToUri, MatrixUri, OwnedEventId, OwnedMxcUri, OwnedRoomId, RoomId, UserId, events::{
             receipt::Receipt,
             room::{
                 ImageInfo, MediaSource, message::{
@@ -4714,6 +4714,10 @@ struct RoomInfoPaneInfo {
     /// Whether this room has a bot/agent participating (any member detected as a
     /// bot via `is_likely_bot_member`).
     is_agent_enabled: bool,
+    /// Whether the compact "bot" pill should trail the room title. This follows
+    /// the same user-facing badge semantics as the rooms list: room binding or a
+    /// registered-agent DM, not merely a bot-looking member in an unbound room.
+    show_title_bot_pill: bool,
     member_count: usize,
     /// The current user's role in this room: "Owner" / "Admin" / "Moderator" /
     /// "Member", or empty if members haven't loaded yet.
@@ -4757,6 +4761,34 @@ fn room_info_bot_identity_fingerprint(
             resolved_parent_bot_user_id: None,
             known_bot_user_ids: Vec::new(),
         })
+}
+
+fn room_info_title_shows_agent_badge(
+    app_state: Option<&AppState>,
+    room_id: &RoomId,
+    dm_target: Option<&UserId>,
+) -> bool {
+    app_state.is_some_and(|app_state|
+        app_state.bot_settings.is_room_bound(room_id)
+            || dm_target.is_some_and(|user_id| app_state.agent_registry.contains(user_id))
+    )
+}
+
+fn room_info_dm_target_from_user_ids<'a>(
+    user_ids: impl IntoIterator<Item = &'a UserId>,
+    my_user_id: Option<&UserId>,
+) -> Option<OwnedUserId> {
+    let mut dm_target = None;
+    for user_id in user_ids {
+        if my_user_id.is_some_and(|my_user_id| my_user_id == user_id) {
+            continue;
+        }
+        if dm_target.is_some() {
+            return None;
+        }
+        dm_target = Some(user_id.to_owned());
+    }
+    dm_target
 }
 
 /// Cache for the expensive member-row build. Keyed by the room and the identity
@@ -5427,9 +5459,8 @@ impl Widget for RoomInfoSlidingPane {
 
         // ----- Hero: name, room id, favourite star -----
         self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.title_wrap.room_name_value)).set_text(cx, &info.room_name);
-        // Bot pill trailing the room name, mirroring the rooms-list bot pill;
-        // driven by the same is_agent_enabled flag as the Agent-enabled badge below.
-        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.title_wrap.title_bot_pill)).set_visible(cx, info.is_agent_enabled);
+        // Bot pill trailing the room name, mirroring the rooms-list bot pill.
+        self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.title_wrap.title_bot_pill)).set_visible(cx, info.show_title_bot_pill);
         self.label(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.room_id_row.room_id_value)).set_text(cx, &info.room_id);
         self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button.star_outline)).set_visible(cx, !info.is_favorite);
         self.view(cx, ids!(content_scroll.info_view.summary_card.hero_row.room_meta.name_row.favorite_button.star_filled)).set_visible(cx, info.is_favorite);
@@ -9637,7 +9668,11 @@ impl RoomScreen {
     /// registry-aware (AgentRegistry ∪ app-service known bots), mirroring the
     /// timeline. Callers without a reachable `AppState` (no `Scope` in hand)
     /// pass `None`, which falls back to the name-only heuristic.
-    fn build_room_info_pane_info(&mut self, app_state: Option<&AppState>) -> Option<RoomInfoPaneInfo> {
+    fn build_room_info_pane_info(
+        &mut self,
+        app_state: Option<&AppState>,
+        is_direct_room: bool,
+    ) -> Option<RoomInfoPaneInfo> {
         let room_id = self.room_id().cloned()?;
         let room_name = self.room_name_id.as_ref()
             .map(ToString::to_string)
@@ -9684,6 +9719,21 @@ impl RoomScreen {
         // Clone the members `Arc` out first (cheap) so the `tl_state` borrow is
         // released before we (mutably) touch the cache below.
         let members_arc = self.tl_state.as_ref().and_then(|tl| tl.room_members.clone());
+        let room_info_dm_target = if is_direct_room {
+            members_arc.as_ref().and_then(|members|
+                room_info_dm_target_from_user_ids(
+                    members.iter().map(|member| member.user_id()),
+                    my_user_id.as_deref(),
+                )
+            )
+        } else {
+            None
+        };
+        let show_title_bot_pill = room_info_title_shows_agent_badge(
+            app_state,
+            room_id.as_ref(),
+            room_info_dm_target.as_deref(),
+        );
 
         let (people_entries, show_people_loading, member_count, is_agent_enabled, my_role) =
             if let Some(members) = members_arc {
@@ -9809,6 +9859,7 @@ impl RoomScreen {
             is_encrypted,
             is_favorite,
             is_agent_enabled,
+            show_title_bot_pill,
             member_count,
             my_role,
             room_avatar_uri,
@@ -9820,7 +9871,8 @@ impl RoomScreen {
     }
 
     fn refresh_room_info_pane(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
-        if let Some(info) = self.build_room_info_pane_info(app_state) {
+        let is_direct_room = self.current_room_is_direct(cx);
+        if let Some(info) = self.build_room_info_pane_info(app_state, is_direct_room) {
             self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).set_info(cx, info);
         }
     }
@@ -9828,9 +9880,20 @@ impl RoomScreen {
     /// Populate the inline "Info" tab body (a second `RoomInfoSlidingPane`
     /// instance mounted inline inside `keyboard_view`).
     fn refresh_inline_room_info(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
-        if let Some(info) = self.build_room_info_pane_info(app_state) {
+        let is_direct_room = self.current_room_is_direct(cx);
+        if let Some(info) = self.build_room_info_pane_info(app_state, is_direct_room) {
             self.room_info_sliding_pane(cx, ids!(info_content)).set_info(cx, info);
         }
+    }
+
+    fn current_room_is_direct(&self, cx: &mut Cx) -> bool {
+        let Some(room_id) = self.room_id() else { return false };
+        if !cx.has_global::<RoomsListRef>() {
+            return false;
+        }
+        cx.get_global::<RoomsListRef>()
+            .is_direct_room(room_id)
+            .unwrap_or(false)
     }
 
     fn show_room_info_pane(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
@@ -14196,6 +14259,78 @@ mod tests {
         assert_ne!(before, after);
         assert_eq!(after.resolved_parent_bot_user_id.as_ref(), Some(&bot_id));
         assert!(after.known_bot_user_ids.iter().any(|id| id == &bot_id));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_hidden_after_room_unbound() {
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let bot_id: OwnedUserId = "@bot:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(bot_id.clone()), true);
+        assert!(room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(bot_id), false);
+        assert!(!room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_hidden_after_agent_registry_unbind() {
+        let room_id: OwnedRoomId = "!dm:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state
+            .agent_registry
+            .register(agent_id.clone(), crate::app::AgentEntry::default());
+        assert!(room_info_title_shows_agent_badge(
+            Some(&app_state),
+            room_id.as_ref(),
+            Some(agent_id.as_ref()),
+        ));
+
+        app_state.agent_registry.unregister(agent_id.as_ref());
+        assert!(!room_info_title_shows_agent_badge(
+            Some(&app_state),
+            room_id.as_ref(),
+            Some(agent_id.as_ref()),
+        ));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_ignores_known_bot_without_binding_or_agent_dm() {
+        let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
+        let bot_id: OwnedUserId = "@bot:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.bot_settings.record_known_bot_user_ids([bot_id]);
+
+        assert!(!room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+    }
+
+    #[test]
+    fn test_room_info_dm_target_requires_single_non_self_member() {
+        let me: OwnedUserId = "@me:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let human_id: OwnedUserId = "@human:example.org".try_into().unwrap();
+
+        assert_eq!(
+            room_info_dm_target_from_user_ids(
+                [me.as_ref(), agent_id.as_ref()],
+                Some(me.as_ref()),
+            ),
+            Some(agent_id.clone()),
+        );
+        assert_eq!(
+            room_info_dm_target_from_user_ids(
+                [me.as_ref(), agent_id.as_ref(), human_id.as_ref()],
+                Some(me.as_ref()),
+            ),
+            None,
+        );
     }
 
     #[test]
