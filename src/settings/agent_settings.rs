@@ -975,7 +975,10 @@ impl WidgetMatchEvent for AgentSettings {
                 }
                 Some(AgentRowAction::Unbind(user_id)) => {
                     if let Some(app_state) = scope.data.get_mut::<AppState>() {
-                        if app_state.agent_registry.unregister(user_id) {
+                        if app_state.unregister_agent_and_clear_bot_identity(
+                            user_id,
+                            current_user_id().as_deref(),
+                        ) {
                             cx.action(AppStateAction::AgentRegistryUpdated);
                         }
                         if let Some(account_user_id) = current_user_id() {
@@ -1524,7 +1527,7 @@ mod tests {
         let src = production_src(include_str!("agent_settings.rs"));
 
         assert!(src.contains("AgentRowAction::Unbind"));
-        assert!(src.contains("agent_registry.unregister(user_id)"));
+        assert!(src.contains("unregister_agent_and_clear_bot_identity"));
         assert!(src.contains("AppStateAction::AgentRegistryUpdated"));
     }
 

@@ -14271,6 +14271,48 @@ mod tests {
     }
 
     #[test]
+    fn test_room_info_bot_marker_hidden_after_agentlab_unbind() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent_id.clone(), crate::app::AgentEntry {
+            framework: crate::app::AgentFramework::Octos,
+            ..Default::default()
+        });
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = agent_id.to_string();
+        app_state.bot_settings.record_known_bot_user_ids([agent_id.clone()]);
+
+        let before = room_info_bot_identity_fingerprint(
+            Some(&app_state),
+            Some(current_user_id.as_ref()),
+        );
+        assert!(is_known_or_likely_bot(
+            agent_id.as_ref(),
+            before.resolved_parent_bot_user_id.as_deref(),
+            &before.known_bot_user_ids,
+        ));
+
+        app_state.unregister_agent_and_clear_bot_identity(
+            agent_id.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+        let after = room_info_bot_identity_fingerprint(
+            Some(&app_state),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(after.resolved_parent_bot_user_id.is_none());
+        assert!(after.known_bot_user_ids.is_empty());
+        assert!(!is_known_or_likely_bot(
+            agent_id.as_ref(),
+            after.resolved_parent_bot_user_id.as_deref(),
+            &after.known_bot_user_ids,
+        ));
+    }
+
+    #[test]
     fn test_room_info_title_bot_pill_hidden_after_room_unbound() {
         let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
         let bot_id: OwnedUserId = "@bot:example.org".try_into().unwrap();
@@ -14308,6 +14350,33 @@ mod tests {
             room_id.as_ref(),
             Some(agent_id.as_ref()),
         ));
+    }
+
+    #[test]
+    fn test_room_info_title_bot_pill_hidden_after_agentlab_unbind_clears_binding() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let agent_id: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent_id.clone(), crate::app::AgentEntry {
+            framework: crate::app::AgentFramework::Octos,
+            ..Default::default()
+        });
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = agent_id.to_string();
+        app_state.bot_settings.record_known_bot_user_ids([agent_id.clone()]);
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(agent_id.clone()), true);
+        assert!(room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
+
+        app_state.unregister_agent_and_clear_bot_identity(
+            agent_id.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(!room_info_title_shows_agent_badge(Some(&app_state), room_id.as_ref(), None));
     }
 
     #[test]

@@ -770,6 +770,30 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_badge_hidden_after_agentlab_unbind_clears_binding() {
+        let current_user_id: OwnedUserId = "@alice:example.org".try_into().unwrap();
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let agent: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = agent.to_string();
+        app_state.bot_settings.record_known_bot_user_ids([agent.clone()]);
+        app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), Some(agent.clone()), true);
+        assert!(room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+
+        app_state.unregister_agent_and_clear_bot_identity(
+            agent.as_ref(),
+            Some(current_user_id.as_ref()),
+        );
+
+        assert!(!room_shows_agent_badge(&app_state, room_id.as_ref(), None));
+    }
+
+    #[test]
     fn test_rooms_list_entry_retains_adaptive_variants_for_batched_bot_pill() {
         let source = include_str!("rooms_list_entry.rs");
         let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
