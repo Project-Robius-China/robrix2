@@ -403,7 +403,7 @@
   "settings.labs.agents.framework.octos.mono": "Oc",
   "settings.labs.agents.framework.octos.name": "Octos",
   "settings.labs.agents.framework.octos.tag": "AppService",
-  "settings.labs.agents.framework.octos.blurb": "好友,外加服务器端 AppService。",
+  "settings.labs.agents.framework.octos.blurb": "在服务器上登记。",
   "settings.labs.agents.framework.octos_direct.mono": "OD",
   "settings.labs.agents.framework.octos_direct.name": "Octos (Direct)",
   "settings.labs.agents.framework.octos_direct.tag": "直接 Agent",

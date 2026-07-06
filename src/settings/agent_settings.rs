@@ -425,7 +425,7 @@ script_mod! {
                 stat_label.text: "Direct"
             }
             octos_agents_stat := AgentStatTile {
-                stat_label.text: "Octos"
+                stat_label.text: "Octos AppService"
             }
         }
 
@@ -606,6 +606,10 @@ script_mod! {
                 height: Fit
                 flow: Right
                 align: Align{y: 0.5}
+                // Right-inset the header so the "AgentRegistry" badge lines up
+                // with each agent row's framework badge (rows are cards with a
+                // 12px content padding, so their badges sit 12px in).
+                padding: Inset{right: 12}
 
                 registry_title := Label {
                     width: Fill

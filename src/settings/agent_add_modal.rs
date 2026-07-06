@@ -441,8 +441,8 @@ script_mod! {
                         spacing: 9
 
                         step2_framework_tile := RoundedView {
-                            width: 26
-                            height: 26
+                            width: 30
+                            height: 30
                             align: Align{x: 0.5, y: 0.5}
                             new_batch: true
                             show_bg: true
@@ -455,7 +455,7 @@ script_mod! {
                                 height: Fit
                                 draw_text +: {
                                     color: (RBX_FG_PRIMARY)
-                                    text_style: TITLE_TEXT { font_size: 10.5 }
+                                    text_style: TITLE_TEXT { font_size: 13.0 }
                                 }
                                 text: ""
                             }

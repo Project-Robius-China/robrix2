@@ -403,7 +403,7 @@
   "settings.labs.agents.framework.octos.mono": "Oc",
   "settings.labs.agents.framework.octos.name": "Octos",
   "settings.labs.agents.framework.octos.tag": "APPSERVICE",
-  "settings.labs.agents.framework.octos.blurb": "Friend plus server-side AppService.",
+  "settings.labs.agents.framework.octos.blurb": "Registered on the server.",
   "settings.labs.agents.framework.octos_direct.mono": "OD",
   "settings.labs.agents.framework.octos_direct.name": "Octos (Direct)",
   "settings.labs.agents.framework.octos_direct.tag": "DIRECT AGENT",
