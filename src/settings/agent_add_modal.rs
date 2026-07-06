@@ -1111,10 +1111,14 @@ impl AddAgentModal {
     fn populate_framework_cards(&mut self, cx: &mut Cx) {
         // Text content.
         let text = |key| tr_key(self.app_language, key);
-        self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono)).set_text(cx, "Oc");
-        self.view.label(cx, ids!(octos_card.card_body.card_col.card_name)).set_text(cx, "Octos");
-        self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "APPSERVICE");
-        self.view.label(cx, ids!(octos_card.card_body.card_col.card_blurb)).set_text(cx, "Friend plus local AppService.");
+        self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono))
+            .set_text(cx, text("settings.labs.agents.framework.octos.mono"));
+        self.view.label(cx, ids!(octos_card.card_body.card_col.card_name))
+            .set_text(cx, text("settings.labs.agents.framework.octos.name"));
+        self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label))
+            .set_text(cx, text("settings.labs.agents.framework.octos.tag"));
+        self.view.label(cx, ids!(octos_card.card_body.card_col.card_blurb))
+            .set_text(cx, text("settings.labs.agents.framework.octos.blurb"));
         self.view.label(cx, ids!(octos_direct_card.card_body.card_tile.card_mono))
             .set_text(cx, text("settings.labs.agents.framework.octos_direct.mono"));
         self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_name))
