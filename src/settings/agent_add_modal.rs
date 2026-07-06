@@ -1202,6 +1202,11 @@ impl AddAgentModal {
         self.view.view(cx, ids!(step2_view)).set_visible(cx, step2);
         self.view.button(cx, ids!(back_button)).set_visible(cx, step2);
         self.view.view(cx, ids!(footer)).set_visible(cx, !step2);
+        // Both steps share one fixed-height ScrollYView (`body_scroll`). The
+        // step-1 framework picker (now 4 cards) can overflow it, so reset the
+        // scroll to the top on every step switch — otherwise a stale step-1
+        // offset clips step-2's header + Matrix ID input at the top.
+        self.view.view(cx, ids!(body_scroll)).set_scroll_pos(cx, Vec2d { x: 0.0, y: 0.0 });
 
         if step2 {
             let fw = self.selected_framework.map(framework_label).unwrap_or("agent");
@@ -1542,6 +1547,24 @@ mod tests {
         // The child is still recorded as a known bot and in the registry.
         assert!(app_state.bot_settings.known_bot_user_ids.contains(&child));
         assert!(app_state.agent_registry.contains(child.as_ref()));
+    }
+
+    #[test]
+    fn test_step_switch_resets_body_scroll_to_top() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+        let start = src.find("fn sync_steps").expect("sync_steps should exist");
+        let rest = &src[start + "fn sync_steps".len()..];
+        let end = rest
+            .find("\n    fn ")
+            .map(|e| start + "fn sync_steps".len() + e)
+            .unwrap_or(src.len());
+        let body = &src[start..end];
+
+        assert!(
+            body.contains("body_scroll") && body.contains("set_scroll_pos"),
+            "sync_steps must reset body_scroll to the top on step switch, so an \
+             overflowing step-1 picker does not clip step-2's top",
+        );
     }
 
     #[test]

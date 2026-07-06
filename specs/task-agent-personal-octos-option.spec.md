@@ -43,6 +43,7 @@ child / 非父 bot 会覆盖掉已配置的 BotFather——本任务加一道守
 - `register_agent_from_search` 对 `OctosDirect` 保持幂等:重复注册同一 `agent_mxid` 不产生重复条目,不覆盖已存在条目
 - `OctosDirect` 选择卡新增的用户可见文案必须通过 i18n key 提供 en / zh-CN 文案
 - Agent Lab 注册的 `OctosDirect` 是 agent 身份来源:bot/agent 识别与 bot picker 必须通过 `AgentRegistry ∪ known_bot_user_ids` 看到它,但不得把它写入 App Service raw `known_bot_user_ids`
+- 步骤切换(`sync_steps`)时必须把共享滚动体 `body_scroll` 复位到顶部;否则 step1 的 4 张 framework 卡溢出固定高度滚动区后,残留滚动偏移会裁切 step2 顶部的 header 与 Matrix ID 输入框
 - Agent Lab 界面内禁止裸 hex 颜色字面量,使用 `RBX_*` 或 `styles.rs` token
 
 ## Boundaries
@@ -182,3 +183,9 @@ child / 非父 bot 会覆盖掉已配置的 BotFather——本任务加一道守
   当 读取 OctosDirect framework 展示文案
   那么 卡片名称 / tag / blurb 均从 `settings.labs.agents.framework.octos_direct.*` key 读取
   并且 en / zh-CN 资源文件均包含这些 key
+
+场景: 步骤切换时复位滚动到顶部
+  测试: test_step_switch_resets_body_scroll_to_top
+  假设 读取 `agent_add_modal.rs` 的 `sync_steps` 源码
+  当 检查步骤切换逻辑
+  那么 `sync_steps` 函数体同时出现 `body_scroll` 与 `set_scroll_pos`
