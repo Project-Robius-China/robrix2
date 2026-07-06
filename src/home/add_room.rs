@@ -13,10 +13,10 @@ use crate::{
     room::{BasicRoomDetails, FetchedRoomAvatar, FetchedRoomPreview, RoomPreviewAction},
     shared::{
         avatar::{AvatarState, AvatarWidgetRefExt},
-        popup_list::{PopupKind, enqueue_popup_notification},
+        popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle},
         styles::COLOR_FG_DANGER_RED,
     },
-    sliding_sync::{DirectMessageRoomAction, MatrixRequest, current_user_id, submit_async_request},
+    sliding_sync::{DirectMessageRoomAction, MatrixRequest, RoomPreviewResponseMode, current_user_id, submit_async_request},
     space_service_sync::SpaceRequest,
     utils::{self, RoomNameId},
 };
@@ -280,7 +280,26 @@ script_mod! {
                 text_style: theme.font_regular {font_size: 18},
             }
         }
-        
+
+        tab_row := View {
+            width: Fill, height: Fit,
+            flow: Right, spacing: 8,
+            margin: Inset{top: 8, bottom: 4}
+            join_existing_tab := RobrixNeutralIconButton {
+                padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+                text: "Join existing room"
+                enabled: false
+            }
+            create_new_tab := RobrixNeutralIconButton {
+                padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+                text: "Create new room"
+            }
+        }
+
+        join_existing_view := View {
+            width: Fill, height: Fit,
+            flow: Down
+
         LineH { padding: 10, margin: Inset{top: 10, right: 2} }
 
         quick_actions_view := View {
@@ -525,7 +544,28 @@ script_mod! {
                 }
             }
         }
-        
+
+        View {
+            width: Fill
+            height: 20
+        }
+
+        }
+
+        create_new_view := View {
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down
+
+            LineH { padding: 10, margin: Inset{top: 10, right: 2} }
+
+            create_room_page_label := SubsectionLabel {
+                text: "Create a new room:"
+            }
+
+            create_room_page_screen := mod.widgets.CreateRoomScreen {}
+        }
     }
 
     mod.widgets.CreateRoomModal = #(CreateRoomModal::register_widget(vm)) {
@@ -542,7 +582,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: #fff
-                border_radius: 24.0
+                border_radius: 4.0
             }
 
             title_view := View {
@@ -561,16 +601,6 @@ script_mod! {
                         color: #000
                     }
                     text: "Create New Room"
-                }
-
-                close_button := RobrixNeutralIconButton {
-                    width: 38
-                    height: 38
-                    align: Align{x: 0.5, y: 0.5}
-                    spacing: 0
-                    padding: 11
-                    draw_icon.svg: (ICON_CLOSE)
-                    icon_walk: Walk{width: 14, height: 14}
                 }
             }
 
@@ -631,7 +661,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: #fff
-                border_radius: 24.0
+                border_radius: 4.0
             }
 
             title_view := View {
@@ -650,16 +680,6 @@ script_mod! {
                         color: #000
                     }
                     text: "Direct Messages"
-                }
-
-                close_button := RobrixNeutralIconButton {
-                    width: 38
-                    height: 38
-                    align: Align{x: 0.5, y: 0.5}
-                    spacing: 0
-                    padding: 11
-                    draw_icon.svg: (ICON_CLOSE)
-                    icon_walk: Walk{width: 14, height: 14}
                 }
             }
 
@@ -1172,7 +1192,7 @@ impl CreateRoomForm {
         create_room_button.set_enabled(cx, !create_room_name_input.text().trim().is_empty());
         create_room_button.set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
         create_room_button.reset_hover(cx);
-        create_room_encrypted_toggle.set_active(cx, self.create_encrypted_room);
+        create_room_encrypted_toggle.set_active(cx, self.create_encrypted_room, Animate::No);
         self.set_create_room_public(cx, self.create_public_room);
         self.set_visibility_popup_visible(cx, false);
         self.sync_mode_views(cx);
@@ -1258,18 +1278,6 @@ impl Widget for CreateRoomModal {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
-        let create_room_form = self.view.create_room_form(cx, ids!(create_room_form));
-        let is_busy = create_room_form.is_busy();
-        let create_button = self.view.button(cx, ids!(create_button));
-        let can_submit = create_room_form.can_submit(cx);
-        create_button.set_enabled(cx, can_submit);
-        create_button.set_text(cx, if is_busy {
-            tr_key(self.app_language, "add_room.create_room.button.syncing")
-        } else {
-            tr_key(self.app_language, "add_room.create_room.button.create")
-        });
-        self.view.button(cx, ids!(cancel_button)).set_enabled(cx, !is_busy);
-        self.view.button(cx, ids!(close_button)).set_enabled(cx, !is_busy);
         self.view.draw_walk(cx, scope, walk)
     }
 }
@@ -1279,19 +1287,26 @@ impl WidgetMatchEvent for CreateRoomModal {
         let create_room_form = self.view.create_room_form(cx, ids!(create_room_form));
         let create_button = self.view.button(cx, ids!(create_button));
         let cancel_button = self.view.button(cx, ids!(cancel_button));
-        let close_button = self.view.button(cx, ids!(close_button));
+
         if create_button.clicked(actions) {
             let _ = create_room_form.submit(cx);
         }
-        let cancel_clicked = cancel_button.clicked(actions);
-        let close_clicked = close_button.clicked(actions);
-        if !create_room_form.is_busy()
-            && (cancel_clicked || close_clicked || actions.iter().any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed))))
-        {
-            if cancel_clicked || close_clicked {
-                cx.action(CreateRoomModalAction::Close);
-            }
+
+        // Allow cancel anytime
+        if cancel_button.clicked(actions) {
+            cx.action(CreateRoomModalAction::Close);
         }
+
+        // Update button states based on form state
+        let is_busy = create_room_form.is_busy();
+        let can_submit = create_room_form.can_submit(cx);
+        create_button.set_enabled(cx, can_submit);
+        create_button.set_text(cx, if is_busy {
+            tr_key(self.app_language, "add_room.create_room.button.syncing")
+        } else {
+            tr_key(self.app_language, "add_room.create_room.button.create")
+        });
+        // cancel_button stays enabled always
     }
 }
 
@@ -1317,9 +1332,9 @@ impl CreateRoomModal {
 
     pub fn show(&mut self, cx: &mut Cx, preferred_parent_space_id: Option<OwnedRoomId>) {
         self.has_fixed_parent = preferred_parent_space_id.is_some();
-        self.view.create_room_form(cx, ids!(create_room_form))
-            .set_app_language(cx, self.app_language);
-        self.view.create_room_form(cx, ids!(create_room_form)).prepare(
+        let create_room_form = self.view.create_room_form(cx, ids!(create_room_form));
+        create_room_form.set_app_language(cx, self.app_language);
+        create_room_form.prepare(
             cx,
             preferred_parent_space_id,
             CreateRoomContext::SpaceLobbyModal,
@@ -1331,11 +1346,15 @@ impl CreateRoomModal {
             } else {
                 tr_key(self.app_language, "add_room.create_room.help.default")
             });
-        self.view.button(cx, ids!(create_button))
-            .set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
-        self.view.button(cx, ids!(create_button)).reset_hover(cx);
-        self.view.button(cx, ids!(cancel_button)).reset_hover(cx);
-        self.view.button(cx, ids!(close_button)).reset_hover(cx);
+        let can_submit = create_room_form.can_submit(cx);
+        let create_button = self.view.button(cx, ids!(create_button));
+        let cancel_button = self.view.button(cx, ids!(cancel_button));
+        create_button.set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
+        create_button.reset_hover(cx);
+        cancel_button.reset_hover(cx);
+        // Initial button states: form is empty so create disabled, cancel always enabled
+        create_button.set_enabled(cx, can_submit);
+        cancel_button.set_enabled(cx, true);
         self.view.redraw(cx);
     }
 }
@@ -1373,17 +1392,6 @@ impl Widget for StartChatModal {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
-        let user_id_text_is_empty = self.view
-            .text_input(cx, ids!(chat_user_id_input))
-            .text()
-            .trim()
-            .is_empty();
-        self.view.button(cx, ids!(go_button))
-            .set_enabled(cx, !self.submitting && !user_id_text_is_empty);
-        self.view.button(cx, ids!(cancel_button))
-            .set_enabled(cx, !self.submitting);
-        self.view.button(cx, ids!(close_button))
-            .set_enabled(cx, !self.submitting);
         self.view.draw_walk(cx, scope, walk)
     }
 }
@@ -1393,7 +1401,11 @@ impl WidgetMatchEvent for StartChatModal {
         let chat_user_id_input = self.view.text_input(cx, ids!(chat_user_id_input));
         let go_button = self.view.button(cx, ids!(go_button));
         let cancel_button = self.view.button(cx, ids!(cancel_button));
-        let close_button = self.view.button(cx, ids!(close_button));
+
+        if chat_user_id_input.changed(actions).is_some() {
+            let user_id_text_is_empty = chat_user_id_input.text().trim().is_empty();
+            go_button.set_enabled(cx, !self.submitting && !user_id_text_is_empty);
+        }
 
         let submit_chat_request = go_button.clicked(actions)
             || chat_user_id_input.returned(actions).is_some();
@@ -1401,9 +1413,8 @@ impl WidgetMatchEvent for StartChatModal {
             self.submit(cx);
         }
 
-        let cancel_clicked = cancel_button.clicked(actions);
-        let close_clicked = close_button.clicked(actions);
-        if cancel_clicked || close_clicked {
+        if cancel_button.clicked(actions) {
+            self.submitting = false;
             cx.action(StartChatModalAction::Close);
         }
 
@@ -1413,6 +1424,9 @@ impl WidgetMatchEvent for StartChatModal {
                 cx.action(StartChatModalAction::Close);
             } else if matches!(action.downcast_ref(), Some(DirectMessageRoomAction::FailedToCreate { .. } | DirectMessageRoomAction::DidNotExist { .. })) {
                 self.submitting = false;
+                let user_id_text_is_empty = chat_user_id_input.text().trim().is_empty();
+                go_button.set_enabled(cx, !user_id_text_is_empty);
+                cancel_button.set_enabled(cx, true);
                 self.view.redraw(cx);
             }
         }
@@ -1456,6 +1470,8 @@ impl StartChatModal {
                 }
 
                 self.submitting = true;
+                self.view.button(cx, ids!(go_button)).set_enabled(cx, false);
+                // cancel_button stays enabled so user can cancel during submission
                 submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
                     create_encrypted: false,
                     user_profile: UserProfile {
@@ -1485,9 +1501,12 @@ impl StartChatModal {
         self.submitting = false;
         self.view.text_input(cx, ids!(chat_user_id_input)).set_text(cx, "");
         self.set_app_language(cx, self.app_language);
-        self.view.button(cx, ids!(go_button)).reset_hover(cx);
-        self.view.button(cx, ids!(cancel_button)).reset_hover(cx);
-        self.view.button(cx, ids!(close_button)).reset_hover(cx);
+        let go_button = self.view.button(cx, ids!(go_button));
+        let cancel_button = self.view.button(cx, ids!(cancel_button));
+        go_button.reset_hover(cx);
+        cancel_button.reset_hover(cx);
+        go_button.set_enabled(cx, false); // Text input is empty
+        cancel_button.set_enabled(cx, true);
         self.view.text_input(cx, ids!(chat_user_id_input)).set_key_focus(cx);
         self.view.redraw(cx);
     }
@@ -1532,8 +1551,25 @@ impl Widget for AddRoomScreen {
             self.set_app_language(cx, app_language);
         }
         self.view.handle_event(cx, event, scope);
-        
+
         if let Event::Actions(actions) = event {
+            let join_existing_tab = self.view.button(cx, ids!(join_existing_tab));
+            let create_new_tab = self.view.button(cx, ids!(create_new_tab));
+            if join_existing_tab.clicked(actions) {
+                self.view.view(cx, ids!(join_existing_view)).set_visible(cx, true);
+                self.view.view(cx, ids!(create_new_view)).set_visible(cx, false);
+                join_existing_tab.set_enabled(cx, false);
+                create_new_tab.set_enabled(cx, true);
+                self.redraw(cx);
+            }
+            if create_new_tab.clicked(actions) {
+                self.view.view(cx, ids!(join_existing_view)).set_visible(cx, false);
+                self.view.view(cx, ids!(create_new_view)).set_visible(cx, true);
+                join_existing_tab.set_enabled(cx, true);
+                create_new_tab.set_enabled(cx, false);
+                self.redraw(cx);
+            }
+
             let room_alias_id_input = self.view.text_input(cx, ids!(room_alias_id_input));
             let search_for_room_button = self.view.button(cx, ids!(search_for_room_button));
             let new_room_button = self.view.button(cx, ids!(new_room_button));
@@ -1603,7 +1639,11 @@ impl Widget for AddRoomScreen {
                             room_or_alias_id: room_or_alias_id.clone(),
                             via: via.clone(),
                         };
-                        submit_async_request(MatrixRequest::GetRoomPreview { room_or_alias_id, via });
+                        submit_async_request(MatrixRequest::GetRoomPreview {
+                            room_or_alias_id,
+                            via,
+                            response_mode: RoomPreviewResponseMode::Action,
+                        });
                     }
                     Err(e) => {
                         let error_text = e.to_string();
@@ -1646,11 +1686,24 @@ impl Widget for AddRoomScreen {
                             let err_str = tr_fmt(self.app_language, "add_room.popup.fetch_error", &[
                                 ("error", error_text.as_str()),
                             ]);
-                            enqueue_popup_notification(
-                                err_str.clone(),
-                                PopupKind::Error,
-                                None,
-                            );
+                            let room_or_alias_id_clone = room_or_alias_id.clone();
+                            let via_clone = via.clone();
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Couldn't load room preview".into()),
+                                message: err_str.clone().into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        submit_async_request(MatrixRequest::GetRoomPreview {
+                                            room_or_alias_id: room_or_alias_id_clone.clone(),
+                                            via: via_clone.clone(),
+                                            response_mode: RoomPreviewResponseMode::Action,
+                                        });
+                                    }),
+                                ],
+                                auto_dismissal_duration: None,
+                                ..Default::default()
+                            });
                             self.state = AddRoomState::FetchError(err_str);
                             self.redraw(cx);
                             break;

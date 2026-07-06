@@ -14,6 +14,8 @@ use crate::{
     home::navigation_tab_bar::{NavigationBarAction, SelectedTab},
     i18n::{AppLanguage, tr_key},
     profile::user_profile_cache,
+    room_preview_cache,
+    settings::app_preferences::effective_is_desktop,
     shared::{
         image_viewer::{ImageViewerAction, ImageViewerError, LoadState},
         popup_list::{PopupKind, enqueue_popup_notification},
@@ -33,6 +35,52 @@ script_mod! {
         align: Align{y: 0.5}
         spacing: 3,
 
+        // Back button — mobile only. Shown when a space is selected so the user
+        // can leave the space and return to the full "All Rooms" list (on desktop
+        // the spaces rail handles this, so it stays hidden there). Visibility is
+        // driven imperatively from `handle_event` on `TabSelected`.
+        back_button := View {
+            visible: false,
+            width: Fit,
+            height: Fit
+            margin: Inset{left: 2, right: 1}
+            flow: Overlay,
+
+            Icon {
+                draw_icon +: {
+                    svg: (ICON_ARROW_BACK)
+                    color: (RBX_FG_SECONDARY)
+                }
+                icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
+            }
+
+            back_click_area := Button {
+                width: Fill,
+                height: Fill
+                padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
+                spacing: 0,
+                text: ""
+                draw_bg +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    border_color: #0000
+                    border_color_hover: #0000
+                    border_color_down: #0000
+                    border_color_focus: #0000
+                    border_size: 0.0
+                    border_radius: 0.0
+                }
+                draw_text +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    color_focus: #0000
+                }
+                icon_walk: Walk{width: 0, height: 0}
+            }
+        }
+
         header_title := Label {
             width: Fill,
             height: Fit,
@@ -41,10 +89,55 @@ script_mod! {
             flow: Right, // do not wrap
             text: "All Rooms"
             draw_text +: {
-                color: #x0
-                text_style: TITLE_TEXT {}
+                color: (RBX_FG_PRIMARY)
+                // Regular weight (thinner) — reads as a title via size, not boldness.
+                text_style: theme.font_regular { font_size: 14 }
             }
         },
+
+        // (The mobile "spaces" toggle icon was removed: switching to spaces is now
+        // the `Workspace` tab in the home screen's tab row — see `RoomsSideBar`.)
+
+        open_directory_button := View {
+            width: Fit,
+            height: Fit
+            margin: Inset{right: 1}
+            flow: Overlay,
+
+            Icon {
+                draw_icon +: {
+                    svg: (ICON_HIERARCHY)
+                    color: (RBX_FG_SECONDARY)
+                }
+                icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
+            }
+
+            directory_click_area := Button {
+                width: Fill,
+                height: Fill
+                padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
+                spacing: 0,
+                text: ""
+                draw_bg +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    border_color: #0000
+                    border_color_hover: #0000
+                    border_color_down: #0000
+                    border_color_focus: #0000
+                    border_size: 0.0
+                    border_radius: 0.0
+                }
+                draw_text +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    color_focus: #0000
+                }
+                icon_walk: Walk{width: 0, height: 0}
+            }
+        }
 
         open_room_filter_modal_button := View {
             width: Fit,
@@ -55,7 +148,7 @@ script_mod! {
             Icon {
                 draw_icon +: {
                     svg: (ICON_SEARCH)
-                    color: (COLOR_TEXT)
+                    color: (RBX_FG_SECONDARY)
                 }
                 icon_walk: Walk{width: 18, height: Fit, margin: Inset{bottom: 2}}
             }
@@ -97,7 +190,7 @@ script_mod! {
                 width: 20,
                 height: 20,
                 draw_bg +: {
-                    color: (COLOR_ACTIVE_PRIMARY)
+                    color: (RBX_ACCENT)
                     border_size: 3.0
                 }
             }
@@ -108,7 +201,7 @@ script_mod! {
                 Icon {
                     draw_icon +: {
                         svg: (ICON_CLOUD_OFFLINE),
-                        color: (COLOR_FG_DANGER_RED),
+                        color: (RBX_DANGER_FG),
                     }
                     icon_walk: Walk{width: 25, height: Fit, margin: Inset{left: 1, bottom: 1}}
                 }
@@ -120,7 +213,7 @@ script_mod! {
                 Icon {
                     draw_icon +: {
                         svg: (ICON_CLOUD_CHECKMARK),
-                        color: (COLOR_FG_ACCEPT_GREEN),
+                        color: (RBX_SUCCESS_FG),
                     }
                     icon_walk: Walk{width: 25, height: Fit, margin: Inset{left: 1, bottom: 2}}
                 }
@@ -147,6 +240,13 @@ impl Widget for RoomsListHeader {
             self.set_app_language(cx, app_language);
         }
         if let Event::Actions(actions) = event {
+            if self.view.button(cx, ids!(back_button.back_click_area)).clicked(actions) {
+                // Leave the currently-selected space and return to the full rooms list.
+                cx.action(NavigationBarAction::GoToHome);
+            }
+            if self.view.button(cx, ids!(open_directory_button.directory_click_area)).clicked(actions) {
+                cx.action(NavigationBarAction::GoToDirectory);
+            }
             if self.view.button(cx, ids!(open_room_filter_modal_button.click_area)).clicked(actions) {
                 cx.action(RoomsListHeaderAction::OpenRoomFilterModal);
             }
@@ -194,6 +294,7 @@ impl Widget for RoomsListHeader {
                             // by RoomScreen in response to the StateUpdate action.
                             user_profile_cache::clear_all_pending_requests();
                             avatar_cache::clear_all_pending_and_failed_requests();
+                            room_preview_cache::clear_all_pending_requests();
                             // Now that we're no longer offline, we also need to tell the
                             // ProfileIcon to refresh itself and fetch our own user's profile again.
                             SignalToUI::set_ui_signal();
@@ -207,16 +308,22 @@ impl Widget for RoomsListHeader {
 
                 if let Some(NavigationBarAction::TabSelected(tab)) = action.downcast_ref() {
                     let header_title = self.view.label(cx, ids!(header_title));
-                    match tab {
+                    let show_back = match tab {
                         SelectedTab::Space { space_name_id } => {
                             header_title.set_text(cx, &space_name_id.to_string());
                             self.showing_space_title = true;
+                            // On mobile there's no spaces rail to step out of a space,
+                            // so surface a back button that returns to "All Rooms".
+                            !effective_is_desktop(cx)
                         }
                         _ => {
                             header_title.set_text(cx, tr_key(self.app_language, "rooms_list_header.title.all_rooms"));
                             self.showing_space_title = false;
+                            false
                         }
-                    }
+                    };
+                    self.view.view(cx, ids!(back_button)).set_visible(cx, show_back);
+                    self.redraw(cx);
                     continue;
                 }
             }
@@ -224,9 +331,9 @@ impl Widget for RoomsListHeader {
 
         // Show tooltips for the sync status icons.
         for (view, text, bg_color) in [
-            (self.view.view(cx, ids!(loading_spinner)), tr_key(self.app_language, "rooms_list_header.tooltip.syncing"), vec4(0.059, 0.533, 0.996, 1.0)), // COLOR_ACTIVE_PRIMARY #0f88fe
-            (self.view.view(cx, ids!(offline_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.offline"), vec4(0.863, 0.0, 0.020, 1.0)),   // COLOR_FG_DANGER_RED #DC0005
-            (self.view.view(cx, ids!(synced_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.synced"), vec4(0.075, 0.533, 0.031, 1.0)), // COLOR_FG_ACCEPT_GREEN #138808
+            (self.view.view(cx, ids!(loading_spinner)), tr_key(self.app_language, "rooms_list_header.tooltip.syncing"), crate::shared::design_tokens::RBX_ACCENT),
+            (self.view.view(cx, ids!(offline_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.offline"), crate::shared::design_tokens::RBX_DANGER_FG),
+            (self.view.view(cx, ids!(synced_icon)), tr_key(self.app_language, "rooms_list_header.tooltip.synced"), crate::shared::design_tokens::RBX_SUCCESS_FG),
         ] {
             if !view.visible() {
                 continue;

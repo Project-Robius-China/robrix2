@@ -25,15 +25,23 @@ pub struct WindowGeomState {
 
 
 /// Save the current app state to persistent storage.
-pub fn save_app_state(
-    app_state: AppState,
-    user_id: OwnedUserId,
-) -> anyhow::Result<()> {
-    let file = std::fs::File::create(
-        persistent_state_dir(&user_id).join(LATEST_APP_STATE_FILE_NAME)
-    )?;
+pub fn save_app_state(app_state: AppState, user_id: OwnedUserId) -> anyhow::Result<()> {
+    let bytes = serialize_app_state(&app_state)?;
+    save_app_state_bytes(&bytes, &user_id)
+}
+
+/// Serializes the current app state into the same format used by [`save_app_state`].
+pub fn serialize_app_state(app_state: &AppState) -> anyhow::Result<Vec<u8>> {
+    Ok(serde_json::to_vec(app_state)?)
+}
+
+/// Save pre-serialized app state bytes to persistent storage.
+pub fn save_app_state_bytes(app_state_json: &[u8], user_id: &UserId) -> anyhow::Result<()> {
+    let state_dir = persistent_state_dir(user_id);
+    std::fs::create_dir_all(&state_dir)?;
+    let file = std::fs::File::create(state_dir.join(LATEST_APP_STATE_FILE_NAME))?;
     let mut writer = std::io::BufWriter::new(file);
-    serde_json::to_writer(&mut writer, &app_state)?;
+    writer.write_all(app_state_json)?;
     writer.flush()?;
     log!("Successfully saved app state to persistent storage.");
     Ok(())
@@ -90,24 +98,38 @@ pub async fn load_app_state(user_id: &UserId) -> anyhow::Result<AppState> {
         }
         Err(e) => return Err(e.into())
     };
-    match serde_json::from_slice(&file_bytes) {
+    let mut app_state = deserialize_app_state_or_recover(&file_bytes, &state_path);
+    // Migration: upgraded users with a legacy known-bot list but no registry
+    // get their bots seeded into the global AgentRegistry on load.
+    app_state.seed_agent_registry_from_known_bots();
+    Ok(app_state)
+}
+
+/// Deserializes persisted app-state bytes, or — when the bytes are unreadable
+/// (e.g. an incompatible format from a previous version) — backs up the file
+/// and returns a default [`AppState`]. Never panics.
+fn deserialize_app_state_or_recover(
+    file_bytes: &[u8],
+    state_path: &std::path::Path,
+) -> AppState {
+    match serde_json::from_slice(file_bytes) {
         Ok(app_state) => {
             log!("Successfully loaded app state from persistent storage.");
-            Ok(app_state)
+            app_state
         }
         Err(e) => {
             error!("Failed to deserialize app state: {e}. This may be due to an incompatible format from a previous version.");
 
-            // Backup the old file to preserve user's data
+            // Backup the old file to preserve user's data.
             let backup_path = state_path.with_extension("json.bak");
-            if let Err(backup_err) = tokio::fs::rename(&state_path, &backup_path).await {
+            if let Err(backup_err) = std::fs::rename(state_path, &backup_path) {
                 error!("Failed to backup old app state file: {}", backup_err);
             } else {
                 log!("Old app state backed up to: {:?}", backup_path);
             }
 
             log!("Using default app state. Your previous tabs and selections will be reset.");
-            Ok(AppState::default())
+            AppState::default()
         }
     }
 }
@@ -134,4 +156,61 @@ pub fn load_window_state(window_ref: WindowRef, cx: &mut Cx) -> anyhow::Result<(
         "Robrix".to_string(),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::AgentEntry;
+
+    #[tokio::test]
+    async fn test_agent_registry_persists_per_account_no_cross_leak() {
+        let alice: OwnedUserId = "@agent-registry-alice:example.org".try_into().unwrap();
+        let bob: OwnedUserId = "@agent-registry-bob:example.org".try_into().unwrap();
+        let _ = std::fs::remove_dir_all(persistent_state_dir(alice.as_ref()));
+        let _ = std::fs::remove_dir_all(persistent_state_dir(bob.as_ref()));
+
+        // Distinct accounts map to distinct storage paths, so one account's
+        // saved state can never overwrite another's.
+        assert_ne!(persistent_state_dir(&alice), persistent_state_dir(&bob));
+
+        let mut alice_state = AppState::default();
+        let agent: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        alice_state
+            .agent_registry
+            .register(agent.clone(), AgentEntry::default());
+        let bob_state = AppState::default();
+
+        save_app_state(alice_state, alice.clone()).unwrap();
+        save_app_state(bob_state, bob.clone()).unwrap();
+
+        let alice_loaded = load_app_state(alice.as_ref()).await.unwrap();
+        let bob_loaded = load_app_state(bob.as_ref()).await.unwrap();
+
+        assert!(alice_loaded.agent_registry.contains(agent.as_ref()));
+        assert!(bob_loaded.agent_registry.is_empty());
+
+        let _ = std::fs::remove_dir_all(persistent_state_dir(alice.as_ref()));
+        let _ = std::fs::remove_dir_all(persistent_state_dir(bob.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_registry_json_falls_back_to_default_state() {
+        let user_id: OwnedUserId = "@agent-registry-corrupt:example.org".try_into().unwrap();
+        let dir = persistent_state_dir(user_id.as_ref());
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state_path = dir.join(LATEST_APP_STATE_FILE_NAME);
+        let corrupt = br#"{"agent_registry": this is not valid json"#;
+        std::fs::write(&state_path, corrupt).unwrap();
+
+        let recovered = load_app_state(user_id.as_ref()).await.unwrap();
+
+        // Falls back to a default AppState (empty registry) without panicking.
+        assert_eq!(recovered.agent_registry.len(), 0);
+        // The unreadable file is preserved as a backup.
+        assert!(state_path.with_extension("json.bak").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

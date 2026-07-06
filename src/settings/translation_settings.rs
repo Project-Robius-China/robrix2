@@ -5,6 +5,10 @@ use crate::{
     i18n::{AppLanguage, tr_fmt, tr_key},
     persistence,
     room::translation::{self, TranslationConfig},
+    shared::design_tokens::{
+        RBX_DANGER_BG, RBX_DANGER_FG, RBX_NEUTRAL_BG, RBX_NEUTRAL_FG,
+        RBX_SUCCESS_BG, RBX_SUCCESS_FG, RBX_WARNING_BG, RBX_WARNING_FG,
+    },
     sliding_sync::current_user_id,
 };
 
@@ -61,8 +65,8 @@ script_mod! {
                 active: false
                 draw_bg +: {
                     size: 20.0
-                    color_active: (COLOR_ACTIVE_PRIMARY)
-                    border_color_active: (COLOR_ACTIVE_PRIMARY)
+                    color_active: (RBX_ACCENT)
+                    border_color_active: (RBX_ACCENT)
                     mark_color_active: #fff
                 }
             }
@@ -147,7 +151,7 @@ script_mod! {
                 spacing: (SPACE_SM)
                 margin: Inset{top: (SPACE_XS)}
 
-                save_button := RobrixIconButton {
+                save_button := SettingsPrimaryButton {
                     padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
                     icon_walk: Walk{width: 0, height: 0}
                     spacing: 0
@@ -161,15 +165,10 @@ script_mod! {
                     text: "Test Connection"
                 }
 
-                test_result_label := Label {
-                    width: Fit, height: Fit
+                test_result_badge := SettingsStatusBadge {
+                    visible: false
                     margin: Inset{left: (SPACE_SM)}
                     align: Align{y: 0.5}
-                    draw_text +: {
-                        color: (COLOR_DISABLED_TEXT)
-                        text_style: REGULAR_TEXT { font_size: 10 }
-                    }
-                    text: ""
                 }
             }
         }
@@ -203,34 +202,22 @@ impl Widget for TranslationSettings {
                         log!("Test translation response: status={}, body={:?}",
                             response.status_code,
                             response.body_string().unwrap_or_default().chars().take(200).collect::<String>());
-                        let label = self.view.label(cx, ids!(test_result_label));
                         match translation::parse_translation_response(response) {
                             Ok(result) => {
-                                let mut lbl = label;
-                                script_apply_eval!(cx, lbl, {
-                                    draw_text +: { color: #x00AA00 }
-                                });
-                                lbl.set_text(cx, &tr_fmt(self.app_language, "settings.labs.translation.test.ok", &[("result", &result)]));
+                                let text = tr_fmt(self.app_language, "settings.labs.translation.test.ok", &[("result", &result)]);
+                                self.show_test_result(cx, RBX_SUCCESS_FG, RBX_SUCCESS_BG, &text);
                             }
                             Err(e) => {
-                                let mut lbl = label;
-                                script_apply_eval!(cx, lbl, {
-                                    draw_text +: { color: #xCC0000 }
-                                });
-                                lbl.set_text(cx, &tr_fmt(self.app_language, "settings.labs.translation.test.failed", &[("error", &e)]));
+                                let text = tr_fmt(self.app_language, "settings.labs.translation.test.failed", &[("error", &e)]);
+                                self.show_test_result(cx, RBX_DANGER_FG, RBX_DANGER_BG, &text);
                             }
                         }
-                        self.view.redraw(cx);
                     }
                 }
                 if let NetworkResponse::HttpError { request_id, error } = response {
                     if *request_id == TEST_TRANSLATION_REQUEST_ID {
-                        let mut label = self.view.label(cx, ids!(test_result_label));
-                        script_apply_eval!(cx, label, {
-                            draw_text +: { color: #xCC0000 }
-                        });
-                        label.set_text(cx, &tr_fmt(self.app_language, "settings.labs.translation.test.error", &[("error", &error.message)]));
-                        self.view.redraw(cx);
+                        let text = tr_fmt(self.app_language, "settings.labs.translation.test.error", &[("error", &error.message)]);
+                        self.show_test_result(cx, RBX_DANGER_FG, RBX_DANGER_BG, &text);
                     }
                 }
             }
@@ -291,20 +278,14 @@ impl WidgetMatchEvent for TranslationSettings {
             let model = self.view.text_input(cx, ids!(model_input)).text().trim().to_string();
 
             if api_url.is_empty() {
-                self.view
-                    .label(cx, ids!(test_result_label))
-                    .set_text(cx, tr_key(self.app_language, "settings.labs.translation.validation.api_url_empty"));
-                self.view.redraw(cx);
+                let text = tr_key(self.app_language, "settings.labs.translation.validation.api_url_empty").to_string();
+                self.show_test_result(cx, RBX_WARNING_FG, RBX_WARNING_BG, &text);
                 return;
             }
 
-            // Show testing status
-            let mut label = self.view.label(cx, ids!(test_result_label));
-            script_apply_eval!(cx, label, {
-                draw_text +: { color: #x999999 }
-            });
-            label.set_text(cx, tr_key(self.app_language, "settings.labs.translation.test.testing"));
-            self.view.redraw(cx);
+            // Show "testing…" status as a neutral pill.
+            let text = tr_key(self.app_language, "settings.labs.translation.test.testing").to_string();
+            self.show_test_result(cx, RBX_NEUTRAL_FG, RBX_NEUTRAL_BG, &text);
 
             // Send a test translation request
             let test_config = TranslationConfig {
@@ -339,6 +320,22 @@ impl TranslationSettings {
         self.app_language = app_language;
         self.app_language_initialized = true;
         self.sync_app_language(cx);
+    }
+
+    /// Show the connection-test result as a status pill: `fg`/`bg` are a semantic
+    /// foreground/background pair (success / warning / danger).
+    fn show_test_result(&mut self, cx: &mut Cx, fg: Vec4, bg: Vec4, text: &str) {
+        let mut badge = self.view.view(cx, ids!(test_result_badge));
+        badge.set_visible(cx, true);
+        script_apply_eval!(cx, badge, {
+            draw_bg +: { color: #(bg) }
+        });
+        let mut label = self.view.label(cx, ids!(test_result_badge.badge_label));
+        script_apply_eval!(cx, label, {
+            draw_text +: { color: #(fg) }
+        });
+        label.set_text(cx, text);
+        self.view.redraw(cx);
     }
 
     fn sync_app_language(&mut self, cx: &mut Cx) {
@@ -393,8 +390,13 @@ impl TranslationSettings {
         self.view.view(cx, ids!(config_section))
             .set_visible(cx, config.enabled);
 
+        // The test-result pill is a transient per-test status; clear it whenever
+        // the section is (re)synced so a stale result doesn't reappear after a
+        // disable -> re-enable cycle.
+        self.view.view(cx, ids!(test_result_badge)).set_visible(cx, false);
+
         self.view.check_box(cx, ids!(translation_switch))
-            .set_active(cx, config.enabled);
+            .set_active(cx, config.enabled, Animate::No);
         self.set_switch_state_label(cx, config.enabled);
     }
 

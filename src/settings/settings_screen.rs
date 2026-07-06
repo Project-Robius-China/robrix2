@@ -2,9 +2,51 @@
 use makepad_widgets::*;
 use url::Url;
 
-use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, bot_settings::BotSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification}, styles::{apply_neutral_button_style, apply_primary_button_style}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
+use crate::{app::{AppState, AppUpdateAction, BotSettingsState}, home::navigation_tab_bar::{NavigationBarAction, get_own_profile}, i18n::{AppLanguage, I18nKey, language_dropdown_labels, tr, tr_fmt, tr_key}, persistence, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, profile::user_profile::UserProfile, settings::{account_settings::AccountSettingsWidgetExt, app_preferences::AppPreferences, app_settings::AppSettingsWidgetExt, translation_settings::TranslationSettingsWidgetExt}, shared::{expand_arrow::ExpandArrow, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}}, sliding_sync::current_user_id, updater::{UpdateCheckOutcome, check_for_updates}};
 
 const CONTRIBUTE_REPO_URL: &str = "https://github.com/Project-Robius-China/robrix2";
+
+/// Teal "selected" style for a settings category tab (solid RBX_ACCENT + white
+/// text), matching the segmented-tab look of the design spec.
+fn apply_settings_tab_selected(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            color: mod.widgets.RBX_ACCENT,
+            color_hover: mod.widgets.RBX_ACCENT_HOVER,
+            color_down: mod.widgets.RBX_ACCENT_PRESSED,
+            border_size: 0.0,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_FG_ON_ACCENT,
+            color_hover: mod.widgets.RBX_FG_ON_ACCENT,
+            color_down: mod.widgets.RBX_FG_ON_ACCENT,
+        }
+    });
+}
+
+/// Ghost "unselected" style for a settings category tab (transparent fill,
+/// secondary text, subtle hover wash).
+fn apply_settings_tab_unselected(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            color: #0000,
+            color_hover: mod.widgets.RBX_BG_HOVER,
+            color_down: mod.widgets.RBX_BG_PRESSED,
+            border_size: 0.0,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_FG_SECONDARY,
+            color_hover: mod.widgets.RBX_FG_SECONDARY,
+            color_down: mod.widgets.RBX_FG_SECONDARY,
+        }
+    });
+}
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -18,35 +60,50 @@ script_mod! {
         width: Fill, height: Fill,
         flow: Overlay
 
-        View {
-            padding: Inset{top: (SPACE_SM), left: (SETTINGS_CONTENT_PADDING), right: (SETTINGS_CONTENT_PADDING), bottom: (SETTINGS_CONTENT_PADDING)},
+        SolidView {
+            show_bg: true
+            draw_bg.color: (RBX_BG_CANVAS)
+            padding: Inset{top: (SPACE_SM), left: (SETTINGS_CONTENT_PADDING), right: (SETTINGS_CONTENT_PADDING) },
             flow: Down
 
-            // The settings header shows a title, with a close button to the right.
+            // Header: "Settings" title + close button.
             settings_header := View {
                 flow: Right,
                 width: Fill, height: Fit
-                margin: Inset{top: (SPACE_SM), left: (SPACE_XS), right: (SPACE_XS)}
+                margin: Inset{top: (SPACE_SM), left: 0, right: (SPACE_XS)}
                 spacing: (SPACE_SM),
+                align: Align{y: 0.5}
 
                 settings_header_title := TitleLabel {
+                    width: Fill
                     padding: 0,
-                    margin: Inset{ left: 0, top: (SPACE_SM) },
-                    text: "Add/Explore Rooms"
+                    margin: 0,
+                    text: "Settings"
                     draw_text +: {
-                        text_style: theme.font_regular {font_size: 18},
+                        text_style: RBX_TEXT_PAGE_TITLE {},
+                        color: (RBX_FG_PRIMARY)
                     }
                 }
 
-                // The "X" close button on the top right
+                // The "X" close button on the top right — bare icon, no fill.
                 close_button := RobrixNeutralIconButton {
                     width: Fit,
                     height: Fit,
                     spacing: 0,
                     margin: 0,
-                    padding: (SPACE_LG),
-                    draw_icon.svg: (ICON_CLOSE)
-                    icon_walk: Walk{width: 12, height: 12}
+                    padding: (SPACE_MD),
+                    draw_bg +: {
+                        color: #0000
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_size: 0.0
+                        border_color: #0000
+                        border_color_hover: #0000
+                        border_color_down: #0000
+                        border_radius: (RBX_RADIUS_XS)
+                    }
+                    draw_icon +: { svg: (ICON_CLOSE), color: (RBX_FG_SECONDARY) }
+                    icon_walk: Walk{width: 14, height: 14}
                 }
             }
 
@@ -65,7 +122,7 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Account"
                 }
 
@@ -74,8 +131,17 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Preferences"
+                }
+
+                category_devices_button := RobrixNeutralIconButton {
+                    width: Fit, height: Fit,
+                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                    spacing: 0,
+                    icon_walk: Walk{width: 0, height: 0, margin: 0}
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
+                    text: "Devices"
                 }
 
                 category_labs_button := RobrixNeutralIconButton {
@@ -83,7 +149,7 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Labs"
                 }
 
@@ -92,7 +158,7 @@ script_mod! {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                     spacing: 0,
                     icon_walk: Walk{width: 0, height: 0, margin: 0}
-                    draw_bg +: { border_radius: (RADIUS_MD) }
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                     text: "Contribute"
                 }
             }
@@ -122,6 +188,8 @@ script_mod! {
                         flow: Down
                         spacing: (SPACE_SM)
 
+                        app_settings := AppSettings {}
+
                         preferences_language_title := TitleLabel {
                             text: "Language"
                         }
@@ -134,13 +202,33 @@ script_mod! {
                             margin: Inset{top: (SPACE_XS)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
 
-                            preferences_application_language_label := SubsectionLabel {
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_SM)
                                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                                text: "Application language"
+
+                                SettingsIconCircle {
+                                    width: 30, height: 30
+                                    draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                                    Icon {
+                                        width: 16, height: 16
+                                        draw_icon +: { svg: (ICON_GLOBE), color: (RBX_ACCENT) }
+                                        icon_walk: Walk{width: 16, height: 16}
+                                    }
+                                }
+                                preferences_application_language_label := SubsectionLabel {
+                                    width: Fill
+                                    margin: 0
+                                    text: "Application language"
+                                }
                             }
 
                             // Custom language selector: button + popup list
@@ -239,69 +327,67 @@ script_mod! {
                             }
                         }
 
-                        LineH { width: 400, padding: 10, margin: Inset{top: 12, bottom: 5} }
-
                         preferences_proxy_title := TitleLabel {
                             text: "Proxy"
-                            draw_text +: {
-                                color: (COLOR_ACTIVE_PRIMARY)
-                            }
                         }
 
                         preferences_proxy_use_card := RoundedView {
                             width: Fill, height: Fit,
-                            flow: Right
-                            align: Align{x: 1.0, y: 0.5}
-                            show_bg: true
-                            draw_bg +: {
-                                color: #F5F5F5
-                                border_radius: 8.0
-                                border_size: 1.0
-                                border_color: #DADADA
-                            }
-                            padding: Inset{top: 12, bottom: 12, left: 12, right: 12}
-                            margin: Inset{left: 5, right: 8, top: 2}
-
-                            preferences_proxy_use_label := Label {
-                                width: Fill, height: Fit
-                                draw_text +: {
-                                    color: (COLOR_TEXT)
-                                    text_style: TITLE_TEXT {font_size: 12}
-                                }
-                                text: "Use proxy"
-                            }
-
-                            preferences_proxy_use_toggle := Toggle {
-                                width: Fit
-                                height: Fit
-                                padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
-                                text: ""
-                                active: false
-                                draw_bg +: {
-                                    size: 20.0
-                                    color_active: (COLOR_ACTIVE_PRIMARY)
-                                    border_color_active: (COLOR_ACTIVE_PRIMARY)
-                                    mark_color_active: #fff
-                                }
-                            }
-                        }
-
-                        preferences_proxy_fields_section := RoundedView {
-                            visible: false
-                            width: Fill, height: Fit,
                             flow: Down
-                            spacing: 0
                             show_bg: true
                             draw_bg +: {
-                                color: #F5F5F5
-                                border_radius: 8.0
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
                                 border_size: 1.0
-                                border_color: #DADADA
+                                border_color: (RBX_STROKE_SOFT)
                             }
-                            padding: Inset{top: 4, left: 12, right: 12, bottom: 8}
-                            margin: Inset{left: 5, right: 8, top: 4}
+                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
+                            margin: Inset{top: (SPACE_XS)}
 
-                            preferences_proxy_address_row := View {
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_SM)
+
+                                SettingsIconCircle {
+                                    width: 30, height: 30
+                                    draw_bg +: { color: (RBX_INFO_BG) }
+                                    Icon {
+                                        width: 16, height: 16
+                                        draw_icon +: { svg: (ICON_SHIELD), color: (RBX_INFO_FG) }
+                                        icon_walk: Walk{width: 16, height: 16}
+                                    }
+                                }
+
+                                preferences_proxy_use_label := SubsectionLabel {
+                                    width: Fill
+                                    margin: Inset{top: 0, bottom: 0}
+                                    text: "Use proxy"
+                                }
+
+                                preferences_proxy_use_toggle := Toggle {
+                                    width: Fit
+                                    height: Fit
+                                    padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
+                                    text: ""
+                                    active: false
+                                    draw_bg +: {
+                                        size: 20.0
+                                        color_active: (RBX_ACCENT)
+                                        border_color_active: (RBX_ACCENT)
+                                        mark_color_active: #fff
+                                    }
+                                }
+                            }
+
+                            preferences_proxy_fields_section := View {
+                                visible: false
+                                width: Fill, height: Fit,
+                                flow: Down
+                                spacing: 0
+
+                                preferences_proxy_address_row := View {
                                 width: Fill, height: Fit,
                                 flow: Right
                                 align: Align{y: 0.5}
@@ -312,7 +398,7 @@ script_mod! {
                                     width: 90, height: Fit
                                     draw_text +: {
                                         color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
+                                        text_style: REGULAR_TEXT {font_size: 12}
                                     }
                                     text: "Address"
                                 }
@@ -325,8 +411,6 @@ script_mod! {
                                 }
                             }
 
-                            LineH { draw_bg.color: #DDDDDD }
-
                             preferences_proxy_port_row := View {
                                 width: Fill, height: Fit,
                                 flow: Right
@@ -338,7 +422,7 @@ script_mod! {
                                     width: 90, height: Fit
                                     draw_text +: {
                                         color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
+                                        text_style: REGULAR_TEXT {font_size: 12}
                                     }
                                     text: "Port"
                                 }
@@ -351,8 +435,6 @@ script_mod! {
                                 }
                             }
 
-                            LineH { draw_bg.color: #DDDDDD }
-
                             preferences_proxy_account_row := View {
                                 width: Fill, height: Fit,
                                 flow: Right
@@ -364,7 +446,7 @@ script_mod! {
                                     width: 90, height: Fit
                                     draw_text +: {
                                         color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
+                                        text_style: REGULAR_TEXT {font_size: 12}
                                     }
                                     text: "Account"
                                 }
@@ -377,8 +459,6 @@ script_mod! {
                                 }
                             }
 
-                            LineH { draw_bg.color: #DDDDDD }
-
                             preferences_proxy_password_row := View {
                                 width: Fill, height: Fit,
                                 flow: Right
@@ -390,7 +470,7 @@ script_mod! {
                                     width: 90, height: Fit
                                     draw_text +: {
                                         color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
+                                        text_style: REGULAR_TEXT {font_size: 12}
                                     }
                                     text: "Password"
                                 }
@@ -403,14 +483,46 @@ script_mod! {
                                     padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                 }
                             }
-                        }
+                            }
 
-                        preferences_proxy_save_button := RobrixIconButton {
-                            width: Fit, height: Fit
-                            padding: Inset{left: 15, right: 15, top: 8, bottom: 8}
-                            margin: Inset{left: 5, top: 5, bottom: 4}
-                            text: "Save Proxy"
+                            preferences_proxy_error_label := Label {
+                                visible: false
+                                width: Fill, height: Fit
+                                margin: Inset{top: (SPACE_SM)}
+                                draw_text +: {
+                                    color: (COLOR_TEXT_WARNING_NOT_FOUND)
+                                    text_style: REGULAR_TEXT {font_size: 11}
+                                    wrap: Words
+                                }
+                                text: ""
+                            }
+
+                            preferences_proxy_save_button_row := View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{x: 0.0, y: 0.5}
+                                margin: Inset{top: (SPACE_SM)}
+
+                                preferences_proxy_save_button := SettingsPrimaryButton {
+                                    width: Fit, height: Fit
+                                    padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
+                                    align: Align{x: 0.5, y: 0.5}
+                                    text: "Save Proxy"
+                                }
+                            }
                         }
+                    }
+                }
+
+                devices_settings_page := ScrollXYView {
+                    width: Fill, height: Fill
+                    flow: Down
+
+                    devices_settings_section := View {
+                        width: Fill, height: Fill
+                        flow: Down
+                        spacing: (SPACE_SM)
+                        devices_settings := DevicesScreen {}
                     }
                 }
 
@@ -423,18 +535,11 @@ script_mod! {
                         flow: Down
                         spacing: (SPACE_SM)
 
-                        // --- App Service card ---
-                        RoundedView {
-                            width: Fill, height: Fit
-                            flow: Down
-                            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
-                            show_bg: true
-                            draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
-                            }
-                            bot_settings := BotSettings {}
-                        }
+                        // --- Agents card (Agent Registry) ---
+                        // Self-styled full card; the Octos AppService config now lives
+                        // inside the "Add an agent" → Octos flow rather than a standalone
+                        // App Service card.
+                        agent_settings := AgentSettings {}
 
                         // --- Translation card ---
                         RoundedView {
@@ -443,21 +548,25 @@ script_mod! {
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
                             translation_settings := TranslationSettings {}
                         }
 
                         // --- TSP card ---
-                        RoundedView {
+                        tsp_settings_card := RoundedView {
                             width: Fill, height: Fit
                             flow: Down
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
                             // The TSP wallet settings section.
                             tsp_settings_screen := TspSettingsScreen {}
@@ -481,13 +590,33 @@ script_mod! {
                             margin: Inset{top: (SPACE_XS)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
 
-                            contribute_title := SubsectionLabel {
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_SM)
                                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                                text: "Contribute"
+
+                                SettingsIconCircle {
+                                    width: 30, height: 30
+                                    draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                                    Icon {
+                                        width: 16, height: 16
+                                        draw_icon +: { svg: (ICON_LINK), color: (RBX_ACCENT) }
+                                        icon_walk: Walk{width: 16, height: 16}
+                                    }
+                                }
+                                contribute_title := SubsectionLabel {
+                                    width: Fill
+                                    margin: 0
+                                    text: "Contribute"
+                                }
                             }
 
                             contribute_description := Label {
@@ -510,7 +639,7 @@ script_mod! {
                                 icon_walk: Walk{width: 0, height: 0}
                                 draw_text +: {
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
-                                    color: #x0000EE,
+                                    color: (RBX_LINK),
                                     color_hover: (COLOR_LINK_HOVER),
                                 }
                                 text: "https://github.com/Project-Robius-China/robrix2"
@@ -523,13 +652,33 @@ script_mod! {
                             padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
                             show_bg: true
                             draw_bg +: {
-                                color: #F8F8FA
-                                border_radius: (RADIUS_LG)
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_SM)
+                                border_size: 1.0
+                                border_color: (RBX_STROKE_SOFT)
                             }
 
-                            about_title := SubsectionLabel {
+                            View {
+                                width: Fill, height: Fit
+                                flow: Right
+                                align: Align{y: 0.5}
+                                spacing: (SPACE_SM)
                                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                                text: "About Robrix"
+
+                                SettingsIconCircle {
+                                    width: 30, height: 30
+                                    draw_bg +: { color: (RBX_INFO_BG) }
+                                    Icon {
+                                        width: 16, height: 16
+                                        draw_icon +: { svg: (ICON_INFO), color: (RBX_INFO_FG) }
+                                        icon_walk: Walk{width: 16, height: 16}
+                                    }
+                                }
+                                about_title := SubsectionLabel {
+                                    width: Fill
+                                    margin: 0
+                                    text: "About Robrix"
+                                }
                             }
 
                             about_description := Label {
@@ -556,13 +705,13 @@ script_mod! {
                                 text: "Current version: 0.0.0"
                             }
 
-                            contribute_check_update_button := RobrixIconButton {
+                            contribute_check_update_button := SettingsPrimaryButton {
                                 width: Fit, height: Fit,
                                 margin: Inset{left: (ICON_BUTTON_LEFT_PAD)}
                                 padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                                 spacing: 0,
                                 icon_walk: Walk{width: 0, height: 0, margin: 0}
-                                draw_bg +: { border_radius: (RADIUS_MD) }
+                                draw_bg +: { border_radius: (RBX_RADIUS_XS) }
                                 text: "Check for Updates"
                             }
                         }
@@ -593,6 +742,7 @@ enum SettingsCategory {
     #[default]
     Account,
     Preferences,
+    Devices,
     Labs,
     Contribute,
 }
@@ -709,10 +859,12 @@ impl Widget for SettingsScreen {
             }
 
             if self.view.button(cx, ids!(preferences_proxy_save_button)).clicked(actions) {
+                let error_label = self.view.label(cx, ids!(preferences_proxy_error_label));
                 match self.build_proxy_url_from_preferences(cx) {
                     Ok(proxy_url) => {
                         match crate::proxy_config::save_proxy_url(proxy_url.as_deref()) {
                             Ok(_) => {
+                                error_label.set_visible(cx, false);
                                 enqueue_popup_notification(
                                     tr_key(self.app_language, "settings.preferences.proxy.popup.saved").to_string(),
                                     PopupKind::Success,
@@ -720,30 +872,25 @@ impl Widget for SettingsScreen {
                                 );
                             }
                             Err(proxy_error) => {
-                                enqueue_popup_notification(
-                                    format!(
-                                        "{}\n\n{}",
-                                        tr_key(self.app_language, "settings.preferences.proxy.popup.invalid"),
-                                        proxy_error
-                                    ),
-                                    PopupKind::Error,
-                                    None,
-                                );
+                                error_label.set_text(cx, &format!(
+                                    "{}\n{}",
+                                    tr_key(self.app_language, "settings.preferences.proxy.popup.invalid"),
+                                    proxy_error,
+                                ));
+                                error_label.set_visible(cx, true);
                             }
                         }
                     }
                     Err(proxy_error) => {
-                        enqueue_popup_notification(
-                            format!(
-                                "{}\n\n{}",
-                                tr_key(self.app_language, "settings.preferences.proxy.popup.invalid"),
-                                proxy_error
-                            ),
-                            PopupKind::Error,
-                            None,
-                        );
+                        error_label.set_text(cx, &format!(
+                            "{}\n{}",
+                            tr_key(self.app_language, "settings.preferences.proxy.popup.invalid"),
+                            proxy_error,
+                        ));
+                        error_label.set_visible(cx, true);
                     }
                 }
+                self.redraw(cx);
             }
 
             if self.view.button(cx, ids!(category_account_button)).clicked(actions) {
@@ -751,6 +898,9 @@ impl Widget for SettingsScreen {
             }
             else if self.view.button(cx, ids!(category_preferences_button)).clicked(actions) {
                 self.set_selected_category(cx, SettingsCategory::Preferences);
+            }
+            else if self.view.button(cx, ids!(category_devices_button)).clicked(actions) {
+                self.set_selected_category(cx, SettingsCategory::Devices);
             }
             else if self.view.button(cx, ids!(category_labs_button)).clicked(actions) {
                 self.set_selected_category(cx, SettingsCategory::Labs);
@@ -774,11 +924,23 @@ impl Widget for SettingsScreen {
                     if url == CONTRIBUTE_REPO_URL {
                         if let Err(e) = robius_open::Uri::new(&url).open() {
                             error!("Failed to open URL {:?}. Error: {:?}", url, e);
-                            enqueue_popup_notification(
-                                tr_fmt(self.app_language, "room_screen.popup.open_url_failed", &[("url", url.as_str())]),
-                                PopupKind::Error,
-                                Some(10.0),
-                            );
+                            let url_for_retry = url.clone();
+                            let error_msg = format!("{:?}", e);
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Couldn't open URL".into()),
+                                message: tr_fmt(self.app_language, "room_screen.popup.open_url_failed", &[("url", url.as_str())]).into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        let _ = robius_open::Uri::new(&url_for_retry).open();
+                                    }),
+                                    NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
+                                        cx.copy_to_clipboard(&error_msg);
+                                    }),
+                                ],
+                                auto_dismissal_duration: Some(10.0),
+                                ..Default::default()
+                            });
                         }
                     }
                 }
@@ -852,19 +1014,31 @@ impl SettingsScreen {
             return;
         }
         self.preferences_proxy_layout_width = card_width;
-        let mut proxy_use_card = self.view.view(cx, ids!(preferences_proxy_use_card));
-        script_apply_eval!(cx, proxy_use_card, {
-            width: #(card_width)
-        });
-        let mut proxy_fields_section = self.view.view(cx, ids!(preferences_proxy_fields_section));
-        script_apply_eval!(cx, proxy_fields_section, {
-            width: #(card_width)
-        });
+        if let Some(mut proxy_use_card) = self.view
+            .child_by_path(ids!(preferences_proxy_use_card))
+            .borrow_mut::<View>()
+        {
+            proxy_use_card.walk.width = Size::Fixed(card_width);
+            proxy_use_card.redraw(cx);
+        }
+        if let Some(mut proxy_fields_section) = self.view
+            .child_by_path(ids!(preferences_proxy_fields_section))
+            .borrow_mut::<View>()
+        {
+            proxy_fields_section.walk.width = Size::Fixed(card_width);
+            proxy_fields_section.redraw(cx);
+        }
     }
 
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.sync_app_language(cx);
+    }
+
+    fn sync_tsp_settings_card_visibility(&mut self, cx: &mut Cx) {
+        self.view
+            .view(cx, ids!(tsp_settings_card))
+            .set_visible(cx, cfg!(feature = "tsp"));
     }
 
     fn sync_app_language(&mut self, cx: &mut Cx) {
@@ -930,11 +1104,9 @@ impl SettingsScreen {
             .account_settings(cx, ids!(account_settings))
             .set_app_language(cx, self.app_language);
         self.view
-            .bot_settings(cx, ids!(bot_settings))
-            .set_app_language(cx, self.app_language);
-        self.view
             .translation_settings(cx, ids!(translation_settings))
             .set_app_language(cx, self.app_language);
+        self.sync_tsp_settings_card_visibility(cx);
         self.view
             .label(cx, ids!(contribute_title))
             .set_text(cx, tr_key(self.app_language, "settings.contribute.title"));
@@ -960,10 +1132,13 @@ impl SettingsScreen {
         self.preferences_use_proxy_enabled = enabled;
         self.view
             .check_box(cx, ids!(preferences_proxy_use_toggle))
-            .set_active(cx, enabled);
+            .set_active(cx, enabled, Animate::No);
         self.view
             .view(cx, ids!(preferences_proxy_fields_section))
             .set_visible(cx, enabled);
+        self.view
+            .label(cx, ids!(preferences_proxy_error_label))
+            .set_visible(cx, false);
         self.view.redraw(cx);
     }
 
@@ -1065,7 +1240,14 @@ impl SettingsScreen {
         }
 
         let proxy_url = proxy_url.to_string();
-        crate::proxy_config::validate_proxy_url(&proxy_url)?;
+        validate_proxy_url_for_user_input(&proxy_url).map_err(|e| match e {
+            ProxyInputError::InvalidHost(host) => tr_fmt(
+                self.app_language,
+                "settings.preferences.proxy.error.invalid_host",
+                &[("host", host.as_str())],
+            ),
+            other => other.to_string(),
+        })?;
         Ok(Some(proxy_url))
     }
 
@@ -1089,6 +1271,7 @@ impl SettingsScreen {
     fn sync_selected_category(&mut self, cx: &mut Cx) {
         let show_account = self.selected_category == SettingsCategory::Account;
         let show_preferences = self.selected_category == SettingsCategory::Preferences;
+        let show_devices = self.selected_category == SettingsCategory::Devices;
         let show_labs = self.selected_category == SettingsCategory::Labs;
         let show_contribute = self.selected_category == SettingsCategory::Contribute;
 
@@ -1100,41 +1283,68 @@ impl SettingsScreen {
                     id!(account_settings_page)
                 } else if show_preferences {
                     id!(preferences_settings_page)
+                } else if show_devices {
+                    id!(devices_settings_page)
                 } else if show_labs {
                     id!(labs_settings_page)
                 } else {
                     id!(contribute_settings_page)
                 },
             );
+        self.sync_tsp_settings_card_visibility(cx);
+
+        // The preferences page is lazy-init: its widgets don't exist until the
+        // user first switches to it, so the saved proxy populated during
+        // SettingsScreen::populate misses the input refs. Re-load here once the
+        // page's widget tree is live so the proxy form reflects whatever was
+        // saved from the login modal.
+        if show_preferences {
+            self.load_saved_proxy_to_preferences_form(cx);
+            // `app_settings` lives in this same lazy-init page. The initial
+            // `SettingsScreen::populate` ran while the preferences page wasn't
+            // instantiated yet, so `app_settings(...).populate(...)` was a silent
+            // no-op (empty ref). Re-populate now that the widget tree is live —
+            // mirroring the proxy re-load above — so saved values are applied and
+            // the (feature-gated) agent-chat section is revealed.
+            let prefs = cx.global::<crate::settings::app_preferences::AppPreferencesGlobal>().0.clone();
+            self.view.app_settings(cx, ids!(app_settings)).populate(cx, &prefs, self.app_language);
+        }
 
         let mut category_account_button = self.view.button(cx, ids!(category_account_button));
         let mut category_preferences_button = self.view.button(cx, ids!(category_preferences_button));
+        let mut category_devices_button = self.view.button(cx, ids!(category_devices_button));
         let mut category_labs_button = self.view.button(cx, ids!(category_labs_button));
         let mut category_contribute_button = self.view.button(cx, ids!(category_contribute_button));
 
         if show_account {
-            apply_primary_button_style(cx, &mut category_account_button);
+            apply_settings_tab_selected(cx, &mut category_account_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_account_button);
+            apply_settings_tab_unselected(cx, &mut category_account_button);
         }
         if show_preferences {
-            apply_primary_button_style(cx, &mut category_preferences_button);
+            apply_settings_tab_selected(cx, &mut category_preferences_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_preferences_button);
+            apply_settings_tab_unselected(cx, &mut category_preferences_button);
+        }
+        if show_devices {
+            apply_settings_tab_selected(cx, &mut category_devices_button);
+        } else {
+            apply_settings_tab_unselected(cx, &mut category_devices_button);
         }
         if show_labs {
-            apply_primary_button_style(cx, &mut category_labs_button);
+            apply_settings_tab_selected(cx, &mut category_labs_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_labs_button);
+            apply_settings_tab_unselected(cx, &mut category_labs_button);
         }
         if show_contribute {
-            apply_primary_button_style(cx, &mut category_contribute_button);
+            apply_settings_tab_selected(cx, &mut category_contribute_button);
         } else {
-            apply_neutral_button_style(cx, &mut category_contribute_button);
+            apply_settings_tab_unselected(cx, &mut category_contribute_button);
         }
 
         category_account_button.reset_hover(cx);
         category_preferences_button.reset_hover(cx);
+        category_devices_button.reset_hover(cx);
         category_labs_button.reset_hover(cx);
         category_contribute_button.reset_hover(cx);
         self.view.redraw(cx);
@@ -1196,25 +1406,33 @@ impl SettingsScreen {
                 );
             }
             UpdateCheckOutcome::Error(error) => {
-                enqueue_popup_notification(
-                    tr_fmt(self.app_language, "settings.update.popup.failed", &[
+                let error_for_copy = error.clone();
+                enqueue_notification(NotificationItem {
+                    kind: PopupKind::Error,
+                    title: Some("Update check failed".into()),
+                    message: tr_fmt(self.app_language, "settings.update.popup.failed", &[
                         ("error", error.as_str()),
-                    ]),
-                    PopupKind::Error,
-                    Some(6.0),
-                );
+                    ]).into(),
+                    actions: vec![
+                        NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
+                            cx.copy_to_clipboard(&error_for_copy);
+                        }),
+                    ],
+                    auto_dismissal_duration: Some(6.0),
+                    ..Default::default()
+                });
             }
         }
     }
 
     /// Fetches the current user's profile and uses it to populate the settings screen.
-    pub fn populate(&mut self, cx: &mut Cx, own_profile: Option<UserProfile>, bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_language: AppLanguage) {
+    pub fn populate(&mut self, cx: &mut Cx, own_profile: Option<UserProfile>, _bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_prefs: &AppPreferences, app_language: AppLanguage) {
         if let Some(profile) = own_profile.or_else(|| get_own_profile(cx)) {
             self.view.account_settings(cx, ids!(account_settings)).populate(cx, profile);
         } else {
             error!("Failed to get own profile for settings screen.");
         }
-        self.view.bot_settings(cx, ids!(bot_settings)).populate(cx, bot_settings);
+        self.view.app_settings(cx, ids!(app_settings)).populate(cx, app_prefs, app_language);
         self.load_saved_proxy_to_preferences_form(cx);
         self.view.translation_settings(cx, ids!(translation_settings)).populate(cx, translation_config);
         #[cfg(feature = "tsp")]
@@ -1233,9 +1451,18 @@ impl SettingsScreen {
 
 impl SettingsScreenRef {
     /// See [`SettingsScreen::populate()`].
-    pub fn populate(&self, cx: &mut Cx, own_profile: Option<UserProfile>, bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_language: AppLanguage) {
+    pub fn populate(&self, cx: &mut Cx, own_profile: Option<UserProfile>, bot_settings: &BotSettingsState, translation_config: &crate::room::translation::TranslationConfig, app_prefs: &AppPreferences, app_language: AppLanguage) {
         let Some(mut inner) = self.borrow_mut() else { return; };
-        inner.populate(cx, own_profile, bot_settings, translation_config, app_language);
+        inner.populate(cx, own_profile, bot_settings, translation_config, app_prefs, app_language);
+    }
+
+    /// Whether the Settings screen is currently showing the Labs ▸ Agent Access
+    /// category. Used by the bottom navigation to route its "+" action to the
+    /// "Add an agent" sheet while the Agent Registry is on screen.
+    pub fn is_showing_agent_access(&self) -> bool {
+        self.borrow()
+            .map(|inner| inner.selected_category == SettingsCategory::Labs)
+            .unwrap_or(false)
     }
 }
 

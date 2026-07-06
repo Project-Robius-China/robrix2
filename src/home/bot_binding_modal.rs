@@ -4,13 +4,58 @@ use makepad_widgets::*;
 use ruma::{OwnedUserId, UserId};
 
 use crate::{
-    app::{AppState, BotSettingsState, RoomBotBindingState},
+    app::{AgentFramework, AppState, RoomBotBindingState},
     i18n::{AppLanguage, tr_fmt, tr_key},
     persistence,
     shared::popup_list::{PopupKind, enqueue_popup_notification},
     sliding_sync::{MatrixRequest, current_user_id, submit_async_request},
     utils::RoomNameId,
 };
+
+fn push_unique_bot_user_id(bot_user_ids: &mut Vec<OwnedUserId>, bot_user_id: OwnedUserId) {
+    if !bot_user_ids
+        .iter()
+        .any(|known_bot_user_id| known_bot_user_id.as_str() == bot_user_id.as_str())
+    {
+        bot_user_ids.push(bot_user_id);
+    }
+}
+
+fn bot_binding_known_bot_user_ids(app_state: &AppState) -> Vec<OwnedUserId> {
+    let mut known_bot_user_ids = app_state.bot_settings.known_bot_user_ids();
+    for bound_bot_user_id in app_state.bot_settings.all_bound_bot_user_ids() {
+        push_unique_bot_user_id(&mut known_bot_user_ids, bound_bot_user_id);
+    }
+    for agent_user_id in app_state.agent_registry.agent_user_ids() {
+        if app_state
+            .agent_registry
+            .get(agent_user_id.as_ref())
+            .is_some_and(|entry| entry.framework == AgentFramework::Octos)
+        {
+            push_unique_bot_user_id(&mut known_bot_user_ids, agent_user_id);
+        }
+    }
+    known_bot_user_ids.sort_by(|lhs, rhs| lhs.as_str().cmp(rhs.as_str()));
+    known_bot_user_ids.dedup_by(|lhs, rhs| lhs.as_str() == rhs.as_str());
+    known_bot_user_ids
+}
+
+fn default_known_bot_selection(
+    room_bound_bots: &[RoomBotBindingState],
+    known_bot_user_ids: &[OwnedUserId],
+) -> usize {
+    room_bound_bots
+        .first()
+        .and_then(|binding|
+            known_bot_user_ids
+                .iter()
+                .position(|known_bot_user_id| known_bot_user_id.as_str() == binding.bot_user_id.as_str())
+        )
+        .map_or_else(
+            || if known_bot_user_ids.is_empty() { 0 } else { 1 },
+            |index| index + 1,
+        )
+}
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -27,11 +72,17 @@ script_mod! {
     }
 
     mod.widgets.BotBindingModal = #(BotBindingModal::register_widget(vm)) {
-        width: Fit
-        height: Fit
+        width: Fill { max: 1000 }
+        // TODO: i'd like for this height to be Fit with a max of Rel { base: Full, factor: 0.90 },
+        //       but Makepad doesn't allow Fit views with a max to be scrolled.
+        height: Fill // { max: 1400 }
+        margin: 40,
+        align: Align{x: 0.5, y: 0}
+        flow: Down
+        padding: Inset{top: 20, right: 25, bottom: 20, left: 25}
 
         RoundedView {
-            width: 448
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -617,25 +668,12 @@ impl BotBindingModal {
         &mut self,
         cx: &mut Cx,
         room_name_id: RoomNameId,
-        bot_settings: &BotSettingsState,
+        app_state: &AppState,
         app_language: AppLanguage,
     ) {
         self.app_language = app_language;
-        self.room_bound_bots = bot_settings.room_bindings_for(room_name_id.room_id());
-        self.known_bot_user_ids = bot_settings.known_bot_user_ids();
-        for bound_bot_user_id in bot_settings.all_bound_bot_user_ids() {
-            if !self
-                .known_bot_user_ids
-                .iter()
-                .any(|known_bot_user_id| known_bot_user_id.as_str() == bound_bot_user_id.as_str())
-            {
-                self.known_bot_user_ids.push(bound_bot_user_id);
-            }
-        }
-        self.known_bot_user_ids
-            .sort_by(|lhs, rhs| lhs.as_str().cmp(rhs.as_str()));
-        self.known_bot_user_ids
-            .dedup_by(|lhs, rhs| lhs.as_str() == rhs.as_str());
+        self.room_bound_bots = app_state.bot_settings.room_bindings_for(room_name_id.room_id());
+        self.known_bot_user_ids = bot_binding_known_bot_user_ids(app_state);
         self.room_name_id = Some(room_name_id.clone());
 
         self.set_title_and_body(cx, &room_name_id);
@@ -646,15 +684,7 @@ impl BotBindingModal {
         let known_bots_dropdown = self.view.drop_down(cx, ids!(form.known_bots_dropdown));
         let user_id_input = self.view.text_input(cx, ids!(form.user_id_input));
         let remark_input = self.view.text_input(cx, ids!(form.remark_input));
-        let selected_item = self
-            .room_bound_bots
-            .first()
-            .and_then(|binding|
-                self.known_bot_user_ids
-                    .iter()
-                    .position(|known_bot_user_id| known_bot_user_id.as_str() == binding.bot_user_id.as_str())
-            )
-            .map_or(0, |index| index + 1);
+        let selected_item = default_known_bot_selection(&self.room_bound_bots, &self.known_bot_user_ids);
         current_room_bots_dropdown.set_selected_item(
             cx,
             if self.room_bound_bots.is_empty() { 0 } else { 1 },
@@ -663,6 +693,12 @@ impl BotBindingModal {
         if let Some(bound_bot) = self.room_bound_bots.first() {
             user_id_input.set_text(cx, bound_bot.bot_user_id.as_str());
             remark_input.set_text(cx, &bound_bot.remark);
+        } else if let Some(bot_user_id) = selected_item
+            .checked_sub(1)
+            .and_then(|index| self.known_bot_user_ids.get(index))
+        {
+            user_id_input.set_text(cx, bot_user_id.as_str());
+            remark_input.set_text(cx, "");
         } else {
             user_id_input.set_text(cx, "");
             remark_input.set_text(cx, "");
@@ -687,11 +723,11 @@ impl BotBindingModalRef {
         &self,
         cx: &mut Cx,
         room_name_id: RoomNameId,
-        bot_settings: &BotSettingsState,
+        app_state: &AppState,
         app_language: AppLanguage,
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.show(cx, room_name_id, bot_settings, app_language);
+        inner.show(cx, room_name_id, app_state, app_language);
     }
 }
 
@@ -700,5 +736,45 @@ fn persist_bot_settings(app_state: &AppState) {
         if let Err(e) = persistence::save_app_state(app_state.clone(), user_id) {
             error!("Failed to persist bot settings. Error: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bot_binding_known_bot_user_ids, default_known_bot_selection};
+    use crate::app::{AgentEntry, AgentFramework, AppState};
+    use matrix_sdk::ruma::OwnedUserId;
+
+    #[test]
+    fn room_bot_picker_includes_registered_octos_agents() {
+        let mut app_state = AppState::default();
+        let octos_id: OwnedUserId = "@octos_mac:matrix.palpo.im".try_into().unwrap();
+
+        app_state.agent_registry.register(
+            octos_id.clone(),
+            AgentEntry {
+                framework: AgentFramework::Octos,
+                ..Default::default()
+            },
+        );
+
+        let known_bots = bot_binding_known_bot_user_ids(&app_state);
+
+        assert!(
+            known_bots.iter().any(|user_id| user_id.as_str() == octos_id.as_str()),
+            "room bot picker should offer globally registered Octos agents without requiring manual re-entry",
+        );
+    }
+
+    #[test]
+    fn room_bot_picker_defaults_to_first_registered_bot() {
+        let octos_id: OwnedUserId = "@octos_mac:matrix.palpo.im".try_into().unwrap();
+        let known_bots = vec![octos_id];
+
+        assert_eq!(
+            default_known_bot_selection(&[], &known_bots),
+            1,
+            "when a room has no bot binding but registered bots exist, Manage Bot should preselect a bot instead of Custom bot user ID",
+        );
     }
 }

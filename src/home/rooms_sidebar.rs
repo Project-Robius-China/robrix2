@@ -10,11 +10,51 @@
 use makepad_widgets::*;
 
 use crate::home::rooms_list::RoomsListWidgetExt;
+use crate::home::navigation_tab_bar::NavigationBarAction;
+use crate::settings::app_preferences::{AppPreferencesGlobal, AppPreferencesAction, ViewModeOverride};
 use crate::shared::room_filter_input_bar::{MainFilterAction, RoomFilterInputBarWidgetExt};
 
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
+
+    // A `Rooms`/`Workspace` home tab — mirrors the room screen's RoomTopBarTab
+    // (src/room/room_top_bar.rs): a RadioButtonFlatter (no radio dot) whose custom
+    // shader draws a teal accent underline that fades in with the `active` state.
+    // Active = dark text + teal underline; inactive = secondary-grey text.
+    mod.widgets.HomeTopBarTab = RadioButtonFlatter {
+        width: Fit, height: Fill,
+        align: Align{x: 0.5, y: 0.5}
+        padding: Inset{left: 14, right: 14, top: 0, bottom: 0}
+        icon_walk: Walk{ width: 0, height: 0, margin: 0 }
+        label_walk: Walk{ width: Fit, height: Fit, margin: 0 }
+
+        draw_bg +: {
+            underline_color: instance((RBX_ACCENT))
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                let h = 3.0
+                sdf.box(
+                    0.0,
+                    self.rect_size.y - h,
+                    self.rect_size.x,
+                    h,
+                    1.5
+                )
+                sdf.fill(mix(#0000, self.underline_color, self.active))
+                return sdf.result
+            }
+        }
+
+        draw_text +: {
+            color: (RBX_FG_SECONDARY)
+            color_hover: (RBX_FG_PRIMARY)
+            color_down: (RBX_FG_PRIMARY)
+            color_active: (RBX_FG_PRIMARY)
+            color_focus: (RBX_FG_PRIMARY)
+            text_style: theme.font_bold { font_size: 11.0 }
+        }
+    }
 
 
     mod.widgets.RoomsSideBar = #(RoomsSideBar::register_widget(vm)) {
@@ -23,7 +63,7 @@ script_mod! {
             flow: Down, spacing: 5
             width: Fill, height: Fill
 
-            draw_bg.color: (COLOR_PRIMARY_DARKER)
+            draw_bg.color: (RBX_BG_SURFACE)
 
             CachedWidget {
                 rooms_list_header := RoomsListHeader {}
@@ -36,68 +76,21 @@ script_mod! {
         Mobile := View {
             width: Fill, height: Fill
             flow: Down,
-            
-            RoundedShadowView {
+
+            // White app-bar: title row + filter field. (The workspace/squares icon
+            // is gone — switching to spaces is now the `Workspace` tab below.)
+            SolidView {
                 width: Fill, height: Fit
                 padding: Inset{top: 15, left: 15, right: 15, bottom: 10}
                 flow: Down,
 
                 show_bg: true
-                draw_bg +: {
-                    color: (COLOR_PRIMARY_DARKER)
-                    border_radius: 4.0
-                    border_size: 0.0
-                    shadow_color: #0005
-                    shadow_radius: 12.0
-                    shadow_offset: vec2(0.0, 0.0)
-
-                    pixel: fn() {
-                        let sdf = Sdf2d.viewport(self.pos * self.rect_size3)
-
-                        let mut fill_color = self.color
-                        if self.color_2.x > -0.5 {
-                            let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
-                            let dir = if self.gradient_fill_horizontal > 0.5 self.pos.x else self.pos.y
-                            fill_color = mix(self.color self.color_2 dir + dither)
-                        }
-
-                        let mut stroke_color = self.border_color
-                        if self.border_color_2.x > -0.5 {
-                            let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
-                            let dir = if self.gradient_border_horizontal > 0.5 self.pos.x else self.pos.y
-                            stroke_color = mix(self.border_color self.border_color_2 dir + dither)
-                        }
-
-                        sdf.box(
-                            self.sdf_rect_pos.x
-                            self.sdf_rect_pos.y
-                            self.sdf_rect_size.x
-                            self.sdf_rect_size.y
-                            max(1.0 self.border_radius)
-                        )
-                        if sdf.shape > -1.0 {
-                            let m = self.shadow_radius
-                            let o = self.shadow_offset + self.rect_shift
-                            let v = GaussShadow.rounded_box_shadow(vec2(m) + o self.rect_size2+o self.pos * (self.rect_size3+vec2(m)) self.shadow_radius*0.5 self.border_radius*2.0)
-                            // Only draw shadow on the bottom half of the view
-                            let pixel_y = self.pos.y * self.rect_size3.y
-                            let mid_y = self.sdf_rect_pos.y + self.sdf_rect_size.y * 0.5
-                            let bottom_mask = smoothstep(mid_y - m * 0.3 mid_y + m * 0.3 pixel_y)
-                            sdf.clear(self.shadow_color * v * bottom_mask)
-                        }
-
-                        sdf.fill_keep(fill_color)
-
-                        if self.border_size > 0.0 {
-                            sdf.stroke(stroke_color self.border_size)
-                        }
-                        return sdf.result
-                    }
-                }
+                draw_bg.color: (RBX_BG_SURFACE)
 
                 rooms_list_header := RoomsListHeader {
+                    spacing: 10
                     open_room_filter_modal_button +: {
-                        visible: false
+                        visible: true
                     }
                 }
 
@@ -106,7 +99,7 @@ script_mod! {
                     height: 45,
                     flow: Right
                     padding: Inset{top: 5, bottom: 2}
-                    spacing: 5 
+                    spacing: 5
                     align: Align{y: 0.5}
 
                     CachedWidget {
@@ -116,11 +109,52 @@ script_mod! {
                 }
             }
 
-            View {
-                padding: Inset{left: 15, right: 15}
+            // `Rooms | Workspace` tab row (mirrors the room screen's top-bar tabs).
+            SolidView {
+                width: Fill, height: 44,
+                flow: Right,
+                align: Align{y: 1.0}
+                padding: Inset{left: 8, right: 8}
+                spacing: 2
+                show_bg: true
+                draw_bg.color: (RBX_BG_SURFACE)
 
-                CachedWidget {
-                    rooms_list := RoomsList {}
+                rooms_tab := mod.widgets.HomeTopBarTab { text: "Rooms" }
+                workspace_tab := mod.widgets.HomeTopBarTab { text: "Workspace" }
+            }
+
+            // Bottom divider under the tab row — clear line for depth.
+            LineH {
+                width: Fill, height: 1.5
+                draw_bg.color: (RBX_STROKE_STRONG)
+            }
+
+            // Body: the Rooms list OR the vertical Workspace (spaces) list. The
+            // SpacesBar singleton (also used by the desktop rail) lives here on
+            // mobile so it stays in the widget tree and keeps draining its updates.
+            home_body := PageFlip {
+                width: Fill, height: Fill
+                active_page: @rooms_page
+
+                rooms_page := SolidView {
+                    width: Fill, height: Fill
+                    padding: Inset{left: 15, right: 15}
+                    show_bg: true
+                    draw_bg.color: (RBX_BG_SURFACE)
+
+                    CachedWidget {
+                        rooms_list := RoomsList {}
+                    }
+                }
+
+                workspace_page := SolidView {
+                    width: Fill, height: Fill
+                    show_bg: true
+                    draw_bg.color: (RBX_BG_SURFACE)
+
+                    CachedWidget {
+                        root_spaces_bar := mod.widgets.SpacesBar {}
+                    }
                 }
             }
         }
@@ -137,6 +171,12 @@ script_mod! {
 #[derive(Script, Widget)]
 pub struct RoomsSideBar {
     #[deref] view: AdaptiveView,
+
+    #[rust] applied_view_mode: ViewModeOverride,
+    /// Mobile only: whether the home tabs (Rooms/Workspace) have had their initial
+    /// active highlight applied. The Mobile variant is built lazily on first draw,
+    /// so this can't be done in `on_after_new`.
+    #[rust] home_tab_initialized: bool,
 }
 
 impl ScriptHook for RoomsSideBar {
@@ -145,7 +185,32 @@ impl ScriptHook for RoomsSideBar {
             // Here we set the global singleton for the RoomsList widget,
             // which is used to access the list of rooms from anywhere in the app.
             cx.set_global(self.view.rooms_list(cx, ids!(rooms_list)));
+            let mode = cx.global::<AppPreferencesGlobal>().0.view_mode;
+            self.apply_view_mode(mode);
         });
+    }
+}
+
+impl RoomsSideBar {
+    fn apply_view_mode(&mut self, mode: ViewModeOverride) {
+        self.view.set_variant_selector(mode.variant_selector());
+        self.applied_view_mode = mode;
+        // A variant switch rebuilds the (lazy) Mobile tabs, so re-apply the default
+        // highlight next chance.
+        self.home_tab_initialized = false;
+    }
+
+    /// Switch the mobile home body to the Rooms tab and highlight it. Used on
+    /// startup and when a space is opened from the Workspace tab (which shows that
+    /// space's rooms). No-ops on desktop, where these ids don't exist.
+    fn show_rooms_tab(&mut self, cx: &mut Cx) {
+        self.view.page_flip(cx, ids!(home_body)).set_active_page(cx, id!(rooms_page));
+        if let Some(mut rb) = self.view.radio_button(cx, ids!(rooms_tab)).borrow_mut() {
+            rb.animator_play(cx, ids!(active.on));
+        }
+        if let Some(mut rb) = self.view.radio_button(cx, ids!(workspace_tab)).borrow_mut() {
+            rb.animator_play(cx, ids!(active.off));
+        }
     }
 }
 impl Widget for RoomsSideBar {
@@ -156,8 +221,40 @@ impl Widget for RoomsSideBar {
             if let Some(keywords) = self.view.room_filter_input_bar(cx, ids!(room_filter_input_bar)).changed(actions) {
                 cx.action(MainFilterAction::Changed(keywords));
             }
+
+            // Mobile home tabs: switch the body PageFlip between the Rooms list and
+            // the Workspace (spaces) list. The radio set de-selects the other tab.
+            let home_tabs = self.view.radio_button_set(cx, ids_array!(rooms_tab, workspace_tab));
+            match home_tabs.selected(cx, actions) {
+                Some(0) => { self.view.page_flip(cx, ids!(home_body)).set_active_page(cx, id!(rooms_page)); }
+                Some(1) => { self.view.page_flip(cx, ids!(home_body)).set_active_page(cx, id!(workspace_page)); }
+                _ => {}
+            }
+
+            for action in actions {
+                if let Some(AppPreferencesAction::ViewModeChanged(new_mode)) = action.downcast_ref() {
+                    if *new_mode != self.applied_view_mode {
+                        self.apply_view_mode(*new_mode);
+                        self.view.redraw(cx);
+                    }
+                }
+                // Tapping a space in the Workspace tab opens that space's rooms, so
+                // jump back to the Rooms tab to show them.
+                if let Some(NavigationBarAction::GoToSpace { .. }) = action.downcast_ref() {
+                    self.show_rooms_tab(cx);
+                }
+            }
         }
         self.view.handle_event(cx, event, scope);
+
+        // The Mobile variant's tabs are built lazily on first draw, so apply the
+        // default Rooms-tab highlight the first time they exist. No-ops on desktop.
+        if !self.home_tab_initialized
+            && self.view.radio_button(cx, ids!(rooms_tab)).borrow().is_some()
+        {
+            self.home_tab_initialized = true;
+            self.show_rooms_tab(cx);
+        }
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {

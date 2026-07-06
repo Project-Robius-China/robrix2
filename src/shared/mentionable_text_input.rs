@@ -191,6 +191,13 @@ pub(crate) struct SlashCommand {
     needs_args: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SlashCommandDiscoveryContext {
+    ManagementDm,
+    ManagementRoom,
+    None,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedSlashCommand {
     pub command: String,
@@ -206,7 +213,7 @@ struct TrackedVisibleMention {
 }
 
 const MENTION_POPUP_HEADER_TEXT: &str = "Users in this Room";
-const SLASH_COMMANDS: &[SlashCommand] = &[
+const MANAGEMENT_DM_SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         command: "/createbot",
         description_key: "slash_command.createbot.description",
@@ -225,6 +232,97 @@ const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         command: "/bothelp",
         description_key: "slash_command.bothelp.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/schedule",
+        description_key: "slash_command.schedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/schedules",
+        description_key: "slash_command.schedules.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/unschedule",
+        description_key: "slash_command.unschedule.description",
+        needs_args: true,
+    },
+];
+
+const MANAGEMENT_ROOM_SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        command: "/createbot",
+        description_key: "slash_command.createbot.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/deletebot",
+        description_key: "slash_command.deletebot.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/listbots",
+        description_key: "slash_command.listbots.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/bothelp",
+        description_key: "slash_command.bothelp.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/schedule",
+        description_key: "slash_command.schedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/schedules",
+        description_key: "slash_command.schedules.description",
+        needs_args: false,
+    },
+    SlashCommand {
+        command: "/unschedule",
+        description_key: "slash_command.unschedule.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/allbots",
+        description_key: "slash_command.allbots.description",
+        needs_args: true,
+    },
+];
+
+/// agent-chat demo workflow commands. Unlike the bot commands above, robrix2 does
+/// NOT handle these on submit — they are plain text that the `wf_coordinator` agent
+/// interprets. They exist only as a `/` autocomplete convenience, and are offered
+/// only when a `wf_coordinator` agent is present in the room (see the workflow gate
+/// in `update_slash_command_list`). `needs_args` is unused for these (they always
+/// take the insert path in `on_slash_command_selected`).
+///
+/// Gated behind the `agent_chat` Cargo feature: compiled in only for agent-chat
+/// builds, and even then activated only via the runtime Settings toggle.
+#[cfg(feature = "agent_chat")]
+const WORKFLOW_SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        command: "/create-issue",
+        description_key: "slash_command.create_issue.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/go",
+        description_key: "slash_command.go.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/review",
+        description_key: "slash_command.review.description",
+        needs_args: true,
+    },
+    SlashCommand {
+        command: "/status",
+        description_key: "slash_command.status.description",
         needs_args: false,
     },
 ];
@@ -254,6 +352,51 @@ pub(crate) fn is_management_bot_room(
     )
 }
 
+pub(crate) fn slash_command_discovery_context(
+    app_service_enabled: bool,
+    is_direct_room: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<&OwnedUserId>,
+    resolved_parent_bot_user_id: Option<&OwnedUserId>,
+    known_bot_user_ids: &[OwnedUserId],
+) -> SlashCommandDiscoveryContext {
+    if !is_management_bot_room(
+        app_service_enabled,
+        is_direct_room,
+        has_persisted_management_binding,
+        bound_bot_user_id,
+        resolved_parent_bot_user_id,
+        known_bot_user_ids,
+    ) {
+        return SlashCommandDiscoveryContext::None;
+    }
+
+    if is_direct_room {
+        SlashCommandDiscoveryContext::ManagementDm
+    } else {
+        SlashCommandDiscoveryContext::ManagementRoom
+    }
+}
+
+fn slash_command_catalog(context: SlashCommandDiscoveryContext) -> &'static [SlashCommand] {
+    match context {
+        SlashCommandDiscoveryContext::ManagementDm => MANAGEMENT_DM_SLASH_COMMANDS,
+        SlashCommandDiscoveryContext::ManagementRoom => MANAGEMENT_ROOM_SLASH_COMMANDS,
+        SlashCommandDiscoveryContext::None => &[],
+    }
+}
+
+/// True if `name` looks like a workflow **coordinator** agent — bare `coordinator`
+/// or `<team>_coordinator` (e.g. `wf_coordinator`, `alpha_coordinator`). Used to detect
+/// agent-chat workflow rooms for ANY parallel team, regardless of team prefix. Matched
+/// against both display name and MXID localpart (`ac_<team>_coordinator` ends with
+/// `_coordinator`, so the `ac_` prefix is irrelevant).
+#[cfg(feature = "agent_chat")]
+fn name_is_workflow_coordinator(name: &str) -> bool {
+    name == "coordinator" || name.ends_with("_coordinator")
+}
+
+#[cfg(test)]
 fn bot_command_popup_enabled(
     app_service_enabled: bool,
     is_direct_room: bool,
@@ -272,7 +415,69 @@ fn bot_command_popup_enabled(
     )
 }
 
+#[cfg(test)]
 fn find_slash_command_trigger_position(text: &str, cursor_pos: usize) -> Option<usize> {
+    find_slash_command_trigger_position_with_visible_mentions(text, cursor_pos, &[])
+}
+
+fn prefix_contains_only_leading_mentions(
+    text: &str,
+    prefix_start: usize,
+    prefix_end: usize,
+    tracked_visible_mentions: &[TrackedVisibleMention],
+) -> bool {
+    let mut cursor = prefix_start;
+    while cursor < prefix_end {
+        let Some(remaining) = text.get(cursor..prefix_end) else {
+            return false;
+        };
+        let Some(ch) = remaining.chars().next() else {
+            return false;
+        };
+
+        if ch.is_whitespace() {
+            cursor += ch.len_utf8();
+            continue;
+        }
+
+        if let Some(mention) = tracked_visible_mentions
+            .iter()
+            .find(|mention| mention.start == cursor && mention.start < prefix_end)
+        {
+            let mention_matches = mention.end <= prefix_end
+                && mention.start < mention.end
+                && text.get(mention.start..mention.end) == Some(mention.visible_text.as_str());
+            debug_assert!(
+                mention_matches,
+                "tracked visible mention span no longer matches text while scanning slash command prefix"
+            );
+            if mention_matches {
+                cursor = mention.end;
+                continue;
+            }
+        }
+
+        let token_end = remaining
+            .char_indices()
+            .find_map(|(idx, ch)| ch.is_whitespace().then_some(cursor + idx))
+            .unwrap_or(prefix_end);
+        let Some(token) = text.get(cursor..token_end) else {
+            return false;
+        };
+        if !token.starts_with('@') {
+            return false;
+        }
+        cursor = token_end;
+    }
+
+    true
+}
+
+fn find_slash_command_trigger_position_with_visible_mentions(
+    text: &str,
+    cursor_pos: usize,
+    tracked_visible_mentions: &[TrackedVisibleMention],
+) -> Option<usize> {
     if cursor_pos == 0 || cursor_pos > text.len() {
         return None;
     }
@@ -281,16 +486,37 @@ fn find_slash_command_trigger_position(text: &str, cursor_pos: usize) -> Option<
     let line_start = current_segment.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
     let line = text.get(line_start..cursor_pos)?;
 
-    if !line.starts_with('/') || line[1..].chars().any(char::is_whitespace) {
+    // The command being typed is the last whitespace-delimited token before the cursor.
+    let token_start = line.rfind(char::is_whitespace).map_or(0, |idx| idx + 1);
+    let token = &line[token_start..];
+    if !token.starts_with('/') {
         return None;
     }
 
-    Some(line_start)
+    // Trigger when the command is at the start of the line (`/cmd`) OR follows only a
+    // leading run of @mentions — the demo pattern `@wf_coordinator /create-issue`.
+    // Anything else before the command (plain words, paths like `see /tmp`) must NOT
+    // trigger the popup. Tracked visible mentions are treated as atomic mention tokens
+    // so display names with spaces, emoji, etc. can still prefix workflow commands.
+    let prefix_end = line_start + token_start;
+    if !prefix_contains_only_leading_mentions(
+        text,
+        line_start,
+        prefix_end,
+        tracked_visible_mentions,
+    ) {
+        return None;
+    }
+
+    Some(line_start + token_start)
 }
 
-fn matching_slash_commands(search_text: &str) -> Vec<SlashCommand> {
+/// Prefix-filter a slash-command set by the typed query (the `/` and surrounding
+/// whitespace are ignored). Lets the popup combine the bot command set and the
+/// workflow command set depending on which are enabled for the room.
+fn matching_slash_commands_in(commands: &[SlashCommand], search_text: &str) -> Vec<SlashCommand> {
     let query = search_text.trim().trim_start_matches('/').to_ascii_lowercase();
-    SLASH_COMMANDS
+    commands
         .iter()
         .copied()
         .filter(|command| {
@@ -303,9 +529,26 @@ fn matching_slash_commands(search_text: &str) -> Vec<SlashCommand> {
         .collect()
 }
 
+fn matching_slash_commands_for_context(
+    context: SlashCommandDiscoveryContext,
+    search_text: &str,
+) -> Vec<SlashCommand> {
+    matching_slash_commands_in(slash_command_catalog(context), search_text)
+}
+
 pub(crate) fn classify_known_slash_command_for_submission(text: &str) -> Option<SlashCommand> {
+    classify_known_slash_command_for_submission_in_context(
+        text,
+        SlashCommandDiscoveryContext::ManagementRoom,
+    )
+}
+
+pub(crate) fn classify_known_slash_command_for_submission_in_context(
+    text: &str,
+    context: SlashCommandDiscoveryContext,
+) -> Option<SlashCommand> {
     let first_token = text.split_whitespace().next()?;
-    SLASH_COMMANDS
+    slash_command_catalog(context)
         .iter()
         .copied()
         .find(|command| command.command == first_token)
@@ -376,6 +619,33 @@ fn primary_submit_modifiers() -> KeyModifiers {
             ..Default::default()
         }
     }
+}
+
+fn primary_submit_modifier_pressed(modifiers: &KeyModifiers) -> bool {
+    #[cfg(any(target_os = "ios", target_os = "macos", target_os = "tvos"))]
+    {
+        modifiers.logo
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "tvos")))]
+    {
+        modifiers.control
+    }
+}
+
+fn return_key_should_submit_message(
+    modifiers: KeyModifiers,
+    popup_selecting: bool,
+    send_on_enter: bool,
+) -> bool {
+    if modifiers.shift || modifiers.alt {
+        return false;
+    }
+
+    if primary_submit_modifier_pressed(&modifiers) {
+        return true;
+    }
+
+    send_on_enter && !popup_selecting
 }
 
 fn member_list_ready_for_mentions(member_count: usize, sync_pending: bool) -> bool {
@@ -845,6 +1115,22 @@ script_mod! {
         }
     }
 
+    // Non-selectable group label shown above each slash-command section when more than
+    // one command set is active (e.g. bot commands + workflow commands in the same room).
+    mod.widgets.SlashCommandSectionHeader = View {
+        width: Fill
+        height: Fit
+        margin: Inset{left: 4 right: 4 top: 6 bottom: 0}
+        padding: Inset{left: 12 right: 12 top: 2 bottom: 2}
+        section_label := Label {
+            height: Fit
+            draw_text +: {
+                color: #999
+                text_style: BOLD_TEXT {font_size: 9.0}
+            }
+        }
+    }
+
     // Template for loading indicator when members are being fetched
     mod.widgets.LoadingIndicator = View {
         width: Fill
@@ -968,6 +1254,7 @@ script_mod! {
         user_list_item: mod.widgets.UserListItem {}
         room_mention_list_item: mod.widgets.RoomMentionListItem {}
         slash_command_list_item: mod.widgets.SlashCommandListItem {}
+        slash_command_section_header: mod.widgets.SlashCommandSectionHeader {}
         loading_indicator: mod.widgets.LoadingIndicator {}
         no_matches_indicator: mod.widgets.NoMatchesIndicator {}
     }
@@ -1011,6 +1298,9 @@ pub struct MentionableTextInput {
     /// Template for slash command list items
     #[live]
     slash_command_list_item: Option<LivePtr>,
+    /// Template for a non-selectable slash-command section header
+    #[live]
+    slash_command_section_header: Option<LivePtr>,
     /// Template for loading indicator
     #[live]
     loading_indicator: Option<LivePtr>,
@@ -1106,7 +1396,17 @@ impl Widget for MentionableTextInput {
             modifiers,
             ..
         }) = event {
-            if modifiers.logo || modifiers.control {
+            // Popup row selection owns plain Enter when a selectable item is focused.
+            // Otherwise the user's send shortcut preference decides whether plain Enter
+            // submits, while the platform primary modifier always force-sends.
+            let popup_selecting = self.cmd_text_input.view(cx, ids!(popup)).visible()
+                && self.cmd_text_input.keyboard_focus_index().is_some();
+            let send_on_enter = scope
+                .data
+                .get::<crate::app::AppState>()
+                .map(|app_state| app_state.app_prefs.send_on_enter)
+                .unwrap_or(false);
+            if return_key_should_submit_message(*modifiers, popup_selecting, send_on_enter) {
                 let text_input = self.cmd_text_input.text_input(cx, ids!(text_input));
                 let uid = text_input.widget_uid();
                 let text = text_input.text();
@@ -1321,11 +1621,11 @@ impl Widget for MentionableTextInput {
                                 self.show_loading_indicator(cx);
                                 let popup = self.cmd_text_input.view(cx, ids!(popup));
                                 popup.set_visible(cx, true);
-                                // Only restore focus if input currently has focus
-                                let text_input_area = self.cmd_text_input.text_input_ref().area();
-                                if cx.has_key_focus(text_input_area) {
-                                    self.cmd_text_input.text_input_ref().set_key_focus(cx);
-                                }
+                                // If the input already has focus, TextInput's
+                                // draw pass keeps the IME visible. Calling
+                                // set_key_focus() again on Android resets the
+                                // IME-dismissed guard and can turn one hide
+                                // request into a hide/show loop.
                             }
                         }
                     }
@@ -1361,18 +1661,21 @@ impl Widget for MentionableTextInput {
         // finger_up events might steal focus after our initial restoration attempt.
         if self.pending_draw_focus_restore {
             let text_input_ref = self.cmd_text_input.text_input_ref();
-            text_input_ref.set_key_focus(cx);
-            if let Some(mut ti) = text_input_ref.borrow_mut() {
-                ti.reset_blink_timer(cx);
-            }
-            // Check if we successfully got focus
+            // Check focus BEFORE requesting it: calling set_key_focus() while the
+            // input is already focused resets the Android IME-dismissed guard and
+            // can turn one hide request into a hide/show loop (same pattern as the
+            // removed popup-path re-requests above).
             let area = text_input_ref.area();
             if cx.has_key_focus(area) {
                 // Successfully restored focus, clear the flag
                 self.pending_draw_focus_restore = false;
             } else {
                 // Focus restoration failed (likely due to finger_up event stealing focus)
-                // Keep the flag true and request another frame to retry
+                // Request focus and retry on the next frame.
+                text_input_ref.set_key_focus(cx);
+                if let Some(mut ti) = text_input_ref.borrow_mut() {
+                    ti.reset_blink_timer(cx);
+                }
                 cx.new_next_frame();
             }
         }
@@ -1403,9 +1706,9 @@ impl MentionableTextInput {
         self.set_popup_header_text(cx, MENTION_POPUP_HEADER_TEXT);
     }
 
-    fn set_popup_header_for_slash_commands(&mut self, cx: &mut Cx, scope: &mut Scope) {
+    fn set_popup_header_for_slash_commands(&mut self, cx: &mut Cx, scope: &mut Scope, header_key: &str) {
         let app_language = Self::current_app_language(scope);
-        self.set_popup_header_text(cx, tr_key(app_language, "slash_command.header"));
+        self.set_popup_header_text(cx, tr_key(app_language, header_key));
     }
 
     fn active_search_text(&self) -> Option<String> {
@@ -1707,13 +2010,25 @@ impl MentionableTextInput {
         items_added
     }
 
+    /// Add a non-selectable group label (e.g. "Bot Commands" / "Workflow Commands") above
+    /// a slash-command section. Not added to the selectable set, so keyboard nav skips it.
+    fn add_slash_command_section_header(&mut self, cx: &mut Cx, app_language: AppLanguage, title_key: &str) {
+        let Some(ptr) = self.slash_command_section_header else {
+            return;
+        };
+        let item = crate::widget_ref_from_live_ptr(cx, Some(ptr));
+        item.label(cx, ids!(section_label))
+            .set_text(cx, tr_key(app_language, title_key));
+        self.cmd_text_input.add_unselectable_item(cx, item);
+    }
+
     fn update_slash_command_list(&mut self, cx: &mut Cx, scope: &mut Scope, search_text: &str) {
         let room_props = scope
             .props
             .get::<RoomScreenProps>()
             .expect("RoomScreenProps should be available in scope for MentionableTextInput");
 
-        let enabled = bot_command_popup_enabled(
+        let bot_context = slash_command_discovery_context(
             room_props.app_service_enabled,
             room_props.is_direct_room,
             room_props.has_persisted_management_binding,
@@ -1721,8 +2036,31 @@ impl MentionableTextInput {
             room_props.resolved_parent_bot_user_id.as_ref(),
             &room_props.known_bot_user_ids,
         );
-        if !enabled {
-            if self.is_slash_command_popup_active() {
+        let bot_enabled = bot_context != SlashCommandDiscoveryContext::None;
+        // agent-chat demo: offer the workflow `/` commands when a coordinator agent is
+        // in the room (robrix2 has no built-in "agent-chat room" concept). Match ANY
+        // team's coordinator — `wf_coordinator`, `alpha_coordinator`, … — on display name
+        // OR localpart, so it works for multiple parallel teams and regardless of the
+        // `ac_` MXID prefix / friendly display name.
+        //
+        // Double-gated: the `agent_chat` Cargo feature (compile-time) AND the runtime
+        // Settings toggle (Preferences → "Enable agent-chat support"). Without both, the
+        // workflow commands are never offered (and the code isn't even compiled in).
+        #[cfg(feature = "agent_chat")]
+        let workflow_enabled = cx
+            .global::<crate::settings::app_preferences::AppPreferencesGlobal>()
+            .0
+            .agent_chat_enabled
+            && room_props.room_members.as_ref().is_some_and(|members| {
+                members.iter().any(|member| {
+                    member.display_name().is_some_and(name_is_workflow_coordinator)
+                        || name_is_workflow_coordinator(member.user_id().localpart())
+                })
+            });
+        #[cfg(not(feature = "agent_chat"))]
+        let workflow_enabled = false;
+        if !bot_enabled && !workflow_enabled {
+            if self.active_popup_mode != PopupMode::None {
                 self.close_mention_popup(cx);
             }
             return;
@@ -1736,34 +2074,73 @@ impl MentionableTextInput {
 
         self.cmd_text_input.clear_items(cx);
         self.cmd_text_input.reset_list_scroll(cx);
-        self.set_popup_header_for_slash_commands(cx, scope);
 
-        let commands = matching_slash_commands(search_text);
-        if commands.is_empty() {
+        // Filter each enabled command set separately so they render as labelled,
+        // visually-separated sections (a room like octos-public has BOTH Octos bots and
+        // the wf_coordinator agent, so both sets are active).
+        let bot_matches = if bot_enabled {
+            matching_slash_commands_for_context(bot_context, search_text)
+        } else {
+            Vec::new()
+        };
+        #[cfg(feature = "agent_chat")]
+        let workflow_matches = if workflow_enabled {
+            matching_slash_commands_in(WORKFLOW_SLASH_COMMANDS, search_text)
+        } else {
+            Vec::new()
+        };
+        #[cfg(not(feature = "agent_chat"))]
+        let workflow_matches: Vec<SlashCommand> = Vec::new();
+        if bot_matches.is_empty() && workflow_matches.is_empty() {
             self.close_mention_popup(cx);
             return;
         }
 
+        // In-list section headers appear only when BOTH groups are present; with a single
+        // group the popup's top header already labels it (no redundant section row).
+        let show_sections = !bot_matches.is_empty() && !workflow_matches.is_empty();
+        let header_key = if show_sections {
+            "slash_command.combined_header"
+        } else if !bot_matches.is_empty() {
+            "slash_command.header"
+        } else {
+            "slash_command.workflow_header"
+        };
+        self.set_popup_header_for_slash_commands(cx, scope, header_key);
+
         let app_language = Self::current_app_language(scope);
-        let items_added = self.add_slash_command_items(cx, app_language, &commands);
+        let mut items_added = 0usize;
+        let mut section_rows = 0usize;
+        if !bot_matches.is_empty() {
+            if show_sections {
+                self.add_slash_command_section_header(cx, app_language, "slash_command.header");
+                section_rows += 1;
+            }
+            items_added += self.add_slash_command_items(cx, app_language, &bot_matches);
+        }
+        if !workflow_matches.is_empty() {
+            if show_sections {
+                self.add_slash_command_section_header(cx, app_language, "slash_command.workflow_header");
+                section_rows += 1;
+            }
+            items_added += self.add_slash_command_items(cx, app_language, &workflow_matches);
+        }
 
         const SLASH_COMMAND_ITEM_HEIGHT: f64 = 48.0;
+        const SLASH_SECTION_HEADER_HEIGHT: f64 = 24.0;
         const LIST_PADDING: f64 = 4.0;
         let max_scroll_height = if cx.display_context.is_desktop() {
             DESKTOP_MAX_SCROLL_HEIGHT
         } else {
             MOBILE_MAX_SCROLL_HEIGHT
         };
-        let content_height = (items_added as f64 * SLASH_COMMAND_ITEM_HEIGHT) + LIST_PADDING;
+        let content_height = (items_added as f64 * SLASH_COMMAND_ITEM_HEIGHT)
+            + (section_rows as f64 * SLASH_SECTION_HEADER_HEIGHT)
+            + LIST_PADDING;
         self.set_list_scroll_height(cx, content_height.min(max_scroll_height));
 
         let popup = self.cmd_text_input.view(cx, ids!(popup));
         popup.set_visible(cx, items_added > 0);
-        let text_input_area = self.cmd_text_input.text_input_ref().area();
-        if cx.has_key_focus(text_input_area) {
-            self.cmd_text_input.text_input_ref().set_key_focus(cx);
-        }
-
         self.redraw(cx);
     }
 
@@ -1800,6 +2177,34 @@ impl MentionableTextInput {
         self.pending_draw_focus_restore = true;
     }
 
+    /// Opens the member-mention popup, the `@` counterpart to
+    /// [`Self::open_slash_command_popup`]. Appends an `@` on a word boundary
+    /// (preserving any text the user already typed), places the cursor after it,
+    /// and runs the same text-change path a real keystroke would, so the member
+    /// search popup opens immediately instead of waiting for the next keypress.
+    fn open_mention_popup(&mut self, cx: &mut Cx, scope: &mut Scope) {
+        let text_input_ref = self.cmd_text_input.text_input_ref();
+        let mut text = self.text();
+        if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+            text.push(' ');
+        }
+        text.push('@');
+        let cursor_index = text.len();
+        self.set_input_text_preserving_mentions(cx, &text);
+        text_input_ref.set_cursor(
+            cx,
+            Cursor {
+                index: cursor_index,
+                prefer_next_row: false,
+            },
+            false,
+        );
+        self.handle_text_change(cx, scope, text);
+        text_input_ref.set_key_focus(cx);
+        // Same focus-commit race as open_slash_command_popup; see note above.
+        self.pending_draw_focus_restore = true;
+    }
+
     /// Update popup visibility and layout based on current state
     fn update_popup_visibility(&mut self, cx: &mut Cx, scope: &mut Scope, has_items: bool) {
         let popup = self.cmd_text_input.view(cx, ids!(popup));
@@ -1825,11 +2230,8 @@ impl MentionableTextInput {
                 // Waiting for room members to be loaded
                 self.show_loading_indicator(cx);
                 popup.set_visible(cx, true);
-                // Only restore focus if input currently has focus
-                let text_input_area = self.cmd_text_input.text_input_ref().area();
-                if cx.has_key_focus(text_input_area) {
-                    self.cmd_text_input.text_input_ref().set_key_focus(cx);
-                }
+                // Preserve existing focus without re-requesting it; see the
+                // Android IME note in the room-member loading branch above.
             }
             MentionSearchState::Searching {
                 accumulated_results,
@@ -1838,11 +2240,7 @@ impl MentionableTextInput {
                 if has_items {
                     // We have search results to display
                     popup.set_visible(cx, true);
-                    // Only restore focus if input currently has focus
-                    let text_input_area = self.cmd_text_input.text_input_ref().area();
-                    if cx.has_key_focus(text_input_area) {
-                        self.cmd_text_input.text_input_ref().set_key_focus(cx);
-                    }
+                    // Preserve existing focus without re-requesting it.
                 } else if accumulated_results.is_empty() {
                     if members_sync_pending || self.search_results_pending {
                         // Still fetching either member list or background search results.
@@ -1855,19 +2253,11 @@ impl MentionableTextInput {
                         self.show_loading_indicator(cx);
                     }
                     popup.set_visible(cx, true);
-                    // Only restore focus if input currently has focus
-                    let text_input_area = self.cmd_text_input.text_input_ref().area();
-                    if cx.has_key_focus(text_input_area) {
-                        self.cmd_text_input.text_input_ref().set_key_focus(cx);
-                    }
+                    // Preserve existing focus without re-requesting it.
                 } else {
                     // Has accumulated results but no items (should not happen)
                     popup.set_visible(cx, true);
-                    // Only restore focus if input currently has focus
-                    let text_input_area = self.cmd_text_input.text_input_ref().area();
-                    if cx.has_key_focus(text_input_area) {
-                        self.cmd_text_input.text_input_ref().set_key_focus(cx);
-                    }
+                    // Preserve existing focus without re-requesting it.
                 }
             }
         }
@@ -1964,7 +2354,11 @@ impl MentionableTextInput {
         let current_text = text_input_ref.text();
         let head = text_input_ref.borrow().map_or(0, |p| p.cursor().index);
 
-        if let Some(start_idx) = find_slash_command_trigger_position(&current_text, head) {
+        if let Some(start_idx) = find_slash_command_trigger_position_with_visible_mentions(
+            &current_text,
+            head,
+            &self.tracked_visible_mentions,
+        ) {
             let command_to_insert = format!("{command} ");
             let (new_text, new_pos) = apply_text_replacement_preserving_mentions(
                 &current_text,
@@ -2049,10 +2443,20 @@ impl MentionableTextInput {
             }
         }
 
-        if self.active_popup_mode == PopupMode::SlashCommand
-            && find_slash_command_trigger_position(&text, cursor_pos).is_none()
-        {
+        let slash_trigger_pos = find_slash_command_trigger_position_with_visible_mentions(
+            &text,
+            cursor_pos,
+            &self.tracked_visible_mentions,
+        );
+        if self.active_popup_mode == PopupMode::SlashCommand && slash_trigger_pos.is_none() {
             self.close_mention_popup(cx);
+        }
+
+        if let Some(trigger_pos) = slash_trigger_pos {
+            let search_text =
+                utils::safe_substring_by_byte_indices(&text, trigger_pos + 1, cursor_pos);
+            self.update_slash_command_list(cx, scope, &search_text);
+            return;
         }
 
         // Look for trigger position for @ menu
@@ -2091,10 +2495,6 @@ impl MentionableTextInput {
 
             // Redraw to ensure UI updates are visible
             self.redraw(cx);
-        } else if let Some(trigger_pos) = find_slash_command_trigger_position(&text, cursor_pos) {
-            let search_text =
-                utils::safe_substring_by_byte_indices(&text, trigger_pos + 1, cursor_pos);
-            self.update_slash_command_list(cx, scope, &search_text);
         } else if self.is_searching() || self.is_slash_command_popup_active() {
             self.close_mention_popup(cx);
         }
@@ -2417,12 +2817,6 @@ impl MentionableTextInput {
         let header_view = self.cmd_text_input.view(cx, ids!(popup.header_view));
         header_view.set_visible(cx, true);
         popup.set_visible(cx, true);
-        // Only restore focus if input currently has focus
-        let text_input_area = self.cmd_text_input.text_input_ref().area();
-        if cx.has_key_focus(text_input_area) {
-            self.cmd_text_input.text_input_ref().set_key_focus(cx);
-        }
-
         // Create a new channel for this search
         let (sender, receiver) = std::sync::mpsc::channel();
 
@@ -2575,11 +2969,7 @@ impl MentionableTextInput {
 
         popup.set_visible(cx, true);
 
-        // Maintain text input focus only if it currently has focus
-        let text_input_area = self.cmd_text_input.text_input_ref().area();
-        if self.is_searching() && cx.has_key_focus(text_input_area) {
-            self.cmd_text_input.text_input_ref().set_key_focus(cx);
-        }
+        // The focused TextInput will keep the IME visible from its draw pass.
     }
 
     /// Shows the no matches indicator when no users match the search
@@ -2606,11 +2996,7 @@ impl MentionableTextInput {
         // Set scroll container height to fit the no-matches indicator (48px + 4px padding)
         self.set_list_scroll_height(cx, 52.0);
 
-        // Maintain text input focus so user can continue typing, but only if currently focused
-        let text_input_area = self.cmd_text_input.text_input_ref().area();
-        if self.is_searching() && cx.has_key_focus(text_input_area) {
-            self.cmd_text_input.text_input_ref().set_key_focus(cx);
-        }
+        // The focused TextInput will keep the IME visible from its draw pass.
     }
 
     /// Check if mention search is currently active
@@ -2776,6 +3162,14 @@ impl MentionableTextInputRef {
         }
     }
 
+    /// Opens the `@` member-mention popup (the counterpart to
+    /// [`Self::open_slash_command_popup`]).
+    pub fn open_mention_popup(&self, cx: &mut Cx, scope: &mut Scope) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.open_mention_popup(cx, scope);
+        }
+    }
+
     /// Sets whether the current user can notify the entire room (@room mention)
     pub fn set_can_notify_room(&self, can_notify: bool) {
         if let Some(mut inner) = self.borrow_mut() {
@@ -2865,6 +3259,10 @@ mod tests {
     use super::*;
     use matrix_sdk::ruma::events::room::message::MessageType;
 
+    fn slash_command_names(commands: &[SlashCommand]) -> Vec<&'static str> {
+        commands.iter().map(|command| command.command).collect()
+    }
+
     #[test]
     fn popup_status_items_are_never_selectable() {
         assert!(!popup_status_item_is_selectable(PopupStatusItemKind::Loading));
@@ -2876,6 +3274,39 @@ mod tests {
         assert!(!member_list_ready_for_mentions(1, true));
         assert!(!member_list_ready_for_mentions(0, false));
         assert!(member_list_ready_for_mentions(3, false));
+    }
+
+    #[test]
+    fn return_key_submission_respects_send_on_enter_preference() {
+        assert!(return_key_should_submit_message(
+            KeyModifiers::default(),
+            false,
+            true,
+        ));
+        assert!(!return_key_should_submit_message(
+            KeyModifiers::default(),
+            false,
+            false,
+        ));
+        assert!(return_key_should_submit_message(
+            primary_submit_modifiers(),
+            false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn return_key_submission_keeps_bare_enter_for_popup_selection() {
+        assert!(!return_key_should_submit_message(
+            KeyModifiers::default(),
+            true,
+            true,
+        ));
+        assert!(return_key_should_submit_message(
+            primary_submit_modifiers(),
+            true,
+            true,
+        ));
     }
 
     #[test]
@@ -3007,6 +3438,30 @@ mod tests {
     }
 
     #[test]
+    fn test_management_dm_command_catalog_excludes_allbots() {
+        let command_names = slash_command_names(slash_command_catalog(
+            SlashCommandDiscoveryContext::ManagementDm,
+        ));
+
+        assert!(command_names.contains(&"/schedule"));
+        assert!(command_names.contains(&"/schedules"));
+        assert!(command_names.contains(&"/unschedule"));
+        assert!(!command_names.contains(&"/allbots"));
+    }
+
+    #[test]
+    fn test_management_room_command_catalog_includes_allbots() {
+        let command_names = slash_command_names(slash_command_catalog(
+            SlashCommandDiscoveryContext::ManagementRoom,
+        ));
+
+        assert!(command_names.contains(&"/schedule"));
+        assert!(command_names.contains(&"/schedules"));
+        assert!(command_names.contains(&"/unschedule"));
+        assert!(command_names.contains(&"/allbots"));
+    }
+
+    #[test]
     fn slash_command_trigger_is_found_at_input_start() {
         assert_eq!(find_slash_command_trigger_position("/li", "/li".len()), Some(0));
     }
@@ -3027,8 +3482,106 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_trigger_is_found_after_leading_mention() {
+        // The demo pattern: @-mention the coordinator, then type the command.
+        let text = "@wf_coordinator /cre";
+        assert_eq!(
+            find_slash_command_trigger_position(text, text.len()),
+            Some("@wf_coordinator ".len())
+        );
+        let text2 = "@wf_coordinator @wf_reviewer /st";
+        assert_eq!(
+            find_slash_command_trigger_position(text2, text2.len()),
+            Some("@wf_coordinator @wf_reviewer ".len())
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_is_found_after_tracked_visible_mention_with_spaces() {
+        let text = "@🤖 wf_coordinator /";
+        let tracked_mentions = vec![TrackedVisibleMention {
+            user_id: "@wf_coordinator:example.org".try_into().unwrap(),
+            visible_text: "@🤖 wf_coordinator".to_string(),
+            start: 0,
+            end: "@🤖 wf_coordinator".len(),
+        }];
+
+        assert_eq!(
+            find_slash_command_trigger_position_with_visible_mentions(
+                text,
+                text.len(),
+                &tracked_mentions,
+            ),
+            Some("@🤖 wf_coordinator ".len())
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_after_tracked_visible_mention_rejects_plain_words() {
+        let text = "@🤖 wf_coordinator see /tmp";
+        let tracked_mentions = vec![TrackedVisibleMention {
+            user_id: "@wf_coordinator:example.org".try_into().unwrap(),
+            visible_text: "@🤖 wf_coordinator".to_string(),
+            start: 0,
+            end: "@🤖 wf_coordinator".len(),
+        }];
+
+        assert_eq!(
+            find_slash_command_trigger_position_with_visible_mentions(
+                text,
+                text.len(),
+                &tracked_mentions,
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_preempts_active_mention_after_leading_mention() {
+        // Manual typing keeps the @mention search state active until a command
+        // trigger takes over. The workflow pattern must switch popups here.
+        let text = "@wf_coordinator /";
+        assert_eq!(
+            find_slash_command_trigger_position_with_visible_mentions(text, text.len(), &[]),
+            Some("@wf_coordinator ".len()),
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_does_not_preempt_active_mention_for_mid_sentence_slash() {
+        let text = "@wf_coordinator see /tmp";
+        assert_eq!(
+            find_slash_command_trigger_position_with_visible_mentions(text, text.len(), &[]),
+            None,
+        );
+    }
+
+    #[test]
+    fn slash_command_trigger_rejected_when_plain_word_precedes() {
+        // A non-mention word before the command must NOT trigger (e.g. a file path).
+        let text = "@wf_coordinator see /tmp";
+        assert_eq!(find_slash_command_trigger_position(text, text.len()), None);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn workflow_coordinator_name_matches_any_team() {
+        // The `/` workflow popup must enable for ANY team's coordinator, not just wf_.
+        assert!(name_is_workflow_coordinator("coordinator"));
+        assert!(name_is_workflow_coordinator("wf_coordinator"));
+        assert!(name_is_workflow_coordinator("alpha_coordinator"));
+        assert!(name_is_workflow_coordinator("ac_beta_coordinator")); // MXID localpart form
+        assert!(!name_is_workflow_coordinator("wf_implementer"));
+        assert!(!name_is_workflow_coordinator("coordinatorx"));
+        assert!(!name_is_workflow_coordinator("alex"));
+    }
+
+    #[test]
     fn slash_commands_filter_by_prefix_without_leading_slash() {
-        let commands = matching_slash_commands("li");
+        let commands = matching_slash_commands_for_context(
+            SlashCommandDiscoveryContext::ManagementRoom,
+            "li",
+        );
         assert_eq!(commands, vec![SlashCommand {
             command: "/listbots",
             description_key: "slash_command.listbots.description",
@@ -3038,7 +3591,11 @@ mod tests {
 
     #[test]
     fn slash_commands_return_empty_for_unknown_prefix() {
-        assert!(matching_slash_commands("zzzznotacommand").is_empty());
+        assert!(matching_slash_commands_for_context(
+            SlashCommandDiscoveryContext::ManagementRoom,
+            "zzzznotacommand",
+        )
+        .is_empty());
     }
 
     #[test]

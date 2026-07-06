@@ -231,6 +231,10 @@ pub struct LinkPreview {
     is_expanded: bool,
     #[rust]
     hidden_links_count: usize,
+    /// Tracks the URLs that were last used to populate this widget's children,
+    /// so we can skip expensive widget recreation when the same links are shown.
+    #[rust]
+    last_populated_links: Vec<String>,
 }
 
 impl Widget for LinkPreview {
@@ -386,10 +390,16 @@ impl LinkPreviewRef {
             title_link.url = link.to_string();
         }
         let text_or_image_ref = view_ref.text_or_image(cx, ids!(image));
+        let image_view = view_ref.view(cx, ids!(image_view));
         text_or_image_ref.show_default_image(cx);
         let link_preview_data = match link_preview_cache_entry {
             LinkPreviewCacheEntry::LoadedLinkPreview(link_preview_data) => link_preview_data,
-            LinkPreviewCacheEntry::Failed(_) => return (view_ref, true),
+            LinkPreviewCacheEntry::Failed(_) => {
+                // No preview could be fetched — collapse the image box and keep a clean
+                // text-only card (just the URL) instead of a broken-image placeholder.
+                image_view.set_visible(cx, false);
+                return (view_ref, true);
+            }
             LinkPreviewCacheEntry::Requested => return (view_ref, false),
         };
         if let Some(url) = &link_preview_data.url {
@@ -426,6 +436,7 @@ impl LinkPreviewRef {
 
         // Handle image through closure
         if let Some(image) = &link_preview_data.image {
+            image_view.set_visible(cx, true);
             let mut image_info = ImageInfo::default();
             image_info.mimetype = link_preview_data.image_type.clone();
             image_info.size = link_preview_data.image_size;
@@ -442,6 +453,10 @@ impl LinkPreviewRef {
                 "",
                 media_cache,
             );
+        } else {
+            // No og:image in the preview metadata — render a simple text-only card
+            // (title + description) instead of leaving a placeholder image box.
+            image_view.set_visible(cx, false);
         }
 
         (view_ref, fully_drawn)
@@ -467,17 +482,16 @@ impl LinkPreviewRef {
     {
         const SKIPPED_DOMAINS: &[&str] = &["matrix.to", "matrix.io"];
         const MAX_LINK_PREVIEWS_BY_EXPAND: usize = 2;
-        let mut fully_drawn_count = 0;
-        let mut accepted_link_count = 0;
-        let mut views = Vec::new();
+
+        // Build the list of accepted URLs (after dedup + domain filtering)
+        // to check if we can skip the expensive widget recreation.
+        let mut accepted_urls: Vec<String> = Vec::new();
         let mut seen_urls = std::collections::HashSet::new();
-        
         for link in links {
             let url_string = link.to_string();
             if seen_urls.contains(&url_string) {
                 continue;
             }
-            
             if let Some(domain) = link.host_str() {
                 if SKIPPED_DOMAINS
                     .iter()
@@ -486,12 +500,28 @@ impl LinkPreviewRef {
                     continue;
                 }
             }
-            
             seen_urls.insert(url_string.clone());
-            accepted_link_count += 1;
+            accepted_urls.push(url_string);
+        }
+
+        // If the links haven't changed and children are already populated,
+        // skip the expensive widget recreation entirely.
+        if let Some(inner) = self.borrow() {
+            if accepted_urls == inner.last_populated_links && !inner.children.is_empty() {
+                return true;
+            }
+        }
+
+        let mut fully_drawn_count = 0;
+        let accepted_link_count = accepted_urls.len();
+        let mut views = Vec::with_capacity(accepted_link_count);
+
+        for (url_string, link) in accepted_urls.iter().zip(
+            links.iter().filter(|l| accepted_urls.contains(&l.to_string()))
+        ) {
             let (view_ref, was_image_drawn) = self.populate_view(
                 cx,
-                link_preview_cache.get_or_fetch_link_preview(url_string),
+                link_preview_cache.get_or_fetch_link_preview(url_string.clone()),
                 link,
                 media_cache,
                 |cx, text_or_image_ref, image_info_source, original_source, body, media_cache| {
@@ -504,6 +534,9 @@ impl LinkPreviewRef {
         if views.len() > MAX_LINK_PREVIEWS_BY_EXPAND {
             let hidden_count = views.len() - MAX_LINK_PREVIEWS_BY_EXPAND;
             self.show_collapsible_buttons(cx, hidden_count);
+        }
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.last_populated_links = accepted_urls;
         }
         self.set_children(views);
         fully_drawn_count == accepted_link_count

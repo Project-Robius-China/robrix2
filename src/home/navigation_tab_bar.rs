@@ -31,12 +31,12 @@
 use makepad_widgets::*;
 use serde::{Deserialize, Serialize};
 use crate::{
-    app::AppState, avatar_cache::{self, AvatarCacheEntry}, i18n::{AppLanguage, tr_fmt}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
+    app::AppState, avatar_cache::{self, AvatarCacheEntry}, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
         user_profile::UserProfile,
         user_profile_cache::{self, UserProfileUpdate},
     }, home::spaces_bar::SpacesBarWidgetExt, shared::{
         avatar::{AvatarState, AvatarWidgetExt}, styles::*, verification_badge::VerificationBadgeWidgetExt
-    }, sliding_sync::{current_user_id, AccountDataAction, AccountSwitchAction}, utils::{self, RoomNameId}
+    }, settings::app_preferences::{effective_is_desktop, AppPreferencesGlobal, AppPreferencesAction, ViewModeOverride}, sliding_sync::{current_user_id, AccountDataAction, AccountSwitchAction}, utils::{self, RoomNameId}
 };
 
 script_mod! {
@@ -65,14 +65,134 @@ script_mod! {
         spacing: 0,
 
         draw_bg +: {
-            color: (COLOR_NAVIGATION_TAB_BG)
-            color_hover: (COLOR_NAVIGATION_TAB_BG_HOVER)
-            color_down: (COLOR_NAVIGATION_TAB_BG_HOVER)
-            color_active: (COLOR_NAVIGATION_TAB_BG_ACTIVE)
-            color_focus: (COLOR_NAVIGATION_TAB_BG_ACTIVE)
+            // Dark navy nav-rail item (visual spec §5.6 / RBX_NAV_* tokens):
+            // transparent when idle so the navy rail shows through, a navy "pill"
+            // on hover/active, plus a teal accent bar on the left of the *active*
+            // item to echo the app-wide teal selection language.
+            color: #0000
+            color_hover: (RBX_NAV_ITEM_HOVER_BG)
+            color_down: (RBX_NAV_ITEM_HOVER_BG)
+            color_active: (RBX_NAV_ITEM_ACTIVE_BG)
+            color_focus: #0000
+            accent_color: instance((RBX_ACCENT))
 
             border_size: 0.0
-            border_radius: (RADIUS_MD)
+            border_radius: (RBX_RADIUS_SM)
+            border_color: #0000
+            border_color_hover: #0000
+            border_color_down: #0000
+            border_color_active: #0000
+            border_color_focus: #0000
+
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.box(
+                    self.border_size,
+                    self.border_size,
+                    self.rect_size.x - self.border_size * 2.0,
+                    self.rect_size.y - self.border_size * 2.0,
+                    self.border_radius
+                )
+                let color_fill = self.color
+                    .mix(self.color_focus, self.focus)
+                    .mix(self.color_active, self.active)
+                    .mix(self.color_hover, self.hover)
+                    .mix(self.color_down, self.down)
+                sdf.fill(color_fill)
+                // Teal selection bar on the left edge, shown only when active.
+                let bar_inset = 12.0
+                sdf.box(
+                    0.0,
+                    bar_inset,
+                    3.0,
+                    self.rect_size.y - bar_inset * 2.0,
+                    1.5
+                )
+                sdf.fill(mix(vec4(0.0, 0.0, 0.0, 0.0), self.accent_color, self.active))
+                return sdf.result
+            }
+        }
+
+        draw_text +: {
+            // Labels are hidden on the desktop rail (label_walk is zero-sized),
+            // but keep the colors on the nav palette for correctness.
+            color: (RBX_NAV_FG)
+            color_hover: (RBX_NAV_FG_ACTIVE)
+            color_down: (RBX_NAV_FG_ACTIVE)
+            color_active: (RBX_NAV_FG_ACTIVE)
+            color_focus: (RBX_NAV_FG)
+
+            text_style: theme.font_bold {font_size: 9}
+        }
+
+        draw_icon +: {
+            // DrawSvg has no per-state color mixing, so the active/idle icon color
+            // is driven by the animator's `active` apply blocks below (white when
+            // selected, muted grey otherwise) — mirrors MobileTabButton.
+            color: (RBX_NAV_FG)
+        }
+
+        // Custom animator: drive the pill (draw_bg amounts), the (hidden) label and
+        // — crucially — the icon color from the active/hover states. Selecting a tab
+        // snaps the icon to white (RBX_NAV_FG_ACTIVE); deselecting returns it to the
+        // muted RBX_NAV_FG. Mirrors the base RadioButton animator + MobileTabButton's
+        // draw_icon trick.
+        animator: Animator {
+            disabled: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {disabled: 0.0} draw_text: {disabled: 0.0} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {disabled: 1.0} draw_text: {disabled: 1.0} } }
+            }
+            hover: {
+                default: @off
+                off:  AnimatorState { from: {all: Forward {duration: 0.15}} apply: { draw_bg: {down: snap(0.0), hover: 0.0} draw_text: {down: snap(0.0), hover: 0.0} } }
+                on:   AnimatorState { from: {all: Snap} apply: { draw_bg: {down: snap(0.0), hover: 1.0} draw_text: {down: snap(0.0), hover: 1.0} } }
+                down: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {down: snap(1.0), hover: 1.0} draw_text: {down: snap(1.0), hover: 1.0} } }
+            }
+            active: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {active: 0.0} draw_text: {active: 0.0} draw_icon: {color: (RBX_NAV_FG)} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {active: 1.0} draw_text: {active: 1.0} draw_icon: {color: (RBX_NAV_FG_ACTIVE)} } }
+            }
+            focus: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {focus: 0.0} draw_text: {focus: 0.0} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {focus: 1.0} draw_text: {focus: 1.0} } }
+            }
+        }
+    }
+
+    // A bottom-bar tab for the Mobile layout: a 24px icon stacked above a small
+    // label, with no active "pill" — selection is shown purely by recoloring the
+    // icon + label to the teal accent (see visual spec §4.14).
+    //
+    // NOTE: `draw_text` recolors itself via the RadioButton animator's `active`
+    // state (color_active). `draw_icon` (DrawSvg) has no per-state color, so its
+    // color is set imperatively in `NavigationTabBar::sync_selected_tab()`.
+    mod.widgets.MobileTabButton = RadioButtonTab {
+        width: Fill,
+        height: Fill,
+        padding: Inset{top: (SPACE_XS), bottom: (SPACE_XS), left: (SPACE_XS), right: (SPACE_XS)}
+        margin: 0,
+        align: Align{x: 0.5, y: 0.5}
+        flow: Down,
+        spacing: (SPACE_XS),
+        text: "",
+
+        icon_walk: Walk{ margin: 0, width: (RBX_ICON_MD), height: (RBX_ICON_MD) }
+        // Full-width label box with centered text, so the label sits centered
+        // under the icon regardless of its length.
+        label_walk: Walk{ margin: 0, width: Fill, height: Fit }
+        label_align: Align{x: 0.5, y: 0.0}
+
+        draw_bg +: {
+            // Transparent in every state — no pill, no border. The bar surface
+            // behind the buttons provides the background color.
+            color: #00000000
+            color_active: #00000000
+            color_disabled: #00000000
+            border_size: 0.0
+            border_radius: 0.0
             border_color: #0000
             border_color_hover: #0000
             border_color_down: #0000
@@ -81,21 +201,52 @@ script_mod! {
         }
 
         draw_text +: {
-            color: (COLOR_NAVIGATION_TAB_FG)
-            color_hover: (COLOR_NAVIGATION_TAB_FG_HOVER)
-            color_down: (COLOR_NAVIGATION_TAB_FG_HOVER)
-            color_active: (COLOR_NAVIGATION_TAB_FG_ACTIVE)
-            color_focus: (COLOR_NAVIGATION_TAB_FG_ACTIVE)
-
-            text_style: theme.font_bold {font_size: 9}
+            // Only the *active* (selected) tab is teal; every other state stays
+            // the inactive grey so hovering/pressing an inactive tab does not
+            // flash it teal (spec §4.14: active=accent, inactive=secondary).
+            color: (RBX_FG_SECONDARY)
+            color_hover: (RBX_FG_SECONDARY)
+            color_down: (RBX_FG_SECONDARY)
+            color_active: (RBX_ACCENT)
+            color_focus: (RBX_FG_SECONDARY)
+            text_style: RBX_TEXT_META {}
         }
 
         draw_icon +: {
-            color: (COLOR_NAVIGATION_TAB_FG)
-            color_hover: (COLOR_NAVIGATION_TAB_FG_HOVER)
-            color_down: (COLOR_NAVIGATION_TAB_FG_HOVER)
-            color_active: (COLOR_NAVIGATION_TAB_FG_ACTIVE)
-            color_focus: (COLOR_NAVIGATION_TAB_FG_ACTIVE)
+            color: (RBX_FG_SECONDARY)
+        }
+
+        // Drive the icon color from the same `active` animator state as the text
+        // so icon + label switch to/from the accent color together on tap (no
+        // lag). DrawSvg has no per-state color, so we set draw_icon.color
+        // directly in the apply blocks. This mirrors the base RadioButton
+        // animator (disabled / hover / active / focus) and only adds draw_icon.
+        animator: Animator {
+            disabled: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {disabled: 0.0} draw_text: {disabled: 0.0} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {disabled: 1.0} draw_text: {disabled: 1.0} } }
+            }
+            // Hover must NOT recolor the text/icon: the RadioButton mixes hover
+            // AFTER active, so any hover color would override the selected tab's
+            // teal. We only drive draw_bg on hover (which is transparent here, so
+            // no visible change) — the tab color stays purely selection-driven.
+            hover: {
+                default: @off
+                off:  AnimatorState { from: {all: Forward {duration: 0.15}} apply: { draw_bg: {down: snap(0.0), hover: 0.0} } }
+                on:   AnimatorState { from: {all: Snap} apply: { draw_bg: {down: snap(0.0), hover: 1.0} } }
+                down: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {down: snap(1.0), hover: 1.0} } }
+            }
+            active: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {active: 0.0} draw_text: {active: 0.0} draw_icon: {color: (RBX_FG_SECONDARY)} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {active: 1.0} draw_text: {active: 1.0} draw_icon: {color: (RBX_ACCENT)} } }
+            }
+            focus: {
+                default: @off
+                off: AnimatorState { from: {all: Forward {duration: 0.2}} apply: { draw_bg: {focus: 0.0} draw_text: {focus: 0.0} } }
+                on:  AnimatorState { from: {all: Forward {duration: 0.0}} apply: { draw_bg: {focus: 1.0} draw_text: {focus: 1.0} } }
+            }
         }
     }
 
@@ -131,44 +282,26 @@ script_mod! {
         draw_icon +: { svg: (ICON_HOME) }
     }
 
-    mod.widgets.ToggleSpacesBarButton = RobrixNeutralIconButton {
-        width: Fill,
-        padding: 16
-        spacing: 0,
-        align: Align{x: 0.5, y: 0.5}
-        draw_icon +: {
-            svg: (ICON_SQUARES)
-            color: (COLOR_NAVIGATION_TAB_FG)
-        }
-        icon_walk: Walk{
-            width: (NAVIGATION_TAB_BAR_SIZE / 2.2),
-            height: (NAVIGATION_TAB_BAR_SIZE / 2.2),
-            margin: 0
-        }
-    }
-
-    mod.widgets.SettingsButton = mod.widgets.NavigationTabButton {
-        draw_icon +: { svg: (ICON_SETTINGS) }
-    }
-
     mod.widgets.AddRoomButton = mod.widgets.NavigationTabButton {
         draw_icon +: { svg: (ICON_ADD) }
     }
 
-    mod.widgets.Separator = LineH { margin: (SPACE_SM) }
+    mod.widgets.Separator = LineH { margin: (SPACE_SM), draw_bg.color: (RBX_NAV_DIVIDER) }
 
     mod.widgets.NavigationTabBar = #(NavigationTabBar::register_widget(vm)) {
-        Desktop := RoundedView {
+        Desktop := SolidView {
             flow: Down,
             align: Align{x: 0.5}
             padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_XS), right: (SPACE_XS)}
-            width: (NAVIGATION_TAB_BAR_SIZE), 
+            width: (NAVIGATION_TAB_BAR_SIZE),
             height: Fill
 
-            draw_bg +: {
-                color: (COLOR_SECONDARY)
-                border_radius: (RADIUS_LG)
-            }
+            show_bg: true
+            // Dark navy anchor rail (visual spec §2/§5.6). SolidView fills its column
+            // edge-to-edge (no rounded-SDF anti-aliased border), so the navy is
+            // perfectly flush to the window's left edge AND to the rooms list — no
+            // stray hairline gap on either side.
+            draw_bg.color: (RBX_NAV_BG)
 
             CachedWidget {
                 profile_icon := mod.widgets.ProfileIcon {}
@@ -186,39 +319,61 @@ script_mod! {
                 root_spaces_bar := mod.widgets.SpacesBar {}
             }
 
-            mod.widgets.Separator {}
-
-            CachedWidget {
-                settings_button := mod.widgets.SettingsButton {}
-            }
         }
 
-        Mobile := RoundedView {
-            flow: Right
-            align: Align{x: 0.5, y: 0.5}
+        // Mobile bottom tab bar (visual spec §4.14): a flat white bar, ~56px
+        // tall, with a 1px top hairline and three equal-width tabs. Each tab is
+        // a 24px icon above a small label; the selected tab is recolored teal.
+        //
+        // NOTE: these tabs are intentionally NOT wrapped in `CachedWidget` (unlike
+        // the Desktop rail above), so the mobile bar can carry its own look. The
+        // Desktop and Mobile variants never coexist, so reusing the `home_button`
+        // / `add_room_button` ids across both is safe.
+        // NOTE: SolidView (not a plain View) — a plain `View` draws nothing
+        // because its base DrawQuad pixel shader is transparent; SolidView/
+        // RoundedView/LineH are the widget types that actually fill with a color.
+        Mobile := SolidView {
+            flow: Down
             width: Fill,
-            height: (NAVIGATION_TAB_BAR_SIZE)
+            height: Fit
 
-            draw_bg +: {
-                color: (COLOR_SECONDARY)
-                border_radius: 0.0
+            show_bg: true
+            // White bar surface — app-bar, room list and this tab bar are all
+            // white; depth comes from the clear divider lines, not bg color.
+            draw_bg.color: (RBX_BG_SURFACE)
+
+            // Top divider — LineH (a RoundedView) actually renders, unlike a plain
+            // View. Clearer line (strong stroke, 1.5px) for depth over the list.
+            LineH {
+                width: Fill, height: 1.5
+                draw_bg.color: (RBX_STROKE_STRONG)
             }
 
-            CachedWidget {
-                home_button := mod.widgets.HomeButton {}
-            }
-            CachedWidget {
-                add_room_button := mod.widgets.AddRoomButton {}
-            }
+            View {
+                flow: Right
+                width: Fill,
+                height: (RBX_BOTTOM_TAB_H)
+                align: Align{y: 0.5}
 
-            toggle_spaces_bar_button := mod.widgets.ToggleSpacesBarButton {}
-
-            CachedWidget {
-                settings_button := mod.widgets.SettingsButton {}
+                // Labels are set in the DSL (English) so they always render; the
+                // runtime i18n pass in handle_event localizes them when possible.
+                home_button := mod.widgets.MobileTabButton {
+                    text: "Home"
+                    draw_icon +: { svg: (ICON_HOME) }
+                }
+                add_room_button := mod.widgets.MobileTabButton {
+                    text: "Add Room"
+                    draw_icon +: { svg: (ICON_ADD) }
+                }
+                settings_button := mod.widgets.MobileTabButton {
+                    text: "Settings"
+                    draw_icon +: { svg: (ICON_SETTINGS) }
+                }
             }
-            CachedWidget {
-                profile_icon := mod.widgets.ProfileIcon {}
-            }
+            // No per-bar safe-area spacer: the window `body` already insets all
+            // content by the platform safe area (SAFE_INSET_PAD_*), so the bar is
+            // a consistent height on iOS and Android. (Supersedes the spacer inset
+            // clamp from #217 — there is no spacer left to inflate.)
         }
     }
 }
@@ -231,6 +386,13 @@ pub struct ProfileIcon {
     #[deref] view: View,
     #[rust] own_profile: Option<UserProfile>,
     #[rust] app_language: AppLanguage,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum ProfileIconAction {
+    Clicked,
+    #[default]
+    None,
 }
 
 impl ScriptHook for ProfileIcon {
@@ -351,6 +513,9 @@ impl Widget for ProfileIcon {
 
         let area = self.view.area();
         match event.hits(cx, area) {
+            Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
+                cx.widget_action(self.widget_uid(), ProfileIconAction::Clicked);
+            }
             Hit::FingerLongPress(_) | Hit::FingerHoverIn(_) => {
                 let (verification_str, bg_color) = self.view
                     .verification_badge(cx, ids!(verification_badge))
@@ -365,7 +530,7 @@ impl Widget for ProfileIcon {
                     ]),
                 );
                 let mut options = CalloutTooltipOptions {
-                    position: if cx.display_context.is_desktop() { TooltipPosition::Right} else { TooltipPosition::Top},
+                    position: if effective_is_desktop(cx) { TooltipPosition::Right} else { TooltipPosition::Top},
                     ..Default::default()
                 };
                 if let Some(c) = bg_color {
@@ -432,7 +597,13 @@ impl Widget for ProfileIcon {
 pub struct NavigationTabBar {
     #[deref] view: AdaptiveView,
 
-    #[rust] is_spaces_bar_shown: bool,
+    #[rust] applied_view_mode: ViewModeOverride,
+    /// The selected tab currently reflected in the bar's highlight. Used to
+    /// re-project `AppState::selected_tab` onto the tab buttons only when it
+    /// actually changes (covers programmatic navigation + view-mode switches).
+    #[rust] applied_selected_tab: Option<SelectedTab>,
+    /// The language the tab labels are currently rendered in.
+    #[rust] applied_language: Option<AppLanguage>,
 }
 
 impl ScriptHook for NavigationTabBar {
@@ -444,7 +615,83 @@ impl ScriptHook for NavigationTabBar {
                 rb.animator_play(cx, ids!(active.on));
             }
             cx.set_global(self.view.spaces_bar(cx, ids!(root_spaces_bar)));
+            let mode = cx.global::<AppPreferencesGlobal>().0.view_mode;
+            self.apply_view_mode(mode);
         });
+    }
+}
+
+impl NavigationTabBar {
+    fn apply_view_mode(&mut self, mode: ViewModeOverride) {
+        self.view.set_variant_selector(mode.variant_selector());
+        self.applied_view_mode = mode;
+        // Switching variants rebuilds the (non-cached) mobile tab buttons, so
+        // force the labels and active highlight to re-apply.
+        self.applied_selected_tab = None;
+        self.applied_language = None;
+    }
+
+    /// Localize the mobile tab labels. (Harmless on Desktop, where the rail
+    /// buttons hide their labels and the gear `settings_button` does not exist.)
+    fn update_tab_labels(&mut self, cx: &mut Cx, language: AppLanguage) {
+        self.view.radio_button(cx, ids!(home_button))
+            .set_text(tr_key(language, "navigation_tab_bar.tab.home"));
+        self.view.radio_button(cx, ids!(add_room_button))
+            .set_text(tr_key(language, "navigation_tab_bar.tab.add_room"));
+        self.view.radio_button(cx, ids!(settings_button))
+            .set_text(tr_key(language, "navigation_tab_bar.tab.settings"));
+        self.view.redraw(cx);
+    }
+
+    /// Project `AppState::selected_tab` onto the tab buttons' active highlight.
+    /// This is the single source of truth for which tab looks selected.
+    fn sync_selected_tab(&mut self, cx: &mut Cx, scope: &mut Scope) {
+        let tab = {
+            let Some(app_state) = scope.data.get::<AppState>() else { return };
+            app_state.selected_tab.clone()
+        };
+        // Bail until the tab buttons exist — the Mobile variant is built lazily on
+        // first draw; we retry on the next event.
+        if self.view.radio_button(cx, ids!(home_button)).borrow().is_none() {
+            return;
+        }
+
+        if self.applied_selected_tab.as_ref() == Some(&tab) {
+            // selected_tab is unchanged, so normally there's nothing to do. BUT a
+            // variant switch / script reapply rebuilds the (non-cached) tab buttons
+            // and resets their active state — leaving the startup Home tab grey. So
+            // re-apply when the tab that SHOULD be active isn't currently active.
+            // Skip while a tap is in-flight (a tab is already active but
+            // selected_tab hasn't caught up yet) so we never fight the tap.
+            let any_active = self.view.radio_button(cx, ids!(home_button)).active(cx)
+                || self.view.radio_button(cx, ids!(add_room_button)).active(cx)
+                || self.view.radio_button(cx, ids!(settings_button)).active(cx);
+            let wants_tab = matches!(
+                tab,
+                SelectedTab::Home | SelectedTab::AddRoom | SelectedTab::Settings
+            );
+            if any_active || !wants_tab {
+                return;
+            }
+            // A tab should be active but none is → the buttons were rebuilt; fall
+            // through and re-apply the highlight.
+        }
+        self.applied_selected_tab = Some(tab.clone());
+
+        // Both bars drive icon + label color from the radio animator's `active`
+        // state, so we only need to set which tab is active.
+        self.apply_tab_active(cx, ids!(home_button), matches!(tab, SelectedTab::Home));
+        self.apply_tab_active(cx, ids!(add_room_button), matches!(tab, SelectedTab::AddRoom));
+        self.apply_tab_active(cx, ids!(settings_button), matches!(tab, SelectedTab::Settings));
+    }
+
+    fn apply_tab_active(&mut self, cx: &mut Cx, path: &[LiveId], active: bool) {
+        let radio_button = self.view.radio_button(cx, path);
+        // `set_active` plays the radio animator's `active` state, which already
+        // drives both draw_text and draw_icon colors (see the MobileTabButton
+        // animator). No imperative draw_icon recolor is needed — and
+        // `script_apply_eval!` fails on these tab buttons anyway (pitfall #40).
+        radio_button.set_active(cx, active, Animate::No);
     }
 }
 
@@ -452,8 +699,27 @@ impl Widget for NavigationTabBar {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         self.view.handle_event(cx, event, scope);
 
+        // Keep the mobile tab labels localized. Mobile-only: the Desktop rail
+        // buttons must stay icon-only (their hidden label doesn't clip text, so
+        // setting it would make labels appear under the desktop icons). Only
+        // commit once the tab buttons exist — the Mobile variant is built lazily
+        // on first draw, so an earlier attempt would no-op and never retry. The
+        // DSL sets English labels meanwhile, so the bar is never blank.
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if !effective_is_desktop(cx)
+            && self.applied_language != Some(app_language)
+            && self.view.radio_button(cx, ids!(home_button)).borrow().is_some()
+        {
+            self.applied_language = Some(app_language);
+            self.update_tab_labels(cx, app_language);
+        }
+
         if let Event::Actions(actions) = event {
-            // Handle one of the radio buttons being clicked (selected).
+            // Handle a tab being clicked (selected).
+            // Note: `settings_button` only exists in the Mobile variant; on
+            // Desktop the avatar `profile_icon` opens Settings instead (below).
             let radio_button_set = self.view.radio_button_set(cx, ids_array!(
                 home_button,
                 add_room_button,
@@ -466,34 +732,32 @@ impl Widget for NavigationTabBar {
                 _ => { }
             }
 
-            if self.view.button(cx, ids!(toggle_spaces_bar_button)).clicked(actions) {
-                self.is_spaces_bar_shown = !self.is_spaces_bar_shown;
-                cx.action(NavigationBarAction::ToggleSpacesBar);
-            }
-
             for action in actions {
-                // If another widget programmatically selected a new tab,
-                // update our radio buttons accordingly.
-                if let Some(NavigationBarAction::TabSelected(tab)) = action.downcast_ref() {
-                    match tab {
-                        SelectedTab::Home     => self.view.radio_button(cx, ids!(home_button)).select(cx, scope),
-                        SelectedTab::AddRoom  => self.view.radio_button(cx, ids!(add_room_button)).select(cx, scope),
-                        SelectedTab::Settings => self.view.radio_button(cx, ids!(settings_button)).select(cx, scope),
-                        SelectedTab::Space { .. } => {
-                            for rb in radio_button_set.iter() {
-                                if let Some(mut rb_inner) = rb.borrow_mut() {
-                                    rb_inner.animator_play(cx, ids!(active.off));
-                                }
-                            }
-                        }
+                // On Desktop, clicking the profile avatar opens Settings.
+                if let ProfileIconAction::Clicked = action.as_widget_action().cast() {
+                    cx.action(NavigationBarAction::OpenSettings);
+                    continue;
+                }
+
+                if let Some(AppPreferencesAction::ViewModeChanged(new_mode)) = action.downcast_ref() {
+                    if *new_mode != self.applied_view_mode {
+                        self.apply_view_mode(*new_mode);
+                        self.view.redraw(cx);
                     }
                     continue;
                 }
             }
         }
+
+        // Project the active highlight from the global selected-tab state. This
+        // covers tab clicks (once HomeScreen updates the state), programmatic
+        // navigation, and view-mode switches.
+        self.sync_selected_tab(cx, scope);
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        // The bottom safe-area inset is handled globally by the window `body`
+        // padding (SAFE_INSET_PAD_*), so the bar needs no per-widget spacer.
         self.view.draw_walk(cx, scope, walk)
     }
 }
@@ -506,6 +770,10 @@ pub enum SelectedTab {
     Home,
     AddRoom,
     Settings,
+    /// The public room directory browser screen.
+    /// Entered from the sidebar header's compass button; no dedicated tab in the
+    /// navigation bar (so no button to keep selected here).
+    Directory,
     // AlertsInbox,
     Space { space_name_id: RoomNameId },
 }
@@ -545,6 +813,8 @@ pub enum NavigationBarAction {
     GoToHome,
     /// Go the add/join/explore room view.
     GoToAddRoom,
+    /// Go to the public room directory browser view (`DirectoryScreen`).
+    GoToDirectory,
     /// Go to the Settings view (open the `SettingsScreen`).
     OpenSettings,
     /// Close the Settings view (`SettingsScreen`), returning to the previous view.

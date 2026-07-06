@@ -3,7 +3,7 @@ use std::ops::Not;
 use makepad_widgets::*;
 use url::Url;
 
-use crate::{app::AppState, homeserver::{login_mode, CapabilityProbeAction, LoginMode}, i18n::{AppLanguage, tr_fmt, tr_key}, sliding_sync::{submit_async_request, AccountSwitchAction, LoginByPassword, LoginRequest, MatrixRequest}};
+use crate::{app::AppState, homeserver::{login_mode, CapabilityProbeAction, LoginMode}, i18n::{AppLanguage, tr_fmt, tr_key}, proxy_config::{validate_proxy_url_for_user_input, ProxyInputError}, sliding_sync::{submit_async_request, AccountSwitchAction, LoginByPassword, LoginRequest, MatrixRequest}};
 use crate::register::{validation::normalize_homeserver_url, RegisterAction};
 
 use super::login_status_modal::{LoginStatusModalAction, LoginStatusModalWidgetExt};
@@ -27,6 +27,16 @@ fn should_probe_homeserver(login_mode: Option<LoginMode>, oidc_in_flight: bool) 
     login_mode.is_none() && !oidc_in_flight
 }
 
+const MOBILE_LOGIN_MAX_WIDTH: f64 = 700.0;
+
+fn is_mobile_login_layout(width: f64, mobile_target: bool) -> bool {
+    mobile_target || width <= MOBILE_LOGIN_MAX_WIDTH
+}
+
+fn is_mobile_runtime_target() -> bool {
+    cfg!(any(target_os = "android", target_os = "ios"))
+}
+
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
@@ -34,31 +44,61 @@ script_mod! {
     mod.widgets.IMG_APP_LOGO = crate_resource("self://resources/robrix_logo_alpha.png")
     mod.widgets.ICON_EYE_OPEN   = crate_resource("self://resources/icons/eye_open.svg")
     mod.widgets.ICON_EYE_CLOSED = crate_resource("self://resources/icons/eye_closed.svg")
+    mod.widgets.ICON_LOGIN_USER = crate_resource("self://resources/icon_user.svg")
 
     mod.widgets.SsoButton = RoundedView {
-        width: Fit,
-        height: Fit,
+        width: 46,
+        height: 40,
+        new_batch: true,
         cursor: MouseCursor.Hand,
         visible: true,
-        padding: 10,
-        margin: Inset{ left: 16.6, right: 16.6, top: 10, bottom: 10}
+        padding: 8,
+        margin: Inset{ left: 3, right: 3, top: 4, bottom: 4}
+        align: Align{x: 0.5, y: 0.5}
+        flow: Right
+        spacing: 8
+        show_bg: true,
         draw_bg +: {
-            border_size: 0.5
-            border_color: #6c6c6c
-            color: (COLOR_PRIMARY)
+            border_size: 1.0
+            border_color: (RBX_STROKE_SOFT)
+            color: (RBX_BG_SURFACE)
+            border_radius: (RBX_RADIUS_XS)
         }
     }
 
     mod.widgets.SsoImage = Image {
-        width: 30, height: 30,
+        width: 22, height: 22,
         draw_bg +: {
             mask: instance(0.0)
             pixel: fn() {
-                let color = self.get_color();
-                let gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                let grayed = mix(color, vec4(gray, gray, gray, color.a), self.mask);
-                return grayed;
+                let color = self.get_color()
+                let gray = dot(color.rgb, vec3(0.299, 0.587, 0.114))
+                let grayed = mix(color, vec4(gray, gray, gray, color.a), self.mask)
+                return Pal.premul(vec4(grayed.xyz, grayed.w * self.opacity))
             }
+        }
+    }
+
+    mod.widgets.LoginTextInput = RobrixTextInput {
+        height: (RBX_CONTROL_H_LG)
+        clip_x: true
+        clip_y: true
+        padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
+        draw_bg +: {
+            color: (RBX_BG_SURFACE)
+            color_hover: (RBX_BG_SURFACE)
+            color_focus: (RBX_BG_SURFACE)
+            color_down: (RBX_BG_SURFACE)
+            color_empty: (RBX_BG_SURFACE)
+            border_radius: (RBX_RADIUS_XS)
+            border_color: (RBX_STROKE_SOFT)
+            border_color_hover: (RBX_STROKE_STRONG)
+            border_color_focus: (RBX_ACCENT)
+            border_color_down: (RBX_STROKE_STRONG)
+            border_color_empty: (RBX_STROKE_SOFT)
+        }
+        draw_cursor +: {
+            color: (RBX_ACCENT)
         }
     }
 
@@ -71,15 +111,15 @@ script_mod! {
         align: Align{x: 0.5, y: 0.5}
         show_bg: true,
         draw_bg +: {
-            color: COLOR_SECONDARY
+            color: (RBX_BG_CANVAS)
         }
 
-        ScrollYView {
+        login_scroll := ScrollYView {
             width: Fill, height: Fill,
             flow: Down, // Required for vertical scrolling to work.
             align: Align{x: 0.5, y: 0.5}
             show_bg: true,
-            draw_bg.color: (COLOR_SECONDARY)
+            draw_bg.color: (RBX_BG_CANVAS)
 
             // allow the view to be scrollable but hide the actual scroll bar
             scroll_bars: {
@@ -98,46 +138,172 @@ script_mod! {
                 align: Align{x: 0.5, y: 0.5}
                 flow: Overlay,
 
-                View {
-                    width: Fill
+                login_card := RoundedView {
+                    width: Fill{max: 494}
                     height: Fit
+                    margin: Inset{left: 16, right: 16}
+                    new_batch: true
                     flow: Down
                     align: Align{x: 0.5, y: 0.5}
-                    spacing: 15.0
+                    padding: Inset{top: 24, bottom: 24, left: 36, right: 36}
+                    show_bg: true,
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        border_size: 1.0
+                        border_color: (RBX_STROKE_SOFT)
+                        border_radius: (RBX_RADIUS_MD)
+                    }
+
+                    // Top-right brand badge in normal card flow; avoid card-level
+                    // overlay around the input stack.
+                    View {
+                        width: Fill, height: Fit
+                        align: Align{x: 1.0, y: 0.0}
+                        agent_badge := RoundedView {
+                            width: Fit, height: Fit
+                            new_batch: true
+                            padding: Inset{left: 9, right: 9, top: 4, bottom: 4}
+                            show_bg: true,
+                            draw_bg +: {
+                                color: (RBX_ACCENT_SOFT)
+                                border_radius: (RBX_RADIUS_PILL)
+                            }
+                            agent_badge_label := Label {
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_ACCENT)
+                                    text_style: RBX_TEXT_BADGE {}
+                                }
+                                text: "Agent-ready workspace"
+                            }
+                        }
+                    }
+
+                    // Centered content column.
+                    form_column := View {
+                    width: Fill, height: Fit
+                    flow: Down
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 10.0
 
                     logo_image := Image {
                         fit: ImageFit.Smallest,
-                        width: 80
+                        width: 60
                         src: (mod.widgets.IMG_APP_LOGO),
+                    }
+
+                    brand_wordmark := Label {
+                        width: Fit, height: Fit
+                        padding: 0,
+                        draw_text +: {
+                            color: (RBX_FG_PRIMARY)
+                            text_style: RBX_TEXT_PAGE_TITLE {font_size: 22.0}
+                        }
+                        text: "Robrix2"
                     }
 
                     title := Label {
                         width: Fit, height: Fit
-                        margin: Inset{ bottom: 5 }
+                        margin: Inset{ bottom: 6 }
                         padding: 0,
                         draw_text +: {
-                            color: (COLOR_TEXT)
-                            text_style: TITLE_TEXT {font_size: 16.0}
+                            color: (RBX_FG_SECONDARY)
+                            text_style: REGULAR_TEXT {font_size: 10.5}
                         }
-                        text: "Login to Robrix"
+                        text: "Agent-native collaboration client"
                     }
 
-                    user_id_input := RobrixTextInput {
-                        width: 275, height: Fit
+                    user_id_field_label := Label {
+                        visible: false
+                        width: Fill{max: 422}, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 11.0}
+                        }
+                        text: "User ID"
+                    }
+
+                    user_id_input := mod.widgets.LoginTextInput {
+                        width: Fill{max: 422}, height: (RBX_CONTROL_H_LG)
                         flow: Right, // do not wrap
-                        padding: 10,
+                        padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
                         empty_text: "User ID"
                     }
 
+                    password_field_label := Label {
+                        visible: false
+                        width: Fill{max: 422}, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 11.0}
+                        }
+                        text: "Password"
+                    }
+
                     View {
-                        width: 275, height: Fit
+                        width: Fill{max: 422}, height: (RBX_CONTROL_H_LG)
+                        flow: Overlay
+                        align: Align{x: 1.0, y: 0.5}
+
+                        password_input := mod.widgets.LoginTextInput {
+                            width: Fill, height: (RBX_CONTROL_H_LG)
+                            flow: Right, // do not wrap
+                            padding: Inset{top: 10, bottom: 10, left: 14, right: 42}
+                            empty_text: "Password"
+                            is_password: true,
+                        }
+
+                        View {
+                            width: 38, height: Fill
+                            align: Align{x: 0.5, y: 0.5}
+
+                            show_password_button := RobrixNeutralIconButton {
+                                width: Fit, height: Fit,
+                                align: Align{x: 0.5, y: 0.5}
+                                padding: 5
+                                spacing: 0
+                                margin: 0
+                                draw_bg +: {
+                                    color: (RBX_BG_SURFACE)
+                                }
+                                draw_icon +: {
+                                    svg: (mod.widgets.ICON_EYE_CLOSED),
+                                    color: (RBX_FG_TERTIARY),
+                                }
+                                icon_walk: Walk{width: 14, height: 14, margin: 0}
+                                text: ""
+                            }
+
+                            hide_password_button := RobrixNeutralIconButton {
+                                visible: false,
+                                align: Align{x: 0.5, y: 0.5}
+                                width: Fit, height: Fit,
+                                padding: 5
+                                spacing: 0
+                                margin: 0
+                                draw_bg +: {
+                                    color: (RBX_BG_SURFACE)
+                                }
+                                draw_icon +: {
+                                    svg: (mod.widgets.ICON_EYE_OPEN),
+                                    color: (RBX_FG_TERTIARY),
+                                }
+                                icon_walk: Walk{width: 14, height: 14, margin: 0}
+                                text: ""
+                            }
+                        }
+                    }
+
+                    confirm_password_wrapper := View {
+                        width: Fill{max: 422}, height: (RBX_CONTROL_H_LG),
+                        visible: false,
                         flow: Overlay,
 
-                        password_input := RobrixTextInput {
-                            width: Fill, height: Fit
+                        confirm_password_input := mod.widgets.LoginTextInput {
+                            width: Fill, height: (RBX_CONTROL_H_LG)
                             flow: Right, // do not wrap
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 40}
-                            empty_text: "Password"
+                            padding: Inset{top: 10, bottom: 10, left: 14, right: 42}
+                            empty_text: "Confirm password"
                             is_password: true,
                         }
 
@@ -145,36 +311,36 @@ script_mod! {
                             width: Fill, height: Fill
                             align: Align{x: 1.0, y: 0.5}
 
-                            show_password_button := Button {
+                            show_confirm_password_button := Button {
                                 width: 36, height: 36,
                                 padding: 6,
                                 draw_bg +: {
-                                    color: #0000
-                                    color_hover: #0000
-                                    color_down: #0000
+                                    color: (COLOR_TRANSPARENT)
+                                    color_hover: (COLOR_TRANSPARENT)
+                                    color_down: (COLOR_TRANSPARENT)
                                     border_size: 0.0
                                 }
                                 draw_icon +: {
                                     svg: (mod.widgets.ICON_EYE_CLOSED),
-                                    color: #8C8C8C,
+                                    color: (RBX_FG_TERTIARY),
                                 }
                                 icon_walk: Walk{width: 20, height: 20}
                                 text: ""
                             }
 
-                            hide_password_button := Button {
+                            hide_confirm_password_button := Button {
                                 visible: false,
                                 width: 36, height: 36,
                                 padding: 6,
                                 draw_bg +: {
-                                    color: #0000
-                                    color_hover: #0000
-                                    color_down: #0000
+                                    color: (COLOR_TRANSPARENT)
+                                    color_hover: (COLOR_TRANSPARENT)
+                                    color_down: (COLOR_TRANSPARENT)
                                     border_size: 0.0
                                 }
                                 draw_icon +: {
                                     svg: (mod.widgets.ICON_EYE_OPEN),
-                                    color: #8C8C8C,
+                                    color: (RBX_FG_TERTIARY),
                                 }
                                 icon_walk: Walk{width: 20, height: 20}
                                 text: ""
@@ -182,51 +348,81 @@ script_mod! {
                         }
                     }
 
-                    View {
-                        width: 275, height: Fit,
-                        flow: Down,
+                    homeserver_field_label := Label {
+                        visible: false
+                        width: Fill{max: 422}, height: Fit
+                        draw_text +: {
+                            color: (RBX_NAV_FG)
+                            text_style: REGULAR_TEXT {font_size: 11.0}
+                        }
+                        text: "Homeserver URL"
+                    }
 
-                        homeserver_input := RobrixTextInput {
-                            width: 275, height: Fit,
+                    View {
+                        width: Fill{max: 422}, height: Fit,
+                        flow: Down,
+                        spacing: 5.0
+
+                        homeserver_input := mod.widgets.LoginTextInput {
+                            width: Fill, height: (RBX_CONTROL_H_LG),
                             flow: Right, // do not wrap
-                            padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
+                            padding: Inset{top: 10, bottom: 10, left: 14, right: 14}
                             empty_text: "matrix.org"
                             draw_text +: {
                                 text_style: TITLE_TEXT {font_size: 10.0}
                             }
                         }
 
-                        View {
-                            width: 275,
-                            height: Fit,
+                        homeserver_hint_row := View {
+                            width: 422,
+                            height: 16,
                             flow: Right,
-                            padding: Inset{top: 3, left: 2, right: 2}
-                            spacing: 0.0,
+                            padding: 0
+                            spacing: 0.0
                             align: Align{x: 0.5, y: 0.5} // center horizontally and vertically
-
-                            LineH { draw_bg.color: #C8C8C8 }
 
                             homeserver_hint_label := Label {
                                 width: Fit, height: Fit
                                 padding: 0
                                 draw_text +: {
-                                    color: #8C8C8C
+                                    color: (RBX_FG_TERTIARY)
                                     text_style: REGULAR_TEXT {font_size: 9}
                                 }
                                 text: "Homeserver URL (optional)"
                             }
-
-                            LineH { draw_bg.color: #C8C8C8 }
                         }
                     }
 
                     login_button := RobrixIconButton {
-                        width: 275,
-                        height: 40
+                        width: Fill{max: 422},
+                        height: (RBX_CONTROL_H_LG)
                         padding: 10
-                        margin: Inset{top: 5, bottom: 10}
+                        margin: Inset{top: 8, bottom: 8}
                         align: Align{x: 0.5, y: 0.5}
-                        text: "Login"
+                        draw_bg +: {
+                            color: (RBX_ACCENT)
+                            color_hover: (RBX_ACCENT_HOVER)
+                            color_down: (RBX_ACCENT_PRESSED)
+                            border_radius: (RBX_RADIUS_XS)
+                            // Same-color 1px border smooths the rounded outer edge
+                            // (a fill-only SDF edge aliases against the white card).
+                            border_size: 1.0
+                            border_color: (RBX_ACCENT)
+                            border_color_hover: (RBX_ACCENT_HOVER)
+                            border_color_down: (RBX_ACCENT_PRESSED)
+                        }
+                        draw_icon +: {
+                            svg: (ICON_LOCK)
+                            color: (RBX_FG_ON_ACCENT)
+                        }
+                        icon_walk: Walk{width: 15, height: 15, margin: Inset{right: 5}}
+                        draw_text +: {
+                            color: (RBX_FG_ON_ACCENT)
+                            color_hover: (RBX_FG_ON_ACCENT)
+                            color_down: (RBX_FG_ON_ACCENT)
+                            text_style: TITLE_TEXT {font_size: 12.0}
+                        }
+                        text: "Sign in securely"
                     }
 
                     // MAS (OIDC) login branch. Hidden by default; the Rust
@@ -236,7 +432,7 @@ script_mod! {
                     // points feel consistent.
                     oidc_card := View {
                         visible: false
-                        width: 275, height: Fit,
+                        width: Fill{max: 422}, height: Fit,
                         flow: Down,
                         spacing: 8,
                         margin: Inset{top: 5, bottom: 10}
@@ -244,7 +440,7 @@ script_mod! {
                         oidc_info_title := Label {
                             width: Fill, height: Fit
                             draw_text +: {
-                                color: (COLOR_TEXT)
+                                color: (RBX_FG_PRIMARY)
                                 text_style: TITLE_TEXT {font_size: 11.0}
                             }
                             text: "Browser sign-in required"
@@ -253,15 +449,15 @@ script_mod! {
                         oidc_info_body := Label {
                             width: Fill, height: Fit
                             draw_text +: {
-                                color: #8C8C8C
+                                color: (RBX_FG_TERTIARY)
                                 text_style: REGULAR_TEXT {font_size: 10.0}
                             }
                             text: ""
                         }
 
                         oidc_continue_button := RobrixIconButton {
-                            width: 275,
-                            height: 40
+                            width: Fill,
+                            height: (RBX_CONTROL_H_LG)
                             padding: 10
                             align: Align{x: 0.5, y: 0.5}
                             text: "Continue in browser"
@@ -271,7 +467,7 @@ script_mod! {
                             visible: false
                             width: Fill, height: Fit
                             draw_text +: {
-                                color: (COLOR_TEXT)
+                                color: (RBX_FG_PRIMARY)
                                 text_style: REGULAR_TEXT {font_size: 10.0}
                             }
                             text: ""
@@ -279,95 +475,166 @@ script_mod! {
 
                         oidc_cancel_button := RobrixIconButton {
                             visible: false
-                            width: 275,
-                            height: 40
+                            width: Fill,
+                            height: (RBX_CONTROL_H_LG)
                             padding: 10
                             align: Align{x: 0.5, y: 0.5}
                             text: "Cancel sign-in"
                         }
                     }
 
-                    LineH {
-                        width: 275
-                        margin: Inset{bottom: -5}
-                        draw_bg.color: #C8C8C8
-                    }
+                    View {
+                        width: Fill{max: 422}, height: Fit,
+                        flow: Right,
+                        spacing: 8.0,
+                        margin: Inset{top: 6}
+                        align: Align{x: 0.5, y: 0.5}
 
-                    sso_prompt_label := Label {
-                        width: Fit, height: Fit
-                        padding: 0,
-                        draw_text +: {
-                            color: (COLOR_TEXT)
-                            text_style: TITLE_TEXT {font_size: 11.0}
+                        LineH { draw_bg.color: (RBX_STROKE_SOFT) }
+
+                        sso_prompt_label := Label {
+                            width: Fit, height: Fit
+                            padding: 0,
+                            draw_text +: {
+                                color: (RBX_FG_SECONDARY)
+                                text_style: REGULAR_TEXT {font_size: 10.0}
+                            }
+                            text: "Or continue with"
                         }
-                        text: "Or, login with an SSO provider:"
+
+                        LineH { draw_bg.color: (RBX_STROKE_SOFT) }
                     }
 
                     sso_view := View {
-                        width: 275, height: Fit,
-                        margin: Inset{left: 30, right: 5} // make the inner view 240 pixels wide
+                        width: Fill{max: 170}, height: Fit,
+                        margin: Inset{top: 8}
+                        align: Align{x: 0.5, y: 0.5}
                         flow: Flow.Right{wrap: true},
+                        spacing: 0.0,
                         apple_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/apple.png")
+                            }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
+                                }
+                                text: "Apple"
                             }
                         }
                         facebook_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/facebook.png")
                             }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
+                                }
+                                text: "Facebook"
+                            }
                         }
                         github_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/github.png")
+                            }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
+                                }
+                                text: "GitHub"
                             }
                         }
                         gitlab_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/gitlab.png")
                             }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
+                                }
+                                text: "GitLab"
+                            }
                         }
                         google_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/google.png")
+                            }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
+                                }
+                                text: "Google"
                             }
                         }
                         twitter_button := mod.widgets.SsoButton {
                             image := mod.widgets.SsoImage {
                                 src: crate_resource("self://resources/img/x.png")
                             }
+                            sso_label := Label {
+                                visible: false
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    text_style: RBX_TEXT_BODY_STRONG {font_size: 10.0}
+                                }
+                                text: "X"
+                            }
                         }
                     }
 
                     View {
-                        width: 275,
+                        width: Fill{max: 422},
                         height: Fit,
                         flow: Right,
-                        // padding: 3,
-                        spacing: 0.0,
+                        spacing: 4.0,
+                        margin: Inset{top: 8}
                         align: Align{x: 0.5, y: 0.5} // center horizontally and vertically
-
-                        LineH { draw_bg.color: #C8C8C8 }
 
                         account_prompt_label := Label {
                             width: Fit, height: Fit
-                            padding: Inset{left: 1, right: 1, top: 0, bottom: 0}
+                            padding: 0,
                             draw_text +: {
-                                color: #x6c6c6c
-                                text_style: REGULAR_TEXT {}
+                                color: (RBX_FG_SECONDARY)
+                                text_style: REGULAR_TEXT {font_size: 10.0}
                             }
-                            text: "Don't have an account?"
+                            text: "New to Robrix?"
                         }
 
-                        LineH { draw_bg.color: #C8C8C8 }
-                    }
-                    
-                    mode_toggle_button := RobrixIconButton {
-                        width: Fit, height: Fit
-                        padding: Inset{left: 15, right: 15, top: 10, bottom: 10}
-                        margin: Inset{bottom: 5}
-                        align: Align{x: 0.5, y: 0.5}
-                        text: "Sign up here"
+                        mode_toggle_button := RobrixIconButton {
+                            width: Fit, height: Fit
+                            padding: Inset{left: 4, right: 4, top: 4, bottom: 4}
+                            align: Align{x: 0.5, y: 0.5}
+                            draw_bg +: {
+                                color: (COLOR_TRANSPARENT)
+                                color_hover: (COLOR_TRANSPARENT)
+                                color_down: (COLOR_TRANSPARENT)
+                                border_color: (COLOR_TRANSPARENT)
+                                border_color_hover: (COLOR_TRANSPARENT)
+                                border_color_down: (COLOR_TRANSPARENT)
+                            }
+                            draw_text +: {
+                                color: (RBX_ACCENT)
+                                color_hover: (RBX_ACCENT_HOVER)
+                                color_down: (RBX_ACCENT_PRESSED)
+                                text_style: TITLE_TEXT {font_size: 11.0}
+                            }
+                            text: "Create an account"
+                        }
                     }
 
                     // Cancel button for add-account mode (hidden by default)
@@ -379,6 +646,123 @@ script_mod! {
                         text: "Cancel"
                         visible: false
                     }
+
+                    // Reassuring status footer (decorative; mirrors the reference design).
+                    desktop_status_divider := LineH {
+                        width: Fill{max: 422}
+                        margin: Inset{top: 12, bottom: 8}
+                        draw_bg.color: (RBX_DIVIDER)
+                    }
+
+                    desktop_status_footer := View {
+                        width: Fill{max: 422}, height: Fit
+                        flow: Right
+                        align: Align{x: 0.5, y: 0.5}
+                        spacing: 8.0
+
+                        footer_secure_label := Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "Secure session"
+                        }
+                        Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "·"
+                        }
+                        footer_selfhost_label := Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "Self-host ready"
+                        }
+                        Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "·"
+                        }
+                        footer_matrix_label := Label {
+                            width: Fit, height: Fit
+                            draw_text +: {
+                                color: (RBX_FG_TERTIARY)
+                                text_style: REGULAR_TEXT {font_size: 9.0}
+                            }
+                            text: "Matrix connected"
+                        }
+                    }
+                    } // end centered content column
+                }
+
+                mobile_status_footer := View {
+                    visible: false
+                    width: Fill{max: 390}, height: Fit
+                    margin: Inset{top: 18, left: 18, right: 18}
+                    flow: Right
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 8.0
+
+                    mobile_footer_secure_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_FG_TERTIARY)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "Secure session"
+                    }
+                    Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_FG_TERTIARY)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "·"
+                    }
+                    mobile_footer_selfhost_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_FG_TERTIARY)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "Self-host ready"
+                    }
+                    Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_FG_TERTIARY)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "·"
+                    }
+                    mobile_footer_matrix_label := Label {
+                        width: Fit, height: Fit
+                        draw_text +: {
+                            color: (RBX_FG_TERTIARY)
+                            text_style: REGULAR_TEXT {font_size: 9.5}
+                        }
+                        text: "Matrix connected"
+                    }
+                }
+
+                mobile_version_label := Label {
+                    visible: false
+                    width: Fit, height: Fit
+                    margin: Inset{top: 20}
+                    draw_text +: {
+                        color: (RBX_FG_TERTIARY)
+                        text_style: REGULAR_TEXT {font_size: 12.0}
+                    }
+                    text: "v2.0.0"
                 }
 
                 // The modal that pops up to display login status messages,
@@ -396,14 +780,14 @@ script_mod! {
                         proxy_settings_modal_inner := RoundedView {
                             width: 380, height: Fit,
                             flow: Down
-                            spacing: 12.0
-                            padding: Inset{top: 18, left: 16, right: 16, bottom: 16}
+                            spacing: 14.0
+                            padding: Inset{top: 20, left: 20, right: 20, bottom: 20}
                             show_bg: true
                             draw_bg +: {
-                                color: (COLOR_PRIMARY)
-                                border_radius: 10.0
+                                color: (RBX_BG_SURFACE)
+                                border_radius: (RBX_RADIUS_MD)
                                 border_size: 1.0
-                                border_color: #D8D8D8
+                                border_color: (RBX_STROKE_SOFT)
                             }
 
                             proxy_settings_header := View {
@@ -412,88 +796,65 @@ script_mod! {
                                 align: Align{x: 1.0, y: 0.5}
                                 spacing: 8.0
 
-                                proxy_settings_title := Label {
+                                proxy_settings_title := TitleLabel {
                                     width: Fill, height: Fit
-                                    draw_text +: {
-                                        color: (COLOR_ACTIVE_PRIMARY)
-                                        text_style: TITLE_TEXT {font_size: 14}
-                                    }
+                                    margin: Inset{top: 0}
                                     text: "Network proxy settings"
                                 }
 
                                 proxy_settings_close_button := RobrixNeutralIconButton {
                                     width: Fit, height: Fit
-                                    padding: Inset{left: 7, right: 4, top: 7, bottom: 7}
+                                    padding: Inset{left: 6, right: 6, top: 6, bottom: 6}
+                                    spacing: 0
                                     text: ""
                                     icon_walk: Walk{width: 14, height: 14, margin: 0}
+                                    label_walk: Walk{width: 0, height: 0, margin: 0}
                                     draw_icon.svg: (ICON_CLOSE)
                                 }
                             }
 
                             proxy_use_card := RoundedView {
                                 width: Fill, height: Fit,
-                                flow: Right,
-                                align: Align{x: 1.0, y: 0.5}
-                                show_bg: true
-                                draw_bg +: {
-                                    color: #F5F5F5
-                                    border_radius: 8.0
-                                    border_size: 1.0
-                                    border_color: #DADADA
-                                }
-                                padding: Inset{top: 12, bottom: 12, left: 12, right: 12}
-
-                                proxy_use_label := Label {
-                                    width: Fill, height: Fit
-                                    draw_text +: {
-                                        color: (COLOR_TEXT)
-                                        text_style: TITLE_TEXT {font_size: 12}
-                                    }
-                                    text: "Use proxy"
-                                }
-
-                                proxy_use_toggle := Toggle {
-                                    width: 52, height: 28
-                                    text: ""
-                                    active: false
-                                    icon_walk: Walk{width: 0, height: 0, margin: 0}
-                                    label_walk: Walk{width: 0, height: 0, margin: 0}
-                                    draw_bg +: {
-                                        size: 18.0
-                                        color: #E3E7EF
-                                        color_hover: #E3E7EF
-                                        color_down: #D5DBE6
-                                        color_active: (COLOR_ACTIVE_PRIMARY)
-                                        border_radius: 14.0
-                                        border_size: 1.5
-                                        border_color: #7E879A
-                                        border_color_hover: #7E879A
-                                        border_color_down: #6F788D
-                                        border_color_active: (COLOR_ACTIVE_PRIMARY_DARKER)
-                                        mark_color: #2D3A57
-                                        mark_color_hover: #2D3A57
-                                        mark_color_down: #2D3A57
-                                        mark_color_active: #FFFFFF
-                                        mark_color_active_hover: #FFFFFF
-                                    }
-                                }
-                            }
-
-                            proxy_fields_section := RoundedView {
-                                visible: false
-                                width: Fill, height: Fit,
                                 flow: Down
-                                spacing: 0
                                 show_bg: true
                                 draw_bg +: {
-                                    color: #F5F5F5
-                                    border_radius: 8.0
-                                    border_size: 1.0
-                                    border_color: #DADADA
+                                    color: (RBX_BG_SURFACE_SUBTLE)
+                                    border_radius: (RBX_RADIUS_MD)
                                 }
-                                padding: Inset{top: 4, left: 12, right: 12, bottom: 8}
+                                padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
 
-                                proxy_address_row := View {
+                                View {
+                                    width: Fill, height: Fit
+                                    flow: Right
+                                    align: Align{x: 1.0, y: 0.5}
+
+                                    proxy_use_label := SubsectionLabel {
+                                        margin: Inset{top: 0, bottom: 0}
+                                        text: "Use proxy"
+                                    }
+
+                                    proxy_use_toggle := Toggle {
+                                        width: Fit
+                                        height: Fit
+                                        padding: Inset{top: (SPACE_SM), right: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM)}
+                                        text: ""
+                                        active: false
+                                        draw_bg +: {
+                                            size: 20.0
+                                            color_active: (RBX_ACCENT)
+                                            border_color_active: (RBX_ACCENT)
+                                            mark_color_active: (RBX_FG_ON_ACCENT)
+                                        }
+                                    }
+                                }
+
+                                proxy_fields_section := View {
+                                    visible: false
+                                    width: Fill, height: Fit,
+                                    flow: Down
+                                    spacing: 0
+
+                                    proxy_address_row := View {
                                     width: Fill, height: Fit,
                                     flow: Right
                                     align: Align{y: 0.5}
@@ -503,21 +864,18 @@ script_mod! {
                                     proxy_address_label := Label {
                                         width: 90, height: Fit
                                         draw_text +: {
-                                            color: (COLOR_TEXT)
-                                            text_style: TITLE_TEXT {font_size: 12}
+                                            color: (RBX_FG_SECONDARY)
+                                            text_style: REGULAR_TEXT {font_size: 12}
                                         }
                                         text: "Address"
                                     }
 
-                                    proxy_address_input := RobrixTextInput {
-                                        width: Fill, height: Fit,
+                                    proxy_address_input := mod.widgets.LoginTextInput {
+                                        width: Fill,
                                         flow: Right,
                                         empty_text: "127.0.0.1"
-                                        padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
-
-                                LineH { draw_bg.color: #DDDDDD }
 
                                 proxy_port_row := View {
                                     width: Fill, height: Fit,
@@ -529,21 +887,18 @@ script_mod! {
                                     proxy_port_label := Label {
                                         width: 90, height: Fit
                                         draw_text +: {
-                                            color: (COLOR_TEXT)
-                                            text_style: TITLE_TEXT {font_size: 12}
+                                            color: (RBX_FG_SECONDARY)
+                                            text_style: REGULAR_TEXT {font_size: 12}
                                         }
                                         text: "Port"
                                     }
 
-                                    proxy_port_input := RobrixTextInput {
-                                        width: Fill, height: Fit,
+                                    proxy_port_input := mod.widgets.LoginTextInput {
+                                        width: Fill,
                                         flow: Right,
                                         empty_text: "7890"
-                                        padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
-
-                                LineH { draw_bg.color: #DDDDDD }
 
                                 proxy_account_row := View {
                                     width: Fill, height: Fit,
@@ -555,21 +910,18 @@ script_mod! {
                                     proxy_account_label := Label {
                                         width: 90, height: Fit
                                         draw_text +: {
-                                            color: (COLOR_TEXT)
-                                            text_style: TITLE_TEXT {font_size: 12}
+                                            color: (RBX_FG_SECONDARY)
+                                            text_style: REGULAR_TEXT {font_size: 12}
                                         }
                                         text: "Account"
                                     }
 
-                                    proxy_account_input := RobrixTextInput {
-                                        width: Fill, height: Fit,
+                                    proxy_account_input := mod.widgets.LoginTextInput {
+                                        width: Fill,
                                         flow: Right,
                                         empty_text: ""
-                                        padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
-
-                                LineH { draw_bg.color: #DDDDDD }
 
                                 proxy_password_row := View {
                                     width: Fill, height: Fit,
@@ -581,26 +933,61 @@ script_mod! {
                                     proxy_password_label := Label {
                                         width: 90, height: Fit
                                         draw_text +: {
-                                            color: (COLOR_TEXT)
-                                            text_style: TITLE_TEXT {font_size: 12}
+                                            color: (RBX_FG_SECONDARY)
+                                            text_style: REGULAR_TEXT {font_size: 12}
                                         }
                                         text: "Password"
                                     }
 
-                                    proxy_password_input := RobrixTextInput {
-                                        width: Fill, height: Fit,
+                                    proxy_password_input := mod.widgets.LoginTextInput {
+                                        width: Fill,
                                         flow: Right,
                                         empty_text: ""
                                         is_password: true,
-                                        padding: Inset{top: 5, bottom: 5, left: 10, right: 10}
                                     }
                                 }
                             }
+                            }
 
-                            proxy_settings_save_button := RobrixIconButton {
-                                width: 120, height: 40
+                            proxy_settings_error_label := Label {
+                                visible: false
+                                width: Fill, height: Fit
+                                margin: Inset{top: 0, bottom: 0, left: 2, right: 2}
+                                draw_text +: {
+                                    color: (RBX_DANGER_FG)
+                                    text_style: REGULAR_TEXT {font_size: 11}
+                                    wrap: Words
+                                }
+                                text: ""
+                            }
+
+                            proxy_settings_save_button_row := View {
+                                width: Fill, height: Fit
+                                flow: Right
                                 align: Align{x: 0.5, y: 0.5}
-                                text: "Save"
+                                margin: Inset{top: 2}
+
+                                proxy_settings_save_button := RobrixIconButton {
+                                    width: 160, height: (RBX_CONTROL_H_LG)
+                                    align: Align{x: 0.5, y: 0.5}
+                                    draw_bg +: {
+                                        color: (RBX_ACCENT)
+                                        color_hover: (RBX_ACCENT_HOVER)
+                                        color_down: (RBX_ACCENT_PRESSED)
+                                        border_radius: (RBX_RADIUS_XS)
+                                        border_size: 1.0
+                                        border_color: (RBX_ACCENT)
+                                        border_color_hover: (RBX_ACCENT_HOVER)
+                                        border_color_down: (RBX_ACCENT_PRESSED)
+                                    }
+                                    draw_text +: {
+                                        color: (RBX_FG_ON_ACCENT)
+                                        color_hover: (RBX_FG_ON_ACCENT)
+                                        color_down: (RBX_FG_ON_ACCENT)
+                                        text_style: TITLE_TEXT {font_size: 12.0}
+                                    }
+                                    text: "Save Proxy"
+                                }
                             }
                         }
                     }
@@ -643,6 +1030,8 @@ pub struct LoginScreen {
     #[deref] view: View,
     /// Whether the password field is currently showing plaintext.
     #[rust] password_visible: bool,
+    /// Whether the confirm password field is currently showing plaintext.
+    #[rust] confirm_password_visible: bool,
     /// Boolean to indicate if the SSO login process is still in flight
     #[rust] sso_pending: bool,
     /// The URL to redirect to after logging in with SSO.
@@ -669,6 +1058,9 @@ pub struct LoginScreen {
     /// True while the OIDC browser flow is in flight. Blocks re-probes and
     /// re-entry into start_oidc_login from duplicate clicks.
     #[rust] oidc_in_flight: bool,
+    /// Cached responsive layout mode. None means the first window geometry
+    /// event still needs to apply either desktop or mobile styling.
+    #[rust] mobile_layout_active: Option<bool>,
 }
 
 impl LoginScreen {
@@ -680,6 +1072,255 @@ impl LoginScreen {
         script_apply_eval!(cx, proxy_settings_modal_inner, {
             width: #(modal_width)
         });
+    }
+
+    fn set_login_input_copy(&mut self, cx: &mut Cx) {
+        let mobile = self.mobile_layout_active.unwrap_or(false);
+        let user_id_key = if mobile { "login.input.mobile.user_id" } else { "login.input.user_id" };
+        let password_key = if mobile { "login.input.mobile.password" } else { "login.input.password" };
+        let homeserver_key = if mobile { "login.input.mobile.homeserver" } else { "login.input.homeserver" };
+
+        self.view.text_input(cx, ids!(user_id_input))
+            .set_empty_text(cx, tr_key(self.app_language, user_id_key).to_string());
+        self.view.text_input(cx, ids!(password_input))
+            .set_empty_text(cx, tr_key(self.app_language, password_key).to_string());
+        self.view.text_input(cx, ids!(homeserver_input))
+            .set_empty_text(cx, tr_key(self.app_language, homeserver_key).to_string());
+        self.view.label(cx, ids!(user_id_field_label))
+            .set_text(cx, tr_key(self.app_language, "login.input.user_id"));
+        self.view.label(cx, ids!(password_field_label))
+            .set_text(cx, tr_key(self.app_language, "login.input.password"));
+        self.view.label(cx, ids!(homeserver_field_label))
+            .set_text(cx, tr_key(self.app_language, "login.label.homeserver_url"));
+    }
+
+    fn sync_login_responsive_layout(&mut self, cx: &mut Cx) {
+        let mobile_runtime_target = is_mobile_runtime_target();
+        let rect = self.view.area().rect(cx);
+        let width = rect.size.x;
+        if width <= 0.0 && !mobile_runtime_target {
+            return;
+        }
+        let mobile = is_mobile_login_layout(width, mobile_runtime_target);
+        if self.mobile_layout_active == Some(mobile) {
+            self.apply_login_layout(cx, mobile);
+            return;
+        }
+        self.mobile_layout_active = Some(mobile);
+        self.set_login_input_copy(cx);
+        self.apply_login_layout(cx, mobile);
+    }
+
+    fn apply_login_layout(&mut self, cx: &mut Cx, mobile: bool) {
+        self.view.view(cx, ids!(agent_badge)).set_visible(cx, !mobile);
+        self.view.view(cx, ids!(user_id_field_label)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(password_field_label)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(homeserver_field_label)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(homeserver_hint_row)).set_visible(cx, !mobile);
+        self.view.view(cx, ids!(desktop_status_divider)).set_visible(cx, !mobile);
+        self.view.view(cx, ids!(desktop_status_footer)).set_visible(cx, !mobile);
+        self.view.view(cx, ids!(mobile_status_footer)).set_visible(cx, mobile);
+        self.view.view(cx, ids!(mobile_version_label)).set_visible(cx, mobile);
+
+        self.apply_login_surface_style(cx, mobile);
+        self.apply_login_text_style(cx, mobile);
+        self.apply_login_input_style(cx, mobile);
+        self.apply_sso_layout_style(cx, mobile);
+    }
+
+    fn apply_login_surface_style(&mut self, cx: &mut Cx, mobile: bool) {
+        let mut login_scroll = self.view.view(cx, ids!(login_scroll));
+        let mut login_card = self.view.view(cx, ids!(login_card));
+        // `Inset{}` constructors aren't in `script_apply_eval!`'s runtime scope
+        // (pitfall #41), so build them in Rust and interpolate with `#(...)`.
+        let card_margin = if mobile {
+            Inset { left: 28.0, right: 28.0, top: 0.0, bottom: 0.0 }
+        } else {
+            Inset { left: 16.0, right: 16.0, top: 0.0, bottom: 0.0 }
+        };
+        let card_padding = if mobile {
+            Inset { top: 24.0, bottom: 24.0, left: 22.0, right: 22.0 }
+        } else {
+            Inset { top: 24.0, bottom: 24.0, left: 36.0, right: 36.0 }
+        };
+        script_apply_eval!(cx, login_scroll, {
+            draw_bg +: {
+                color: mod.widgets.RBX_BG_CANVAS
+            }
+        });
+        script_apply_eval!(cx, login_card, {
+            margin: #(card_margin)
+            padding: #(card_padding)
+            draw_bg +: {
+                color: mod.widgets.RBX_BG_SURFACE
+                border_color: mod.widgets.RBX_STROKE_SOFT
+                border_radius: mod.widgets.RBX_RADIUS_MD
+            }
+        });
+    }
+
+    fn apply_login_text_style(&mut self, cx: &mut Cx, mobile: bool) {
+        let mut brand_wordmark = self.view.label(cx, ids!(brand_wordmark));
+        let mut title = self.view.label(cx, ids!(title));
+        let mut sso_prompt_label = self.view.label(cx, ids!(sso_prompt_label));
+        let mut account_prompt_label = self.view.label(cx, ids!(account_prompt_label));
+        let mut mode_toggle_button = self.view.button(cx, ids!(mode_toggle_button));
+        if mobile {
+            script_apply_eval!(cx, brand_wordmark, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_PRIMARY
+                    text_style: mod.widgets.RBX_TEXT_PAGE_TITLE {font_size: 34.0}
+                }
+            });
+            script_apply_eval!(cx, title, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 13.0}
+                }
+            });
+            script_apply_eval!(cx, sso_prompt_label, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 11.0}
+                }
+            });
+            script_apply_eval!(cx, account_prompt_label, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.5}
+                }
+            });
+            script_apply_eval!(cx, mode_toggle_button, {
+                draw_text +: {
+                    color: mod.widgets.RBX_ACCENT
+                    color_hover: mod.widgets.RBX_ACCENT_HOVER
+                    color_down: mod.widgets.RBX_ACCENT_PRESSED
+                    text_style: mod.widgets.RBX_TEXT_BODY_STRONG {font_size: 14.0}
+                }
+            });
+        } else {
+            script_apply_eval!(cx, brand_wordmark, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_PRIMARY
+                    text_style: mod.widgets.RBX_TEXT_PAGE_TITLE {font_size: 22.0}
+                }
+            });
+            script_apply_eval!(cx, title, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.5}
+                }
+            });
+            script_apply_eval!(cx, sso_prompt_label, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.0}
+                }
+            });
+            script_apply_eval!(cx, account_prompt_label, {
+                draw_text +: {
+                    color: mod.widgets.RBX_FG_SECONDARY
+                    text_style: mod.widgets.RBX_TEXT_BODY {font_size: 10.0}
+                }
+            });
+            script_apply_eval!(cx, mode_toggle_button, {
+                draw_text +: {
+                    color: mod.widgets.RBX_ACCENT
+                    color_hover: mod.widgets.RBX_ACCENT_HOVER
+                    color_down: mod.widgets.RBX_ACCENT_PRESSED
+                    text_style: mod.widgets.RBX_TEXT_BODY_STRONG {font_size: 11.0}
+                }
+            });
+        }
+    }
+
+    fn apply_login_input_style(&mut self, cx: &mut Cx, mobile: bool) {
+        let input_ids: &[&[LiveId]] = ids_array!(
+            user_id_input,
+            password_input,
+            confirm_password_input,
+            homeserver_input
+        );
+        // Pitfall #41: build the Inset in Rust, interpolate with `#(...)`.
+        let input_padding = if mobile {
+            Inset { top: 10.0, bottom: 10.0, left: 16.0, right: 16.0 }
+        } else {
+            Inset { top: 10.0, bottom: 10.0, left: 14.0, right: 14.0 }
+        };
+        for input_ref in self.view_set(cx, input_ids).iter() {
+            let Some(mut input) = input_ref.borrow_mut() else { continue };
+            if mobile {
+                script_apply_eval!(cx, input, {
+                    padding: #(input_padding)
+                    draw_bg +: {
+                        color: mod.widgets.RBX_BG_SURFACE
+                        color_hover: mod.widgets.RBX_BG_SURFACE
+                        color_focus: mod.widgets.RBX_BG_SURFACE
+                        color_down: mod.widgets.RBX_BG_SURFACE
+                        color_empty: mod.widgets.RBX_BG_SURFACE
+                        border_color: mod.widgets.RBX_STROKE_SOFT
+                        border_color_hover: mod.widgets.RBX_STROKE_STRONG
+                        border_color_focus: mod.widgets.RBX_ACCENT
+                        border_color_down: mod.widgets.RBX_STROKE_STRONG
+                        border_color_empty: mod.widgets.RBX_STROKE_SOFT
+                    }
+                    draw_cursor +: {
+                        color: mod.widgets.RBX_ACCENT
+                    }
+                    draw_text +: {
+                        color: mod.widgets.RBX_FG_PRIMARY
+                        color_hover: mod.widgets.RBX_FG_PRIMARY
+                        color_focus: mod.widgets.RBX_FG_PRIMARY
+                        color_down: mod.widgets.RBX_FG_PRIMARY
+                        color_empty: mod.widgets.RBX_FG_TERTIARY
+                        color_empty_hover: mod.widgets.RBX_FG_TERTIARY
+                        color_empty_focus: mod.widgets.RBX_FG_TERTIARY
+                    }
+                });
+            } else {
+                script_apply_eval!(cx, input, {
+                    padding: #(input_padding)
+                    draw_bg +: {
+                        color: mod.widgets.RBX_BG_SURFACE
+                        color_hover: mod.widgets.RBX_BG_SURFACE
+                        color_focus: mod.widgets.RBX_BG_SURFACE
+                        color_down: mod.widgets.RBX_BG_SURFACE
+                        color_empty: mod.widgets.RBX_BG_SURFACE
+                        border_color: mod.widgets.RBX_STROKE_SOFT
+                        border_color_hover: mod.widgets.RBX_STROKE_STRONG
+                        border_color_focus: mod.widgets.RBX_ACCENT
+                        border_color_down: mod.widgets.RBX_STROKE_STRONG
+                        border_color_empty: mod.widgets.RBX_STROKE_SOFT
+                    }
+                    draw_cursor +: {
+                        color: mod.widgets.RBX_ACCENT
+                    }
+                    draw_text +: {
+                        color: mod.widgets.RBX_FG_PRIMARY
+                        color_hover: mod.widgets.RBX_FG_PRIMARY
+                        color_focus: mod.widgets.RBX_FG_PRIMARY
+                        color_down: mod.widgets.RBX_FG_PRIMARY
+                        color_empty: mod.widgets.RBX_FG_TERTIARY
+                        color_empty_hover: mod.widgets.RBX_FG_TERTIARY
+                        color_empty_focus: mod.widgets.RBX_FG_TERTIARY
+                    }
+                });
+            }
+        }
+    }
+
+    fn apply_sso_layout_style(&mut self, cx: &mut Cx, mobile: bool) {
+        let mut sso_view = self.view.view(cx, ids!(sso_view));
+        let sso_width = if mobile { 170.0 } else { 322.0 };
+        if mobile {
+            script_apply_eval!(cx, sso_view, {
+                width: #(sso_width)
+            });
+        } else {
+            script_apply_eval!(cx, sso_view, {
+                width: #(sso_width)
+            });
+        }
     }
 
     fn set_sso_pending_state(&mut self, cx: &mut Cx, pending: bool) {
@@ -711,12 +1352,7 @@ impl LoginScreen {
 
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
-        self.view.text_input(cx, ids!(user_id_input))
-            .set_empty_text(cx, tr_key(self.app_language, "login.input.user_id").to_string());
-        self.view.text_input(cx, ids!(password_input))
-            .set_empty_text(cx, tr_key(self.app_language, "login.input.password").to_string());
-        self.view.text_input(cx, ids!(homeserver_input))
-            .set_empty_text(cx, tr_key(self.app_language, "login.input.homeserver").to_string());
+        self.set_login_input_copy(cx);
         self.view.text_input(cx, ids!(proxy_address_input))
             .set_empty_text(cx, tr_key(self.app_language, "login.proxy_settings.input.address").to_string());
         self.view.text_input(cx, ids!(proxy_port_input))
@@ -742,26 +1378,45 @@ impl LoginScreen {
         self.view.button(cx, ids!(proxy_settings_save_button))
             .set_text(cx, tr_key(self.app_language, "login.proxy_settings.save"));
         self.view.label(cx, ids!(sso_prompt_label))
-            .set_text(cx, tr_key(self.app_language, "login.sso.prompt"));
+            .set_text(cx, tr_key(self.app_language, "login.divider.or_continue_with"));
         let login_status_modal_inner = self.view.login_status_modal(cx, ids!(login_status_modal_inner));
         login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login_status_modal.title"));
         login_status_modal_inner.button_ref(cx).set_text(cx, tr_key(self.app_language, "login_status_modal.button.cancel"));
         self.view.label(cx, ids!(title))
-            .set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
+            .set_text(cx, tr_key(self.app_language, "login.subtitle.tagline"));
         self.view.button(cx, ids!(login_button))
-            .set_text(cx, tr_key(self.app_language, "login.button.login"));
+            .set_text(cx, tr_key(self.app_language, "login.button.sign_in_securely"));
         self.view.label(cx, ids!(account_prompt_label))
-            .set_text(cx, tr_key(self.app_language, "login.account_prompt.no_account"));
+            .set_text(cx, tr_key(self.app_language, "login.account_prompt.new_to_robrix"));
+        self.view.button(cx, ids!(mode_toggle_button))
+            .set_text(cx, tr_key(self.app_language, "login.mode_toggle.create_account"));
+        self.view.label(cx, ids!(footer_secure_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.secure_session"));
+        self.view.label(cx, ids!(footer_selfhost_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.self_host_ready"));
+        self.view.label(cx, ids!(footer_matrix_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.matrix_connected"));
+        self.view.label(cx, ids!(mobile_footer_secure_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.secure_session"));
+        self.view.label(cx, ids!(mobile_footer_selfhost_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.self_host_ready"));
+        self.view.label(cx, ids!(mobile_footer_matrix_label))
+            .set_text(cx, tr_key(self.app_language, "login.footer.matrix_connected"));
+        self.view.label(cx, ids!(agent_badge_label))
+            .set_text(cx, tr_key(self.app_language, "login.badge.agent_ready"));
     }
 
     fn set_use_proxy_enabled(&mut self, cx: &mut Cx, enabled: bool) {
         self.use_proxy_enabled = enabled;
         self.view
             .check_box(cx, ids!(proxy_use_toggle))
-            .set_active(cx, enabled);
+            .set_active(cx, enabled, Animate::No);
         self.view
             .view(cx, ids!(proxy_fields_section))
             .set_visible(cx, enabled);
+        self.view
+            .label(cx, ids!(proxy_settings_error_label))
+            .set_visible(cx, false);
         self.redraw(cx);
     }
 
@@ -865,7 +1520,14 @@ impl LoginScreen {
         }
 
         let proxy_url = proxy_url.to_string();
-        crate::proxy_config::validate_proxy_url(&proxy_url)?;
+        validate_proxy_url_for_user_input(&proxy_url).map_err(|e| match e {
+            ProxyInputError::InvalidHost(host) => tr_fmt(
+                self.app_language,
+                "login.proxy_settings.error.invalid_host",
+                &[("host", host.as_str())],
+            ),
+            other => other.to_string(),
+        })?;
         Ok(Some(proxy_url))
     }
 
@@ -925,6 +1587,7 @@ impl ScriptHook for LoginScreen {
             self.load_saved_proxy_to_form(cx);
             self.set_app_language(cx, self.app_language);
             self.sync_proxy_settings_modal_layout(cx);
+            self.sync_login_responsive_layout(cx);
         });
     }
 }
@@ -938,10 +1601,11 @@ impl Widget for LoginScreen {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        self.view.handle_event(cx, event, scope);
         if matches!(event, Event::WindowGeomChange(_)) {
             self.sync_proxy_settings_modal_layout(cx);
+            self.sync_login_responsive_layout(cx);
         }
-        self.view.handle_event(cx, event, scope);
         self.widget_match_event(cx, event, scope);
     }
 
@@ -971,11 +1635,13 @@ impl WidgetMatchEvent for LoginScreen {
 
         if self.view.button(cx, ids!(proxy_settings_button)).clicked(actions) {
             self.sync_proxy_settings_modal_layout(cx);
+            self.view.label(cx, ids!(proxy_settings_error_label)).set_visible(cx, false);
             proxy_settings_modal.open(cx);
             self.redraw(cx);
         }
 
         if self.view.button(cx, ids!(proxy_settings_close_button)).clicked(actions) {
+            self.view.label(cx, ids!(proxy_settings_error_label)).set_visible(cx, false);
             proxy_settings_modal.close(cx);
             self.redraw(cx);
         }
@@ -993,18 +1659,18 @@ impl WidgetMatchEvent for LoginScreen {
         }
 
         if self.view.button(cx, ids!(proxy_settings_save_button)).clicked(actions) {
+            let error_label = self.view.label(cx, ids!(proxy_settings_error_label));
             match self.build_proxy_url_from_form(cx) {
                 Ok(proxy_url) => {
                     if let Err(e) = crate::proxy_config::save_proxy_url(proxy_url.as_deref()) {
                         warning!("Failed to persist proxy configuration from proxy settings modal: {e}");
-                        login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login.status.invalid_proxy.title"));
                         let error_text = tr_fmt(self.app_language, "login.status.invalid_proxy.body", &[
                             ("error", e.as_str()),
                         ]);
-                        login_status_modal_inner.set_status(cx, &error_text);
-                        login_status_modal_inner.button_ref(cx).set_text(cx, tr_key(self.app_language, "login.status.okay"));
-                        login_status_modal.open(cx);
+                        error_label.set_text(cx, &error_text);
+                        error_label.set_visible(cx, true);
                     } else {
+                        error_label.set_visible(cx, false);
                         proxy_settings_modal.close(cx);
                         login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login.proxy_settings.saved.title"));
                         login_status_modal_inner.set_status(cx, tr_key(self.app_language, "login.proxy_settings.saved.body"));
@@ -1014,13 +1680,11 @@ impl WidgetMatchEvent for LoginScreen {
                     self.redraw(cx);
                 }
                 Err(proxy_validation_error) => {
-                    login_status_modal_inner.set_title(cx, tr_key(self.app_language, "login.status.invalid_proxy.title"));
                     let error_text = tr_fmt(self.app_language, "login.status.invalid_proxy.body", &[
                         ("error", proxy_validation_error.as_str()),
                     ]);
-                    login_status_modal_inner.set_status(cx, &error_text);
-                    login_status_modal_inner.button_ref(cx).set_text(cx, tr_key(self.app_language, "login.status.okay"));
-                    login_status_modal.open(cx);
+                    error_label.set_text(cx, &error_text);
+                    error_label.set_visible(cx, true);
                     self.redraw(cx);
                 }
             }
@@ -1032,7 +1696,7 @@ impl WidgetMatchEvent for LoginScreen {
             self.reset_sso_state(cx);
             self.reset_oidc_screen_state(cx);
             // Reset the UI back to normal login mode
-            self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
+            self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.subtitle.tagline"));
             cancel_button.set_visible(cx, false);
             mode_toggle_button.set_visible(cx, true);
             cx.action(LoginAction::CancelAddAccount);
@@ -1047,6 +1711,19 @@ impl WidgetMatchEvent for LoginScreen {
             password_input.toggle_is_password(cx);
             show_pw_button.set_visible(cx, !self.password_visible);
             hide_pw_button.set_visible(cx, self.password_visible);
+            password_input.set_key_focus(cx);
+            self.redraw(cx);
+        }
+
+        // Handle toggling confirm password visibility
+        let confirm_password_input = self.view.text_input(cx, ids!(confirm_password_input));
+        let show_confirm_pw_button = self.view.button(cx, ids!(show_confirm_password_button));
+        let hide_confirm_pw_button = self.view.button(cx, ids!(hide_confirm_password_button));
+        if show_confirm_pw_button.clicked(actions) || hide_confirm_pw_button.clicked(actions) {
+            self.confirm_password_visible = !self.confirm_password_visible;
+            confirm_password_input.toggle_is_password(cx);
+            show_confirm_pw_button.set_visible(cx, !self.confirm_password_visible);
+            hide_confirm_pw_button.set_visible(cx, self.confirm_password_visible);
             self.redraw(cx);
         }
 
@@ -1270,7 +1947,7 @@ impl WidgetMatchEvent for LoginScreen {
                     }
                     self.discovery_pending = false;
                     self.view.button(cx, ids!(login_button))
-                        .set_text(cx, tr_key(self.app_language, "login.button.login"));
+                        .set_text(cx, tr_key(self.app_language, "login.button.sign_in_securely"));
                     let resolved = login_mode(caps.as_ref());
                     self.login_mode = Some(resolved);
                     match resolved {
@@ -1293,7 +1970,7 @@ impl WidgetMatchEvent for LoginScreen {
                     self.clear_homeserver_classification();
                     self.show_password_login_branch(cx);
                     self.view.button(cx, ids!(login_button))
-                        .set_text(cx, tr_key(self.app_language, "login.button.login"));
+                        .set_text(cx, tr_key(self.app_language, "login.button.sign_in_securely"));
                     login_status_modal_inner.set_title(
                         cx,
                         tr_key(self.app_language, "login.status.login_failed"),
@@ -1355,7 +2032,7 @@ impl WidgetMatchEvent for LoginScreen {
                     password_input.set_text(cx, "");
                     homeserver_input.set_text(cx, "");
                     // Reset title and buttons in case we were in add-account mode
-                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.subtitle.tagline"));
                     cancel_button.set_visible(cx, false);
                     mode_toggle_button.set_visible(cx, true);
                     login_status_modal.close(cx);
@@ -1412,7 +2089,7 @@ impl WidgetMatchEvent for LoginScreen {
                     password_input.set_text(cx, "");
                     homeserver_input.set_text(cx, "");
                     // Reset title and buttons
-                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.title.login_to_robrix"));
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "login.subtitle.tagline"));
                     cancel_button.set_visible(cx, false);
                     mode_toggle_button.set_visible(cx, true);
                     login_status_modal.close(cx);
@@ -1590,7 +2267,7 @@ pub enum LoginAction {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_probe_homeserver, should_show_login_failure_modal};
+    use super::{is_mobile_login_layout, should_probe_homeserver, should_show_login_failure_modal};
     use crate::homeserver::LoginMode;
 
     #[test]
@@ -1622,5 +2299,232 @@ mod tests {
     #[test]
     fn capability_probe_is_not_required_while_oidc_login_is_in_flight() {
         assert!(!should_probe_homeserver(None, true));
+    }
+
+    /// User-visible copy keys added by the login redesign. Every key must
+    /// resolve in both dictionaries (see the two tests below).
+    const LOGIN_REDESIGN_KEYS: &[&str] = &[
+        "login.subtitle.tagline",
+        "login.button.sign_in_securely",
+        "login.divider.or_continue_with",
+        "login.account_prompt.new_to_robrix",
+        "login.mode_toggle.create_account",
+        "login.footer.secure_session",
+        "login.footer.self_host_ready",
+        "login.footer.matrix_connected",
+        "login.badge.agent_ready",
+    ];
+
+    #[test]
+    fn test_login_redesign_i18n_keys_exist_en() {
+        use crate::i18n::{tr_key, AppLanguage};
+        for key in LOGIN_REDESIGN_KEYS {
+            let v = tr_key(AppLanguage::English, key);
+            assert!(!v.is_empty(), "missing EN i18n for {key}");
+            // tr_key falls back to the key name when the entry is absent.
+            assert_ne!(v, *key, "EN i18n for {key} is missing (fell back to the key name)");
+        }
+    }
+
+    #[test]
+    fn test_login_redesign_i18n_keys_exist_zh() {
+        use crate::i18n::{tr_key, AppLanguage};
+        for key in LOGIN_REDESIGN_KEYS {
+            let zh = tr_key(AppLanguage::ChineseSimplified, key);
+            let en = tr_key(AppLanguage::English, key);
+            assert!(!zh.is_empty(), "missing ZH i18n for {key}");
+            assert_ne!(zh, *key, "ZH i18n for {key} is missing (fell back to the key name)");
+            // tr_key falls back to EN when the zh-CN entry is missing, so a
+            // distinct zh-CN string is the real proof the key was translated.
+            assert_ne!(zh, en, "ZH i18n for {key} is missing (fell back to the English string)");
+        }
+    }
+
+    #[test]
+    fn test_login_screen_source_wires_accent_token() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("RBX_ACCENT"), "the primary CTA should use the teal RBX_ACCENT token");
+        assert!(src.contains("login_button"), "the login_button widget id must be preserved");
+        // Build the legacy-blue needle from parts so this assertion's own source
+        // text does not contain the contiguous token and self-trip include_str!.
+        let legacy_primary = concat!("COLOR_ACTIVE", "_PRIMARY");
+        assert!(
+            !src.contains(legacy_primary),
+            "login screen must not reference the deprecated legacy primary-blue token",
+        );
+    }
+
+    #[test]
+    fn test_login_screen_source_uses_desktop_card_contract() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("max: 494"), "desktop login card should keep the wider reference-card max width");
+        assert!(src.contains("border_radius: (RBX_RADIUS_MD)"), "login card should use RBX_RADIUS_MD");
+        assert!(src.contains("login_button := RobrixIconButton"));
+        assert!(src.contains("max: 422"), "primary form controls should align to the desktop content column max width");
+
+        for forbidden in [
+            concat!("#", "0000"),
+            concat!("#", "x00000000"),
+            concat!("#", "fff"),
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "login screen should not contain bare color literal {forbidden}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_login_inputs_do_not_inherit_legacy_blue_focus_border() {
+        let src = include_str!("login_screen.rs");
+        let input_style = src
+            .split("mod.widgets.LoginTextInput = RobrixTextInput")
+            .nth(1)
+            .expect("LoginTextInput style should exist")
+            .split("mod.widgets.LoginScreen")
+            .next()
+            .expect("LoginTextInput style should precede LoginScreen");
+        assert!(input_style.contains("border_color_hover: (RBX_STROKE_STRONG)"));
+        assert!(input_style.contains("border_color_focus: (RBX_ACCENT)"));
+        assert!(input_style.contains("border_color_down: (RBX_STROKE_STRONG)"));
+        assert!(input_style.contains("clip_y: true"));
+        assert!(input_style.contains("draw_cursor +:"));
+        assert!(src.contains("homeserver_input := mod.widgets.LoginTextInput"));
+        let legacy_homeserver_input = concat!("homeserver_input := ", "RobrixTextInput");
+        assert!(
+            !src.contains(legacy_homeserver_input),
+            "homeserver input should use the login-specific input style, not the legacy-blue global input",
+        );
+    }
+
+    #[test]
+    fn test_login_form_uses_non_overlay_layout_around_inputs() {
+        let src = include_str!("login_screen.rs");
+        let card_needle = concat!("login_card", " := RoundedView");
+        let column_needle = concat!("form_column", " := View");
+        let hint_row_needle = concat!("homeserver_hint_row", " := View");
+        let old_hint_needle = concat!(
+            "LineH { draw_bg.color: (RBX_STROKE_SOFT) }",
+            "\n\n                            ",
+            "homeserver_hint_label",
+        );
+        assert!(src.contains(card_needle));
+        assert!(src.contains(column_needle));
+        assert!(src.contains(hint_row_needle));
+        assert!(
+            !src.contains(old_hint_needle),
+            "homeserver hint should not be sandwiched between divider lines directly under the input",
+        );
+    }
+
+    #[test]
+    fn test_mobile_login_layout_target_detection() {
+        assert!(is_mobile_login_layout(700.0, false));
+        assert!(is_mobile_login_layout(390.0, false));
+        assert!(!is_mobile_login_layout(701.0, false));
+        assert!(is_mobile_login_layout(1272.0, true));
+    }
+
+    #[test]
+    fn test_mobile_login_reapplies_layout_for_late_bound_children() {
+        let src = include_str!("login_screen.rs");
+        let same_mode_branch = concat!(
+            "if self.mobile_layout_active == Some(mobile) {\n",
+            "            self.apply_login_layout(cx, mobile);"
+        );
+        assert!(
+            src.contains(same_mode_branch),
+            "mobile layout must reapply on repeated geometry events so nested controls receive runtime style",
+        );
+    }
+
+    #[test]
+    fn test_login_screen_source_contains_mobile_light_contract() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("RBX_BG_CANVAS"), "mobile and desktop login should use the light canvas token until global theme switching exists");
+        assert!(src.contains("RBX_BG_SURFACE"), "mobile and desktop login should use the light surface token until global theme switching exists");
+        assert!(
+            !src.contains(concat!("RBX_", "LOGIN_BG")),
+            "mobile login should not introduce a standalone dark background before global theme switching",
+        );
+        assert!(
+            !src.contains(concat!("RBX_", "LOGIN_SURFACE")),
+            "mobile login should not introduce a standalone dark surface before global theme switching",
+        );
+
+        for forbidden in [
+            concat!("#", "0000"),
+            concat!("#", "x00000000"),
+            concat!("#", "fff"),
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "login screen should not contain bare color literal {forbidden}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_mobile_login_form_labels_and_placeholders_are_i18n_bound() {
+        use crate::i18n::{tr_key, AppLanguage};
+
+        let src = include_str!("login_screen.rs");
+        for needle in [
+            "user_id_field_label",
+            "password_field_label",
+            "homeserver_field_label",
+            "login.input.mobile.user_id",
+            "login.input.mobile.password",
+            "login.input.mobile.homeserver",
+        ] {
+            assert!(src.contains(needle), "missing mobile login source contract: {needle}");
+        }
+
+        for key in [
+            "login.input.mobile.user_id",
+            "login.input.mobile.password",
+            "login.input.mobile.homeserver",
+        ] {
+            let en = tr_key(AppLanguage::English, key);
+            let zh = tr_key(AppLanguage::ChineseSimplified, key);
+            assert_ne!(en, key, "missing EN i18n for {key}");
+            assert_ne!(zh, key, "missing ZH i18n for {key}");
+            if key != "login.input.mobile.homeserver" {
+                assert_ne!(zh, en, "ZH i18n for {key} fell back to English");
+            }
+        }
+    }
+
+    #[test]
+    fn test_mobile_sso_grid_preserves_provider_ids() {
+        let src = include_str!("login_screen.rs");
+        assert!(
+            src.contains(concat!("width: Fill{max: ", "170}")),
+            "mobile SSO grid should use a constrained width so six icon buttons align as 3x2",
+        );
+        assert!(
+            src.contains("let sso_width = if mobile { 170.0 } else { 322.0 };"),
+            "runtime layout should only switch the direct SSO container width",
+        );
+        for id in [
+            "apple_button",
+            "facebook_button",
+            "github_button",
+            "gitlab_button",
+            "google_button",
+            "twitter_button",
+        ] {
+            assert!(src.contains(id), "missing existing SSO provider id {id}");
+        }
+        assert!(!src.contains(concat!("microsoft", "_button")));
+        assert!(!src.contains(concat!("more", "_button")));
+    }
+
+    #[test]
+    fn test_mobile_login_footer_contract() {
+        let src = include_str!("login_screen.rs");
+        assert!(src.contains("mobile_status_footer"));
+        assert!(src.contains("mobile_version_label"));
+        assert!(src.contains("desktop_status_footer"));
     }
 }

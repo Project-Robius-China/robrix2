@@ -4,14 +4,14 @@ use crate::{
     app::{AppState, BotSettingsState},
     i18n::{AppLanguage, tr_fmt, tr_key},
     persistence,
-    shared::popup_list::{PopupKind, enqueue_popup_notification},
+    shared::popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle},
     sliding_sync::current_user_id,
 };
 
 const OCTOS_HEALTH_REQUEST_ID: LiveId = live_id!(octos_health);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum OctosHealthStatus {
+pub enum OctosHealthStatus {
     #[default]
     Unknown,
     Checking,
@@ -28,14 +28,14 @@ enum OctosHealthProbeStage {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct OctosHealthState {
-    status: OctosHealthStatus,
+pub struct OctosHealthState {
+    pub status: OctosHealthStatus,
     probe_stage: OctosHealthProbeStage,
-    in_flight: bool,
+    pub in_flight: bool,
 }
 
 impl OctosHealthState {
-    fn begin_check(&mut self, base_url: &str) -> Option<String> {
+    pub fn begin_check(&mut self, base_url: &str) -> Option<String> {
         if self.in_flight {
             return None;
         }
@@ -45,7 +45,7 @@ impl OctosHealthState {
         Some(normalize_octos_probe_url(base_url, "/health"))
     }
 
-    fn handle_http_result(&mut self, base_url: &str, status_code: u16) -> Option<String> {
+    pub fn handle_http_result(&mut self, base_url: &str, status_code: u16) -> Option<String> {
         if status_code == 200 {
             self.finish(OctosHealthStatus::Reachable);
             None
@@ -54,7 +54,7 @@ impl OctosHealthState {
         }
     }
 
-    fn handle_transport_error(&mut self, base_url: &str) -> Option<String> {
+    pub fn handle_transport_error(&mut self, base_url: &str) -> Option<String> {
         self.handle_failure(base_url)
     }
 
@@ -110,9 +110,25 @@ script_mod! {
             spacing: (SPACE_XS)
             margin: Inset{bottom: 2}
 
-            app_service_title := TitleLabel {
-                width: Fit
-                text: "App Service"
+            View {
+                width: Fill, height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                spacing: (SPACE_SM)
+
+                SettingsIconCircle {
+                    width: 30, height: 30
+                    draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                    Icon {
+                        width: 16, height: 16
+                        draw_icon +: { svg: (ICON_HIERARCHY), color: (RBX_ACCENT) }
+                        icon_walk: Walk{width: 16, height: 16}
+                    }
+                }
+                app_service_title := TitleLabel {
+                    width: Fill
+                    text: "App Service"
+                }
             }
 
             description := mod.widgets.BotSettingsInfoLabel {
@@ -143,8 +159,8 @@ script_mod! {
                 active: false
                 draw_bg +: {
                     size: 20.0
-                    color_active: (COLOR_ACTIVE_PRIMARY)
-                    border_color_active: (COLOR_ACTIVE_PRIMARY)
+                    color_active: (RBX_ACCENT)
+                    border_color_active: (RBX_ACCENT)
                     mark_color_active: #fff
                 }
             }
@@ -228,22 +244,14 @@ script_mod! {
                 align: Align{y: 0.5}
                 margin: Inset{top: 2}
 
-                save_octos_service_button := RobrixIconButton {
+                save_octos_service_button := SettingsPrimaryButton {
                     padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
                     icon_walk: Walk{width: 0, height: 0}
                     spacing: 0
                     text: "Save"
                 }
 
-                octos_health_status_label := Label {
-                    width: Fit
-                    height: Fit
-                    draw_text +: {
-                        color: (COLOR_DISABLED_TEXT)
-                        text_style: REGULAR_TEXT { font_size: 10.5 }
-                    }
-                    text: "Unknown"
-                }
+                octos_health_status_badge := SettingsStatusBadge {}
 
                 check_now_button := RobrixNeutralIconButton {
                     padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
@@ -264,6 +272,10 @@ pub struct BotSettings {
     app_language: AppLanguage,
     #[rust]
     octos_health: OctosHealthState,
+    #[rust]
+    last_synced_bot_settings: BotSettingsState,
+    #[rust]
+    has_synced_bot_settings: bool,
 }
 
 impl Widget for BotSettings {
@@ -274,6 +286,7 @@ impl Widget for BotSettings {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        self.sync_from_scope_if_needed(cx, scope);
 
         if let Event::NetworkResponses(responses) = event {
             for response in responses {
@@ -346,15 +359,24 @@ impl WidgetMatchEvent for BotSettings {
                     );
                 }
                 Err(error) => {
-                    enqueue_popup_notification(
-                        tr_fmt(
-                            self.app_language,
-                            "settings.labs.app_service.health.validation.invalid_url",
-                            &[("error", &error)],
-                        ),
-                        PopupKind::Error,
-                        Some(4.0),
+                    let error_detail = tr_fmt(
+                        self.app_language,
+                        "settings.labs.app_service.health.validation.invalid_url",
+                        &[("error", &error)],
                     );
+                    let error_detail_copy = error_detail.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't save settings".into()),
+                        message: error_detail.into(),
+                        actions: vec![
+                            NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&error_detail_copy);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(4.0),
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -363,11 +385,19 @@ impl WidgetMatchEvent for BotSettings {
             let service_url = match self.save_app_service_settings(cx, app_state) {
                 Ok(service_url) => service_url,
                 Err(error) => {
-                    enqueue_popup_notification(
-                        error,
-                        PopupKind::Error,
-                        Some(4.0),
-                    );
+                    let error_copy = error.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't validate settings".into()),
+                        message: error.into(),
+                        actions: vec![
+                            NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&error_copy);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(4.0),
+                        ..Default::default()
+                    });
                     return;
                 }
             };
@@ -380,6 +410,19 @@ impl WidgetMatchEvent for BotSettings {
 }
 
 impl BotSettings {
+    fn sync_from_scope_if_needed(&mut self, cx: &mut Cx, scope: &mut Scope) {
+        let Some(app_state) = scope.data.get::<AppState>() else {
+            return;
+        };
+        if should_sync_bot_settings_from_app_state(
+            self.has_synced_bot_settings,
+            &self.last_synced_bot_settings,
+            app_state,
+        ) {
+            self.sync_ui(cx, &app_state.bot_settings);
+        }
+    }
+
     fn current_service_url(&self, cx: &mut Cx) -> String {
         let service_url = self.view
             .text_input(cx, ids!(octos_service_input))
@@ -459,29 +502,38 @@ impl BotSettings {
     }
 
     fn set_octos_health_status_label(&mut self, cx: &mut Cx) {
-        let (text_key, color) = match self.octos_health.status {
+        use crate::shared::design_tokens::{
+            RBX_DANGER_BG, RBX_DANGER_FG, RBX_NEUTRAL_BG, RBX_NEUTRAL_FG,
+            RBX_SUCCESS_BG, RBX_SUCCESS_FG, RBX_WARNING_BG, RBX_WARNING_FG,
+        };
+        // (text key, foreground, pill background) per health state.
+        let (text_key, fg, bg) = match self.octos_health.status {
             OctosHealthStatus::Unknown => (
                 "settings.labs.app_service.health.status.unknown",
-                vec4(0.6, 0.6, 0.6, 1.0),
+                RBX_NEUTRAL_FG, RBX_NEUTRAL_BG,
             ),
             OctosHealthStatus::Checking => (
                 "settings.labs.app_service.health.status.checking",
-                vec4(0.6, 0.6, 0.6, 1.0),
+                RBX_WARNING_FG, RBX_WARNING_BG,
             ),
             OctosHealthStatus::Reachable => (
                 "settings.labs.app_service.health.status.reachable",
-                vec4(0.0, 0.6666667, 0.0, 1.0),
+                RBX_SUCCESS_FG, RBX_SUCCESS_BG,
             ),
             OctosHealthStatus::Unreachable => (
                 "settings.labs.app_service.health.status.unreachable",
-                vec4(0.8, 0.0, 0.0, 1.0),
+                RBX_DANGER_FG, RBX_DANGER_BG,
             ),
         };
-        let mut label = self.view.label(cx, ids!(octos_health_status_label));
+        let mut badge = self.view.view(cx, ids!(octos_health_status_badge));
+        script_apply_eval!(cx, badge, {
+            draw_bg +: { color: #(bg) }
+        });
+        let mut label = self.view.label(cx, ids!(octos_health_status_badge.badge_label));
         script_apply_eval!(cx, label, {
             text: #(tr_key(self.app_language, text_key)),
             draw_text +: {
-                color: #(color)
+                color: #(fg)
             }
         });
     }
@@ -537,9 +589,11 @@ impl BotSettings {
     }
 
     fn sync_ui(&mut self, cx: &mut Cx, bot_settings: &BotSettingsState) {
+        self.has_synced_bot_settings = true;
+        self.last_synced_bot_settings = bot_settings.clone();
         self.view
             .check_box(cx, ids!(app_service_switch))
-            .set_active(cx, bot_settings.enabled);
+            .set_active(cx, bot_settings.enabled, Animate::No);
         self.view
             .text_input(cx, ids!(botfather_user_id_input))
             .set_text(cx, bot_settings.botfather_user_id.trim());
@@ -556,6 +610,14 @@ impl BotSettings {
         self.sync_app_language(cx);
         self.sync_ui(cx, bot_settings);
     }
+}
+
+fn should_sync_bot_settings_from_app_state(
+    has_synced_bot_settings: bool,
+    last_synced_bot_settings: &BotSettingsState,
+    app_state: &AppState,
+) -> bool {
+    !has_synced_bot_settings || last_synced_bot_settings != &app_state.bot_settings
 }
 
 impl BotSettingsRef {
@@ -585,7 +647,10 @@ fn persist_bot_settings(app_state: &AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{OctosHealthProbeStage, OctosHealthState, OctosHealthStatus};
+    use super::{
+        OctosHealthProbeStage, OctosHealthState, OctosHealthStatus,
+        should_sync_bot_settings_from_app_state,
+    };
     use crate::app::BotSettingsState;
 
     #[test]
@@ -707,5 +772,41 @@ mod tests {
 
         assert_eq!(bot_settings, before);
         assert_eq!(state.status, OctosHealthStatus::Unreachable);
+    }
+
+    #[test]
+    fn test_bot_settings_scope_sync_detects_restored_state() {
+        let last_synced = BotSettingsState::default();
+        let mut app_state = crate::app::AppState::default();
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = "@octosbot:example.com".into();
+        app_state.bot_settings.octos_service_url = "http://192.168.5.12:8010".into();
+
+        assert!(should_sync_bot_settings_from_app_state(true, &last_synced, &app_state));
+    }
+
+    #[test]
+    fn test_bot_settings_scope_sync_ignores_unchanged_state() {
+        let mut app_state = crate::app::AppState::default();
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = "@octosbot:example.com".into();
+        app_state.bot_settings.octos_service_url = "http://192.168.5.12:8010".into();
+
+        assert!(!should_sync_bot_settings_from_app_state(
+            true,
+            &app_state.bot_settings,
+            &app_state,
+        ));
+    }
+
+    #[test]
+    fn test_bot_settings_scope_sync_runs_before_first_hydration() {
+        let app_state = crate::app::AppState::default();
+
+        assert!(should_sync_bot_settings_from_app_state(
+            false,
+            &app_state.bot_settings,
+            &app_state,
+        ));
     }
 }

@@ -17,21 +17,27 @@ script_mod! {
     mod.widgets.ICON_ROTATE_CW        = crate_resource("self://resources/icons/rotate_right_fa.svg")
     mod.widgets.ICON_ROTATE_CCW       = crate_resource("self://resources/icons/rotate_left_fa.svg")
     mod.widgets.ICON_COPY             = crate_resource("self://resources/icons/copy.svg")
+    mod.widgets.ICON_DOWNLOAD         = crate_resource("self://resources/icons/download.svg")
     mod.widgets.ICON_EDIT             = crate_resource("self://resources/icons/edit.svg")
     mod.widgets.ICON_EXTERNAL_LINK    = crate_resource("self://resources/icons/external_link.svg")
     mod.widgets.ICON_IMPORT           = crate_resource("self://resources/icons/import.svg") // TODO: FIX
+    mod.widgets.ICON_GLOBE            = crate_resource("self://resources/icons/globe.svg")
     mod.widgets.ICON_HIERARCHY        = crate_resource("self://resources/icons/hierarchy.svg")
+    mod.widgets.ICON_LOCK             = crate_resource("self://resources/icons/lock.svg")
     mod.widgets.ICON_HOME             = crate_resource("self://resources/icons/home.svg")
     mod.widgets.ICON_HTML_FILE        = crate_resource("self://resources/icons/html_file.svg")
     mod.widgets.ICON_INFO             = crate_resource("self://resources/icons/info.svg")
     mod.widgets.ICON_INVITE           = crate_resource("self://resources/icons/invite.svg")
     mod.widgets.ICON_JOIN_ROOM        = crate_resource("self://resources/icons/join_room.svg")
     mod.widgets.ICON_JUMP             = crate_resource("self://resources/icons/go_back.svg")
+    mod.widgets.ICON_LOCK_FILLED      = crate_resource("self://resources/icons/lock_filled.svg")
+    mod.widgets.ICON_LOCK_OPEN        = crate_resource("self://resources/icons/lock_open.svg")
     mod.widgets.ICON_LOGOUT           = crate_resource("self://resources/icons/logout.svg")
     mod.widgets.ICON_LINK             = crate_resource("self://resources/icons/link.svg")
     mod.widgets.ICON_PIN              = crate_resource("self://resources/icons/pin.svg")
     mod.widgets.ICON_REPLY            = crate_resource("self://resources/icons/reply.svg")
     mod.widgets.ICON_SEARCH           = crate_resource("self://resources/icons/search.svg")
+    mod.widgets.ICON_THREADS          = crate_resource("self://resources/icons/double_chat.svg")
     mod.widgets.ICON_SEND             = crate_resource("self://resources/icon_send.svg")
     mod.widgets.ICON_SETTINGS         = crate_resource("self://resources/icons/settings.svg")
     mod.widgets.ICON_SQUARES          = crate_resource("self://resources/icons/squares_filled.svg")
@@ -46,6 +52,14 @@ script_mod! {
     mod.widgets.ICON_ZOOM_OUT         = crate_resource("self://resources/icons/zoom_out.svg")
     mod.widgets.ICON_ADD_ATTACHMENT   = crate_resource("self://resources/icons/add_attachment.svg")
     mod.widgets.ICON_FILE             = crate_resource("self://resources/icons/file.svg")
+    mod.widgets.ICON_ARROW_BACK       = crate_resource("self://resources/icons/arrow_back.svg")
+    mod.widgets.ICON_SHIELD           = crate_resource("self://resources/icons/shield.svg")
+    mod.widgets.ICON_MORE_VERT        = crate_resource("self://resources/icons/more_vert.svg")
+    mod.widgets.ICON_CHEVRON_RIGHT    = crate_resource("self://resources/icons/chevron_right.svg")
+    mod.widgets.ICON_STAR             = crate_resource("self://resources/icons/star.svg")
+    mod.widgets.ICON_STAR_FILLED      = crate_resource("self://resources/icons/star_filled.svg")
+    mod.widgets.ICON_ROBOT            = crate_resource("self://resources/icons/robot.svg")
+    mod.widgets.ICON_PEOPLE           = crate_resource("self://resources/icons/people.svg")
 
     mod.widgets.TITLE_TEXT = theme.font_regular {
         font_size: (13),
@@ -266,6 +280,14 @@ script_mod! {
     // Settings screen layout
     mod.widgets.SETTINGS_CONTENT_PADDING = 16
     mod.widgets.SETTINGS_BUTTON_HEIGHT = 36
+
+    // The font size used for regular (non-title, non-subsection) text
+    // within any settings screen (e.g., dropdown labels, radio/toggle
+    // labels, inline helper text inside a control).
+    mod.widgets.SETTINGS_REGULAR_FONT_SIZE = 11
+    mod.widgets.SETTINGS_REGULAR_TEXT_STYLE = theme.font_regular {
+        font_size: (mod.widgets.SETTINGS_REGULAR_FONT_SIZE),
+    }
 
     // Text alignment compensation for non-Label widgets (LinkLabel, IconButton)
     // whose internal rendering origin differs from plain Label.

@@ -23,6 +23,10 @@ script_mod! {
             flow: Down
             height: Fit
             visible: false
+            // Own GPU draw list so the dropdown (which overflows above the input
+            // into the timeline area) composites above the timeline's bot-card
+            // new_batch draw lists instead of being covered by them.
+            new_batch: true
 
             draw_bg +: {
                 color: instance(theme.color_fg_app)

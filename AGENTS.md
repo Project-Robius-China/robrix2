@@ -21,6 +21,10 @@ This project does not use automatic Rust formatting. Do not run `cargo fmt`, `ru
 
 Present changes for testing first. Wait for user confirmation before committing or opening a PR.
 
+### Check i18n for new features
+
+When designing or implementing new features, always check whether i18n translation keys and UI text alignment need updates so translated content is not missing or visually inconsistent.
+
 ### Makepad 2.0 only
 
 - Use `script_mod!`, not `live_design!`
@@ -43,6 +47,14 @@ Present changes for testing first. Wait for user confirmation before committing 
 ### Async Matrix operations
 
 Always use `submit_async_request(MatrixRequest::*)`. Do not spawn raw tokio tasks for Matrix API calls from UI code.
+
+### UI / design system
+
+All UI work follows the visual spec [docs/ui-visual-spec-zh.md](docs/ui-visual-spec-zh.md) and the token layer `src/shared/design_tokens.rs`.
+
+- Use `RBX_*` tokens (or existing `styles.rs` tokens) for color / radius / typography. Do NOT hardcode hex in screens — add a token first.
+- Do NOT reinvent card / badge / row styles; follow the spec's component contracts/recipes (§4) and the hard constraints (§0.1).
+- Only the token layer ships as code; build components per the spec, and follow its build order (§8).
 
 ## Quick Makepad Notes
 

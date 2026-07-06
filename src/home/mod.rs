@@ -3,11 +3,14 @@ use makepad_widgets::{ScriptVm, event::{DigitId, FingerDownEvent, FingerLongPres
 pub mod add_room;
 pub mod bot_binding_modal;
 pub mod create_bot_modal;
+pub mod create_room;
 pub mod delete_bot_modal;
 pub mod edited_indicator;
 pub mod editing_pane;
+pub mod encryption_notice;
 pub mod event_source_modal;
 pub mod home_screen;
+pub mod sticker_modal;
 pub mod invite_modal;
 pub mod invite_screen;
 pub mod light_themed_dock;
@@ -23,6 +26,7 @@ pub mod rooms_list_entry;
 pub mod rooms_list_header;
 pub mod rooms_sidebar;
 pub mod search_messages;
+pub mod global_message_search;
 pub mod space_lobby;
 pub mod spaces_bar;
 pub mod navigation_tab_bar;
@@ -30,10 +34,12 @@ pub mod welcome_screen;
 pub mod event_reaction_list;
 pub mod new_message_context_menu;
 pub mod room_context_menu;
+pub mod room_settings_modal;
 pub mod link_preview;
 pub mod room_image_viewer;
 pub mod streaming_animation;
 pub mod upload_progress;
+pub mod directory_screen;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContextMenuOpenGesture {
@@ -83,8 +89,10 @@ pub fn consume_context_menu_opening_finger_up(
 
 pub fn script_mod(vm: &mut ScriptVm) {
     search_messages::script_mod(vm);
+    global_message_search::script_mod(vm);
     loading_pane::script_mod(vm);
     location_preview::script_mod(vm);
+    create_room::script_mod(vm);
     add_room::script_mod(vm);
     bot_binding_modal::script_mod(vm);
     create_bot_modal::script_mod(vm);
@@ -98,22 +106,30 @@ pub fn script_mod(vm: &mut ScriptVm) {
     rooms_list::script_mod(vm);
     edited_indicator::script_mod(vm);
     editing_pane::script_mod(vm);
+    encryption_notice::script_mod(vm);
     new_message_context_menu::script_mod(vm);
     event_source_modal::script_mod(vm);
+    sticker_modal::script_mod(vm);
     room_context_menu::script_mod(vm);
+    room_settings_modal::script_mod(vm);
     invite_modal::script_mod(vm);
     invite_screen::script_mod(vm);
     tombstone_footer::script_mod(vm);
     room_screen::script_mod(vm);
+    // `spaces_bar` must be registered BEFORE `rooms_sidebar` and `navigation_tab_bar`,
+    // which both reference `mod.widgets.SpacesBar` in their DSL (the Workspace tab and
+    // the desktop rail). Registering it after would fail with "property SpacesBar not
+    // found in prototype chain".
+    spaces_bar::script_mod(vm);
     rooms_sidebar::script_mod(vm);
     welcome_screen::script_mod(vm);
     light_themed_dock::script_mod(vm);
     main_mobile_ui::script_mod(vm);
     main_desktop_ui::script_mod(vm);
-    spaces_bar::script_mod(vm);
     navigation_tab_bar::script_mod(vm);
     // Note: upload_progress::script_mod is called earlier in app.rs
     // because RoomInputBar depends on it.
+    directory_screen::script_mod(vm);
     // Keep HomeScreen last, it references many widgets registered above.
     home_screen::script_mod(vm);
 }

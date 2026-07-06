@@ -126,23 +126,28 @@ script_mod! {
 
         align: Align{x: 0.0, y: 0.5}
         padding: 9
-        margin: 0
+        // 1px bottom inset so the tab bar's bottom border line runs
+        // continuously beneath every tab (including the active one).
+        margin: Inset{bottom: 1}
 
         close_button: mod.widgets.RobrixTabCloseButton {}
         draw_text +: {
             text_style: theme.font_regular {}
 
-            color: #000
-            color_hover: #fe8610
-            color_active: COLOR_PRIMARY
+            // Unified palette: dark text on the neutral unselected tab, white on the
+            // teal selected tab. (No more orange hover text.)
+            color: (RBX_FG_PRIMARY)
+            color_hover: (RBX_FG_PRIMARY)
+            color_active: (COLOR_PRIMARY)
         }
 
         draw_bg +: {
-            // Light blue-ish color, de-saturated from COLOR_ACTIVE_PRIMARY
-            color: #E1EEFA
-            // A slightly darker shade of the tab color for hover visibility
-            color_hover: #C8DDEF
-            color_active: COLOR_ACTIVE_PRIMARY
+            // Unselected tabs: subtle neutral surface. Selected tab: teal accent
+            // (RBX_ACCENT) — the unified UI selection color, replacing the legacy
+            // bright blue COLOR_ACTIVE_PRIMARY.
+            color: (RBX_BG_SURFACE_SUBTLE)
+            color_hover: (RBX_BG_HOVER)
+            color_active: (RBX_ACCENT)
             // Remove the border and rounded corners from the default Tab style
             border_size: 0.0
             border_radius: 3.0
@@ -200,11 +205,34 @@ script_mod! {
             draw_depth: 10
             color: #x0
         }
+        // Both layers are drawn FLAT with a 1px bottom border, replacing the
+        // theme's built-in bottom "shadow" (the base TabBar's draw_fill fades
+        // to transparent black at its bottom edge via color_2: #0000).
+        // draw_bg covers the whole bar; draw_fill covers the area after the
+        // last tab — so both need the same fill + border for a seamless bar.
         draw_fill +: {
-            color: COLOR_PRIMARY * 0.96
+            color: (RBX_BG_SURFACE_SUBTLE)
+            border_color: (RBX_STROKE_STRONG)
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.rect(0., 0., self.rect_size.x, self.rect_size.y)
+                sdf.fill(self.color)
+                sdf.rect(0., self.rect_size.y - 1.0, self.rect_size.x, 1.0)
+                sdf.fill(self.border_color)
+                return sdf.result
+            }
         }
         draw_bg +: {
-            color: COLOR_PRIMARY * 0.96
+            color: (RBX_BG_SURFACE_SUBTLE)
+            border_color: (RBX_STROKE_STRONG)
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.rect(0., 0., self.rect_size.x, self.rect_size.y)
+                sdf.fill(self.color)
+                sdf.rect(0., self.rect_size.y - 1.0, self.rect_size.x, 1.0)
+                sdf.fill(self.border_color)
+                return sdf.result
+            }
         }
 
         width: Fill
@@ -225,6 +253,18 @@ script_mod! {
 
         round_corner +: {
             color: COLOR_SECONDARY
+
+            // Flat dock: draw NO rounded-corner slivers. The panels stay flush
+            // rectangles (rooms list butts square against the navy rail; the
+            // main/timeline panel is square too). The round-corner trick paints a
+            // small corner sliver in the BACKDROP color to fake rounding — but that
+            // only works when the sliver color matches whatever is behind the panel.
+            // Once the desktop backdrop went navy, the grey slivers showed up as
+            // grey notches at the panel corners (e.g. the tab bar's top-right corner
+            // against navy). Drawing nothing keeps every corner clean on any backdrop.
+            pixel: fn() {
+                return #x00000000
+            }
         }
 
         padding: Inset{left: theme.dock_border_size, top: 0, right: theme.dock_border_size, bottom: theme.dock_border_size}
