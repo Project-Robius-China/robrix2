@@ -15,6 +15,7 @@ use crate::homeserver::{CapabilityProbeAction, HsCapabilities};
 use crate::login::login_screen::LoginAction;
 use crate::register::{RegisterAction, RegisterMode};
 use crate::register::validation::{normalize_homeserver_url, HomeserverUrlError};
+use crate::shared::popup_list::{enqueue_popup_notification, PopupKind};
 use crate::sliding_sync::{submit_async_request, MatrixRequest};
 
 fn can_start_capability_discovery(registration_pending: bool, awaiting_sync_startup: bool) -> bool {
@@ -42,6 +43,33 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
+    // Primary CTA — mirrors the login screen's login_button (teal RBX_ACCENT
+    // fill, on-accent text, XS control radius). Shared by the homeserver "Next"
+    // step and the final "Create Account" submit so the two read as one system.
+    mod.widgets.RegisterPrimaryButton = RobrixIconButton {
+        width: Fill,
+        height: (RBX_CONTROL_H_LG)
+        padding: 10
+        align: Align{x: 0.5, y: 0.5}
+        draw_bg +: {
+            color: (RBX_ACCENT)
+            color_hover: (RBX_ACCENT_HOVER)
+            color_down: (RBX_ACCENT_PRESSED)
+            border_radius: (RBX_RADIUS_XS)
+            // Same-color 1px border smooths the rounded outer edge (matches login).
+            border_size: 1.0
+            border_color: (RBX_ACCENT)
+            border_color_hover: (RBX_ACCENT_HOVER)
+            border_color_down: (RBX_ACCENT_PRESSED)
+        }
+        draw_text +: {
+            color: (RBX_FG_ON_ACCENT)
+            color_hover: (RBX_FG_ON_ACCENT)
+            color_down: (RBX_FG_ON_ACCENT)
+            text_style: TITLE_TEXT {font_size: 12.0}
+        }
+    }
+
     mod.widgets.RegisterScreen = set_type_default() do #(RegisterScreen::register_widget(vm)) {
         ..mod.widgets.SolidView
 
@@ -50,7 +78,7 @@ script_mod! {
         align: Align{x: 0.5, y: 0.5}
         show_bg: true,
         draw_bg +: {
-            color: COLOR_SECONDARY
+            color: (RBX_BG_CANVAS)
         }
 
         ScrollYView {
@@ -59,7 +87,7 @@ script_mod! {
             flow: Down,
             align: Align{x: 0.5, y: 0.5}
             show_bg: true,
-            draw_bg.color: (COLOR_SECONDARY)
+            draw_bg.color: (RBX_BG_CANVAS)
 
             scroll_bars: {
                 show_scroll_x: false,
@@ -78,180 +106,184 @@ script_mod! {
                 align: Align{x: 0.5, y: 0.5}
                 flow: Overlay
 
-                View {
-                    width: Fill,
+                // The register card — mirrors login_card: white surface, soft 1px
+                // stroke, MD (8) corner radius (main's calm/crisp card token).
+                register_card := RoundedView {
+                    width: Fill{max: 460}
                     height: Fit,
+                    margin: Inset{left: 16, right: 16}
+                    new_batch: true
                     flow: Down,
                     align: Align{x: 0.5, y: 0.5}
-                    spacing: 15.0
+                    spacing: 12.0
+                    padding: Inset{top: 24, bottom: 24, left: 36, right: 36}
+                    show_bg: true,
+                    draw_bg +: {
+                        color: (RBX_BG_SURFACE)
+                        border_size: 1.0
+                        border_color: (RBX_STROKE_SOFT)
+                        border_radius: (RBX_RADIUS_MD)
+                    }
 
                     logo_image := Image {
                         fit: ImageFit.Smallest,
-                        width: 80
+                        width: 60
                         src: (mod.widgets.IMG_APP_LOGO),
                     }
 
                     title := Label {
                         width: Fit,
                         height: Fit,
-                        margin: Inset{bottom: 5}
+                        margin: Inset{bottom: 2}
                         padding: 0,
                         draw_text +: {
-                            color: (COLOR_TEXT)
-                            text_style: TITLE_TEXT {font_size: 16.0}
+                            color: (RBX_FG_PRIMARY)
+                            text_style: RBX_TEXT_PAGE_TITLE {font_size: 20.0}
                         }
                         text: "Create Account"
                     }
 
+                    subtitle := Label {
+                        width: Fit,
+                        height: Fit,
+                        margin: Inset{bottom: 6}
+                        padding: 0,
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY)
+                            text_style: REGULAR_TEXT {font_size: 10.5}
+                        }
+                        text: "Set up your account on a Matrix homeserver"
+                    }
+
                     View {
-                        width: 275,
+                        width: Fill,
                         height: Fit,
                         flow: Down,
+                        spacing: 5.0
 
-                        homeserver_input := RobrixTextInput {
-                            width: 275,
-                            height: Fit,
+                        homeserver_input := mod.widgets.LoginTextInput {
+                            width: Fill,
                             flow: Right,
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
                             empty_text: "matrix.org"
                         }
 
                         View {
-                            width: 275,
+                            width: Fill,
                             height: Fit,
                             flow: Right,
                             padding: Inset{top: 3, left: 2, right: 2}
-                            spacing: 0.0,
+                            spacing: 6.0,
                             align: Align{x: 0.5, y: 0.5}
 
-                            LineH { draw_bg.color: #C8C8C8 }
+                            LineH { draw_bg.color: (RBX_DIVIDER) }
 
                             homeserver_hint_label := Label {
                                 width: Fit,
                                 height: Fit,
                                 padding: 0,
                                 draw_text +: {
-                                    color: #8C8C8C
+                                    color: (RBX_FG_TERTIARY)
                                     text_style: REGULAR_TEXT {font_size: 9}
                                 }
                                 text: "Homeserver URL"
                             }
 
-                            LineH { draw_bg.color: #C8C8C8 }
+                            LineH { draw_bg.color: (RBX_DIVIDER) }
                         }
                     }
 
-                    next_button := RobrixIconButton {
-                        width: 275,
-                        height: 40
-                        padding: 10
-                        margin: Inset{top: 5, bottom: 10}
-                        align: Align{x: 0.5, y: 0.5}
+                    next_button := mod.widgets.RegisterPrimaryButton {
+                        margin: Inset{top: 5, bottom: 6}
                         text: "Next"
                     }
 
-                    status_area := View {
-                        width: 275,
-                        height: Fit,
-                        flow: Down,
-                        visible: false
-                        padding: Inset{top: 2, bottom: 2, left: 4, right: 4}
-
-                        status_label := Label {
-                            width: Fill,
-                            height: Fit,
-                            draw_text +: {
-                                color: (COLOR_TEXT)
-                                text_style: REGULAR_TEXT {font_size: 10.5}
-                            }
-                            text: ""
-                        }
-                    }
-
                     registration_form := View {
-                        width: 275,
+                        width: Fill,
                         height: Fit,
                         flow: Down,
                         spacing: 10,
                         visible: false
 
-                        username_input := RobrixTextInput {
-                            width: 275, height: Fit,
+                        username_input := mod.widgets.LoginTextInput {
+                            width: Fill,
                             flow: Right,
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
                             empty_text: "Username"
                         }
 
-                        password_input := RobrixTextInput {
-                            width: 275, height: Fit,
+                        password_input := mod.widgets.LoginTextInput {
+                            width: Fill,
                             flow: Right,
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
                             empty_text: "Password"
                             is_password: true,
                         }
 
-                        confirm_password_input := RobrixTextInput {
-                            width: 275, height: Fit,
+                        confirm_password_input := mod.widgets.LoginTextInput {
+                            width: Fill,
                             flow: Right,
-                            padding: Inset{top: 10, bottom: 10, left: 10, right: 10}
                             empty_text: "Confirm password"
                             is_password: true,
                         }
 
-                        form_error_label := Label {
-                            width: Fill, height: Fit,
-                            visible: false
-                            draw_text +: {
-                                color: (COLOR_FG_DANGER_RED)
-                                text_style: REGULAR_TEXT {font_size: 10.5}
-                            }
-                            text: ""
-                        }
-
-                        submit_button := RobrixIconButton {
-                            width: 275, height: 40
-                            padding: 10
+                        submit_button := mod.widgets.RegisterPrimaryButton {
                             margin: Inset{top: 5}
-                            align: Align{x: 0.5, y: 0.5}
+                            draw_icon +: {
+                                svg: (ICON_LOCK)
+                                color: (RBX_FG_ON_ACCENT)
+                            }
+                            icon_walk: Walk{width: 15, height: 15, margin: Inset{right: 5}}
                             text: "Create Account"
                         }
                     }
 
                     LineH {
-                        width: 275
-                        margin: Inset{bottom: -5}
-                        draw_bg.color: #C8C8C8
+                        width: Fill
+                        margin: Inset{top: 8, bottom: 0}
+                        draw_bg.color: (RBX_DIVIDER)
                     }
 
                     View {
-                        width: 275,
+                        width: Fill,
                         height: Fit,
                         flow: Right,
-                        spacing: 0.0,
+                        spacing: 6.0,
                         align: Align{x: 0.5, y: 0.5}
 
-                        LineH { draw_bg.color: #C8C8C8 }
+                        LineH { draw_bg.color: (RBX_DIVIDER) }
 
                         account_prompt_label := Label {
                             width: Fit,
                             height: Fit,
                             padding: Inset{left: 1, right: 1, top: 0, bottom: 0}
                             draw_text +: {
-                                color: #x6c6c6c
+                                color: (RBX_FG_SECONDARY)
                                 text_style: REGULAR_TEXT {}
                             }
                             text: "Already have an account?"
                         }
 
-                        LineH { draw_bg.color: #C8C8C8 }
+                        LineH { draw_bg.color: (RBX_DIVIDER) }
                     }
 
                     back_button := RobrixIconButton {
                         width: Fit,
                         height: Fit,
-                        padding: Inset{left: 15, right: 15, top: 10, bottom: 10}
+                        padding: Inset{left: 8, right: 8, top: 6, bottom: 6}
                         margin: Inset{bottom: 5}
                         align: Align{x: 0.5, y: 0.5}
+                        draw_bg +: {
+                            color: (COLOR_TRANSPARENT)
+                            color_hover: (COLOR_TRANSPARENT)
+                            color_down: (COLOR_TRANSPARENT)
+                            border_color: (COLOR_TRANSPARENT)
+                            border_color_hover: (COLOR_TRANSPARENT)
+                            border_color_down: (COLOR_TRANSPARENT)
+                        }
+                        draw_text +: {
+                            color: (RBX_ACCENT)
+                            color_hover: (RBX_ACCENT_HOVER)
+                            color_down: (RBX_ACCENT_PRESSED)
+                            text_style: TITLE_TEXT {font_size: 11.0}
+                        }
                         text: "← Back to Login"
                     }
                 }
@@ -319,9 +351,7 @@ impl WidgetMatchEvent for RegisterScreen {
                     // Prevent submit-against-stale-server in the Next→response window.
                     self.last_discovery = None;
                     self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
-                    self.clear_form_error(cx);
-
-                    self.show_status(cx, "Checking server capabilities...");
+                    self.show_status("Checking server capabilities...", PopupKind::Info);
                     self.discovery_pending = true;
                     self.view.button(cx, ids!(next_button)).set_text(cx, "Checking...");
                     self.last_discovery_input_url = Some(url.clone());
@@ -331,13 +361,13 @@ impl WidgetMatchEvent for RegisterScreen {
                     });
                 }
                 Err(HomeserverUrlError::Empty) => {
-                    self.show_status(cx, "Please enter a homeserver URL (e.g. matrix.org).");
+                    self.show_status("Please enter a homeserver URL (e.g. matrix.org).", PopupKind::Error);
                 }
                 Err(HomeserverUrlError::UnsupportedScheme(s)) => {
-                    self.show_status(cx, &format!("Unsupported scheme: {s}. Only http(s) is allowed."));
+                    self.show_status(&format!("Unsupported scheme: {s}. Only http(s) is allowed."), PopupKind::Error);
                 }
                 Err(HomeserverUrlError::Invalid) => {
-                    self.show_status(cx, "That URL looks invalid. Please check and try again.");
+                    self.show_status("That URL looks invalid. Please check and try again.", PopupKind::Error);
                 }
             }
         }
@@ -366,16 +396,15 @@ impl WidgetMatchEvent for RegisterScreen {
             let localpart = match validate_localpart(&username) {
                 Ok(l) => l,
                 Err(LocalpartError::Empty) => {
-                    self.show_form_error(cx, "Please enter a username.");
+                    self.show_form_error("Please enter a username.");
                     return;
                 }
                 Err(LocalpartError::TooLong) => {
-                    self.show_form_error(cx, "Username is too long (max 255 characters).");
+                    self.show_form_error("Username is too long (max 255 characters).");
                     return;
                 }
                 Err(LocalpartError::InvalidChars) => {
                     self.show_form_error(
-                        cx,
                         "Username can contain only lowercase letters, digits, and . _ = - /",
                     );
                     return;
@@ -385,17 +414,17 @@ impl WidgetMatchEvent for RegisterScreen {
             if let Err(e) = validate_passwords_match(&password, &confirm) {
                 match e {
                     PasswordError::Empty => {
-                        self.show_form_error(cx, "Please enter and confirm a password.");
+                        self.show_form_error("Please enter and confirm a password.");
                     }
                     PasswordError::Mismatch => {
-                        self.show_form_error(cx, "Passwords don't match. Please re-enter.");
+                        self.show_form_error("Passwords don't match. Please re-enter.");
                     }
                 }
                 return;
             }
 
             let Some(caps) = self.last_discovery.as_ref() else {
-                self.show_form_error(cx, "Please check the homeserver first (click Next).");
+                self.show_form_error("Please check the homeserver first (click Next).");
                 return;
             };
 
@@ -408,7 +437,6 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.last_discovery = None;
                     self.last_discovery_input_url = None;
                     self.show_form_error(
-                        cx,
                         "The homeserver URL looks invalid. Please fix it and click Next again.",
                     );
                     return;
@@ -419,7 +447,6 @@ impl WidgetMatchEvent for RegisterScreen {
                 self.last_discovery = None;
                 self.last_discovery_input_url = None;
                 self.show_form_error(
-                    cx,
                     "The homeserver changed since the last check. Click Next to verify this server before creating an account.",
                 );
                 return;
@@ -427,8 +454,7 @@ impl WidgetMatchEvent for RegisterScreen {
 
             let homeserver_url = caps.base_url.clone();
 
-            self.clear_form_error(cx);
-            self.show_status(cx, "Creating your account...");
+            self.show_status("Creating your account...", PopupKind::Info);
             self.registration_pending = true;
             submit.set_text(cx, "Creating...");
             self.view.redraw(cx);
@@ -444,19 +470,17 @@ impl WidgetMatchEvent for RegisterScreen {
             match action.downcast_ref::<LoginAction>() {
                 Some(LoginAction::LoginSuccess) => {
                     self.awaiting_sync_startup = false;
-                    self.view.view(cx, ids!(status_area)).set_visible(cx, false);
-                    self.view.label(cx, ids!(status_label)).set_text(cx, "");
                 }
                 Some(LoginAction::LoginFailure(msg)) if self.awaiting_sync_startup => {
                     // Account already exists on the server; don't frame as registration failure.
                     self.awaiting_sync_startup = false;
                     Cx::post_action(LoginAction::ClearFailureState);
                     self.show_status(
-                        cx,
                         &format!(
                             "Your account was created, but we couldn't start a session:\n{msg}\n\n\
                              Please click ← Back to Login and sign in with your new account."
                         ),
+                        PopupKind::Warning,
                     );
                 }
                 _ => {}
@@ -476,49 +500,46 @@ impl WidgetMatchEvent for RegisterScreen {
                     match caps.mode() {
                         RegisterMode::MasWebOnly => {
                             self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
-                            self.clear_form_error(cx);
                             match caps.mas_signup_url.as_deref() {
                                 Some(url) => match robius_open::Uri::new(url).open() {
                                     Ok(()) => {
                                         self.show_status(
-                                            cx,
                                             "Browser opened. Complete registration in your web browser, \
                                              then click ← Back to Login and sign in with your new account.",
+                                            PopupKind::Info,
                                         );
                                     }
                                     Err(e) => {
                                         log!("robius_open failed for MAS signup url {url}: {e:?}");
                                         self.show_status(
-                                            cx,
                                             &format!(
                                                 "Could not open the browser automatically. Please visit this URL manually:\n{url}"
                                             ),
+                                            PopupKind::Warning,
                                         );
                                     }
                                 },
                                 None => {
                                     self.show_status(
-                                        cx,
                                         "This server advertises browser-based registration but no signup URL was found.",
+                                        PopupKind::Warning,
                                     );
                                 }
                             }
                         }
                         RegisterMode::Uiaa => {
                             self.view.view(cx, ids!(registration_form)).set_visible(cx, true);
-                            self.clear_form_error(cx);
                             self.show_status(
-                                cx,
                                 "This homeserver allows direct registration. Fill in your details below to create an account.",
+                                PopupKind::Info,
                             );
                         }
                         RegisterMode::Disabled => {
                             self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
-                            self.clear_form_error(cx);
                             self.show_status(
-                                cx,
                                 "This server does not allow registration. Please choose a different homeserver \
                                  or sign in with an existing account.",
+                                PopupKind::Warning,
                             );
                         }
                     }
@@ -531,8 +552,7 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.discovery_pending = false;
                     self.view.button(cx, ids!(next_button)).set_text(cx, "Next");
                     self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
-                    self.clear_form_error(cx);
-                    self.show_status(cx, &format!("Could not reach that server: {error}"));
+                    self.show_status(&format!("Could not reach that server: {error}"), PopupKind::Error);
                     self.last_discovery = None;
                     self.last_discovery_input_url = None;
                 }
@@ -559,21 +579,15 @@ impl WidgetMatchEvent for RegisterScreen {
                     self.last_discovery = None;
                     self.last_discovery_input_url = None;
                     self.view.view(cx, ids!(registration_form)).set_visible(cx, false);
-                    self.clear_form_error(cx);
-
                     // Bridging feedback during the ~100-200ms SyncService::build window.
-                    self.show_status(cx, "Account created! Loading your account...");
+                    self.show_status("Account created! Loading your account...", PopupKind::Success);
                     self.awaiting_sync_startup = true;
                 }
                 Some(RegisterAction::RegistrationFailed(err)) => {
                     self.registration_pending = false;
                     self.awaiting_sync_startup = false;
                     self.view.button(cx, ids!(submit_button)).set_text(cx, "Create Account");
-                    self.show_form_error(cx, err);
-                    self.show_status(
-                        cx,
-                        "Registration didn't go through. Please check the error above and retry.",
-                    );
+                    self.show_form_error(&format!("Registration didn't go through: {err}"));
                 }
                 _ => {}
             }
@@ -582,23 +596,17 @@ impl WidgetMatchEvent for RegisterScreen {
 }
 
 impl RegisterScreen {
-    fn show_status(&mut self, cx: &mut Cx, message: &str) {
-        self.view.view(cx, ids!(status_area)).set_visible(cx, true);
-        self.view.label(cx, ids!(status_label)).set_text(cx, message);
-        self.view.redraw(cx);
+    /// Surface a status/feedback message through the global popup notification
+    /// overlay. This replaces the old inline status area: the popup card wraps
+    /// long messages (no right-edge truncation on the narrow register card), and
+    /// the overlay renders above every screen — including this pre-auth one.
+    /// Popups auto-dismiss so transient/stale messages don't pile up.
+    fn show_status(&self, message: &str, kind: PopupKind) {
+        enqueue_popup_notification(message.to_string(), kind, Some(6.0));
     }
 
-    fn show_form_error(&mut self, cx: &mut Cx, message: &str) {
-        let label = self.view.label(cx, ids!(form_error_label));
-        label.set_text(cx, message);
-        label.set_visible(cx, true);
-        self.view.redraw(cx);
-    }
-
-    fn clear_form_error(&mut self, cx: &mut Cx) {
-        let label = self.view.label(cx, ids!(form_error_label));
-        label.set_text(cx, "");
-        label.set_visible(cx, false);
+    fn show_form_error(&self, message: &str) {
+        self.show_status(message, PopupKind::Error);
     }
 }
 

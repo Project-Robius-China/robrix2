@@ -13,7 +13,7 @@ use crate::{
     room::{BasicRoomDetails, FetchedRoomAvatar, FetchedRoomPreview, RoomPreviewAction},
     shared::{
         avatar::{AvatarState, AvatarWidgetRefExt},
-        popup_list::{PopupKind, enqueue_popup_notification},
+        popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle},
         styles::COLOR_FG_DANGER_RED,
     },
     sliding_sync::{DirectMessageRoomAction, MatrixRequest, RoomPreviewResponseMode, current_user_id, submit_async_request},
@@ -280,7 +280,26 @@ script_mod! {
                 text_style: theme.font_regular {font_size: 18},
             }
         }
-        
+
+        tab_row := View {
+            width: Fill, height: Fit,
+            flow: Right, spacing: 8,
+            margin: Inset{top: 8, bottom: 4}
+            join_existing_tab := RobrixNeutralIconButton {
+                padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+                text: "Join existing room"
+                enabled: false
+            }
+            create_new_tab := RobrixNeutralIconButton {
+                padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+                text: "Create new room"
+            }
+        }
+
+        join_existing_view := View {
+            width: Fill, height: Fit,
+            flow: Down
+
         LineH { padding: 10, margin: Inset{top: 10, right: 2} }
 
         quick_actions_view := View {
@@ -530,7 +549,23 @@ script_mod! {
             width: Fill
             height: 20
         }
-        
+
+        }
+
+        create_new_view := View {
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down
+
+            LineH { padding: 10, margin: Inset{top: 10, right: 2} }
+
+            create_room_page_label := SubsectionLabel {
+                text: "Create a new room:"
+            }
+
+            create_room_page_screen := mod.widgets.CreateRoomScreen {}
+        }
     }
 
     mod.widgets.CreateRoomModal = #(CreateRoomModal::register_widget(vm)) {
@@ -547,7 +582,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: #fff
-                border_radius: 24.0
+                border_radius: 4.0
             }
 
             title_view := View {
@@ -626,7 +661,7 @@ script_mod! {
             show_bg: true
             draw_bg +: {
                 color: #fff
-                border_radius: 24.0
+                border_radius: 4.0
             }
 
             title_view := View {
@@ -1516,8 +1551,25 @@ impl Widget for AddRoomScreen {
             self.set_app_language(cx, app_language);
         }
         self.view.handle_event(cx, event, scope);
-        
+
         if let Event::Actions(actions) = event {
+            let join_existing_tab = self.view.button(cx, ids!(join_existing_tab));
+            let create_new_tab = self.view.button(cx, ids!(create_new_tab));
+            if join_existing_tab.clicked(actions) {
+                self.view.view(cx, ids!(join_existing_view)).set_visible(cx, true);
+                self.view.view(cx, ids!(create_new_view)).set_visible(cx, false);
+                join_existing_tab.set_enabled(cx, false);
+                create_new_tab.set_enabled(cx, true);
+                self.redraw(cx);
+            }
+            if create_new_tab.clicked(actions) {
+                self.view.view(cx, ids!(join_existing_view)).set_visible(cx, false);
+                self.view.view(cx, ids!(create_new_view)).set_visible(cx, true);
+                join_existing_tab.set_enabled(cx, true);
+                create_new_tab.set_enabled(cx, false);
+                self.redraw(cx);
+            }
+
             let room_alias_id_input = self.view.text_input(cx, ids!(room_alias_id_input));
             let search_for_room_button = self.view.button(cx, ids!(search_for_room_button));
             let new_room_button = self.view.button(cx, ids!(new_room_button));
@@ -1634,11 +1686,24 @@ impl Widget for AddRoomScreen {
                             let err_str = tr_fmt(self.app_language, "add_room.popup.fetch_error", &[
                                 ("error", error_text.as_str()),
                             ]);
-                            enqueue_popup_notification(
-                                err_str.clone(),
-                                PopupKind::Error,
-                                None,
-                            );
+                            let room_or_alias_id_clone = room_or_alias_id.clone();
+                            let via_clone = via.clone();
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Couldn't load room preview".into()),
+                                message: err_str.clone().into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        submit_async_request(MatrixRequest::GetRoomPreview {
+                                            room_or_alias_id: room_or_alias_id_clone.clone(),
+                                            via: via_clone.clone(),
+                                            response_mode: RoomPreviewResponseMode::Action,
+                                        });
+                                    }),
+                                ],
+                                auto_dismissal_duration: None,
+                                ..Default::default()
+                            });
                             self.state = AddRoomState::FetchError(err_str);
                             self.redraw(cx);
                             break;

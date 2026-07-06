@@ -1,8 +1,11 @@
 use makepad_widgets::ScriptVm;
 
 pub mod attachment_download;
+pub mod audio_message_player;
+pub mod animated_image;
 pub mod avatar;
 pub mod collapsible_header;
+pub mod design_tokens;
 pub mod expand_arrow;
 pub mod confirmation_modal;
 pub mod file_upload_modal;
@@ -32,6 +35,9 @@ pub mod webrtc_video;
 pub fn script_mod(vm: &mut ScriptVm) {
     // Order matters here, as some widget definitions depend on others.
     styles::script_mod(vm);
+    // Semantic design tokens (RBX_*) build on theme.* + styles; register right
+    // after styles so every later module can read them.
+    design_tokens::script_mod(vm);
     helpers::script_mod(vm);
     icon_button::script_mod(vm);
     expand_arrow::script_mod(vm);
@@ -39,6 +45,8 @@ pub fn script_mod(vm: &mut ScriptVm) {
     collapsible_header::script_mod(vm);
     timestamp::script_mod(vm);
     room_filter_input_bar::script_mod(vm);
+    audio_message_player::script_mod(vm);
+    animated_image::script_mod(vm);
     avatar::script_mod(vm);
     room_filter_search_results::script_mod(vm);
     text_or_image::script_mod(vm);

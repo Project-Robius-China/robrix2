@@ -10,7 +10,7 @@ license = "MIT"
 readme = "README.md"
 categories = ["gui"]
 repository = "https://github.com/Project-Robius-China/robrix2"
-version = "1.0.0-alpha.1"
+version = "1.0.0"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
 [dependencies]
@@ -45,8 +45,8 @@ imghdr = "0.7.0"
 linkify = "0.10.0"
 mime = "0.3"
 mime_guess = "2.0"
-matrix-sdk-base = { git = "https://github.com/project-robius/matrix-rust-sdk", branch = "space_room_suggested" }
-matrix-sdk = { git = "https://github.com/project-robius/matrix-rust-sdk", branch = "space_room_suggested", default-features = false, features = [
+matrix-sdk-base = { git = "https://github.com/Project-Robius-China/matrix-rust-sdk", branch = "space_room_suggested-event-cache-no-panic" }
+matrix-sdk = { git = "https://github.com/Project-Robius-China/matrix-rust-sdk", branch = "space_room_suggested-event-cache-no-panic", default-features = false, features = [
     "e2e-encryption",
     "automatic-room-key-forwarding",
     "markdown",
@@ -55,7 +55,7 @@ matrix-sdk = { git = "https://github.com/project-robius/matrix-rust-sdk", branch
     "bundled-sqlite",
     "sso-login",
 ] }
-matrix-sdk-ui = { git = "https://github.com/project-robius/matrix-rust-sdk", branch = "space_room_suggested", default-features = false, features = [
+matrix-sdk-ui = { git = "https://github.com/Project-Robius-China/matrix-rust-sdk", branch = "space_room_suggested-event-cache-no-panic", default-features = false, features = [
     "rustls-tls",
 ] }
 ## Use the same ruma version as what's specified in matrix-sdk's Cargo.toml.
@@ -81,11 +81,23 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] 
 sanitize-filename = "0.6"
 serde = "1.0"
 serde_json = "1.0"
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "aiff", "flac", "isomp4", "alac", "pcm"] }
 thiserror = "2.0.16"
 tokio = { version = "1.43.1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3.17"
 unicode-segmentation = "1.11.0"
+percent-encoding = "2.3"
 url = "2.5.0"
+## Hand reqwest a preconfigured webpki-roots TLS config so certificate
+## verification never routes through `rustls-platform-verifier`, which on Android
+## is uninitialized (no JNI init + no bundled Kotlin verifier class in a
+## cargo-makepad APK) and panics on the first https request — making login/add
+## homeserver hang forever on "checking". Pin the same rustls 0.23 + `ring`
+## crypto provider that matrix-sdk/reqwest already use so the config type matches
+## and we avoid a "no process-level CryptoProvider" panic. See
+## src/proxy_config.rs::webpki_rustls_config.
+## rustls = { version = "0.23.37", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1.0"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 rfd = "0.15"
@@ -134,6 +146,12 @@ reqwest = { version = "0.12", default-features = false, optional = true, feature
 default = []
 ## Enables experimental support for using TSP wallets.
 tsp = ["dep:tsp_sdk", "dep:quinn", "dep:aws-lc-rs", "dep:reqwest"]
+
+## Enables experimental remote agent-chat support (the `/create-issue`, `/go`,
+## `/review`, `/status` workflow slash-commands shown in rooms that contain a
+## `*_coordinator` agent). Off by default; even when compiled in, it must also
+## be turned on at runtime via Settings → Preferences → "Enable agent-chat support".
+agent_chat = []
 
 ## Hides the command prompt console on Windows.
 hide_windows_console = []
@@ -311,7 +329,7 @@ minimum_system_version = "11.0"
 frameworks = []
 info_plist_path = "./packaging/Info.plist"
 entitlements = "./packaging/Entitlements.plist"
-signing_identity = "Developer ID Application: GOSIM FOUNDATION LTD. (HMX6XGJZ3R)"
+signing_identity = "-"
 
 
 ## Configuration for `cargo packager`'s generation of a macOS `.dmg`.

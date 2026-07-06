@@ -6,7 +6,7 @@ use makepad_widgets::{text::selection::Cursor, *};
 use rfd::FileDialog;
 use matrix_sdk::{encryption::VerificationState, ruma::OwnedUserId};
 
-use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}, styles::*}, sliding_sync::{get_client, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, submit_async_request}, utils, verification::VerificationStateAction};
+use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, styles::*}, sliding_sync::{get_client, current_user_id, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, PasswordChangeFailure, submit_async_request}, utils, verification::VerificationStateAction};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use crate::{app::ConfirmDeleteAction, shared::confirmation_modal::ConfirmationModalContent};
 
@@ -97,18 +97,21 @@ script_mod! {
             }
         }
 
-        // --- Avatar card ---
+        // --- Identity card: Avatar + Display Name + User ID grouped together ---
         RoundedView {
             width: Fill, height: Fit
             flow: Down
-            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
+            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_MD), bottom: (SPACE_MD)}
             margin: Inset{top: (SPACE_SM)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
+            // -- Avatar --
             avatar_section_label := SubsectionLabel {
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
                 text: "Your Avatar:"
@@ -116,92 +119,100 @@ script_mod! {
 
             View {
                 width: Fill, height: Fit
-                flow: Right { wrap: true },
+                // NOTE: plain `flow: Right` (not wrap) — this row has a `width: Fill`
+                // action column child, and `flow: Right { wrap: true }` does not
+                // support Fill-width children (logs a turtle error every frame).
+                flow: Right,
                 align: Align{y: 0.5}
+                spacing: (SPACE_LG)
 
                 our_own_avatar := Avatar {
-                    width: 100,
-                    height: 100,
+                    width: 84,
+                    height: 84,
                     margin: (SPACE_SM),
                     text_view +: {
                         text +: {
                             draw_text +: {
-                                text_style: theme.font_regular { font_size: 35.0 }
+                                text_style: theme.font_regular { font_size: 30.0 }
                             }
                         }
                     }
                 }
 
+                // Compact action column: hint + small Upload / Remove buttons.
                 View {
-                    width: Fit, height: Fit
+                    width: Fill, height: Fit
                     flow: Down,
-                    align: Align{y: 0.5}
-                    padding: Inset{ left: (SPACE_SM), right: (SPACE_SM) }
                     spacing: (SPACE_SM)
 
+                    avatar_hint_label := Label {
+                        width: Fill, height: Fit
+                        flow: Flow.Right{wrap: true}
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY),
+                            text_style: REGULAR_TEXT { font_size: 10.5 }
+                        }
+                        text: "Upload a new avatar, or remove the current one."
+                    }
+
                     View {
-                        width: Fit, height: Fit
-                        flow: Right,
+                        width: Fill, height: Fit
+                        flow: Flow.Right{wrap: true},
                         align: Align{y: 0.5}
                         spacing: (SPACE_SM)
 
-                        upload_avatar_button := RobrixIconButton {
-                            width: 140,
-                            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
-                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                        upload_avatar_button := SettingsPrimaryButton {
+                            width: Fit, height: Fit,
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
                             margin: 0,
-                            draw_bg +: { border_radius: (RADIUS_MD) }
+                            draw_bg +: {
+                                color: (RBX_ACCENT)
+                                color_hover: (RBX_ACCENT_HOVER)
+                                color_down: (RBX_ACCENT_PRESSED)
+                                border_radius: (RBX_RADIUS_SM)
+                            }
                             draw_icon.svg: (ICON_UPLOAD)
-                            icon_walk: Walk{width: 16, height: 16}
-                            text: "Upload Avatar"
+                            icon_walk: Walk{width: 15, height: 15}
+                            text: "Upload"
+                        }
+
+                        delete_avatar_button := RobrixNegativeIconButton {
+                            width: Fit, height: Fit,
+                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_MD)}
+                            margin: 0,
+                            draw_bg +: {
+                                color: #0000
+                                color_hover: (RBX_DANGER_BG)
+                                color_down: (RBX_DANGER_BG)
+                                border_size: 0.0
+                                border_color: #0000
+                                border_color_hover: #0000
+                                border_color_down: #0000
+                                border_radius: (RBX_RADIUS_SM)
+                            }
+                            draw_icon.svg: (ICON_TRASH)
+                            icon_walk: Walk{ width: 15, height: 15 }
+                            text: "Remove"
                         }
 
                         upload_avatar_spinner := LoadingSpinner {
                             width: 16, height: 16
                             visible: false
-                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
-                        }
-                    }
-
-                    View {
-                        width: Fit, height: Fit
-                        flow: Right,
-                        align: Align{y: 0.5}
-                        spacing: (SPACE_SM)
-
-                        delete_avatar_button := RobrixNegativeIconButton {
-                            width: 140,
-                            height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
-                            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
-                            margin: 0,
-                            draw_bg +: { border_radius: (RADIUS_MD) }
-                            draw_icon.svg: (ICON_TRASH)
-                            icon_walk: Walk{ width: 16, height: 16 }
-                            text: "Delete Avatar"
+                            draw_bg.color: (RBX_ACCENT)
                         }
 
                         delete_avatar_spinner := LoadingSpinner {
                             width: 16, height: 16
                             visible: false
-                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                            draw_bg.color: (RBX_DANGER_FG)
                         }
                     }
                 }
             }
-        }
 
-        // --- Display Name card ---
-        RoundedView {
-            width: Fill, height: Fit
-            flow: Down
-            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
-            margin: Inset{top: (SPACE_SM)}
-            show_bg: true
-            draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
-            }
+            LineH { height: 1.0, margin: Inset{top: (SPACE_MD), bottom: (SPACE_MD)}, draw_bg.color: (RBX_STROKE_SOFT) }
 
+            // -- Display Name --
             display_name_section_label := SubsectionLabel {
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
                 text: "Your Display Name:"
@@ -249,23 +260,13 @@ script_mod! {
                     width: 16, height: 16
                     margin: Inset{left: (SPACE_XS), top: 13} // vertically center with buttons
                     visible: false
-                    draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                    draw_bg.color: (RBX_ACCENT)
                 }
             }
-        }
 
-        // --- User ID card ---
-        RoundedView {
-            width: Fill, height: Fit
-            flow: Down
-            padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_MD)}
-            margin: Inset{top: (SPACE_SM)}
-            show_bg: true
-            draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
-            }
+            LineH { height: 1.0, margin: Inset{top: (SPACE_MD), bottom: (SPACE_MD)}, draw_bg.color: (RBX_STROKE_SOFT) }
 
+            // -- User ID --
             user_id_section_label := SubsectionLabel {
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
                 text: "Your User ID:"
@@ -275,25 +276,36 @@ script_mod! {
                 width: Fill, height: Fit
                 flow: Right,
                 align: Align{y: 0.5}
-                spacing: (SPACE_SM)
-
-                copy_user_id_button := RobrixNeutralIconButton {
-                    enable_long_press: true,
-                    padding: (SPACE_MD),
-                    spacing: 0,
-                    draw_icon.svg: (ICON_COPY)
-                    icon_walk: Walk{width: 16, height: 16, margin: Inset{right: -2} }
-                }
+                spacing: (SPACE_XS)
 
                 user_id := Label {
                     width: Fill, height: Fit
                     flow: Flow.Right{wrap: true},
-                    margin: Inset{top: 9}
                     draw_text +: {
                         color: (MESSAGE_TEXT_COLOR),
                         text_style: MESSAGE_TEXT_STYLE { font_size: 11.5 },
                     }
                     text: "You are not logged in."
+                }
+
+                // Copy button sits AFTER the id, small and ghost-styled.
+                copy_user_id_button := RobrixNeutralIconButton {
+                    enable_long_press: true,
+                    width: Fit, height: Fit,
+                    padding: (SPACE_XS),
+                    spacing: 0,
+                    draw_bg +: {
+                        color: #0000
+                        color_hover: (RBX_BG_HOVER)
+                        color_down: (RBX_BG_PRESSED)
+                        border_size: 0.0
+                        border_color: #0000
+                        border_color_hover: #0000
+                        border_color_down: #0000
+                        border_radius: (RBX_RADIUS_XS)
+                    }
+                    draw_icon +: { svg: (ICON_COPY), color: (RBX_FG_TERTIARY) }
+                    icon_walk: Walk{width: 13, height: 13}
                 }
             }
         }
@@ -306,13 +318,33 @@ script_mod! {
             margin: Inset{top: (SPACE_SM)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
-            multiple_accounts_section_label := SubsectionLabel {
+            View {
+                width: Fill, height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                spacing: (SPACE_SM)
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                text: "Multiple Accounts:"
+
+                SettingsIconCircle {
+                    width: 30, height: 30
+                    draw_bg +: { color: (RBX_INFO_BG) }
+                    Icon {
+                        width: 16, height: 16
+                        draw_icon +: { svg: (ICON_ADD_USER), color: (RBX_INFO_FG) }
+                        icon_walk: Walk{width: 16, height: 16}
+                    }
+                }
+                multiple_accounts_section_label := SubsectionLabel {
+                    width: Fill
+                    margin: 0
+                    text: "Multiple Accounts:"
+                }
             }
 
             View {
@@ -330,29 +362,35 @@ script_mod! {
                 spacing: (SPACE_SM)
                 show_bg: true
                 draw_bg +: {
-                    color: (COLOR_ACCOUNT_ACTIVE_BG)
-                    border_radius: (RADIUS_LG)
+                    color: (RBX_ACCENT_SOFT)
+                    border_radius: (RBX_RADIUS_SM)
+                    border_size: 1.0
+                    border_color: (RBX_ACCENT)
                 }
 
-                View {
+                active_account_label := Label {
                     width: Fill, height: Fit
-                    flow: Down,
-                    spacing: 2
-
-                    active_account_label := Label {
-                        width: Fill, height: Fit
-                        draw_text +: {
-                            color: (COLOR_PRIMARY),
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
-                        }
-                        text: "@user:server"
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        color: (RBX_FG_PRIMARY),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
                     }
+                    text: "@user:server"
+                }
+
+                // "Active" as a compact solid-teal pill, inline on the right.
+                active_account_status_pill := RoundedView {
+                    width: Fit, height: Fit
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: Inset{left: 9, right: 9, top: 3, bottom: 3}
+                    show_bg: true
+                    draw_bg +: { color: (RBX_ACCENT), border_radius: (RBX_RADIUS_PILL) }
 
                     active_account_status_label := Label {
                         width: Fit, height: Fit
                         draw_text +: {
-                            color: (COLOR_PRIMARY),
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 9 },
+                            color: (RBX_FG_ON_ACCENT),
+                            text_style: theme.font_bold { font_size: 9 },
                         }
                         text: "Active"
                     }
@@ -381,10 +419,10 @@ script_mod! {
                 visible: false
                 show_bg: true
                 draw_bg +: {
-                    color: (COLOR_SECONDARY)
-                    border_radius: (RADIUS_LG)
+                    color: (RBX_BG_SURFACE_SUBTLE)
+                    border_radius: (RBX_RADIUS_SM)
                     border_size: 1.0
-                    border_color: (COLOR_INACTIVE_BORDER)
+                    border_color: (RBX_STROKE_SOFT)
                 }
 
                 View {
@@ -402,7 +440,7 @@ script_mod! {
                     }
                 }
 
-                switch_account_button := RobrixIconButton {
+                switch_account_button := SettingsPrimaryButton {
                     width: Fit, height: Fit
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM), right: (SPACE_SM)}
                     draw_icon.svg: (ICON_JUMP)
@@ -421,7 +459,7 @@ script_mod! {
                 text: "1 account logged in"
             }
 
-            add_account_button := RobrixIconButton {
+            add_account_button := SettingsPrimaryButton {
                 width: Fit,
                 padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                 margin: Inset{top: (SPACE_XS)}
@@ -441,13 +479,33 @@ script_mod! {
             margin: Inset{top: (SPACE_SM), bottom: (SPACE_LG)}
             show_bg: true
             draw_bg +: {
-                color: #F8F8FA
-                border_radius: (RADIUS_LG)
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
-            other_actions_section_label := SubsectionLabel {
+            View {
+                width: Fill, height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                spacing: (SPACE_SM)
                 margin: Inset{top: 0, bottom: (SPACE_XS)}
-                text: "Other actions:"
+
+                SettingsIconCircle {
+                    width: 30, height: 30
+                    draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                    Icon {
+                        width: 16, height: 16
+                        draw_icon +: { svg: (ICON_SETTINGS), color: (RBX_ACCENT) }
+                        icon_walk: Walk{width: 16, height: 16}
+                    }
+                }
+                other_actions_section_label := SubsectionLabel {
+                    width: Fill
+                    margin: 0
+                    text: "Other actions:"
+                }
             }
 
             View {
@@ -456,12 +514,12 @@ script_mod! {
                 align: Align{y: 0.5},
                 spacing: (SPACE_SM)
 
-                manage_account_button := RobrixIconButton {
+                change_password_button := SettingsPrimaryButton {
                     padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
                     draw_bg +: { border_radius: (RADIUS_MD) }
-                    draw_icon.svg: (ICON_EXTERNAL_LINK)
+                    draw_icon.svg: (ICON_LOCK)
                     icon_walk: Walk{width: 16, height: 16}
-                    text: "Manage Account"
+                    text: "Change Password"
                 }
 
                 copy_access_token_button := RobrixNeutralIconButton {
@@ -480,6 +538,100 @@ script_mod! {
                     text: "Log out"
                 }
             }
+
+            change_password_panel := RoundedView {
+                visible: false
+                width: Fill, height: Fit
+                flow: Down
+                spacing: (SPACE_SM)
+                margin: Inset{top: (SPACE_MD)}
+                padding: Inset{top: (SPACE_MD), bottom: (SPACE_MD), left: (SPACE_MD), right: (SPACE_MD)}
+                show_bg: true
+                new_batch: true
+                draw_bg +: {
+                    color: (RBX_BG_SURFACE_SUBTLE)
+                    border_radius: (RBX_RADIUS_SM)
+                    border_size: 1.0
+                    border_color: (RBX_STROKE_SOFT)
+                }
+
+                change_password_title_label := Label {
+                    width: Fill, height: Fit
+                    draw_text +: {
+                        color: (RBX_FG_PRIMARY)
+                        text_style: theme.font_bold { font_size: 12.0 }
+                    }
+                    text: "Change Password"
+                }
+
+                View {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true}
+                    spacing: (SPACE_SM)
+
+                    old_password_input := RobrixTextInput {
+                        width: 260, height: 40
+                        empty_text: "Current password"
+                        is_password: true
+                    }
+
+                    new_password_input := RobrixTextInput {
+                        width: 260, height: 40
+                        empty_text: "New password"
+                        is_password: true
+                    }
+
+                    confirm_password_input := RobrixTextInput {
+                        width: 260, height: 40
+                        empty_text: "Confirm new password"
+                        is_password: true
+                    }
+                }
+
+                change_password_error_label := Label {
+                    visible: false
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        color: (RBX_DANGER_FG)
+                        text_style: REGULAR_TEXT { font_size: 10.5 }
+                    }
+                    text: ""
+                }
+
+                View {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true}
+                    align: Align{y: 0.5}
+                    spacing: (SPACE_SM)
+
+                    save_password_button := SettingsPrimaryButton {
+                        width: Fit, height: Fit
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                        margin: 0
+                        draw_bg +: { border_radius: (RADIUS_MD) }
+                        draw_icon.svg: (ICON_CHECKMARK)
+                        icon_walk: Walk{width: 16, height: 16}
+                        text: "Save Password"
+                    }
+
+                    cancel_password_change_button := RobrixNeutralIconButton {
+                        width: Fit, height: Fit
+                        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_MD), right: (SPACE_LG)}
+                        margin: 0
+                        draw_bg +: { border_radius: (RADIUS_MD) }
+                        draw_icon.svg: (ICON_FORBIDDEN)
+                        icon_walk: Walk{width: 16, height: 16}
+                        text: "Cancel"
+                    }
+
+                    change_password_spinner := LoadingSpinner {
+                        width: 16, height: 16
+                        visible: false
+                        draw_bg.color: (RBX_ACCENT)
+                    }
+                }
+            }
         }
     }
 }
@@ -490,9 +642,12 @@ pub struct AccountSettings {
     #[deref] view: View,
 
     #[rust] own_profile: Option<UserProfile>,
+    #[rust] own_profile_is_fallback: bool,
     #[rust(VerificationState::Unknown)] verification_state: VerificationState,
     #[rust] own_device: Option<OwnDeviceInfo>,
     #[rust] app_language: AppLanguage,
+    #[rust] password_change_panel_open: bool,
+    #[rust] password_change_in_flight: bool,
     /// List of other account user IDs (not the currently active one)
     #[rust] other_accounts: Vec<OwnedUserId>,
 }
@@ -505,6 +660,7 @@ impl Widget for AccountSettings {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        self.sync_current_account_from_runtime(cx);
         self.match_event(cx, event);
 
         let copy_user_id_button = self.view.button(cx, ids!(copy_user_id_button));
@@ -542,27 +698,15 @@ impl Widget for AccountSettings {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        self.sync_current_account_from_runtime(cx);
         self.view.draw_walk(cx, scope, walk)
     }
 }
 
 impl MatchEvent for AccountSettings {
     fn handle_signal(&mut self, cx: &mut Cx) {
-        // If we don't have a profile yet, try to get it
-        if self.own_profile.is_none() {
-            user_profile_cache::process_user_profile_updates(cx);
-            if let Some(new_profile) = get_own_profile(cx) {
-                self.own_profile = Some(new_profile.clone());
-                self.own_device = None;
-                self.view.label(cx, ids!(user_id))
-                    .set_text(cx, new_profile.user_id.as_str());
-                self.view.text_input(cx, ids!(display_name_input))
-                    .set_text(cx, new_profile.username.as_deref().unwrap_or_default());
-                self.populate_avatar_views(cx);
-                self.populate_account_list(cx);
-                self.refresh_verification_state(cx);
-                self.view.redraw(cx);
-            }
+        self.sync_current_account_from_runtime(cx);
+        if self.own_profile_is_fallback || self.own_profile.is_none() {
             return;
         }
         // Process avatar updates from the cache
@@ -586,6 +730,11 @@ impl MatchEvent for AccountSettings {
         let display_name_input = self.view.text_input(cx, ids!(display_name_input));
         let delete_avatar_button = self.view.button(cx, ids!(delete_avatar_button));
         let upload_avatar_button = self.view.button(cx, ids!(upload_avatar_button));
+        let old_password_input = self.view.text_input(cx, ids!(old_password_input));
+        let new_password_input = self.view.text_input(cx, ids!(new_password_input));
+        let confirm_password_input = self.view.text_input(cx, ids!(confirm_password_input));
+        let save_password_button = self.view.button(cx, ids!(save_password_button));
+        let cancel_password_change_button = self.view.button(cx, ids!(cancel_password_change_button));
 
         for action in actions {
             if let Some(VerificationStateAction::Update(state)) = action.downcast_ref() {
@@ -622,11 +771,18 @@ impl MatchEvent for AccountSettings {
                         AccessTokenCopyError::NoSession => "settings.account.popup.access_token_no_session",
                         AccessTokenCopyError::Unavailable => "settings.account.popup.access_token_unavailable",
                     };
-                    enqueue_popup_notification(
-                        tr_key(self.app_language, error_key),
-                        PopupKind::Error,
-                        Some(4.0),
-                    );
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't get access token".into()),
+                        message: tr_key(self.app_language, error_key).into(),
+                        actions: vec![
+                            NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                submit_async_request(MatrixRequest::GetAccessTokenForCopy);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(4.0),
+                        ..Default::default()
+                    });
                     continue;
                 }
                 _ => {}
@@ -666,11 +822,19 @@ impl MatchEvent for AccountSettings {
                         self.own_profile.as_ref().is_some_and(|p| p.avatar_state.has_avatar()),
                         &delete_avatar_button
                     );
-                    enqueue_popup_notification(
-                        err_msg.clone(),
-                        PopupKind::Error,
-                        Some(4.0),
-                    );
+                    let err = err_msg.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't upload avatar".into()),
+                        message: err.clone().into(),
+                        actions: vec![
+                            NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&err);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(4.0),
+                        ..Default::default()
+                    });
                     continue;
                 }
                 Some(AccountDataAction::DisplayNameChanged(new_name)) => {
@@ -703,11 +867,40 @@ impl MatchEvent for AccountSettings {
                     display_name_input.set_is_read_only(cx, false);
                     display_name_input.set_disabled(cx, false);
                     Self::enable_display_name_buttons(cx, true, &accept_display_name_button, &cancel_display_name_button);
+                    let err = err_msg.clone();
+                    enqueue_notification(NotificationItem {
+                        kind: PopupKind::Error,
+                        title: Some("Couldn't update display name".into()),
+                        message: err.clone().into(),
+                        actions: vec![
+                            NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                                cx.copy_to_clipboard(&err);
+                            }),
+                        ],
+                        auto_dismissal_duration: Some(4.0),
+                        ..Default::default()
+                    });
+                    continue;
+                }
+                Some(AccountDataAction::PasswordChanged) => {
+                    self.password_change_in_flight = false;
+                    self.set_password_change_form_enabled(cx, true);
+                    self.hide_password_change_panel(cx);
                     enqueue_popup_notification(
-                        err_msg.clone(),
-                        PopupKind::Error,
+                        tr_key(self.app_language, "settings.account.popup.password_changed"),
+                        PopupKind::Success,
                         Some(4.0),
                     );
+                    continue;
+                }
+                Some(AccountDataAction::PasswordChangeFailed(reason)) => {
+                    self.password_change_in_flight = false;
+                    self.view.widget(cx, ids!(change_password_spinner)).set_visible(cx, false);
+                    self.set_password_change_form_enabled(cx, true);
+                    self.set_password_change_error(cx, Some(&password_change_failure_message(
+                        self.app_language,
+                        reason,
+                    )));
                     continue;
                 }
                 Some(AccountDataAction::OwnDeviceFetched(device)) => {
@@ -742,6 +935,26 @@ impl MatchEvent for AccountSettings {
 
         if self.view.button(cx, ids!(copy_access_token_button)).clicked(actions) {
             submit_async_request(MatrixRequest::GetAccessTokenForCopy);
+        }
+
+        if self.view.button(cx, ids!(change_password_button)).clicked(actions) {
+            if self.password_change_panel_open {
+                self.hide_password_change_panel(cx);
+            } else {
+                self.show_password_change_panel(cx);
+            }
+        }
+
+        if cancel_password_change_button.clicked(actions) {
+            self.hide_password_change_panel(cx);
+        }
+
+        let submit_password_change = save_password_button.clicked(actions)
+            || old_password_input.returned(actions).is_some()
+            || new_password_input.returned(actions).is_some()
+            || confirm_password_input.returned(actions).is_some();
+        if submit_password_change {
+            self.submit_password_change(cx);
         }
 
         let Some(own_profile) = &self.own_profile else { return };
@@ -846,16 +1059,6 @@ impl MatchEvent for AccountSettings {
                 tr_key(self.app_language, "settings.account.popup.copied_user_id"),
                 PopupKind::Success,
                 Some(3.0),
-            );
-        }
-
-        if self.view.button(cx, ids!(manage_account_button)).clicked(actions) {
-            // TODO: support opening the user's account management page in a browser,
-            //       or perhaps in an in-app pane if that's what is needed for regular UN+PW login.
-            enqueue_popup_notification(
-                tr_key(self.app_language, "settings.account.popup.account_management_not_implemented"),
-                PopupKind::Warning,
-                Some(4.0),
             );
         }
 
@@ -966,11 +1169,15 @@ impl AccountSettings {
         self.view
             .label(cx, ids!(user_id_section_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.section.your_user_id"));
-        if self.own_profile.is_none() {
-            self.view
-                .label(cx, ids!(user_id))
-                .set_text(cx, tr_key(self.app_language, "settings.account.user_id.not_logged_in"));
-        }
+        let fallback_user_id = current_user_id();
+        let user_id_text = user_id_label_text(
+            self.app_language,
+            self.own_profile.as_ref(),
+            fallback_user_id.as_ref(),
+        );
+        self.view
+            .label(cx, ids!(user_id))
+            .set_text(cx, &user_id_text);
         self.view
             .label(cx, ids!(multiple_accounts_section_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.section.multiple_accounts"));
@@ -990,8 +1197,26 @@ impl AccountSettings {
             .label(cx, ids!(other_actions_section_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.section.other_actions"));
         self.view
-            .button(cx, ids!(manage_account_button))
-            .set_text(cx, tr_key(self.app_language, "settings.account.button.manage_account"));
+            .button(cx, ids!(change_password_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.change_password"));
+        self.view
+            .label(cx, ids!(change_password_title_label))
+            .set_text(cx, tr_key(self.app_language, "settings.account.change_password.title"));
+        self.view
+            .text_input(cx, ids!(old_password_input))
+            .set_empty_text(cx, tr_key(self.app_language, "settings.account.change_password.old_placeholder").to_string());
+        self.view
+            .text_input(cx, ids!(new_password_input))
+            .set_empty_text(cx, tr_key(self.app_language, "settings.account.change_password.new_placeholder").to_string());
+        self.view
+            .text_input(cx, ids!(confirm_password_input))
+            .set_empty_text(cx, tr_key(self.app_language, "settings.account.change_password.confirm_placeholder").to_string());
+        self.view
+            .button(cx, ids!(save_password_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.change_password.save"));
+        self.view
+            .button(cx, ids!(cancel_password_change_button))
+            .set_text(cx, tr_key(self.app_language, "settings.account.button.cancel"));
         self.view
             .button(cx, ids!(copy_access_token_button))
             .set_text(cx, tr_key(self.app_language, "settings.account.button.copy_access_token"));
@@ -1008,6 +1233,128 @@ impl AccountSettings {
             .label(cx, ids!(verification_unverified_hint_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.verification.unverified_hint"));
         self.populate_account_list(cx);
+        self.view.redraw(cx);
+    }
+
+    fn sync_current_account_from_runtime(&mut self, cx: &mut Cx) {
+        user_profile_cache::process_user_profile_updates(cx);
+
+        if let Some(new_profile) = get_own_profile(cx) {
+            if self.needs_profile_sync(&new_profile) {
+                self.apply_own_profile(cx, new_profile, true);
+            } else {
+                self.populate_account_list(cx);
+            }
+            return;
+        }
+
+        match current_user_id() {
+            Some(user_id) => {
+                if self.needs_fallback_profile_for(&user_id) {
+                    self.apply_fallback_profile(cx, user_id);
+                } else {
+                    self.populate_account_list(cx);
+                }
+            }
+            None => {
+                if self.own_profile.is_some() {
+                    self.clear_current_account_display(cx);
+                } else {
+                    self.populate_account_list(cx);
+                }
+            }
+        }
+    }
+
+    fn needs_profile_sync(&self, new_profile: &UserProfile) -> bool {
+        self.own_profile_is_fallback
+            || self.own_profile.as_ref().is_none_or(|profile|
+                profile.user_id != new_profile.user_id
+                    || profile.username != new_profile.username
+                    || profile.avatar_state.has_avatar() != new_profile.avatar_state.has_avatar()
+            )
+    }
+
+    fn needs_fallback_profile_for(&self, user_id: &OwnedUserId) -> bool {
+        self.own_profile.as_ref().is_none_or(|profile| profile.user_id != *user_id)
+    }
+
+    fn apply_own_profile(
+        &mut self,
+        cx: &mut Cx,
+        own_profile: UserProfile,
+        refresh_verification: bool,
+    ) {
+        self.view.label(cx, ids!(user_id))
+            .set_text(cx, own_profile.user_id.as_str());
+        self.view.text_input(cx, ids!(display_name_input))
+            .set_text(cx, own_profile.username.as_deref().unwrap_or_default());
+        Self::enable_display_name_buttons(
+            cx,
+            false,
+            &self.view.button(cx, ids!(accept_display_name_button)),
+            &self.view.button(cx, ids!(cancel_display_name_button)),
+        );
+
+        self.own_profile = Some(own_profile);
+        self.own_profile_is_fallback = false;
+        self.populate_avatar_views(cx);
+        if refresh_verification {
+            self.own_device = None;
+            self.refresh_verification_state(cx);
+        }
+        self.populate_account_list(cx);
+        self.view.redraw(cx);
+    }
+
+    fn apply_fallback_profile(&mut self, cx: &mut Cx, user_id: OwnedUserId) {
+        let fallback_profile = UserProfile {
+            user_id,
+            username: None,
+            avatar_state: AvatarState::Unknown,
+        };
+        self.view.text_input(cx, ids!(display_name_input)).set_text(cx, "");
+        self.own_profile = Some(fallback_profile);
+        self.own_profile_is_fallback = true;
+        if let Some(profile) = self.own_profile.as_ref() {
+            self.view.label(cx, ids!(user_id)).set_text(cx, profile.user_id.as_str());
+        }
+        Self::enable_display_name_buttons(
+            cx,
+            false,
+            &self.view.button(cx, ids!(accept_display_name_button)),
+            &self.view.button(cx, ids!(cancel_display_name_button)),
+        );
+        self.populate_avatar_views(cx);
+        self.own_device = None;
+        self.refresh_verification_state(cx);
+        self.populate_account_list(cx);
+        self.view.redraw(cx);
+    }
+
+    fn clear_current_account_display(&mut self, cx: &mut Cx) {
+        self.own_profile = None;
+        self.own_profile_is_fallback = false;
+        self.own_device = None;
+        self.verification_state = VerificationState::Unknown;
+        self.view
+            .label(cx, ids!(user_id))
+            .set_text(cx, tr_key(self.app_language, "settings.account.user_id.not_logged_in"));
+        self.view.text_input(cx, ids!(display_name_input)).set_text(cx, "");
+        Self::enable_display_name_buttons(
+            cx,
+            false,
+            &self.view.button(cx, ids!(accept_display_name_button)),
+            &self.view.button(cx, ids!(cancel_display_name_button)),
+        );
+        self.view.avatar(cx, ids!(our_own_avatar)).show_text(
+            cx,
+            Some(COLOR_ROBRIX_PURPLE),
+            None,
+            "?",
+        );
+        self.populate_account_list(cx);
+        self.update_verification_banner(cx);
         self.view.redraw(cx);
     }
 
@@ -1090,20 +1437,7 @@ impl AccountSettings {
 
     /// Show and initializes the account settings within the SettingsScreen.
     pub fn populate(&mut self, cx: &mut Cx, own_profile: UserProfile) {
-        self.view.label(cx, ids!(user_id))
-            .set_text(cx, own_profile.user_id.as_str());
-        self.view.text_input(cx, ids!(display_name_input))
-            .set_text(cx, own_profile.username.as_deref().unwrap_or_default());
-        Self::enable_display_name_buttons(
-            cx,
-            false,
-            &self.view.button(cx, ids!(accept_display_name_button)),
-            &self.view.button(cx, ids!(cancel_display_name_button)),
-        );
-
-        self.own_profile = Some(own_profile);
-        self.populate_avatar_views(cx);
-        self.refresh_verification_state(cx);
+        self.apply_own_profile(cx, own_profile, true);
         self.sync_app_language(cx);
 
         self.view.button(cx, ids!(upload_avatar_button)).reset_hover(cx);
@@ -1111,14 +1445,22 @@ impl AccountSettings {
         self.view.button(cx, ids!(accept_display_name_button)).reset_hover(cx);
         self.view.button(cx, ids!(cancel_display_name_button)).reset_hover(cx);
         self.view.button(cx, ids!(copy_user_id_button)).reset_hover(cx);
-        self.view.button(cx, ids!(manage_account_button)).reset_hover(cx);
+        self.view.button(cx, ids!(change_password_button)).reset_hover(cx);
+        self.hide_password_change_panel(cx);
         self.view.button(cx, ids!(logout_button)).reset_hover(cx);
         self.view.redraw(cx);
     }
 
     /// Populate the account list with logged-in accounts from the AccountManager.
     fn populate_account_list(&mut self, cx: &mut Cx) {
-        let count = account_manager::account_count();
+        let active_user_id = effective_active_account_user_id(
+            account_manager::get_active_user_id(),
+            current_user_id(),
+        );
+        let count = effective_account_count(
+            account_manager::account_count(),
+            active_user_id.as_ref(),
+        );
         let label_text = if count == 0 {
             tr_key(self.app_language, "settings.account.account_count.none").to_string()
         } else if count == 1 {
@@ -1131,9 +1473,6 @@ impl AccountSettings {
             )
         };
         self.view.label(cx, ids!(account_count_label)).set_text(cx, &label_text);
-
-        // Get the active account
-        let active_user_id = account_manager::get_active_user_id();
 
         // Show/hide active account view based on whether there's an active account
         let has_active = active_user_id.is_some();
@@ -1170,100 +1509,377 @@ impl AccountSettings {
         enable: bool,
         delete_avatar_button: &ButtonRef,
     ) {
-        let (delete_button_fg_color, delete_button_bg_color) = if enable {
-            (COLOR_FG_DANGER_RED, COLOR_BG_DANGER_RED)
-        } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
-        };
+        use crate::shared::design_tokens::{RBX_DANGER_BG, RBX_DANGER_FG, RBX_FG_DISABLED};
+        // Ghost "Remove" button: transparent fill, danger-red text/icon, red-tinted
+        // hover. Disabled = greyed text, still transparent.
+        let fg = if enable { RBX_DANGER_FG } else { RBX_FG_DISABLED };
         let mut delete_avatar_button = delete_avatar_button.clone();
         script_apply_eval!(cx, delete_avatar_button, {
             enabled: #(enable),
             draw_bg +: {
-                color: #(delete_button_bg_color),
-                border_color: #(delete_button_fg_color),
+                color: #00000000,
+                color_hover: #(RBX_DANGER_BG),
+                color_down: #(RBX_DANGER_BG),
+                border_size: 0.0,
+                border_color: #00000000,
             }
             draw_icon +: {
-                color: #(delete_button_fg_color),
+                color: #(fg),
             }
             draw_text +: {
-                color: #(delete_button_fg_color),
+                color: #(fg),
             }
         });
     }
 
-    /// Enable or disable the upload avatar button.
+    /// Enable or disable the upload avatar badge.
     fn enable_upload_avatar_button(
         cx: &mut Cx,
         enable: bool,
         upload_avatar_button: &ButtonRef,
     ) {
-        let (upload_button_fg_color, upload_button_bg_color) = if enable {
-            (COLOR_PRIMARY, COLOR_ACTIVE_PRIMARY)
+        use crate::shared::design_tokens::{
+            RBX_ACCENT, RBX_BG_DISABLED, RBX_FG_DISABLED, RBX_FG_ON_ACCENT,
+        };
+        // Teal "Upload" button (grey when disabled).
+        let (fg, bg) = if enable {
+            (RBX_FG_ON_ACCENT, RBX_ACCENT)
         } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
+            (RBX_FG_DISABLED, RBX_BG_DISABLED)
         };
         let mut upload_avatar_button = upload_avatar_button.clone();
         script_apply_eval!(cx, upload_avatar_button, {
             enabled: #(enable),
             draw_bg +: {
-                color: #(upload_button_bg_color),
-                border_color: #(upload_button_fg_color),
+                color: #(bg),
             }
             draw_icon +: {
-                color: #(upload_button_fg_color),
+                color: #(fg),
             }
             draw_text +: {
-                color: #(upload_button_fg_color),
+                color: #(fg),
             }
         });
     }
 
-    /// Enable or disable the display name accept and cancel buttons.
+    /// Enable or disable the display name accept and cancel buttons. Styled to
+    /// match the rest of settings: Save = teal primary, Cancel = ghost neutral.
     fn enable_display_name_buttons(
         cx: &mut Cx,
         enable: bool,
         accept_display_name_button: &ButtonRef,
         cancel_display_name_button: &ButtonRef,
     ) {
-        let (accept_button_fg_color, accept_button_bg_color) = if enable {
-            (COLOR_FG_ACCEPT_GREEN, COLOR_BG_ACCEPT_GREEN)
-        } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
+        use crate::shared::design_tokens::{
+            RBX_ACCENT, RBX_BG_DISABLED, RBX_BG_HOVER, RBX_BG_PRESSED, RBX_FG_DISABLED,
+            RBX_FG_ON_ACCENT, RBX_FG_SECONDARY,
         };
-        let (cancel_button_fg_color, cancel_button_bg_color) = if enable {
-            (COLOR_FG_DANGER_RED, COLOR_BG_DANGER_RED)
+        // Save Name: teal primary (grey when disabled).
+        let (accept_fg, accept_bg) = if enable {
+            (RBX_FG_ON_ACCENT, RBX_ACCENT)
         } else {
-            (COLOR_FG_DISABLED, COLOR_BG_DISABLED)
+            (RBX_FG_DISABLED, RBX_BG_DISABLED)
         };
-
         let mut accept_display_name_button = accept_display_name_button.clone();
         script_apply_eval!(cx, accept_display_name_button, {
             enabled: #(enable),
             draw_bg +: {
-                color: #(accept_button_bg_color),
-                border_color: #(accept_button_fg_color),
-            },
+                color: #(accept_bg),
+                border_size: 0.0,
+                border_color: #00000000,
+            }
             draw_text +: {
-                color: #(accept_button_fg_color),
-            },
+                color: #(accept_fg),
+            }
             draw_icon +: {
-                color: #(accept_button_fg_color),
+                color: #(accept_fg),
             }
         });
+        // Cancel: ghost neutral (transparent fill, subtle hover).
+        let cancel_fg = if enable { RBX_FG_SECONDARY } else { RBX_FG_DISABLED };
         let mut cancel_display_name_button = cancel_display_name_button.clone();
         script_apply_eval!(cx, cancel_display_name_button, {
             enabled: #(enable),
             draw_bg +: {
-                color: #(cancel_button_bg_color),
-                border_color: #(cancel_button_fg_color),
-            },
+                color: #00000000,
+                color_hover: #(RBX_BG_HOVER),
+                color_down: #(RBX_BG_PRESSED),
+                border_size: 0.0,
+                border_color: #00000000,
+            }
             draw_text +: {
-                color: #(cancel_button_fg_color),
-            },
+                color: #(cancel_fg),
+            }
             draw_icon +: {
-                color: #(cancel_button_fg_color),
+                color: #(cancel_fg),
             }
         });
+    }
+
+    fn show_password_change_panel(&mut self, cx: &mut Cx) {
+        if self.password_change_in_flight {
+            return;
+        }
+        self.password_change_panel_open = true;
+        self.view.view(cx, ids!(change_password_panel)).set_visible(cx, true);
+        self.view.text_input(cx, ids!(old_password_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(new_password_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(confirm_password_input)).set_text(cx, "");
+        self.set_password_change_error(cx, None);
+        self.set_password_change_form_enabled(cx, true);
+        self.view.redraw(cx);
+    }
+
+    fn hide_password_change_panel(&mut self, cx: &mut Cx) {
+        if self.password_change_in_flight {
+            return;
+        }
+        self.password_change_panel_open = false;
+        self.view.view(cx, ids!(change_password_panel)).set_visible(cx, false);
+        self.view.text_input(cx, ids!(old_password_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(new_password_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(confirm_password_input)).set_text(cx, "");
+        self.set_password_change_error(cx, None);
+        self.view.widget(cx, ids!(change_password_spinner)).set_visible(cx, false);
+        self.set_password_change_form_enabled(cx, true);
+        self.view.redraw(cx);
+    }
+
+    fn submit_password_change(&mut self, cx: &mut Cx) {
+        if self.password_change_in_flight {
+            return;
+        }
+
+        let old_password = self.view.text_input(cx, ids!(old_password_input)).text();
+        let new_password = self.view.text_input(cx, ids!(new_password_input)).text();
+        let confirm_password = self.view.text_input(cx, ids!(confirm_password_input)).text();
+        let submission = match validate_password_change_form(
+            &old_password,
+            &new_password,
+            &confirm_password,
+        ) {
+            Ok(submission) => submission,
+            Err(error) => {
+                self.set_password_change_error(cx, Some(tr_key(self.app_language, error.translation_key())));
+                return;
+            }
+        };
+
+        self.password_change_in_flight = true;
+        self.set_password_change_error(cx, None);
+        self.set_password_change_form_enabled(cx, false);
+        self.view.widget(cx, ids!(change_password_spinner)).set_visible(cx, true);
+        submit_async_request(MatrixRequest::ChangePassword {
+            old_password: submission.old_password,
+            new_password: submission.new_password,
+        });
+        enqueue_popup_notification(
+            tr_key(self.app_language, "settings.account.popup.changing_password"),
+            PopupKind::Info,
+            Some(4.0),
+        );
+    }
+
+    fn set_password_change_form_enabled(&mut self, cx: &mut Cx, enabled: bool) {
+        let old_password_input = self.view.text_input(cx, ids!(old_password_input));
+        let new_password_input = self.view.text_input(cx, ids!(new_password_input));
+        let confirm_password_input = self.view.text_input(cx, ids!(confirm_password_input));
+        old_password_input.set_is_read_only(cx, !enabled);
+        old_password_input.set_disabled(cx, !enabled);
+        new_password_input.set_is_read_only(cx, !enabled);
+        new_password_input.set_disabled(cx, !enabled);
+        confirm_password_input.set_is_read_only(cx, !enabled);
+        confirm_password_input.set_disabled(cx, !enabled);
+        self.view.button(cx, ids!(save_password_button)).set_enabled(cx, enabled);
+        self.view.button(cx, ids!(cancel_password_change_button)).set_enabled(cx, enabled);
+    }
+
+    fn set_password_change_error(&mut self, cx: &mut Cx, message: Option<&str>) {
+        let error_label = self.view.label(cx, ids!(change_password_error_label));
+        match message {
+            Some(message) => {
+                error_label.set_text(cx, message);
+                error_label.set_visible(cx, true);
+            }
+            None => {
+                error_label.set_text(cx, "");
+                error_label.set_visible(cx, false);
+            }
+        }
+    }
+}
+
+fn effective_active_account_user_id(
+    account_manager_active_user_id: Option<OwnedUserId>,
+    current_user_id: Option<OwnedUserId>,
+) -> Option<OwnedUserId> {
+    account_manager_active_user_id.or(current_user_id)
+}
+
+fn effective_account_count(
+    account_manager_count: usize,
+    active_user_id: Option<&OwnedUserId>,
+) -> usize {
+    if account_manager_count == 0 && active_user_id.is_some() {
+        1
+    } else {
+        account_manager_count
+    }
+}
+
+fn user_id_label_text(
+    app_language: AppLanguage,
+    own_profile: Option<&UserProfile>,
+    fallback_user_id: Option<&OwnedUserId>,
+) -> String {
+    if let Some(profile) = own_profile {
+        profile.user_id.to_string()
+    } else if let Some(user_id) = fallback_user_id {
+        user_id.to_string()
+    } else {
+        tr_key(app_language, "settings.account.user_id.not_logged_in").to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PasswordChangeFormError {
+    EmptyOldPassword,
+    EmptyPassword,
+    ConfirmationMismatch,
+}
+
+impl PasswordChangeFormError {
+    fn translation_key(self) -> &'static str {
+        match self {
+            PasswordChangeFormError::EmptyOldPassword => "settings.account.change_password.error.old_empty",
+            PasswordChangeFormError::EmptyPassword => "settings.account.change_password.error.empty",
+            PasswordChangeFormError::ConfirmationMismatch => "settings.account.change_password.error.mismatch",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PasswordChangeSubmission {
+    old_password: String,
+    new_password: String,
+}
+
+fn validate_password_change_form(
+    old_password: &str,
+    new_password: &str,
+    confirm_password: &str,
+) -> Result<PasswordChangeSubmission, PasswordChangeFormError> {
+    if old_password.is_empty() {
+        return Err(PasswordChangeFormError::EmptyOldPassword);
+    }
+    if new_password.is_empty() {
+        return Err(PasswordChangeFormError::EmptyPassword);
+    }
+    if new_password != confirm_password {
+        return Err(PasswordChangeFormError::ConfirmationMismatch);
+    }
+    Ok(PasswordChangeSubmission {
+        old_password: old_password.to_string(),
+        new_password: new_password.to_string(),
+    })
+}
+
+fn password_change_failure_message(
+    app_language: AppLanguage,
+    failure: &PasswordChangeFailure,
+) -> String {
+    match failure {
+        PasswordChangeFailure::NoSession => {
+            tr_key(app_language, "settings.account.change_password.error.no_session").to_string()
+        }
+        PasswordChangeFailure::NotSupported => {
+            tr_key(app_language, "settings.account.change_password.error.not_supported").to_string()
+        }
+        PasswordChangeFailure::ReauthRequired => {
+            tr_key(app_language, "settings.account.change_password.error.reauth_required").to_string()
+        }
+        PasswordChangeFailure::InvalidOldPassword => {
+            tr_key(app_language, "settings.account.change_password.error.invalid_old_password").to_string()
+        }
+        PasswordChangeFailure::WeakPassword(details) => tr_fmt(
+            app_language,
+            "settings.account.change_password.error.weak_password",
+            &[("details", details)],
+        ),
+        PasswordChangeFailure::Failed(details) => tr_fmt(
+            app_language,
+            "settings.account.change_password.error.failed",
+            &[("details", details)],
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matrix_sdk::ruma::UserId;
+
+    fn user_id(raw: &str) -> OwnedUserId {
+        UserId::parse(raw).unwrap().to_owned()
+    }
+
+    #[test]
+    fn effective_active_account_falls_back_to_current_user() {
+        let current = user_id("@alex:matrix.palpo.im");
+        assert_eq!(
+            effective_active_account_user_id(None, Some(current.clone())),
+            Some(current),
+        );
+    }
+
+    #[test]
+    fn effective_account_count_counts_current_user_when_manager_is_empty() {
+        let current = user_id("@alex:matrix.palpo.im");
+        assert_eq!(effective_account_count(0, Some(&current)), 1);
+    }
+
+    #[test]
+    fn user_id_label_uses_fallback_user_before_profile_loads() {
+        let current = user_id("@alex:matrix.palpo.im");
+        assert_eq!(
+            user_id_label_text(AppLanguage::English, None, Some(&current)),
+            "@alex:matrix.palpo.im",
+        );
+    }
+
+    #[test]
+    fn change_password_form_accepts_old_password_and_matching_new_password() {
+        assert_eq!(
+            validate_password_change_form("old-password", "new-password-123", "new-password-123"),
+            Ok(PasswordChangeSubmission {
+                old_password: "old-password".to_string(),
+                new_password: "new-password-123".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn change_password_form_rejects_empty_old_password() {
+        assert_eq!(
+            validate_password_change_form("", "new-password-123", "new-password-123"),
+            Err(PasswordChangeFormError::EmptyOldPassword),
+        );
+    }
+
+    #[test]
+    fn change_password_form_rejects_empty_new_password() {
+        assert_eq!(
+            validate_password_change_form("old-password", "", ""),
+            Err(PasswordChangeFormError::EmptyPassword),
+        );
+    }
+
+    #[test]
+    fn change_password_form_rejects_confirmation_mismatch() {
+        assert_eq!(
+            validate_password_change_form("old-password", "new-password-123", "different-password"),
+            Err(PasswordChangeFormError::ConfirmationMismatch),
+        );
     }
 }
 

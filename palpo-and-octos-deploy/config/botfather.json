@@ -3,9 +3,13 @@
   "name": "BotFather",
   "enabled": true,
   "config": {
-    "provider": "moonshot",
-    "model": "kimi-k2.5",
-    "api_key_env": "MOONSHOT_API_KEY",
+    "llm": {
+      "primary": {
+        "family_id": "moonshot",
+        "model_id": "kimi-k2.5",
+        "route": { "api_key_env": "MOONSHOT_API_KEY" }
+      }
+    },
     "admin_mode": true,
     "channels": [
       {
@@ -20,10 +24,7 @@
         "allowed_senders": []
       }
     ],
-    "gateway": {
-      "max_history": 50,
-      "queue_mode": "followup"
-    },
+    "gateway": { "max_history": 50, "queue_mode": "followup" },
     "approval_policy": {
       "default": "allow",
       "rules": [

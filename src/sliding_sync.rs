@@ -15,9 +15,11 @@ use matrix_sdk::{
             room::{Visibility, create_room::v3::{Request as CreateRoomRequest, RoomPreset}},
             directory::get_public_rooms_filtered,
             error::ErrorKind,
+            filter::RoomEventFilter,
             profile::{AvatarUrl, DisplayName, set_avatar_url},
             receipt::create_receipt::v3::ReceiptType,
-            uiaa::{AuthData, AuthType, Dummy},
+            search::search_events,
+            uiaa::{AuthData, AuthType, Dummy, Password},
         }}, directory::{Filter as PublicRoomsFilter, RoomTypeFilter}, events::{
             direct::DirectUserIdentifier,
             relation::RelationType,
@@ -25,7 +27,8 @@ use matrix_sdk::{
                 encryption::RoomEncryptionEventContent, member::MembershipState, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
             },
             space::{child::SpaceChildEventContent, parent::SpaceParentEventContent},
-            InitialStateEvent, MessageLikeEventType, StateEventType
+            AnyMessageLikeEventContent, AnyTimelineEvent, sticker::StickerEventContent,
+            room::ImageInfo, InitialStateEvent, MessageLikeEventType, StateEventType
         }, EventId, MatrixToUri, MatrixUri, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomOrAliasId, UserId, int, uint
     }, reqwest::{Client as ReqwestClient, Response as ReqwestResponse, StatusCode as ReqwestStatusCode, header::HeaderValue}, sliding_sync::VersionBuilder, Client, Error, OwnedServerName, Room, RoomDisplayName, RoomMemberships, RoomState, SessionChange, SuccessorRoom
 };
@@ -62,7 +65,7 @@ use crate::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
     }, proxy_config::{self, build_policy_reqwest_client, resolve_effective_proxy_url}, room::{FetchedRoomAvatar, FetchedRoomPreview, RoomPreviewAction}, shared::{
-        avatar::AvatarState, jump_to_bottom_button::UnreadMessageCount, popup_list::{PopupKind, enqueue_popup_notification}
+        avatar::AvatarState, jump_to_bottom_button::UnreadMessageCount, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}
     }, space_service_sync::space_service_loop, utils::{self, AVATAR_THUMBNAIL_FORMAT, RoomNameId, VecDiff, avatar_from_room_name}, verification::add_verification_event_handlers_and_sync_client
 };
 
@@ -455,7 +458,10 @@ async fn build_client(
             backup_download_strategy: matrix_sdk::encryption::BackupDownloadStrategy::OneShot,
             auto_enable_backups: true,
         })
-        .with_enable_share_history_on_invite(true)
+        // Off: palpo's key backup 404s, so share_room_history() (MSC3061) aborts
+        // every invite — encrypted or not — before /invite is sent. Re-enable when
+        // the homeserver's key backup works.
+        .with_enable_share_history_on_invite(false)
         .handle_refresh_tokens();
 
     // Use a 60 second timeout for all requests to the homeserver.
@@ -755,15 +761,56 @@ pub enum AccountDataAction {
     DisplayNameChanged(Option<String>),
     /// Failed to update the user's display name.
     DisplayNameChangeFailed(String),
+    /// The user's password was successfully changed.
+    PasswordChanged,
+    /// Failed to change the user's password.
+    PasswordChangeFailed(PasswordChangeFailure),
     /// Result of [`MatrixRequest::GetOwnDevice`].
     /// * `None` if not logged in or the crypto store isn't ready yet.
     OwnDeviceFetched(Option<OwnDeviceInfo>),
+    /// Result of [`MatrixRequest::GetDeviceList`] — every device this user
+    /// has signed in with on the homeserver. Includes the current device.
+    DeviceListFetched(Vec<DeviceInfo>),
+    /// Failure result for [`MatrixRequest::GetDeviceList`].
+    DeviceListFetchFailed(String),
+    /// Result of [`MatrixRequest::DeleteDevice`].
+    DeviceDeleteResult {
+        device_id: String,
+        outcome: DeviceDeleteOutcome,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnDeviceInfo {
     pub device_id: String,
     pub display_name: Option<String>,
+}
+
+/// One entry from the homeserver's `/devices` list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceInfo {
+    pub device_id: String,
+    /// User-set device label, e.g. "robrix-un-pw". `None` when never set
+    /// (display the standard "Unknown device" fallback in that case).
+    pub display_name: Option<String>,
+    /// Last public IP this device hit the homeserver from.
+    pub last_seen_ip: Option<String>,
+    /// Unix-millisecond timestamp of the last server-side activity.
+    pub last_seen_ts_ms: Option<i64>,
+}
+
+/// Outcome of attempting to delete a single device.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeviceDeleteOutcome {
+    /// The server accepted the deletion.
+    Removed,
+    /// The server returned a 401 User-Interactive Auth challenge. The user
+    /// must complete it in a browser before the next retry can succeed.
+    /// `fallback_url` is the homeserver's UIA fallback page for whichever
+    /// auth flow stage the server picked first.
+    NeedsAuth { fallback_url: String },
+    /// Anything else (network error, 403, server bug, …).
+    Error(String),
 }
 
 /// Actions emitted in response to account switching.
@@ -825,6 +872,85 @@ pub enum RoomThreadsAction {
     },
 }
 
+/// A single message hit returned by [`MatrixRequest::SearchMessages`].
+///
+/// We pre-extract just the fields the UI needs (sender display name, plain
+/// body, timestamp, event ID) so the action stays cheap to clone and
+/// `Cx::post_action` doesn't have to ship the full ruma event back to the
+/// UI thread.
+#[derive(Clone, Debug)]
+pub struct SearchedMessage {
+    pub event_id: OwnedEventId,
+    pub sender_user_id: OwnedUserId,
+    pub sender_display_name: Option<String>,
+    pub body: String,
+    pub timestamp: MilliSecondsSinceUnixEpoch,
+}
+
+/// Action dispatched in response to a [`MatrixRequest::SearchMessages`].
+///
+/// The UI matches on `room_id` + `search_term` to ignore stale results from
+/// requests that have since been superseded.
+#[derive(Clone, Debug)]
+pub enum SearchMessagesResultAction {
+    Received {
+        room_id: OwnedRoomId,
+        search_term: String,
+        results: Vec<SearchedMessage>,
+        /// If `Some`, more results are available via this token.
+        next_batch: Option<String>,
+        /// Total count of matches reported by the server (the spec returns
+        /// `count` as `Option<UInt>`; we coerce to `u64`).
+        total_count: u64,
+        /// Whether this batch was the first page (i.e. request had no
+        /// `next_batch` token). The UI uses this to know when to *replace*
+        /// vs *append* its current result list.
+        is_initial_page: bool,
+    },
+    Failed {
+        room_id: OwnedRoomId,
+        search_term: String,
+        error: String,
+        /// Whether this was the initial page (so the UI can keep showing the
+        /// previous results when a pagination request fails).
+        was_initial_page: bool,
+    },
+}
+
+/// A single message hit returned by [`MatrixRequest::SearchAllMessages`].
+///
+/// Same shape as [`SearchedMessage`] but additionally carries `room_id`,
+/// since global search results span multiple rooms.
+#[derive(Clone, Debug)]
+pub struct GlobalSearchHit {
+    pub event_id: OwnedEventId,
+    pub room_id: OwnedRoomId,
+    pub sender_user_id: OwnedUserId,
+    pub sender_display_name: Option<String>,
+    pub body: String,
+    pub timestamp: MilliSecondsSinceUnixEpoch,
+}
+
+/// Action dispatched in response to a [`MatrixRequest::SearchAllMessages`].
+///
+/// Mirrors [`SearchMessagesResultAction`] but without a room id at the top
+/// level (each hit carries its own).
+#[derive(Clone, Debug)]
+pub enum GlobalMessageSearchAction {
+    Received {
+        search_term: String,
+        hits: Vec<GlobalSearchHit>,
+        next_batch: Option<String>,
+        total_count: u64,
+        is_initial_page: bool,
+    },
+    Failed {
+        search_term: String,
+        error: String,
+        was_initial_page: bool,
+    },
+}
+
 /// Either a main room timeline or a thread-focused timeline.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TimelineKind {
@@ -883,6 +1009,30 @@ pub enum MatrixRequest {
     /// Request the currently-authenticated user's access token for copying to
     /// external Matrix client integrations such as Hermes/OpenClaw.
     GetAccessTokenForCopy,
+    /// Load the user's sticker pack catalog by talking to the public scalar
+    /// widgets API (`integrations.element.io`). On success posts a
+    /// [`crate::home::sticker_modal::StickerCatalogAction::Ready`] action with
+    /// the parsed pack list; on failure posts the `Failed` variant.
+    LoadStickerCatalog,
+    /// Enable or disable a single sticker pack on the scalar widgets API.
+    /// Fired by the per-row `ToggleFlat` in the sticker modal.
+    SetStickerPackState {
+        /// The pack's wire identifier (`Asset::asset_type` on the wire,
+        /// e.g. `"isabella"`).
+        asset_type: String,
+        /// `true` → enable, `false` → disable.
+        enable: bool,
+    },
+    /// Fetch image bytes for the individual stickers in one pack.
+    /// Fired when the user taps the "▸" drill-down button for an active pack.
+    /// On success posts [`crate::home::sticker_modal::StickerGridAction::Ready`];
+    /// on failure posts the `Failed` variant.
+    LoadPackStickers {
+        pack_id: String,
+        pack_name: String,
+        /// `(mxc_url, https_url, body)` tuples for each sticker in the pack.
+        sticker_infos: Vec<(String, String, String)>,
+    },
     /// Probe a homeserver's registration capabilities.
     /// Sent from RegisterScreen's Next button; result arrives via
     /// `CapabilityProbeAction::Discovered` / `Failed`.
@@ -1066,6 +1216,50 @@ pub enum MatrixRequest {
         kind: RemoteDirectorySearchKind,
         limit: u64,
     },
+    /// Request to fetch a page of the user's homeserver's public room directory.
+    ///
+    /// Used by the dedicated public room directory browser screen.
+    /// Pagination is driven by the `since` cursor: the first request passes `None`,
+    /// then each response's `next_batch` is fed back in on subsequent calls.
+    FetchPublicDirectoryPage {
+        /// The search term; empty string means "no filter" (browse server's default order).
+        search_term: String,
+        /// Whether to fetch rooms or spaces.
+        kind: DirectoryRoomKind,
+        /// Pagination cursor. `None` for the first page.
+        since: Option<String>,
+        /// Optional page size hint to the server (server may ignore or cap).
+        limit: Option<u64>,
+        /// Discriminator so stale responses can be discarded when the user changes the query.
+        query_id: u64,
+    },
+    /// Request to search room messages on the server via the Matrix
+    /// `POST /_matrix/client/v3/search` endpoint (room_events category).
+    ///
+    /// Dispatched by the per-room search pane. Results are returned via
+    /// [`SearchMessagesResultAction`]. Set `next_batch = None` for a fresh
+    /// search; set it to a previous response's `next_batch` token to load
+    /// the next page. When `abort_previous` is true the in-flight search
+    /// task (if any) is cancelled before starting the new one — used when
+    /// the user types a different query while results are still arriving.
+    SearchMessages {
+        room_id: OwnedRoomId,
+        search_term: String,
+        next_batch: Option<String>,
+        abort_previous: bool,
+    },
+    /// Search messages across **all** of the user's joined rooms via the
+    /// Matrix `/_matrix/client/v3/search` endpoint. Same plumbing as
+    /// [`MatrixRequest::SearchMessages`] but the request omits the
+    /// `RoomEventFilter::rooms` constraint so the server searches every
+    /// room the user has joined. The 2-character minimum is enforced
+    /// here rather than at the call site so a stray short query is
+    /// silently dropped.
+    SearchAllMessages {
+        search_term: String,
+        next_batch: Option<String>,
+        abort_previous: bool,
+    },
     /// Request to fetch the full details (the room preview) of a tombstoned room.
     GetSuccessorRoomDetails {
         tombstoned_room_id: OwnedRoomId,
@@ -1174,9 +1368,22 @@ pub enum MatrixRequest {
         /// * If `None`, the display name will be removed.
         new_display_name: Option<String>,
     },
+    /// Request to change the current user's account password using the current
+    /// password as UIAA password auth.
+    ChangePassword {
+        old_password: String,
+        new_password: String,
+    },
     /// Request to fetch our own [`Device`].
     /// The response is delivered via [`AccountDataAction::OwnDeviceFetched`].
     GetOwnDevice,
+    /// Request to list every device this user has signed in with.
+    /// Response: [`AccountDataAction::DeviceListFetched`] on success,
+    /// [`AccountDataAction::DeviceListFetchFailed`] on error.
+    GetDeviceList,
+    /// Request to delete one device from the user's account. Response:
+    /// [`AccountDataAction::DeviceDeleteResult`] in all cases.
+    DeleteDevice { device_id: String },
     /// Request to fetch an Avatar image from the server.
     /// Upon completion of the async media request, the `on_fetched` function
     /// will be invoked with the content of an `AvatarUpdate`.
@@ -1217,6 +1424,7 @@ pub enum MatrixRequest {
         replied_to: Option<Reply>,
         target_user_id: Option<OwnedUserId>,
         explicit_room: bool,
+        broadcast_target_user_ids: Option<Vec<OwnedUserId>>,
         #[cfg(feature = "tsp")]
         sign_with_tsp: bool,
     },
@@ -1234,6 +1442,19 @@ pub enum MatrixRequest {
         target_user_id: OwnedUserId,
         explicit_room: bool,
         source_event_id: OwnedEventId,
+    },
+    /// Send an `m.sticker` event to the given room.
+    SendSticker {
+        timeline_kind: TimelineKind,
+        /// Human-readable description (the `body` field).
+        body: String,
+        /// Original `mxc://` URL of the sticker image.
+        mxc_url: String,
+        /// Image dimensions in pixels (0 when unknown).
+        width: u32,
+        height: u32,
+        /// File size in bytes (0 when unknown).
+        size: u64,
     },
     /// Request to send a file attachment to the given room.
     SendAttachment {
@@ -1377,6 +1598,13 @@ pub enum MatrixRequest {
         matrix_server_name: String,
         expires_in: u64,
     },
+    /// Request to create a new room. Submitted by `CreateRoomScreen`.
+    /// On success the handler also issues `invite_user_by_id` for each
+    /// entry in `config.initial_invitees` — per-invitee failures are
+    /// rolled up into `CreateRoomAction::PartialInvite`.
+    CreateRoomFromConfig {
+        config: crate::home::create_room::CreateRoomConfig,
+    },
 }
 
 fn add_octos_target_user_id(
@@ -1407,17 +1635,44 @@ fn add_octos_explicit_room_marker(
     content
 }
 
+fn add_octos_broadcast_targets(
+    mut content: serde_json::Value,
+    broadcast_target_user_ids: Option<&[OwnedUserId]>,
+) -> serde_json::Value {
+    let Some(broadcast_target_user_ids) = broadcast_target_user_ids else {
+        return content;
+    };
+    if broadcast_target_user_ids.is_empty() {
+        return content;
+    }
+
+    if let Some(content_obj) = content.as_object_mut() {
+        content_obj.insert(
+            "org.octos.broadcast_targets".to_string(),
+            serde_json::Value::Array(
+                broadcast_target_user_ids
+                    .iter()
+                    .map(|user_id| serde_json::Value::String(user_id.to_string()))
+                    .collect(),
+            ),
+        );
+    }
+    content
+}
+
 fn add_octos_routing_metadata(
     content: serde_json::Value,
     target_user_id: Option<&UserId>,
     explicit_room: bool,
+    broadcast_target_user_ids: Option<&[OwnedUserId]>,
 ) -> serde_json::Value {
     let content = add_octos_explicit_room_marker(content, explicit_room);
-    if let Some(target_user_id) = target_user_id {
+    let content = if let Some(target_user_id) = target_user_id {
         add_octos_target_user_id(content, target_user_id)
     } else {
         content
-    }
+    };
+    add_octos_broadcast_targets(content, broadcast_target_user_ids)
 }
 
 async fn ensure_target_user_joined_room(
@@ -1817,6 +2072,41 @@ mod matrix_request_tests {
     }
 
     #[test]
+    fn test_send_message_adds_octos_broadcast_targets() {
+        let targets = vec![
+            OwnedUserId::try_from("@octosbot_bob:example.com").unwrap(),
+            OwnedUserId::try_from("@octosbot_weather:example.com").unwrap(),
+        ];
+        let content = serde_json::json!({
+            "msgtype": "m.text",
+            "body": "/allbots summarize",
+        });
+
+        let content = add_octos_routing_metadata(
+            content,
+            None,
+            false,
+            Some(&targets),
+        );
+
+        assert_eq!(
+            content
+                .get("org.octos.broadcast_targets")
+                .and_then(|value| value.as_array())
+                .map(|targets|
+                    targets
+                        .iter()
+                        .filter_map(|target| target.as_str())
+                        .collect::<Vec<_>>()
+                ),
+            Some(vec![
+                "@octosbot_bob:example.com",
+                "@octosbot_weather:example.com",
+            ])
+        );
+    }
+
+    #[test]
     fn test_should_restore_loaded_app_state_with_bot_settings_and_empty_dock() {
         let mut app_state = crate::app::AppState::default();
         app_state.bot_settings.enabled = true;
@@ -1920,6 +2210,72 @@ pub enum RemoteDirectorySearchResult {
     },
 }
 
+/// Whether the public directory browser is fetching rooms or spaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectoryRoomKind {
+    Rooms,
+    Spaces,
+}
+
+/// A single entry returned by `MatrixRequest::FetchPublicDirectoryPage`.
+///
+/// Carries the richer fields the directory browser shows per row (topic, member count, alias),
+/// which the existing slim `RemoteDirectorySearchResult` deliberately omits.
+#[derive(Clone, Debug)]
+pub struct PublicRoomDirectoryEntry {
+    pub room_id: OwnedRoomId,
+    /// The displayable name. Falls back to canonical alias, then room id.
+    pub display_name: String,
+    pub canonical_alias: Option<String>,
+    pub topic: Option<String>,
+    pub num_joined_members: u64,
+    pub avatar_uri: Option<OwnedMxcUri>,
+    pub is_space: bool,
+    pub world_readable: bool,
+    pub guest_can_join: bool,
+}
+
+/// Actions emitted by the worker thread in response to
+/// `MatrixRequest::FetchPublicDirectoryPage`.
+#[derive(Clone, Debug)]
+pub enum PublicDirectoryAction {
+    /// A page of results arrived.
+    Page {
+        query_id: u64,
+        /// `true` if this was the first page (continuation pages append).
+        is_first_page: bool,
+        rooms: Vec<PublicRoomDirectoryEntry>,
+        /// Server-supplied cursor for the next page; `None` means no more pages.
+        next_batch: Option<String>,
+    },
+    /// The request failed.
+    Failed {
+        query_id: u64,
+        is_first_page: bool,
+        error: String,
+    },
+}
+
+/// Extracts a UIA fallback URL the user can open in a browser to complete
+/// re-authentication. Returns `None` if the error wasn't a UIA challenge
+/// (caller should treat that as a transport / server error).
+///
+/// Constructs the URL per the Matrix spec:
+///   `{homeserver}/_matrix/client/v3/auth/{stage}/fallback/web?session={session}`
+/// using the first uncompleted stage from the first auth flow.
+fn extract_uia_fallback(
+    client: &matrix_sdk::Client,
+    err: &matrix_sdk::HttpError,
+) -> Option<String> {
+    let uiaa = err.as_uiaa_response()?;
+    let session = uiaa.session.as_ref()?;
+    let stage = uiaa.flows.first()?.stages.first()?;
+    let homeserver = client.homeserver();
+    Some(format!(
+        "{homeserver}_matrix/client/v3/auth/{stage}/fallback/web?session={session}"
+    ))
+}
+
 /// Submits a request to the worker thread to be executed asynchronously.
 pub fn submit_async_request(req: MatrixRequest) {
     if let Some(sender) = REQUEST_SENDER.lock().unwrap().as_ref() {
@@ -1974,6 +2330,56 @@ pub enum AccessTokenCopyError {
     NoSession,
     /// A client is logged in but its session carries no access token.
     Unavailable,
+}
+
+/// Why a [`MatrixRequest::ChangePassword`] request failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PasswordChangeFailure {
+    /// No Matrix client is currently logged in.
+    NoSession,
+    /// The homeserver explicitly reports that password changes are disabled.
+    NotSupported,
+    /// The homeserver requires user-interactive authentication / re-auth.
+    ReauthRequired,
+    /// The homeserver rejected the current password used for UIAA.
+    InvalidOldPassword,
+    /// The homeserver rejected the new password as too weak.
+    WeakPassword(String),
+    /// Any other password change error.
+    Failed(String),
+}
+
+impl PasswordChangeFailure {
+    fn from_matrix_error(error: &Error) -> Self {
+        if let Some(uiaa_info) = error.as_uiaa_response() {
+            if uiaa_info.auth_error.is_some() {
+                return Self::InvalidOldPassword;
+            }
+            return Self::ReauthRequired;
+        }
+        if matches!(error.client_api_error_kind(), Some(ErrorKind::WeakPassword)) {
+            return Self::WeakPassword(error.to_string());
+        }
+        Self::Failed(error.to_string())
+    }
+}
+
+fn password_change_auth_data(
+    user_id: OwnedUserId,
+    old_password: String,
+    session: Option<String>,
+) -> AuthData {
+    let mut password = Password::new(user_id.into(), old_password);
+    password.session = session;
+    AuthData::Password(password)
+}
+
+fn password_change_retry_session(error: &Error) -> Option<String> {
+    let uiaa_info = error.as_uiaa_response()?;
+    if uiaa_info.auth_error.is_some() {
+        return None;
+    }
+    uiaa_info.session.clone()
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -2112,6 +2518,43 @@ async fn matrix_worker_task(
 
             MatrixRequest::GetAccessTokenForCopy => {
                 Cx::post_action(access_token_copy_result_for_client(get_client()));
+            }
+
+            MatrixRequest::LoadStickerCatalog => {
+                use crate::home::sticker_modal::{
+                    StickerCatalogAction, load_sticker_catalog, report_failure,
+                };
+                let Some(client) = get_client() else {
+                    report_failure("not logged in");
+                    continue;
+                };
+                let _task = Handle::current().spawn(async move {
+                    match load_sticker_catalog(client).await {
+                        Ok(packs) => Cx::post_action(StickerCatalogAction::Ready { packs }),
+                        Err(e) => report_failure(e),
+                    }
+                });
+            }
+
+            MatrixRequest::SetStickerPackState { asset_type, enable } => {
+                use crate::home::sticker_modal::set_pack_state;
+                let Some(client) = get_client() else { continue };
+                let _task = Handle::current().spawn(async move {
+                    if let Err(e) = set_pack_state(client, asset_type, enable).await {
+                        log!("[sticker] set_pack_state failed: {e}");
+                    }
+                });
+            }
+
+            MatrixRequest::LoadPackStickers { pack_id, pack_name, sticker_infos } => {
+                use crate::home::sticker_modal::load_pack_stickers_streaming;
+                // `load_pack_stickers_streaming` posts StickerGridAction::Ready
+                // from disk-cache data immediately, then posts
+                // StickerImagePatchAction batches for any cache-miss images —
+                // no additional action posting needed here.
+                let _task = Handle::current().spawn(async move {
+                    load_pack_stickers_streaming(pack_id, pack_name, sticker_infos).await;
+                });
             }
 
             MatrixRequest::DiscoverHomeserverCapabilities { url, proxy } => {
@@ -2565,11 +3008,24 @@ async fn matrix_worker_task(
                                     .pending_thread_timelines
                                     .remove(&thread_root_event_id);
                             }
-                            enqueue_popup_notification(
-                                format!("Failed to create thread-focused timeline. Please retry opening the thread again later.\n\nError: {error}"),
-                                PopupKind::Error,
-                                None,
-                            );
+                            let error_detail = format!("{error}");
+                            let room_id_retry = room_id.clone();
+                            let thread_root_event_id_retry = thread_root_event_id.clone();
+                            enqueue_notification(NotificationItem {
+                                kind: PopupKind::Error,
+                                title: Some("Couldn't create thread timeline".into()),
+                                message: format!("Failed to create thread-focused timeline.\n\nError: {error_detail}").into(),
+                                actions: vec![
+                                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                        submit_async_request(MatrixRequest::CreateThreadTimeline {
+                                            room_id: room_id_retry.clone(),
+                                            thread_root_event_id: thread_root_event_id_retry.clone(),
+                                        });
+                                    }),
+                                ],
+                                auto_dismissal_duration: None,
+                                ..Default::default()
+                            });
                         }
                     }
                 });
@@ -2990,6 +3446,267 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::FetchPublicDirectoryPage { search_term, kind, since, limit, query_id } => {
+                let Some(client) = get_client() else { continue };
+                let _fetch_task = Handle::current().spawn(async move {
+                    let is_first_page = since.is_none();
+                    let trimmed = search_term.trim();
+
+                    let mut filter = PublicRoomsFilter::new();
+                    if !trimmed.is_empty() {
+                        filter.generic_search_term = Some(trimmed.to_owned());
+                    }
+                    filter.room_types = match kind {
+                        DirectoryRoomKind::Rooms => vec![RoomTypeFilter::Default],
+                        DirectoryRoomKind::Spaces => vec![RoomTypeFilter::Space],
+                    };
+
+                    let mut request = get_public_rooms_filtered::v3::Request::new();
+                    request.filter = filter;
+                    request.since = since.clone();
+                    if let Some(limit) = limit {
+                        if let Ok(limit_uint) = matrix_sdk::ruma::UInt::try_from(limit) {
+                            request.limit = Some(limit_uint);
+                        }
+                    }
+
+                    log!(
+                        "[public_directory] -> POST /_matrix/client/v3/publicRooms \
+                         query_id={query_id} is_first_page={is_first_page} kind={kind:?} \
+                         search_term={trimmed:?} since={since:?} limit={limit:?}"
+                    );
+
+                    match client.public_rooms_filtered(request).await {
+                        Ok(response) => {
+                            log!(
+                                "[public_directory] <- OK query_id={query_id} \
+                                 rooms={} next_batch={:?}",
+                                response.chunk.len(),
+                                response.next_batch,
+                            );
+                            let rooms = response.chunk.into_iter().map(|room| {
+                                let display_name = room.name.clone()
+                                    .or_else(|| room.canonical_alias.as_ref().map(ToString::to_string))
+                                    .unwrap_or_else(|| room.room_id.to_string());
+                                PublicRoomDirectoryEntry {
+                                    room_id: room.room_id.clone(),
+                                    display_name,
+                                    canonical_alias: room.canonical_alias.as_ref().map(ToString::to_string),
+                                    topic: room.topic,
+                                    num_joined_members: room.num_joined_members.into(),
+                                    avatar_uri: room.avatar_url,
+                                    is_space: matches!(kind, DirectoryRoomKind::Spaces),
+                                    world_readable: room.world_readable,
+                                    guest_can_join: room.guest_can_join,
+                                }
+                            }).collect();
+                            Cx::post_action(PublicDirectoryAction::Page {
+                                query_id,
+                                is_first_page,
+                                rooms,
+                                next_batch: response.next_batch,
+                            });
+                        }
+                        Err(e) => {
+                            log!(
+                                "[public_directory] <- ERROR query_id={query_id} \
+                                 is_first_page={is_first_page} error={e}"
+                            );
+                            Cx::post_action(PublicDirectoryAction::Failed {
+                                query_id,
+                                is_first_page,
+                                error: e.to_string(),
+                            });
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::SearchMessages { room_id, search_term, next_batch, abort_previous } => {
+                if abort_previous {
+                    if let Some(handle) = SEARCH_MESSAGES_ABORT.lock().unwrap().take() {
+                        handle.abort();
+                    }
+                }
+                let search_term = search_term.trim().to_owned();
+                if search_term.is_empty() {
+                    continue;
+                }
+                let Some(client) = get_client() else { continue };
+
+                // Build the /search request.
+                let mut room_filter = RoomEventFilter::empty();
+                room_filter.rooms = Some(vec![room_id.clone()]);
+                let mut criteria = search_events::v3::Criteria::new(search_term.clone());
+                criteria.filter = room_filter;
+                criteria.order_by = Some(search_events::v3::OrderBy::Recent);
+                criteria.event_context = search_events::v3::EventContext::new();
+                criteria.event_context.after_limit = uint!(0);
+                criteria.event_context.before_limit = uint!(0);
+                criteria.event_context.include_profile = true;
+                let mut categories = search_events::v3::Categories::new();
+                categories.room_events = Some(criteria);
+                let mut req = search_events::v3::Request::new(categories);
+                req.next_batch = next_batch.clone();
+
+                let is_initial_page = next_batch.is_none();
+                let room_id_for_task = room_id.clone();
+                let search_term_for_task = search_term.clone();
+                let join_handle = Handle::current().spawn(async move {
+                    match client.send(req).await {
+                        Ok(response) => {
+                            let result = response.search_categories.room_events;
+                            let total_count: u64 = result.count
+                                .map(|c| c.into())
+                                .unwrap_or(0);
+                            let next_batch = result.next_batch;
+                            let mut results: Vec<SearchedMessage> = Vec::with_capacity(result.results.len());
+                            for item in result.results.into_iter() {
+                                let Some(raw_event) = item.result else { continue };
+                                let Ok(event) = raw_event.deserialize() else { continue };
+                                let AnyTimelineEvent::MessageLike(msg_like) = event else { continue };
+                                let event_id = msg_like.event_id().to_owned();
+                                let sender_user_id = msg_like.sender().to_owned();
+                                let timestamp = msg_like.origin_server_ts();
+                                // Prefer the replacement content body when an edit exists.
+                                let mut body: Option<String> = None;
+                                let mut content = msg_like.original_content();
+                                if let Some(replace) = msg_like.relations().replace {
+                                    content = replace.original_content();
+                                }
+                                if let Some(AnyMessageLikeEventContent::RoomMessage(message)) = content {
+                                    body = Some(message.body().to_string());
+                                }
+                                let Some(body) = body else { continue };
+                                let sender_display_name = item.context
+                                    .profile_info
+                                    .get(&sender_user_id)
+                                    .and_then(|p| p.displayname.clone());
+                                results.push(SearchedMessage {
+                                    event_id,
+                                    sender_user_id,
+                                    sender_display_name,
+                                    body,
+                                    timestamp,
+                                });
+                            }
+                            Cx::post_action(SearchMessagesResultAction::Received {
+                                room_id: room_id_for_task,
+                                search_term: search_term_for_task,
+                                results,
+                                next_batch,
+                                total_count,
+                                is_initial_page,
+                            });
+                        }
+                        Err(e) => {
+                            error!("MatrixRequest::SearchMessages failed for room {room_id_for_task}: {e}");
+                            Cx::post_action(SearchMessagesResultAction::Failed {
+                                room_id: room_id_for_task,
+                                search_term: search_term_for_task,
+                                error: e.to_string(),
+                                was_initial_page: is_initial_page,
+                            });
+                        }
+                    }
+                });
+                *SEARCH_MESSAGES_ABORT.lock().unwrap() = Some(join_handle.abort_handle());
+            }
+
+            MatrixRequest::SearchAllMessages { search_term, next_batch, abort_previous } => {
+                if abort_previous {
+                    if let Some(handle) = SEARCH_ALL_MESSAGES_ABORT.lock().unwrap().take() {
+                        handle.abort();
+                    }
+                }
+                let search_term = search_term.trim().to_owned();
+                // Enforce the 2-character minimum here so a stray short
+                // query (e.g. from a glitchy keystroke) never hits the
+                // server. The button-disabled state in the UI is the
+                // primary guard; this is belt-and-braces.
+                if search_term.chars().count() < 2 {
+                    continue;
+                }
+                let Some(client) = get_client() else { continue };
+
+                // Build the /search request without a `rooms` filter so
+                // the server searches every room the user has joined.
+                let mut criteria = search_events::v3::Criteria::new(search_term.clone());
+                criteria.filter = RoomEventFilter::empty();
+                criteria.order_by = Some(search_events::v3::OrderBy::Recent);
+                criteria.event_context = search_events::v3::EventContext::new();
+                criteria.event_context.after_limit = uint!(0);
+                criteria.event_context.before_limit = uint!(0);
+                criteria.event_context.include_profile = true;
+                let mut categories = search_events::v3::Categories::new();
+                categories.room_events = Some(criteria);
+                let mut req = search_events::v3::Request::new(categories);
+                req.next_batch = next_batch.clone();
+
+                let is_initial_page = next_batch.is_none();
+                let search_term_for_task = search_term.clone();
+                let join_handle = Handle::current().spawn(async move {
+                    match client.send(req).await {
+                        Ok(response) => {
+                            let result = response.search_categories.room_events;
+                            let total_count: u64 = result.count
+                                .map(|c| c.into())
+                                .unwrap_or(0);
+                            let next_batch = result.next_batch;
+                            let mut hits: Vec<GlobalSearchHit> =
+                                Vec::with_capacity(result.results.len());
+                            for item in result.results.into_iter() {
+                                let Some(raw_event) = item.result else { continue };
+                                let Ok(event) = raw_event.deserialize() else { continue };
+                                let AnyTimelineEvent::MessageLike(msg_like) = event else { continue };
+                                let event_id = msg_like.event_id().to_owned();
+                                let room_id = msg_like.room_id().to_owned();
+                                let sender_user_id = msg_like.sender().to_owned();
+                                let timestamp = msg_like.origin_server_ts();
+                                // Prefer the replacement content body when an edit exists.
+                                let mut body: Option<String> = None;
+                                let mut content = msg_like.original_content();
+                                if let Some(replace) = msg_like.relations().replace {
+                                    content = replace.original_content();
+                                }
+                                if let Some(AnyMessageLikeEventContent::RoomMessage(message)) = content {
+                                    body = Some(message.body().to_string());
+                                }
+                                let Some(body) = body else { continue };
+                                let sender_display_name = item.context
+                                    .profile_info
+                                    .get(&sender_user_id)
+                                    .and_then(|p| p.displayname.clone());
+                                hits.push(GlobalSearchHit {
+                                    event_id,
+                                    room_id,
+                                    sender_user_id,
+                                    sender_display_name,
+                                    body,
+                                    timestamp,
+                                });
+                            }
+                            Cx::post_action(GlobalMessageSearchAction::Received {
+                                search_term: search_term_for_task,
+                                hits,
+                                next_batch,
+                                total_count,
+                                is_initial_page,
+                            });
+                        }
+                        Err(e) => {
+                            error!("MatrixRequest::SearchAllMessages failed: {e}");
+                            Cx::post_action(GlobalMessageSearchAction::Failed {
+                                search_term: search_term_for_task,
+                                error: e.to_string(),
+                                was_initial_page: is_initial_page,
+                            });
+                        }
+                    }
+                });
+                *SEARCH_ALL_MESSAGES_ABORT.lock().unwrap() = Some(join_handle.abort_handle());
+            }
+
             MatrixRequest::GetSuccessorRoomDetails { tombstoned_room_id } => {
                 let Some(client) = get_client() else { continue };
                 let (sender, successor_room) = {
@@ -3091,7 +3808,10 @@ async fn matrix_worker_task(
                                 space_link_error = Some(error.to_string());
                             }
 
-                            let room_name_id = RoomNameId::from_room(&room).await;
+                            let room_name_id = RoomNameId::new(
+                                RoomDisplayName::Named(room_name.clone()),
+                                room.room_id().to_owned(),
+                            );
                             Cx::post_action(CreateRoomAction::Created {
                                 room_name_id,
                                 parent_space_id,
@@ -3386,6 +4106,74 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::ChangePassword { old_password, new_password } => {
+                let Some(client) = get_client() else {
+                    Cx::post_action(AccountDataAction::PasswordChangeFailed(
+                        PasswordChangeFailure::NoSession,
+                    ));
+                    continue;
+                };
+                let Some(user_id) = current_user_id() else {
+                    Cx::post_action(AccountDataAction::PasswordChangeFailed(
+                        PasswordChangeFailure::NoSession,
+                    ));
+                    continue;
+                };
+                let _change_password_task = Handle::current().spawn(async move {
+                    match client.homeserver_capabilities().can_change_password().await {
+                        Ok(false) => {
+                            Cx::post_action(AccountDataAction::PasswordChangeFailed(
+                                PasswordChangeFailure::NotSupported,
+                            ));
+                            return;
+                        }
+                        Ok(true) => {}
+                        Err(e) => {
+                            warning!("Failed to check whether password changes are supported: {e}");
+                        }
+                    }
+
+                    log!("Sending request to change account password...");
+                    let auth_data = password_change_auth_data(
+                        user_id.clone(),
+                        old_password.clone(),
+                        None,
+                    );
+                    let result = client
+                        .account()
+                        .change_password(&new_password, Some(auth_data))
+                        .await;
+                    let result = match result {
+                        Err(e) => match password_change_retry_session(&e) {
+                            Some(session) => {
+                                let auth_data = password_change_auth_data(
+                                    user_id,
+                                    old_password,
+                                    Some(session),
+                                );
+                                client
+                                    .account()
+                                    .change_password(&new_password, Some(auth_data))
+                                    .await
+                            }
+                            None => Err(e),
+                        },
+                        Ok(response) => Ok(response),
+                    };
+                    match result {
+                        Ok(_) => {
+                            log!("Successfully changed account password.");
+                            Cx::post_action(AccountDataAction::PasswordChanged);
+                        }
+                        Err(e) => {
+                            Cx::post_action(AccountDataAction::PasswordChangeFailed(
+                                PasswordChangeFailure::from_matrix_error(&e),
+                            ));
+                        }
+                    }
+                });
+            }
+
             MatrixRequest::GetOwnDevice => {
                 let Some(client) = get_client() else { continue };
                 let _get_own_device_task = Handle::current().spawn(async move {
@@ -3404,6 +4192,70 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::GetDeviceList => {
+                let Some(client) = get_client() else { continue };
+                let _get_device_list_task = Handle::current().spawn(async move {
+                    match client.devices().await {
+                        Ok(resp) => {
+                            let devices = resp
+                                .devices
+                                .into_iter()
+                                .map(|d| DeviceInfo {
+                                    device_id: d.device_id.to_string(),
+                                    display_name: d.display_name,
+                                    last_seen_ip: d.last_seen_ip,
+                                    last_seen_ts_ms: d
+                                        .last_seen_ts
+                                        .map(|ts| ts.get().into()),
+                                })
+                                .collect::<Vec<_>>();
+                            log!("Fetched {} device(s)", devices.len());
+                            Cx::post_action(AccountDataAction::DeviceListFetched(devices));
+                        }
+                        Err(e) => {
+                            error!("Failed to list devices: {e:?}");
+                            Cx::post_action(AccountDataAction::DeviceListFetchFailed(
+                                e.to_string(),
+                            ));
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::DeleteDevice { device_id } => {
+                let Some(client) = get_client() else { continue };
+                let _delete_device_task = Handle::current().spawn(async move {
+                    let id: matrix_sdk::ruma::OwnedDeviceId = device_id.clone().into();
+                    let outcome = match client.delete_devices(&[id], None).await {
+                        Ok(_) => {
+                            log!("Deleted device {device_id}");
+                            DeviceDeleteOutcome::Removed
+                        }
+                        Err(e) => {
+                            // Try to extract a UIA `session` + fallback URL from
+                            // the homeserver response. If the error is a UIA
+                            // challenge, the server gave us a list of auth
+                            // flows; we build the fallback URL Synapse-style:
+                            //   {homeserver}/_matrix/client/r0/auth/{stage}/fallback/web?session={session}
+                            match extract_uia_fallback(&client, &e) {
+                                Some(fallback_url) => {
+                                    log!("DeleteDevice requires UIA, fallback: {fallback_url}");
+                                    DeviceDeleteOutcome::NeedsAuth { fallback_url }
+                                }
+                                None => {
+                                    error!("DeleteDevice failed: {e:?}");
+                                    DeviceDeleteOutcome::Error(e.to_string())
+                                }
+                            }
+                        }
+                    };
+                    Cx::post_action(AccountDataAction::DeviceDeleteResult {
+                        device_id,
+                        outcome,
+                    });
+                });
+            }
+
             MatrixRequest::FetchRoomSettings { room_id } => {
                 let Some(client) = get_client() else { continue };
                 let _fetch_room_settings_task = Handle::current().spawn(async move {
@@ -3419,15 +4271,27 @@ async fn matrix_worker_task(
                 let Some(client) = get_client() else { continue };
                 let _set_room_name_task = Handle::current().spawn(async move {
                     if let Some(room) = client.get_room(&room_id) {
-                        match room.set_name(name).await {
+                        match room.set_name(name.clone()).await {
                             Ok(_) => log!("Room name set successfully."),
                             Err(e) => {
                                 error!("Failed to set room name: {e:?}");
-                                enqueue_popup_notification(
-                                    "Failed to set room name",
-                                    crate::shared::popup_list::PopupKind::Error,
-                                    Some(5.0),
-                                );
+                                let name_retry = name.clone();
+                                let room_id_retry = room_id.clone();
+                                enqueue_notification(NotificationItem {
+                                    kind: PopupKind::Error,
+                                    title: Some("Couldn't set room name".into()),
+                                    message: "Failed to set room name".into(),
+                                    actions: vec![
+                                        NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                            submit_async_request(MatrixRequest::SetRoomName {
+                                                room_id: room_id_retry.clone(),
+                                                name: name_retry.clone(),
+                                            });
+                                        }),
+                                    ],
+                                    auto_dismissal_duration: Some(5.0),
+                                    ..Default::default()
+                                });
                             }
                         }
                     }
@@ -4046,6 +4910,7 @@ async fn matrix_worker_task(
                 replied_to,
                 target_user_id,
                 explicit_room,
+                broadcast_target_user_ids,
                 #[cfg(feature = "tsp")]
                 sign_with_tsp,
             } => {
@@ -4101,6 +4966,9 @@ async fn matrix_worker_task(
                             message
                         }
                     };
+                    let has_broadcast_targets = broadcast_target_user_ids
+                        .as_ref()
+                        .is_some_and(|targets| !targets.is_empty());
 
                     if let Some(replied_to_info) = replied_to {
                         let reply_content = match timeline
@@ -4120,7 +4988,7 @@ async fn matrix_worker_task(
                             }
                         };
 
-                        if target_user_id.is_some() || explicit_room {
+                        if target_user_id.is_some() || explicit_room || has_broadcast_targets {
                             let target_user_id = target_user_id.as_ref();
                             if let Some(target_user_id) = target_user_id
                                 && let Err(_e) = ensure_target_user_joined_room(
@@ -4143,6 +5011,7 @@ async fn matrix_worker_task(
                                     content,
                                     target_user_id.map(|user_id| user_id.as_ref()),
                                     explicit_room,
+                                    broadcast_target_user_ids.as_deref(),
                                 ),
                                 Err(_e) => {
                                     error!("Failed to serialize reply content for {timeline_kind}: {_e:?}");
@@ -4176,7 +5045,7 @@ async fn matrix_worker_task(
                                 }
                             }
                         }
-                    } else if target_user_id.is_some() || explicit_room {
+                    } else if target_user_id.is_some() || explicit_room || has_broadcast_targets {
                         let target_user_id = target_user_id.as_ref();
                         if let Some(target_user_id) = target_user_id
                             && let Err(_e) = ensure_target_user_joined_room(
@@ -4199,6 +5068,7 @@ async fn matrix_worker_task(
                                 content,
                                 target_user_id.map(|user_id| user_id.as_ref()),
                                 explicit_room,
+                                broadcast_target_user_ids.as_deref(),
                             ),
                             Err(_e) => {
                                 error!("Failed to serialize message content for {timeline_kind}: {_e:?}");
@@ -4330,6 +5200,7 @@ async fn matrix_worker_task(
                         content,
                         Some(target_user_id.as_ref()),
                         explicit_room,
+                        None,
                     );
                     match timeline.room().send_raw("m.room.message", raw_content).await {
                         Ok(_response) => {
@@ -4348,6 +5219,57 @@ async fn matrix_worker_task(
                             });
                         }
                     }
+                });
+            }
+
+            MatrixRequest::SendSticker { timeline_kind, body, mxc_url, width, height, size } => {
+                log!("[sticker-dbg] LAYER4: MatrixRequest::SendSticker received timeline={timeline_kind} body={body:?} mxc={mxc_url:?} w={width} h={height} size={size}");
+                let Some((timeline, _sender)) = get_timeline_and_sender(&timeline_kind) else {
+                    log!("BUG: {timeline_kind} not found for send sticker request");
+                    continue;
+                };
+                if mxc_url.is_empty() {
+                    log!("SendSticker: mxc_url is empty, skipping");
+                    continue;
+                }
+                let _task = Handle::current().spawn(async move {
+                    use ruma::events::room::{MediaSource, ThumbnailInfo};
+                    use ruma::UInt;
+                    let mxc_uri = OwnedMxcUri::from(mxc_url);
+                    let mut info = ImageInfo::new();
+                    let mimetype = "image/png".to_owned();
+                    let uint_w = if width > 0 { Some(UInt::from(width)) } else { None };
+                    let uint_h = if height > 0 { Some(UInt::from(height)) } else { None };
+                    let uint_s = if size > 0 { UInt::try_from(size).ok() } else { None };
+                    info.width = uint_w;
+                    info.height = uint_h;
+                    info.size = uint_s;
+                    info.mimetype = Some(mimetype.clone());
+                    info.thumbnail_source = Some(MediaSource::Plain(mxc_uri.clone()));
+                    info.thumbnail_info = Some(Box::new({
+                        let mut ti = ThumbnailInfo::new();
+                        ti.width = uint_w;
+                        ti.height = uint_h;
+                        ti.size = uint_s;
+                        ti.mimetype = Some(mimetype);
+                        ti
+                    }));
+                    let content = AnyMessageLikeEventContent::Sticker(
+                        StickerEventContent::new(body, info, mxc_uri),
+                    );
+                    log!("[sticker-dbg] LAYER4-async: calling timeline.send() for {timeline_kind}");
+                    match timeline.send(content).await {
+                        Ok(_) => log!("[sticker-dbg] LAYER4-async: OK sent sticker to {timeline_kind}."),
+                        Err(e) => {
+                            error!("[sticker-dbg] LAYER4-async: FAILED send sticker to {timeline_kind}: {e:?}");
+                            enqueue_popup_notification(
+                                format!("Failed to send sticker: {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                        }
+                    }
+                    SignalToUI::set_ui_signal();
                 });
             }
 
@@ -4972,6 +5894,70 @@ async fn matrix_worker_task(
                     SignalToUI::set_ui_signal();
                 });
             }
+
+            MatrixRequest::CreateRoomFromConfig { config } => {
+                let Some(client) = get_client() else { continue };
+
+                Handle::current().spawn(async move {
+                    use crate::home::create_room::CreateRoomFromConfigAction;
+                    let room_name = config.name.trim().to_owned();
+                    let request = config.to_ruma_request();
+                    let invitees = config.initial_invitees.clone();
+                    let avatar_bytes = config.avatar_bytes.clone();
+                    let avatar_mime = config.avatar_mime.clone();
+                    match client.create_room(request).await {
+                        Ok(room) => {
+                            let room_id = room.room_id().to_owned();
+                            if let (Some(bytes), Some(mime_str)) = (avatar_bytes, avatar_mime) {
+                                match mime_str.parse::<mime::Mime>() {
+                                    Ok(mime) => {
+                                        if let Err(err) = room
+                                            .upload_avatar(&mime, bytes, None)
+                                            .await
+                                        {
+                                            error!(
+                                                "create_room: avatar upload for {room_id} failed: {err:?}"
+                                            );
+                                        }
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            "create_room: avatar mime {mime_str} unparsable: {err:?}"
+                                        );
+                                    }
+                                }
+                            }
+
+                            let mut failed = Vec::new();
+                            for invitee in invitees.iter() {
+                                if let Err(err) = room.invite_user_by_id(invitee).await {
+                                    error!(
+                                        "create_room: invite of {invitee} to {room_id} failed: {err:?}"
+                                    );
+                                    failed.push(invitee.clone());
+                                }
+                            }
+                            if failed.is_empty() {
+                                Cx::post_action(CreateRoomFromConfigAction::Created {
+                                    room_id,
+                                    room_name,
+                                });
+                            } else {
+                                Cx::post_action(CreateRoomFromConfigAction::PartialInvite {
+                                    room_id,
+                                    room_name,
+                                    failed,
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            Cx::post_action(CreateRoomFromConfigAction::Failed {
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
+                });
+            }
         }
     }
 
@@ -5376,6 +6362,17 @@ static SYNC_SERVICE_LIFECYCLE_LOCK: LazyLock<tokio::sync::Mutex<()>> =
 /// Flag to indicate an account switch is in progress.
 /// Contains the user_id to switch to, if any.
 static ACCOUNT_SWITCH_TARGET: Mutex<Option<OwnedUserId>> = Mutex::new(None);
+
+/// Abort handle for the most recently-spawned `MatrixRequest::SearchMessages`
+/// task. Used to cancel an in-flight server search when the user changes the
+/// query while results are still arriving (`abort_previous = true`).
+static SEARCH_MESSAGES_ABORT: Mutex<Option<tokio::task::AbortHandle>> = Mutex::new(None);
+
+/// Same as [`SEARCH_MESSAGES_ABORT`] but for the global (cross-room) search
+/// initiated by [`MatrixRequest::SearchAllMessages`]. Kept as a separate
+/// handle so an in-flight per-room search isn't accidentally cancelled by a
+/// global one or vice versa.
+static SEARCH_ALL_MESSAGES_ABORT: Mutex<Option<tokio::task::AbortHandle>> = Mutex::new(None);
 
 /// Check if an account switch is pending (non-consuming peek).
 fn is_account_switch_pending() -> bool {
@@ -6751,6 +7748,17 @@ async fn add_new_room(
     let room_name_id = RoomNameId::from((new_room.display_name.clone(), new_room.room_id.clone()));
     // Start with a basic text avatar; the avatar image will be fetched asynchronously below.
     let room_avatar = avatar_from_room_name(room_name_id.name_for_avatar());
+    // The DM counterparty MXID, only for 1:1 direct rooms (used for agent badges).
+    let dm_target = if new_room.is_direct {
+        let targets = new_room.room.direct_targets();
+        if targets.len() == 1 {
+            targets.into_iter().next().and_then(|id| id.into_user_id())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     rooms_list::enqueue_rooms_list_update(RoomsListUpdate::AddJoinedRoom(JoinedRoomInfo {
         latest,
         tags: new_room.tags.clone().unwrap_or_default(),
@@ -6769,6 +7777,8 @@ async fn add_new_room(
         has_been_paginated: false,
         is_selected: false,
         is_direct: new_room.is_direct,
+        dm_target,
+        member_user_ids: Vec::new(),
         is_encrypted,
         is_tombstoned: new_room.is_tombstoned,
         has_active_call: false,

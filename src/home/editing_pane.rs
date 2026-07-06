@@ -12,7 +12,7 @@ use matrix_sdk_ui::timeline::{EventTimelineItem, MsgLikeKind, TimelineEventItemI
 
 use crate::shared::mentionable_text_input::{MentionableTextInputWidgetExt, MentionableTextInputWidgetRefExt};
 use crate::{
-    shared::popup_list::{enqueue_popup_notification, PopupKind},
+    shared::popup_list::{enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle, PopupKind},
     sliding_sync::{submit_async_request, MatrixRequest, TimelineKind},
 };
 
@@ -472,11 +472,20 @@ impl EditingPane {
                 cx.widget_action(self.widget_uid(), EditingPaneAction::HideAnimationStarted);
             },
             Err(e) => {
-                enqueue_popup_notification(
-                    format!("Failed to edit message: {}", e),
-                    PopupKind::Error,
-                    None,
-                );
+                let error_msg = format!("Failed to edit message: {}", e);
+                let error_msg_copy = error_msg.clone();
+                enqueue_notification(NotificationItem {
+                    kind: PopupKind::Error,
+                    title: Some("Couldn't edit message".into()),
+                    message: error_msg.into(),
+                    actions: vec![
+                        NotificationAction::new("Copy error", NotifActionStyle::Neutral, move |cx| {
+                            cx.copy_to_clipboard(&error_msg_copy);
+                        }),
+                    ],
+                    auto_dismissal_duration: None,
+                    ..Default::default()
+                });
             },
         }
     }
