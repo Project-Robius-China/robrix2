@@ -39,7 +39,9 @@ child / 非父 bot 会覆盖掉已配置的 BotFather——本任务加一道守
 - 注册 `OctosDirect` agent 不得修改或清空 `known_bot_user_ids` 与 `room_bindings`(App Service 绑定状态)
 - 首次(`botfather_user_id` 为默认 localpart 时)注册 `AgentFramework::Octos` 仍写 `botfather_user_id` 并置 `enabled = true`,现有主流程不回退
 - 已配置了不同 BotFather 时,再注册一个 `Octos` bot 不得覆盖 `botfather_user_id`(child-bot 守卫)
+- 已配置了不同 BotFather 且已有自定义 `octos_service_url` 时,再注册一个 `Octos` child bot 不得把服务地址重置为默认值或传入值
 - `register_agent_from_search` 对 `OctosDirect` 保持幂等:重复注册同一 `agent_mxid` 不产生重复条目,不覆盖已存在条目
+- `OctosDirect` 选择卡新增的用户可见文案必须通过 i18n key 提供 en / zh-CN 文案
 - Agent Lab 界面内禁止裸 hex 颜色字面量,使用 `RBX_*` 或 `styles.rs` token
 
 ## Boundaries
@@ -119,6 +121,16 @@ child / 非父 bot 会覆盖掉已配置的 BotFather——本任务加一道守
   但是 `known_bot_user_ids` 含 "@octos_weather:example.org"
   并且 agent_registry 含 "@octos_weather:example.org"
 
+<!-- lint-ack: verification-metadata-suggestion — 单元测试只验证 AppState 字段保留,不执行网络 I/O -->
+场景: 注册 child Octos 不覆盖已配置的 AppService URL
+  测试: test_register_octos_child_preserves_existing_appservice_url
+  Level: unit
+  假设 `bot_settings.botfather_user_id` 已配置为 "@octos:example.org"
+  并且 `bot_settings.octos_service_url` 已配置为 "http://10.0.0.5:8010"
+  当 以 framework `Octos` 注册 child bot "@octos_weather:example.org" 且传入默认服务地址
+  那么 `bot_settings.octos_service_url` 仍等于 "http://10.0.0.5:8010"
+  并且 agent_registry 含 "@octos_weather:example.org"
+
 场景: OctosDirect 在汇总中计入 direct 类
   测试: test_octos_direct_counts_as_direct
   假设 agent_registry 含一个 framework 为 `OctosDirect` 的条目
@@ -146,3 +158,10 @@ child / 非父 bot 会覆盖掉已配置的 BotFather——本任务加一道守
   当 调用 `parse_agent_user_id`
   那么 返回错误,提示需要完整 Matrix user ID
   但是 agent_registry 不新增任何条目
+
+场景: OctosDirect 选择卡文案使用 i18n key
+  测试: test_octos_direct_card_text_uses_i18n_keys
+  假设 app language 为 English 或 zh-CN
+  当 读取 OctosDirect framework 展示文案
+  那么 卡片名称 / tag / blurb 均从 `settings.labs.agents.framework.octos_direct.*` key 读取
+  并且 en / zh-CN 资源文件均包含这些 key

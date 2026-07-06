@@ -16,7 +16,7 @@ use ruma::OwnedUserId;
 
 use crate::{
     app::{AgentFramework, AppState, BotSettingsState},
-    i18n::AppLanguage,
+    i18n::{AppLanguage, tr_key},
     persistence,
     profile::user_profile::UserProfile,
     shared::avatar::AvatarState,
@@ -54,32 +54,27 @@ pub fn register_agent_with_modal_settings(
 ) -> bool {
     let added = register_agent_from_search(app_state, user_id.clone(), display_name, framework);
 
-    if framework == AgentFramework::Octos {
+    if framework != AgentFramework::Octos {
+        return added;
+    }
+
+    app_state.bot_settings.enabled = true;
+    let current_botfather = app_state.bot_settings.botfather_user_id.trim();
+    let should_claim_botfather =
+        current_botfather == BotSettingsState::DEFAULT_BOTFATHER_LOCALPART
+        || current_botfather == user_id.as_str();
+
+    if should_claim_botfather {
         let url = octos_service_url
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or(BotSettingsState::DEFAULT_OCTOS_SERVICE_URL)
             .to_string();
-
-        app_state.bot_settings.enabled = true;
-        // child-bot guard: claim the management-bot slot only when it is still
-        // unset (the default localpart) or already points at this same id. This
-        // keeps first-time appservice setup working while preventing a child /
-        // other appservice bot registration from silently clobbering a
-        // configured parent bot. Explicit re-designation stays in the App
-        // Service card.
-        let should_claim_botfather = {
-            let current = app_state.bot_settings.botfather_user_id.trim();
-            current == BotSettingsState::DEFAULT_BOTFATHER_LOCALPART
-                || current == user_id.as_str()
-        };
-        if should_claim_botfather {
-            app_state.bot_settings.botfather_user_id = user_id.as_str().to_string();
-        }
+        app_state.bot_settings.botfather_user_id = user_id.as_str().to_string();
         app_state.bot_settings.octos_service_url = url;
-        app_state.bot_settings.record_known_bot_user_ids([user_id]);
     }
+    app_state.bot_settings.record_known_bot_user_ids([user_id]);
 
     added
 }
@@ -1115,14 +1110,19 @@ impl AddAgentModal {
 
     fn populate_framework_cards(&mut self, cx: &mut Cx) {
         // Text content.
+        let text = |key| tr_key(self.app_language, key);
         self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono)).set_text(cx, "Oc");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_name)).set_text(cx, "Octos");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "APPSERVICE");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_blurb)).set_text(cx, "Friend plus local AppService.");
-        self.view.label(cx, ids!(octos_direct_card.card_body.card_tile.card_mono)).set_text(cx, "OD");
-        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_name)).set_text(cx, "Octos (Direct)");
-        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
-        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_blurb)).set_text(cx, "Octos, added as a Matrix friend.");
+        self.view.label(cx, ids!(octos_direct_card.card_body.card_tile.card_mono))
+            .set_text(cx, text("settings.labs.agents.framework.octos_direct.mono"));
+        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_name))
+            .set_text(cx, text("settings.labs.agents.framework.octos_direct.name"));
+        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_tag.card_tag_label))
+            .set_text(cx, text("settings.labs.agents.framework.octos_direct.tag"));
+        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_blurb))
+            .set_text(cx, text("settings.labs.agents.framework.octos_direct.blurb"));
         self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono)).set_text(cx, "He");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_name)).set_text(cx, "Hermes");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
@@ -1444,6 +1444,7 @@ mod tests {
     use super::*;
 
     use crate::app::BotSettingsState;
+    use crate::i18n::tr_key;
 
     fn production_src(src: &'static str) -> &'static str {
         src.split("#[cfg(test)]").next().unwrap_or(src)
@@ -1540,6 +1541,35 @@ mod tests {
         assert_eq!(app_state.bot_settings.botfather_user_id, parent.as_str());
         // The child is still recorded as a known bot and in the registry.
         assert!(app_state.bot_settings.known_bot_user_ids.contains(&child));
+        assert!(app_state.agent_registry.contains(child.as_ref()));
+    }
+
+    #[test]
+    fn test_register_octos_child_preserves_existing_appservice_url() {
+        let mut app_state = AppState::default();
+        let parent: OwnedUserId = "@octos:example.org".parse().unwrap();
+        let custom_url = "http://10.0.0.5:8010";
+        register_agent_with_modal_settings(
+            &mut app_state,
+            parent.clone(),
+            None,
+            AgentFramework::Octos,
+            Some(custom_url.to_string()),
+        );
+        assert_eq!(app_state.bot_settings.botfather_user_id, parent.as_str());
+        assert_eq!(app_state.bot_settings.octos_service_url, custom_url);
+
+        let child: OwnedUserId = "@octos_weather:example.org".parse().unwrap();
+        register_agent_with_modal_settings(
+            &mut app_state,
+            child.clone(),
+            None,
+            AgentFramework::Octos,
+            Some(BotSettingsState::DEFAULT_OCTOS_SERVICE_URL.to_string()),
+        );
+
+        assert_eq!(app_state.bot_settings.botfather_user_id, parent.as_str());
+        assert_eq!(app_state.bot_settings.octos_service_url, custom_url);
         assert!(app_state.agent_registry.contains(child.as_ref()));
     }
 
@@ -1698,6 +1728,36 @@ mod tests {
         assert!(app_src.contains(".show_octos("));
         assert!(app_src.contains("&octos_service_url"));
         assert!(app_src.contains("existing_octos_agent_user_id"));
+    }
+
+    #[test]
+    fn test_octos_direct_card_text_uses_i18n_keys() {
+        let src = production_src(include_str!("agent_add_modal.rs"));
+
+        assert_eq!(
+            tr_key(AppLanguage::English, "settings.labs.agents.framework.octos_direct.name"),
+            "Octos (Direct)",
+        );
+        assert_eq!(
+            tr_key(AppLanguage::ChineseSimplified, "settings.labs.agents.framework.octos_direct.blurb"),
+            "Octos, 作为 Matrix 好友直接添加。",
+        );
+        for key in [
+            "settings.labs.agents.framework.octos_direct.mono",
+            "settings.labs.agents.framework.octos_direct.name",
+            "settings.labs.agents.framework.octos_direct.tag",
+            "settings.labs.agents.framework.octos_direct.blurb",
+        ] {
+            assert!(
+                src.contains(&format!("text(\"{key}\")")),
+                "OctosDirect card text should read {key} from i18n resources",
+            );
+        }
+        assert!(src.contains("let text = |key| tr_key(self.app_language, key);"));
+        assert!(
+            !src.contains(".set_text(cx, \"Octos (Direct)\")"),
+            "OctosDirect card name should not be hardcoded in AddAgentModal",
+        );
     }
 
     #[test]
