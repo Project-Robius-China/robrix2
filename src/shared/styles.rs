@@ -60,6 +60,7 @@ script_mod! {
     mod.widgets.ICON_STAR_FILLED      = crate_resource("self://resources/icons/star_filled.svg")
     mod.widgets.ICON_ROBOT            = crate_resource("self://resources/icons/robot.svg")
     mod.widgets.ICON_PEOPLE           = crate_resource("self://resources/icons/people.svg")
+    mod.widgets.ICON_DEVICE           = crate_resource("self://resources/icons/device.svg")
 
     mod.widgets.TITLE_TEXT = theme.font_regular {
         font_size: (13),
