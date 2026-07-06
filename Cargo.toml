@@ -70,6 +70,14 @@ ruma = { git = "https://github.com/ruma/ruma", rev = "a0acf4187a7c7557d145db54bc
 ] }
 rand = "0.8.5"
 rangemap = "1.5.0"
+## Direct rustls dep used only to install the process-level CryptoProvider
+## at startup. matrix-sdk and livekit both pull in rustls 0.23 but neither
+## installs a default provider; without an explicit install_default call,
+## any rustls-using crate that asks for the default (e.g. LiveKit's
+## webrtc-sys TLS handshake) panics with
+## "Could not automatically determine the process-level CryptoProvider".
+## aws-lc-rs is already in our dep tree via webrtc-sys / quinn-TSP.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 sanitize-filename = "0.6"
 serde = "1.0"
 serde_json = "1.0"
@@ -91,6 +99,10 @@ nokhwa = { version = "0.10", features = ["input-native"] }
 ## rustls-tls-native-roots is required for WSS connections
 [target.'cfg(all(not(any(target_os = "android", target_os = "ios", target_os = "windows"))))'.dependencies]
 livekit = { version = "0.7", features = ["rustls-tls-native-roots"] }
+## rodio for ringtone playback in 1:1 voice calls (incoming ring + outgoing dial tone).
+## Gated to the same desktop platforms as livekit; mobile/Windows use a stub.
+## "vorbis" enables OGG decoding for the bundled ringtone assets.
+rodio = { version = "0.20", default-features = false, features = ["vorbis"] }
 
 ## Dependencies for TSP support.
 ## Commit "f0bc4625dcd729e07e4a36257df2f1d94c81cef4" is the most recent one without the invalid change to pin serde to 1.0.219.

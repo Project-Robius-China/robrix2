@@ -55,6 +55,14 @@ pub enum LiveKitMessage {
     VideoTrackSubscribed { participant_id: String },
     /// Remote participant's video track unsubscribed
     VideoTrackUnsubscribed { participant_id: String },
+    /// Remote participant changed their microphone (audio track) mute
+    /// state. Sent in response to LiveKit `RoomEvent::TrackMuted` /
+    /// `TrackUnmuted` events filtered to audio kind. Video mute is
+    /// already covered by `VideoTrackSubscribed`/`Unsubscribed`.
+    ParticipantAudioMuteChanged {
+        participant_id: String,
+        is_muted: bool,
+    },
 }
 
 /// Commands sent from UI to LiveKit client
@@ -83,7 +91,14 @@ impl LiveKitClient {
         }
     }
 
-    /// Start the LiveKit client with channels for communication
+    /// Start the LiveKit client with channels for communication.
+    ///
+    /// The event loop runs on the project's existing Matrix tokio
+    /// runtime (via [`crate::sliding_sync::spawn_async_task`]) — we do
+    /// NOT spawn our own OS thread or create a second runtime.
+    /// Tokio's signal driver and process-wide singletons would conflict
+    /// if we did, which is what caused `Runtime::new().unwrap()` to
+    /// panic silently before.
     pub fn start(&mut self) -> mpsc::UnboundedReceiver<LiveKitMessage> {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (msg_tx, msg_rx) = mpsc::unbounded_channel();
@@ -92,11 +107,11 @@ impl LiveKitClient {
 
         let is_connected = self.is_connected.clone();
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                Self::run_event_loop(cmd_rx, msg_tx, is_connected).await;
-            });
+        log!("LiveKitClient::start - scheduling event loop on Matrix tokio runtime");
+        crate::sliding_sync::spawn_async_task(async move {
+            log!("LiveKitClient: event loop task started");
+            Self::run_event_loop(cmd_rx, msg_tx, is_connected).await;
+            log!("LiveKitClient: event loop task ended");
         });
 
         msg_rx
@@ -207,7 +222,15 @@ impl LiveKitClient {
                                                 is_speaking: false,
                                                 is_screen_sharing: false,
                                             };
-                                            let _ = msg_tx_clone.send(LiveKitMessage::ParticipantJoined(participant_info));
+                                            // Capture the send Result so a closed
+                                            // channel (UI side dropped its
+                                            // receiver) becomes visible in the
+                                            // log instead of silently dropping
+                                            // the message.
+                                            match msg_tx_clone.send(LiveKitMessage::ParticipantJoined(participant_info)) {
+                                                Ok(_) => log!("LiveKit: Sent ParticipantJoined to UI channel"),
+                                                Err(e) => log!("LiveKit: FAILED to send ParticipantJoined (UI receiver closed): {:?}", e),
+                                            }
                                             SignalToUI::set_ui_signal();
                                         }
                                         RoomEvent::ParticipantDisconnected(participant) => {
@@ -286,6 +309,50 @@ impl LiveKitClient {
                                                     participant_id,
                                                 });
                                                 SignalToUI::set_ui_signal();
+                                            }
+                                        }
+                                        RoomEvent::TrackMuted { participant, publication } => {
+                                            let kind = publication.kind();
+                                            let participant_id = participant.identity().to_string();
+                                            log!(
+                                                "LiveKit: TrackMuted fired by {} (kind={:?})",
+                                                participant_id, kind
+                                            );
+                                            if kind == TrackKind::Audio {
+                                                match msg_tx_clone.send(
+                                                    LiveKitMessage::ParticipantAudioMuteChanged {
+                                                        participant_id: participant_id.clone(),
+                                                        is_muted: true,
+                                                    },
+                                                ) {
+                                                    Ok(_) => log!("LiveKit: Sent ParticipantAudioMuteChanged(muted=true) for {}", participant_id),
+                                                    Err(e) => log!("LiveKit: FAILED to send ParticipantAudioMuteChanged(muted=true) for {}: {:?}", participant_id, e),
+                                                }
+                                                SignalToUI::set_ui_signal();
+                                            } else {
+                                                log!("LiveKit: TrackMuted ignored (non-audio kind)");
+                                            }
+                                        }
+                                        RoomEvent::TrackUnmuted { participant, publication } => {
+                                            let kind = publication.kind();
+                                            let participant_id = participant.identity().to_string();
+                                            log!(
+                                                "LiveKit: TrackUnmuted fired by {} (kind={:?})",
+                                                participant_id, kind
+                                            );
+                                            if kind == TrackKind::Audio {
+                                                match msg_tx_clone.send(
+                                                    LiveKitMessage::ParticipantAudioMuteChanged {
+                                                        participant_id: participant_id.clone(),
+                                                        is_muted: false,
+                                                    },
+                                                ) {
+                                                    Ok(_) => log!("LiveKit: Sent ParticipantAudioMuteChanged(muted=false) for {}", participant_id),
+                                                    Err(e) => log!("LiveKit: FAILED to send ParticipantAudioMuteChanged(muted=false) for {}: {:?}", participant_id, e),
+                                                }
+                                                SignalToUI::set_ui_signal();
+                                            } else {
+                                                log!("LiveKit: TrackUnmuted ignored (non-audio kind)");
                                             }
                                         }
                                         RoomEvent::Disconnected { reason } => {
@@ -384,8 +451,25 @@ impl LiveKitClient {
     }
 
     pub fn send_command(&self, cmd: LiveKitCommand) {
-        if let Some(tx) = &self.command_tx {
-            let _ = tx.send(cmd);
+        // Log the variant tag (without payload, for brevity) so we can
+        // see which commands fire from the UI side and whether the
+        // command channel is open.
+        let tag = match &cmd {
+            LiveKitCommand::Connect { .. } => "Connect",
+            LiveKitCommand::Disconnect => "Disconnect",
+            LiveKitCommand::SetMicrophoneMuted(_) => "SetMicrophoneMuted",
+            LiveKitCommand::SetCameraMuted(_) => "SetCameraMuted",
+            LiveKitCommand::StartScreenShare => "StartScreenShare",
+            LiveKitCommand::StopScreenShare => "StopScreenShare",
+            LiveKitCommand::PublishVideoFrame(_) => "PublishVideoFrame",
+            LiveKitCommand::PublishData { .. } => "PublishData",
+        };
+        match &self.command_tx {
+            None => log!("LiveKitClient::send_command({}) — command_tx is None; start() never ran", tag),
+            Some(tx) => match tx.send(cmd) {
+                Ok(_) => log!("LiveKitClient::send_command({}) — queued", tag),
+                Err(e) => log!("LiveKitClient::send_command({}) — channel closed: {:?}", tag, e),
+            },
         }
     }
 

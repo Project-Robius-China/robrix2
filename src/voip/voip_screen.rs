@@ -87,6 +87,12 @@ script_mod! {
                         spacing: 4
                         align: Center
 
+                        // The card shows whichever of these two icons
+                        // matches the participant's current mute state.
+                        // We swap visibility at draw time rather than
+                        // re-binding the SVG at runtime, because
+                        // script_apply_eval cannot reliably re-resolve
+                        // resource references (CLAUDE.md pitfall #41).
                         mute_icon := RobrixIconButton {
                             width: 14
                             height: 14
@@ -99,6 +105,21 @@ script_mod! {
                             }
                             draw_icon +: {
                                 color: #aaa
+                            }
+                        }
+                        mute_off_icon := RobrixIconButton {
+                            width: 14
+                            height: 14
+                            padding: 0
+                            draw_icon.svg: (ICON_MICROPHONE_OFF)
+                            icon_walk: Walk{width: 12, height: 12}
+                            visible: false
+                            draw_bg +: {
+                                color: #00000000
+                                border_radius: 0.0
+                            }
+                            draw_icon +: {
+                                color: #e53935
                             }
                         }
 
@@ -611,6 +632,10 @@ pub struct VoipScreen {
     #[rust] from_notification: bool,
     #[rust] show_participants: bool,
     #[rust] show_debug: bool,
+    /// Whether this is a voice-only call. When true, the camera is
+    /// never started, the lobby hides the camera preview, and remote
+    /// video tracks are ignored — only the avatar is shown.
+    #[rust] voice_only: bool,
 
     // LiveKit client
     #[rust] livekit_client: Option<LiveKitClient>,
@@ -636,9 +661,6 @@ pub struct VoipScreen {
 
     // Flag to start call camera after lobby camera releases
     #[rust] pending_call_camera_start: bool,
-
-    // Participant counter
-    #[rust] participant_counter: usize,
 
     // Timer for refreshing call members from Matrix
     #[rust] call_members_refresh_timer: Timer,
@@ -1008,14 +1030,23 @@ impl Widget for VoipScreen {
 }
 
 impl VoipScreen {
-    /// Initialize the VoIP screen
-    pub fn initialize(&mut self, cx: &mut Cx, room_id: OwnedRoomId) {
-        log!("VoipScreen: Initializing for room {}", room_id);
+    /// Initialize the VoIP screen.
+    ///
+    /// `voice_only`: when `true`, opens in voice-call mode — no
+    /// camera preview in the lobby, no local video publish, and
+    /// remote video tracks are not subscribed. The lobby still
+    /// shows the mic toggle so the user can choose to start muted.
+    pub fn initialize(&mut self, cx: &mut Cx, room_id: OwnedRoomId, voice_only: bool) {
+        log!("VoipScreen: Initializing for room {} (voice_only={})", room_id, voice_only);
+        self.voice_only = voice_only;
         self.in_lobby = true;
         self.lobby_mic_enabled = true;
-        self.lobby_camera_enabled = true;
+        // In voice-only mode the lobby camera preview is suppressed
+        // and the call's local video track starts muted.
+        self.lobby_camera_enabled = !voice_only;
         self.show_participants = true;
         self.call = Call::default();
+        self.call.local_video_muted = voice_only;
         self.speaking_detector = SpeakingDetector::new();
 
         // Initialize LiveKit client
@@ -1037,8 +1068,13 @@ impl VoipScreen {
         self.camera_permission = VoipGlobalState::get_camera_permission(cx);
         self.camera_choice = VoipGlobalState::get_camera_choice(cx);
 
-        // Try to start camera if we already have permission and camera choice
-        self.try_start_camera(cx);
+        // Try to start camera if we already have permission and camera
+        // choice — but only when this is a video call. Voice-only
+        // calls deliberately leave the camera off to keep the lobby
+        // and the in-call view avatar-only.
+        if !self.voice_only {
+            self.try_start_camera(cx);
+        }
 
         // Set default room
         self.set_room(cx, room_id.clone());
@@ -1121,6 +1157,17 @@ impl VoipScreen {
             }
             msgs
         } else {
+            // Only log this once per second to avoid spam — the absence
+            // of `livekit_rx` is the bug we want to surface.
+            static LAST_LOG: std::sync::Mutex<Option<std::time::Instant>> =
+                std::sync::Mutex::new(None);
+            if let Ok(mut last) = LAST_LOG.lock() {
+                let now = std::time::Instant::now();
+                if last.is_none_or(|t| now.duration_since(t).as_secs() >= 1) {
+                    log!("poll_livekit_messages: livekit_rx is None (LiveKit client not initialized?)");
+                    *last = Some(now);
+                }
+            }
             Vec::new()
         };
 
@@ -1207,6 +1254,19 @@ impl VoipScreen {
 
                     if let Some(p) = self.call.participants.get_mut(&participant_id) {
                         p.is_video_on = false;
+                    }
+                    needs_update = true;
+                }
+                LiveKitMessage::ParticipantAudioMuteChanged { participant_id, is_muted } => {
+                    log!("Audio mute changed for {}: muted={}", participant_id, is_muted);
+                    let list = self.view.participants_list(cx, ids!(participants_list));
+                    list.update_participant(cx, &participant_id, |p| {
+                        p.is_muted = is_muted;
+                    });
+                    // Mirror to the internal call-state map so any
+                    // downstream consumers (PiP, status) stay in sync.
+                    if let Some(p) = self.call.participants.get_mut(&participant_id) {
+                        p.is_muted = is_muted;
                     }
                     needs_update = true;
                 }
@@ -1340,9 +1400,11 @@ impl VoipScreen {
         };
         self.view.label(cx, ids!(call_status)).set_text(cx, status);
 
-        let count = self.call.participants.len() + 1;
-        self.view.label(cx, ids!(participant_count))
-            .set_text(cx, &format!("{} participant{}", count, if count == 1 { "" } else { "s" }));
+        // NOTE: participant_count label is owned by
+        // `update_participants_from_call_members` (Matrix call-member
+        // state is authoritative for "who joined"). Writing it here
+        // too caused the Matrix-driven count to be overwritten on the
+        // next LiveKit poll tick.
 
         // Update call control icon button styles based on state
         let mut mic_btn = self.view.button(cx, ids!(mic_button));
@@ -1449,7 +1511,7 @@ impl VoipScreen {
         self.view.button(cx, ids!(join_call_button)).set_visible(cx, self.in_lobby);
 
         // Force redraw to ensure all visibility changes take effect
-        self.view.redraw(cx);
+        //self.view.redraw(cx);
 
         // Sync state to global for PiP display
         self.sync_to_global_state(cx);
@@ -1704,7 +1766,6 @@ impl VoipScreen {
     /// Add a test participant (with optional video on)
     /// Returns the participant ID for use with push_test_video_frame
     pub fn add_participant(&mut self, cx: &mut Cx, name: &str, is_video_on: bool) -> String {
-        self.participant_counter += 1;
         let letter = name.chars().next().unwrap_or('?').to_uppercase().to_string();
         // Use a predictable ID format: "test_<name>" for easy testing
         let participant_id = format!("test_{}", name.to_lowercase().replace(' ', "_"));
@@ -1745,7 +1806,6 @@ impl VoipScreen {
         log!("Clearing all participants");
         let list = self.view.participants_list(cx, ids!(participants_list));
         list.clear_all(cx);  // Use clear_all to also remove video textures
-        self.participant_counter = 0;
     }
 
     /// Start continuous test video frames to a participant (~30fps)
@@ -1834,18 +1894,36 @@ impl VoipScreen {
         // Get the participants list reference
         let list = self.view.participants_list(cx, ids!(participants_list));
 
+        // Snapshot per-participant runtime state that is owned by
+        // LiveKit (not by Matrix call-member events) before we wipe
+        // the list. Without this snapshot, mute / speaking state would
+        // get reset to `false` on every 5-second Matrix refresh,
+        // overwriting whatever the LiveKit `TrackMuted` handler had
+        // just set. Keyed by participant id — with prefix-match
+        // fallback to handle LiveKit's `@user:server.tld:<session>`
+        // identities vs. our stored bare `@user:server.tld` ids.
+        let previous = list.get_participants();
+        let lookup_prev = |id: &str| -> Option<&Participant> {
+            previous.iter()
+                .find(|p| p.id == id)
+                .or_else(|| previous.iter().find(|p| id.starts_with(&p.id)))
+                .or_else(|| previous.iter().find(|p| p.id.starts_with(id)))
+        };
+
         // Clear existing participants but preserve video textures
         // Video textures are keyed by participant ID (user_id) and will be matched
         // when participants are re-added with the same IDs
         list.clear(cx);
-        self.participant_counter = 0;
 
         // Get current user to exclude self from participants list
         let current_user_id = get_client()
             .and_then(|c| c.session_meta().map(|m| m.user_id.to_string()));
         log!("Current user ID: {:?}", current_user_id);
 
-        // Track added user_ids to avoid duplicates (multiple devices same user)
+        // Track added user_ids to avoid duplicates (multiple devices same
+        // user). The size of this set is the count of "other" participants
+        // — total participants displayed in the header is `len() + 1`
+        // (the +1 is self), matching the formula in `update_ui`.
         let mut added_user_ids = std::collections::HashSet::new();
 
         for member in members {
@@ -1861,7 +1939,6 @@ impl VoipScreen {
             }
             added_user_ids.insert(member.user_id.clone());
 
-            self.participant_counter += 1;
             let name = member.display_name.clone()
                 .unwrap_or_else(|| member.user_id.clone());
             let letter = name.chars().next().unwrap_or('?').to_uppercase().to_string();
@@ -1873,26 +1950,43 @@ impl VoipScreen {
             // Check if this participant already has video texture (from LiveKit video frames)
             let has_video = list.has_video_texture(&participant_id);
 
+            // Restore LiveKit-derived runtime flags (mute, speaking) if
+            // we had them before the wipe. Matrix call-member events
+            // don't carry this state, so without the snapshot we'd
+            // reset it to false on every refresh.
+            let prev = lookup_prev(&participant_id);
+            let is_muted = prev.map(|p| p.is_muted).unwrap_or(false);
+            let is_speaking = prev.map(|p| p.is_speaking).unwrap_or(false);
+
             let participant = Participant {
                 id: participant_id.clone(),
                 name,
                 avatar_letter: letter,
-                is_muted: false,  // We don't have this info from state events
-                is_speaking: false,
+                is_muted,
+                is_speaking,
                 is_video_on: has_video,  // Preserve video state from LiveKit
             };
 
-            log!("Adding call member: {} (id={}, video={})",
-                participant.name, participant_id, has_video);
+            log!("Adding call member: {} (id={}, video={}, muted={})",
+                participant.name, participant_id, has_video, is_muted);
             list.add_participant(cx, participant);
         }
 
-        // Update participant count display
-        let count = self.participant_counter;
+        // Update participant count display. `+ 1` accounts for self,
+        // who was excluded from `added_user_ids` above.
+        let count = added_user_ids.len() + 1;
         self.view.label(cx, ids!(participant_count))
             .set_text(cx, &format!("{} participant{}", count, if count == 1 { "" } else { "s" }));
 
-        log!("Updated participants panel with {} other participants", self.participant_counter);
+        // Force redraw so the new label text actually paints. `update_ui`
+        // (the LiveKit-driven sibling) already calls redraw at its end;
+        // this function needs its own redraw because it's invoked from
+        // a separate action arm and won't be followed by `update_ui` in
+        // general.
+        self.view.redraw(cx);
+
+        log!("Updated participants panel: {} total ({} others)",
+            count, added_user_ids.len());
     }
 
     /// Connect to LiveKit with the given URL and JWT token
@@ -1927,10 +2021,11 @@ impl VoipScreen {
 }
 
 impl VoipScreenRef {
-    /// Initialize the VoIP screen
-    pub fn initialize(&self, cx: &mut Cx, room_id: OwnedRoomId) {
+    /// Initialize the VoIP screen. `voice_only`: when true, opens in
+    /// voice-call mode (no camera preview, avatar tiles, mic-only).
+    pub fn initialize(&self, cx: &mut Cx, room_id: OwnedRoomId, voice_only: bool) {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.initialize(cx, room_id);
+            inner.initialize(cx, room_id, voice_only);
         }
     }
 

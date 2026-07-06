@@ -23,6 +23,13 @@ pub mod participants_list;
 pub mod token_cache;
 pub mod voip_screen;
 
+// 1:1 voice call submodules. `ringing` is a protocol-level layer (m.call.notify
+// per MSC4075 + ringtone playback) that is intentionally independent of the
+// LiveKit/MatrixRTC media stack so it can later be reused for group-call ringing.
+// `oneonone` owns the 1:1-specific call-flow state machine and UI surfaces.
+pub mod ringing;
+pub mod oneonone;
+
 pub use voip_screen::VoipScreenWidgetRefExt;
 pub use participants_list::{Participant, ParticipantsListWidgetRefExt};
 pub use camera::CameraChoice;
@@ -165,14 +172,34 @@ pub struct VoipGlobalState {
     pub cached_livekit_jwts: Vec<CachedLiveKitJwt>,
     /// Active call state for PiP overlay display
     pub active_call: Option<ActiveCallState>,
+    /// 1:1 voice-call orchestrator state machine. Drives ring → answer →
+    /// in-call → hangup. Distinct from `active_call` above (which is the
+    /// MatrixRTC group-call concept) — the 1:1 flow uses this FSM as the
+    /// single source of truth, and updates `active_call` once it reaches
+    /// the InCall state so the PiP overlay can render.
+    pub one_on_one: oneonone::OneOnOneCall,
+    /// Ringtone player handle (rodio-backed on desktop). Initialized on
+    /// app startup. `None` until [`VoipGlobalState::initialize`] runs.
+    pub ringtone_player: Option<ringing::RingtonePlayer>,
+    /// Outgoing/incoming ring timeout timer. Active only in the
+    /// `Outgoing` and `Incoming` states. Held here (not on a widget)
+    /// because the FSM lives at the app level and survives screen
+    /// navigation.
+    pub ring_timer: Timer,
 }
 
 impl VoipGlobalState {
     /// Initialize global VoIP state and request permissions/video inputs.
     /// Call this in App::handle_startup.
     pub fn initialize(cx: &mut Cx) {
-        // Set global state
-        cx.set_global(VoipGlobalState::default());
+        // Set global state with a ringtone player. The audio thread spins
+        // up lazily on the first play, so this is cheap if no call ever
+        // happens.
+        let state = VoipGlobalState {
+            ringtone_player: Some(ringing::RingtonePlayer::spawn()),
+            ..Default::default()
+        };
+        cx.set_global(state);
 
         // Request camera permission
         log!("VoipGlobalState: Requesting camera permission...");
@@ -181,6 +208,26 @@ impl VoipGlobalState {
         // Request video inputs enumeration - this triggers VideoInputsEvent
         log!("VoipGlobalState: Requesting video inputs...");
         cx.video_input(0, |_buf| {});
+    }
+
+    /// Apply a 1:1 call event through the orchestrator and dispatch the
+    /// resulting actions. This is the single entry point for the 1:1
+    /// flow — the voice-call button, the incoming-call modal, the
+    /// ring-timeout timer, and the inbound `m.call.notify` handler all
+    /// funnel through here.
+    pub fn apply_call_event(cx: &mut Cx, event: oneonone::OneOnOneEvent) {
+        // Step 1: run the FSM in a short borrow.
+        let actions = if cx.has_global::<VoipGlobalState>() {
+            cx.get_global::<VoipGlobalState>().one_on_one.apply(event)
+        } else {
+            return;
+        };
+        // Step 2: dispatch each action. Each arm re-acquires the borrow
+        // as needed so we never hold it across an await or a recursive
+        // call into another global.
+        for action in actions {
+            oneonone::dispatch_action(cx, action);
+        }
     }
 
     /// Handle camera permission result. Call from App's event handler.
@@ -339,8 +386,6 @@ impl VoipGlobalState {
     pub fn update_active_call(cx: &mut Cx, call: ActiveCallState) {
         if cx.has_global::<VoipGlobalState>() {
             let state = cx.get_global::<VoipGlobalState>();
-            log!("VoipGlobalState: Updating active call state for room {:?}, in_call={}",
-                call.room_id, call.in_call);
             state.active_call = Some(call);
         }
     }

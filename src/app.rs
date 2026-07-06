@@ -157,6 +157,18 @@ script_mod! {
                                 bot_binding_modal_inner := BotBindingModal {}
                             }
                         }
+                        // Full-screen modal that surfaces incoming 1:1
+                        // voice calls. Driven by `OneOnOneUiAction` —
+                        // opens on `ShowIncomingModal`, closes on
+                        // `HideIncomingModal` / Accept / Decline /
+                        // ring timeout.
+                        incoming_call_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill
+                                align: Align{x: 0.5, y: 0.4}
+                                incoming_call_modal_inner := IncomingCallModal {}
+                            }
+                        }
                         room_filter_modal := Modal {
                             content +: {
                                 room_filter_modal_inner := RoundedShadowView {
@@ -674,6 +686,15 @@ impl MatchEvent for App {
         self.skipped_update_version = load_skipped_update_version();
         self.start_auto_update_check(cx);
 
+        // Install the process-level rustls CryptoProvider before any
+        // TLS connection is attempted. matrix-sdk + livekit both pull
+        // in rustls 0.23 without selecting a provider; the first
+        // rustls user that hits a `get_default()` call (LiveKit's
+        // webrtc-sys handshake) panics if we skip this. Calling
+        // install_default twice returns Err — we ignore it because
+        // multiple modules may try (e.g. TSP init also installs).
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         log!("App::Startup: starting matrix sdk loop");
         let _tokio_rt_handle = crate::sliding_sync::start_matrix_tokio().unwrap();
 
@@ -703,10 +724,119 @@ impl MatchEvent for App {
             let keywords = std::mem::take(&mut self.pending_room_filter_keywords);
             self.update_room_filter_modal_results(cx, &keywords);
         }
+
+        // 1:1 voice call ring timer. Lives on `VoipGlobalState` because
+        // the call FSM survives screen navigation; firing it transitions
+        // the FSM to `Ended { Missed }`.
+        let ring_timer_fired = if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            state.ring_timer.is_timer(event).is_some()
+        } else { false };
+        if ring_timer_fired {
+            if cx.has_global::<VoipGlobalState>() {
+                let state = cx.get_global::<VoipGlobalState>();
+                state.ring_timer = Timer::default();
+            }
+            VoipGlobalState::apply_call_event(
+                cx,
+                crate::voip::oneonone::OneOnOneEvent::RingTimeout,
+            );
+        }
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         self.sync_app_language(cx);
+
+        // 1:1 voice call: inbound m.call.notify events arrive as a
+        // `RingerAction::IncomingRing` from the matrix-sdk event handler.
+        // Convert each into a `UserPlaceCall`-equivalent `IncomingRing`
+        // FSM event so the orchestrator decides whether to ring,
+        // auto-decline (busy), or ignore (stale).
+        for action in actions {
+            if let Some(ring_action) = action.downcast_ref::<crate::voip::ringing::RingerAction>() {
+                let crate::voip::ringing::RingerAction::IncomingRing(ring) = ring_action;
+                log!("App: forwarding IncomingRing to orchestrator (call_id={})", ring.call_id);
+                VoipGlobalState::apply_call_event(
+                    cx,
+                    crate::voip::oneonone::OneOnOneEvent::IncomingRing {
+                        call_id: ring.call_id.clone(),
+                        room_id: ring.room_id.clone(),
+                        caller: ring.caller.clone(),
+                    },
+                );
+            }
+
+            if let Some(ui) = action.downcast_ref::<crate::voip::oneonone::OneOnOneUiAction>() {
+                match ui {
+                    crate::voip::oneonone::OneOnOneUiAction::ShowIncomingModal { .. } => {
+                        log!("App: opening incoming-call modal");
+                        self.ui.modal(cx, ids!(incoming_call_modal)).open(cx);
+                    }
+                    crate::voip::oneonone::OneOnOneUiAction::HideIncomingModal => {
+                        log!("App: closing incoming-call modal");
+                        self.ui.modal(cx, ids!(incoming_call_modal)).close(cx);
+                    }
+                    crate::voip::oneonone::OneOnOneUiAction::JoinSfu { room_id, peer: _, role } => {
+                        log!("App: JoinSfu requested for room {} (role={:?})", room_id, role);
+                        // Navigate to the existing VoipScreen lobby in
+                        // this room. The user then clicks "Join Call"
+                        // and the existing group-call infrastructure
+                        // takes over (audio capture, LiveKit SFU
+                        // connect, etc). The dedicated voice-only
+                        // preset that skips the lobby is a follow-up
+                        // — for now we land in the lobby so the call
+                        // is at least connectable end-to-end.
+                        if let Some(room_name_id) = cx.get_global::<RoomsListRef>().get_room_name(room_id) {
+                            cx.widget_action(
+                                self.ui.widget_uid(),
+                                RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
+                            );
+                        } else {
+                            log!("App: JoinSfu: room name not yet cached for {}", room_id);
+                        }
+                    }
+                    crate::voip::oneonone::OneOnOneUiAction::LeaveSfu => {
+                        log!("App: LeaveSfu requested");
+                        // The user-driven hangup path: the existing
+                        // VoipScreen handles "leave call" via its own
+                        // controls. Future iteration: drive the leave
+                        // from the orchestrator so external triggers
+                        // (e.g. ringtimeout-after-accept) also tear
+                        // down cleanly.
+                    }
+                    crate::voip::oneonone::OneOnOneUiAction::CallEnded { room_id, outcome } => {
+                        log!("App: 1:1 call ended in room {} ({:?})", room_id, outcome);
+                        let toast = match outcome {
+                            crate::voip::oneonone::CallOutcome::Completed => "Call ended.",
+                            crate::voip::oneonone::CallOutcome::Declined => "Call declined.",
+                            crate::voip::oneonone::CallOutcome::Missed => "Missed call.",
+                            crate::voip::oneonone::CallOutcome::Cancelled => "Call cancelled.",
+                            crate::voip::oneonone::CallOutcome::FailedToConnect =>
+                                "Call failed to connect.",
+                            crate::voip::oneonone::CallOutcome::ConnectionLost =>
+                                "Connection lost.",
+                        };
+                        enqueue_popup_notification(toast, PopupKind::Info, Some(3.0));
+                    }
+                }
+            }
+
+            if let Some(notify) = action.downcast_ref::<crate::sliding_sync::CallNotifyAction>() {
+                match notify {
+                    crate::sliding_sync::CallNotifyAction::Sent { call_id, .. } => {
+                        log!("App: m.call.notify sent (call_id={})", call_id);
+                    }
+                    crate::sliding_sync::CallNotifyAction::Failed { call_id, error, .. } => {
+                        log!("App: m.call.notify send failed (call_id={}): {}", call_id, error);
+                        enqueue_popup_notification(
+                            format!("Failed to ring: {error}"),
+                            PopupKind::Error,
+                            Some(4.0),
+                        );
+                    }
+                }
+            }
+        }
 
         let invite_confirmation_modal_inner = self.ui.confirmation_modal(cx, ids!(invite_confirmation_modal_inner));
         if let Some(_accepted) = invite_confirmation_modal_inner.closed(actions) {
@@ -1197,7 +1327,7 @@ impl MatchEvent for App {
                     if let Some(room_name_id) = cx.get_global::<RoomsListRef>().get_room_name(room_id) {
                         cx.widget_action(
                             self.ui.widget_uid(),
-                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
                         );
                     }
                     self.ui.redraw(cx);
@@ -2355,7 +2485,7 @@ impl App {
                     .set_displayed_space(cx, space_name_id);
                 id!(space_lobby_view)
             }
-            SelectedRoom::Voip { room_name_id } => {
+            SelectedRoom::Voip { room_name_id, .. } => {
                 // VoIP uses RoomScreen with VoIP as main content (no timeline)
                 let room_screen = self.ui.room_screen(cx, ids!(room_screen_0));
                 room_screen.set_voip_visible(cx, true, Some(room_name_id.room_id().clone()));
@@ -2823,6 +2953,14 @@ pub enum SelectedRoom {
     },
     Voip {
         room_name_id: RoomNameId,
+        /// When true, open VoipScreen in voice-only mode: no camera
+        /// preview in the lobby, microphone-only publish, avatar tiles
+        /// instead of video tiles. Driven by the voice-call button.
+        /// `#[serde(default)]` keeps backward compat with persisted
+        /// app state from before this field existed (defaults to false
+        /// = the original group/video call behavior).
+        #[serde(default)]
+        voice_only: bool,
     },
 }
 
@@ -2833,7 +2971,7 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id.room_id(),
             SelectedRoom::Space { space_name_id } => space_name_id.room_id(),
             SelectedRoom::Thread { room_name_id, .. } => room_name_id.room_id(),
-            SelectedRoom::Voip { room_name_id } => room_name_id.room_id(),
+            SelectedRoom::Voip { room_name_id, .. } => room_name_id.room_id(),
 
         }
     }
@@ -2844,7 +2982,7 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id,
             SelectedRoom::Space { space_name_id } => space_name_id,
             SelectedRoom::Thread { room_name_id, .. } => room_name_id,
-            SelectedRoom::Voip { room_name_id } => room_name_id,
+            SelectedRoom::Voip { room_name_id, .. } => room_name_id,
         }
     }
 
@@ -2894,7 +3032,7 @@ impl SelectedRoom {
                     &format!("{}##{}", room_name_id.room_id(), thread_root_event_id)
                 )
             }
-            SelectedRoom::Voip { room_name_id } => {
+            SelectedRoom::Voip { room_name_id, .. } => {
                 // VoIP tabs get a distinct ID to differentiate from normal room tabs
                 LiveId::from_str(
                     &format!("{}##voip", room_name_id.room_id())
@@ -2911,7 +3049,7 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id.to_string(),
             SelectedRoom::Space { space_name_id } => format!("[Space] {space_name_id}"),
             SelectedRoom::Thread { room_name_id, .. } => format!("[Thread] {room_name_id}"),
-            SelectedRoom::Voip { room_name_id } => format!("[VoIP] {room_name_id}"),
+            SelectedRoom::Voip { room_name_id, .. } => format!("[VoIP] {room_name_id}"),
         }
     }
 }
@@ -2991,10 +3129,13 @@ impl PartialEq for SelectedRoom {
             }
             // Thread is never equal to non-Thread
             (SelectedRoom::Thread { .. }, _) | (_, SelectedRoom::Thread { .. }) => false,
-            // VoIP rooms are equal only to other VoIP rooms with same room_id
+            // VoIP rooms are equal only to other VoIP rooms with same room_id.
+            // `voice_only` is intentionally ignored: clicking voice in a
+            // room that already has a video call tab open should focus
+            // that tab rather than opening a duplicate.
             (
-                SelectedRoom::Voip { room_name_id: lhs },
-                SelectedRoom::Voip { room_name_id: rhs },
+                SelectedRoom::Voip { room_name_id: lhs, .. },
+                SelectedRoom::Voip { room_name_id: rhs, .. },
             ) => lhs.room_id() == rhs.room_id(),
             // VoIP is never equal to non-VoIP (even if same room_id)
             (SelectedRoom::Voip { .. }, _) | (_, SelectedRoom::Voip { .. }) => false,

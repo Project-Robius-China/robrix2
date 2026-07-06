@@ -3739,12 +3739,32 @@ script_mod! {
                 }
             }
 
-            // Video call button - floating in top right corner
+            // Call buttons - floating in top right corner.
+            // Voice call (1:1) sits to the left of the existing video / group call button.
             video_call_button_container := View {
                 width: Fill
                 height: Fit
                 align: Align{x: 1.0, y: 0.0}
                 padding: Inset{top: 10, right: 10}
+                flow: Right
+                spacing: 8
+
+                voice_call_button := RobrixIconButton {
+                    width: 40
+                    height: 40
+                    padding: 8
+                    draw_icon.svg: (ICON_PHONE)
+                    icon_walk: Walk{width: 20, height: 20}
+                    draw_bg +: {
+                        color: #fff
+                        border_radius: 20.0
+                        border_size: 1.0
+                        border_color: #ddd
+                    }
+                    draw_icon +: {
+                        color: #333
+                    }
+                }
 
                 video_call_button := RobrixIconButton {
                     width: 40
@@ -4913,7 +4933,31 @@ impl Widget for RoomScreen {
                     #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
                     cx.widget_action(
                         self.widget_uid(),
-                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
+                    );
+                }
+            }
+
+            // Handle the voice_call_button being clicked. Same navigation
+            // as the video_call_button, but signals `voice_only: true` so
+            // VoipScreen opens with no camera preview and avatar tiles
+            // instead of video tiles.
+            if self.view.button(cx, ids!(voice_call_button)).clicked(actions) {
+                if let Some(room_name_id) = self.room_name_id.clone() {
+                    log!("Voice call button clicked for room: {}", room_name_id.room_id());
+                    #[cfg(any(target_os = "android", target_os = "ios", target_os = "windows"))]
+                    {
+                        let _ = room_name_id;
+                        enqueue_popup_notification(
+                            "Voice calls are not supported on this platform.",
+                            PopupKind::Warning,
+                            Some(4.0),
+                        );
+                    }
+                    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
+                    cx.widget_action(
+                        self.widget_uid(),
+                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: true }),
                     );
                 }
             }
@@ -4934,7 +4978,7 @@ impl Widget for RoomScreen {
                     #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
                     cx.widget_action(
                         self.widget_uid(),
-                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
                     );
                 }
             }
@@ -4955,7 +4999,7 @@ impl Widget for RoomScreen {
                     #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
                     cx.widget_action(
                         self.widget_uid(),
-                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id }),
+                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
                     );
                 }
             }
@@ -8785,7 +8829,10 @@ impl RoomScreenRef {
             let voip_screen = inner.view.voip_screen(cx, ids!(voip_screen));
             if let Some(room_id) = room_id {
                 log!("RoomScreen: Showing VoIP screen for room {}", room_id);
-                voip_screen.initialize(cx, room_id);
+                // This embedded-VoipScreen path (mobile / RoomScreen
+                // overlay) has no voice/video distinction at the call
+                // site; default to the original video-call behavior.
+                voip_screen.initialize(cx, room_id, false);
             }
         } else {
             let voip_screen = inner.view.voip_screen(cx, ids!(voip_screen));
