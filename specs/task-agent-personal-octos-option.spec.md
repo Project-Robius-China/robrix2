@@ -42,12 +42,15 @@ child / 非父 bot 会覆盖掉已配置的 BotFather——本任务加一道守
 - 已配置了不同 BotFather 且已有自定义 `octos_service_url` 时,再注册一个 `Octos` child bot 不得把服务地址重置为默认值或传入值
 - `register_agent_from_search` 对 `OctosDirect` 保持幂等:重复注册同一 `agent_mxid` 不产生重复条目,不覆盖已存在条目
 - `OctosDirect` 选择卡新增的用户可见文案必须通过 i18n key 提供 en / zh-CN 文案
+- Agent Lab 注册的 `OctosDirect` 是 agent 身份来源:bot/agent 识别与 bot picker 必须通过 `AgentRegistry ∪ known_bot_user_ids` 看到它,但不得把它写入 App Service raw `known_bot_user_ids`
 - Agent Lab 界面内禁止裸 hex 颜色字面量,使用 `RBX_*` 或 `styles.rs` token
 
 ## Boundaries
 
 ### Allowed Changes
 - src/app.rs
+- src/home/bot_binding_modal.rs
+- src/home/room_screen.rs
 - src/settings/agent_settings.rs
 - src/settings/agent_add_modal.rs
 - resources/i18n/en.json
@@ -59,7 +62,7 @@ child / 非父 bot 会覆盖掉已配置的 BotFather——本任务加一道守
 - 不要为 `OctosDirect` 触发任何 App Service / BotFather 设置(`botfather_user_id` / `enabled` / `known_bot_user_ids`)
 - 不要构建 `/invitebot` 命令或任何把 agent 邀请进房的逻辑
 - 不要为 OctosDirect 增加 admin API 健康检查 / 管理 UI(robrix 只经 Matrix 与其交互,不关心其部署位置)
-- 不要改动 `bot_binding_modal` / `create_bot_modal` / BotFather 业务流
+- 不要改动 `create_bot_modal` / BotFather 业务流;`bot_binding_modal` 只允许把 `OctosDirect` registry agent 纳入现有 bot picker 集合
 - 不要新增 cargo 依赖
 - 不要运行 `cargo fmt`
 
@@ -137,6 +140,20 @@ child / 非父 bot 会覆盖掉已配置的 BotFather——本任务加一道守
   当 计算 framework 汇总
   那么 direct 类计数包含该 `OctosDirect` 条目
   并且 App Service(octos)类计数不包含该条目
+
+场景: OctosDirect agent 出现在房间 bot 选择器
+  测试: room_bot_picker_includes_registered_octos_direct_agents
+  假设 agent_registry 含一个 framework 为 `OctosDirect` 的 "@myagent:matrix.palpo.im"
+  当 计算房间 bot picker 的可选 bot 集合
+  那么 可选集合含 "@myagent:matrix.palpo.im"
+  但是 raw `bot_settings.known_bot_user_ids` 不含 "@myagent:matrix.palpo.im"
+
+场景: DM bot binding 检测使用 registry 合并后的 known-bots
+  测试: test_detected_bot_binding_uses_registry_augmented_known_bots
+  假设 agent_registry 含一个 framework 为 `OctosDirect` 的 agent
+  当 DM 成员检测需要判断候选 bot
+  那么 检测逻辑使用 `timeline_known_bot_user_ids(app_state)`
+  但是 不只读取 raw `app_state.bot_settings.known_bot_user_ids()`
 
 场景: OctosDirect 不显示 App Service 健康复查行
   测试: test_octos_direct_no_appservice_recheck
