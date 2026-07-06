@@ -63,7 +63,20 @@ pub fn register_agent_with_modal_settings(
             .to_string();
 
         app_state.bot_settings.enabled = true;
-        app_state.bot_settings.botfather_user_id = user_id.as_str().to_string();
+        // child-bot guard: claim the management-bot slot only when it is still
+        // unset (the default localpart) or already points at this same id. This
+        // keeps first-time appservice setup working while preventing a child /
+        // other appservice bot registration from silently clobbering a
+        // configured parent bot. Explicit re-designation stays in the App
+        // Service card.
+        let should_claim_botfather = {
+            let current = app_state.bot_settings.botfather_user_id.trim();
+            current == BotSettingsState::DEFAULT_BOTFATHER_LOCALPART
+                || current == user_id.as_str()
+        };
+        if should_claim_botfather {
+            app_state.bot_settings.botfather_user_id = user_id.as_str().to_string();
+        }
         app_state.bot_settings.octos_service_url = url;
         app_state.bot_settings.record_known_bot_user_ids([user_id]);
     }
@@ -414,6 +427,7 @@ script_mod! {
                     hermes_card := FrameworkCard {}
                     openclaw_card := FrameworkCard {}
                     octos_card := FrameworkCard {}
+                    octos_direct_card := FrameworkCard {}
                 }
 
                 // ---------- STEP 2: detect/bind ----------
@@ -832,6 +846,7 @@ impl WidgetMatchEvent for AddAgentModal {
                 (AgentFramework::Hermes, ids!(hermes_card.card_click)),
                 (AgentFramework::OpenClaw, ids!(openclaw_card.card_click)),
                 (AgentFramework::Octos, ids!(octos_card.card_click)),
+                (AgentFramework::OctosDirect, ids!(octos_direct_card.card_click)),
             ];
             for (framework, click_id) in cards {
                 if self.view.button(cx, click_id).clicked(actions) {
@@ -1104,6 +1119,10 @@ impl AddAgentModal {
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_name)).set_text(cx, "Octos");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "APPSERVICE");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_blurb)).set_text(cx, "Friend plus local AppService.");
+        self.view.label(cx, ids!(octos_direct_card.card_body.card_tile.card_mono)).set_text(cx, "OD");
+        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_name)).set_text(cx, "Octos (Direct)");
+        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
+        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_blurb)).set_text(cx, "Octos, added as a Matrix friend.");
         self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono)).set_text(cx, "He");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_name)).set_text(cx, "Hermes");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
@@ -1122,6 +1141,17 @@ impl AddAgentModal {
         script_apply_eval!(cx, octos_tag, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
         let mut octos_tag_pill = self.view.view(cx, ids!(octos_card.card_body.card_col.card_tag));
         script_apply_eval!(cx, octos_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
+
+        // OctosDirect reuses the Octos framework palette (it is an Octos agent,
+        // just added directly instead of via App Service).
+        let mut octos_direct_tile = self.view.view(cx, ids!(octos_direct_card.card_body.card_tile));
+        script_apply_eval!(cx, octos_direct_tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
+        let mut octos_direct_mono = self.view.label(cx, ids!(octos_direct_card.card_body.card_tile.card_mono));
+        script_apply_eval!(cx, octos_direct_mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+        let mut octos_direct_tag = self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_tag.card_tag_label));
+        script_apply_eval!(cx, octos_direct_tag, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+        let mut octos_direct_tag_pill = self.view.view(cx, ids!(octos_direct_card.card_body.card_col.card_tag));
+        script_apply_eval!(cx, octos_direct_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
 
         let mut hermes_tile = self.view.view(cx, ids!(hermes_card.card_body.card_tile));
         script_apply_eval!(cx, hermes_tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
@@ -1147,6 +1177,7 @@ impl AddAgentModal {
             (AgentFramework::Hermes, ids!(hermes_card)),
             (AgentFramework::OpenClaw, ids!(openclaw_card)),
             (AgentFramework::Octos, ids!(octos_card)),
+            (AgentFramework::OctosDirect, ids!(octos_direct_card)),
         ];
         for (framework, card_id) in cards {
             let selected = self.selected_framework == Some(framework);
@@ -1201,7 +1232,7 @@ impl AddAgentModal {
         let mut tile = self.view.view(cx, ids!(step2_agent_header.step2_framework_tile));
         let mut mono = self.view.label(cx, ids!(step2_agent_header.step2_framework_tile.step2_framework_mono));
         match framework {
-            AgentFramework::Octos => {
+            AgentFramework::Octos | AgentFramework::OctosDirect => {
                 script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
                 script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
             }
@@ -1436,6 +1467,80 @@ mod tests {
         assert_eq!(app_state.bot_settings.botfather_user_id, user_id.as_str());
         assert_eq!(app_state.bot_settings.octos_service_url, "http://127.0.0.1:8787");
         assert!(app_state.bot_settings.known_bot_user_ids.contains(&user_id));
+    }
+
+    #[test]
+    fn test_register_octos_direct_does_not_touch_botfather() {
+        let mut app_state = AppState::default();
+        assert!(!app_state.bot_settings.enabled);
+        let default_botfather = app_state.bot_settings.botfather_user_id.clone();
+        let user_id: OwnedUserId = "@myagent:example.org".parse().unwrap();
+
+        let added = register_agent_with_modal_settings(
+            &mut app_state,
+            user_id.clone(),
+            Some("MyAgent".to_string()),
+            AgentFramework::OctosDirect,
+            None,
+        );
+
+        assert!(added);
+        assert_ne!(app_state.bot_settings.botfather_user_id, user_id.as_str());
+        assert_eq!(app_state.bot_settings.botfather_user_id, default_botfather);
+        assert!(!app_state.bot_settings.enabled);
+        assert!(!app_state.bot_settings.known_bot_user_ids.contains(&user_id));
+        // Still registered as an agent in the registry.
+        assert!(app_state.agent_registry.contains(user_id.as_ref()));
+    }
+
+    #[test]
+    fn test_register_octos_appservice_first_time_sets_botfather() {
+        let mut app_state = AppState::default();
+        assert_eq!(
+            app_state.bot_settings.botfather_user_id,
+            BotSettingsState::DEFAULT_BOTFATHER_LOCALPART,
+        );
+        let user_id: OwnedUserId = "@octos:example.org".parse().unwrap();
+
+        register_agent_with_modal_settings(
+            &mut app_state,
+            user_id.clone(),
+            None,
+            AgentFramework::Octos,
+            None,
+        );
+
+        assert_eq!(app_state.bot_settings.botfather_user_id, user_id.as_str());
+        assert!(app_state.bot_settings.enabled);
+    }
+
+    #[test]
+    fn test_register_octos_child_does_not_clobber_botfather() {
+        let mut app_state = AppState::default();
+        let parent: OwnedUserId = "@octos:example.org".parse().unwrap();
+        register_agent_with_modal_settings(
+            &mut app_state,
+            parent.clone(),
+            None,
+            AgentFramework::Octos,
+            None,
+        );
+        assert_eq!(app_state.bot_settings.botfather_user_id, parent.as_str());
+
+        let child: OwnedUserId = "@octos_weather:example.org".parse().unwrap();
+        register_agent_with_modal_settings(
+            &mut app_state,
+            child.clone(),
+            None,
+            AgentFramework::Octos,
+            None,
+        );
+
+        // BotFather untouched by the child registration.
+        assert_eq!(app_state.bot_settings.botfather_user_id, parent.as_str());
+        // The child is still recorded as a known bot and in the registry.
+        assert!(app_state.bot_settings.known_bot_user_ids.contains(&child));
+        assert!(app_state.agent_registry.contains(child.as_ref()));
     }
 
     #[test]

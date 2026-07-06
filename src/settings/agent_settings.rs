@@ -28,9 +28,10 @@ use crate::{
 
 /// The frameworks a user can pick when registering an agent from search.
 /// `Unknown` is reserved for migrated legacy bots and is not user-selectable.
-pub fn framework_options() -> [AgentFramework; 3] {
+pub fn framework_options() -> [AgentFramework; 4] {
     [
         AgentFramework::Octos,
+        AgentFramework::OctosDirect,
         AgentFramework::Hermes,
         AgentFramework::OpenClaw,
     ]
@@ -40,6 +41,7 @@ pub fn framework_options() -> [AgentFramework; 3] {
 pub fn framework_label(framework: AgentFramework) -> &'static str {
     match framework {
         AgentFramework::Octos => "Octos",
+        AgentFramework::OctosDirect => "Octos (Direct)",
         AgentFramework::Hermes => "Hermes",
         AgentFramework::OpenClaw => "OpenClaw",
         AgentFramework::Unknown => "Unknown",
@@ -50,6 +52,7 @@ pub fn framework_label(framework: AgentFramework) -> &'static str {
 pub fn framework_mono(framework: AgentFramework) -> &'static str {
     match framework {
         AgentFramework::Octos => "Oc",
+        AgentFramework::OctosDirect => "OD",
         AgentFramework::Hermes => "He",
         AgentFramework::OpenClaw => "Cl",
         AgentFramework::Unknown => "Ag",
@@ -122,7 +125,9 @@ fn agent_registry_summary(app_state: &AppState) -> AgentRegistrySummary {
             .unwrap_or_default()
         {
             AgentFramework::Octos => summary.octos += 1,
-            AgentFramework::Hermes | AgentFramework::OpenClaw => summary.direct += 1,
+            AgentFramework::OctosDirect
+            | AgentFramework::Hermes
+            | AgentFramework::OpenClaw => summary.direct += 1,
             AgentFramework::Unknown => summary.unknown += 1,
         }
     }
@@ -801,7 +806,7 @@ impl AgentRegistryRow {
         let mut badge = self.view.view(cx, ids!(agent_top_row.agent_framework_badge));
         let mut label = self.view.label(cx, ids!(agent_top_row.agent_framework_badge.agent_framework_label));
         match framework {
-            AgentFramework::Octos => {
+            AgentFramework::Octos | AgentFramework::OctosDirect => {
                 script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
                 script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
@@ -1304,6 +1309,87 @@ mod tests {
         assert!(options.contains(&AgentFramework::Octos));
         assert!(options.contains(&AgentFramework::Hermes));
         assert!(options.contains(&AgentFramework::OpenClaw));
+    }
+
+    #[test]
+    fn test_register_agent_octos_direct() {
+        let mut app_state = AppState::default();
+        let id: OwnedUserId = "@myagent:example.org".try_into().unwrap();
+
+        let added = register_agent_from_search(
+            &mut app_state,
+            id.clone(),
+            Some("MyAgent".to_string()),
+            AgentFramework::OctosDirect,
+        );
+
+        assert!(added);
+        assert!(app_state.agent_registry.contains(id.as_ref()));
+        let entry = app_state.agent_registry.get(id.as_ref()).unwrap();
+        assert_eq!(entry.framework, AgentFramework::OctosDirect);
+        assert_eq!(entry.display_name.as_deref(), Some("MyAgent"));
+    }
+
+    #[test]
+    fn test_framework_options_include_octos_direct() {
+        let options = framework_options();
+        assert!(options.contains(&AgentFramework::OctosDirect));
+        assert!(options.contains(&AgentFramework::Octos));
+    }
+
+    #[test]
+    fn test_framework_label_octos_direct_distinct() {
+        let direct = framework_label(AgentFramework::OctosDirect);
+        assert_ne!(direct, framework_label(AgentFramework::Octos));
+        assert!(!direct.is_empty());
+    }
+
+    #[test]
+    fn test_octos_direct_counts_as_direct() {
+        let mut app_state = AppState::default();
+        register_agent_from_search(
+            &mut app_state,
+            "@myagent:example.org".try_into().unwrap(),
+            None,
+            AgentFramework::OctosDirect,
+        );
+
+        let summary = agent_registry_summary(&app_state);
+        assert_eq!(summary.direct, 1);
+        assert_eq!(summary.octos, 0);
+    }
+
+    #[test]
+    fn test_octos_direct_no_appservice_recheck() {
+        assert!(!agent_row_shows_recheck(AgentFramework::OctosDirect));
+        assert!(agent_row_shows_recheck(AgentFramework::Octos));
+    }
+
+    #[test]
+    fn test_register_octos_direct_idempotent() {
+        let mut app_state = AppState::default();
+        let id: OwnedUserId = "@myagent:example.org".try_into().unwrap();
+        assert!(register_agent_from_search(&mut app_state, id.clone(), None, AgentFramework::OctosDirect));
+
+        let added_again =
+            register_agent_from_search(&mut app_state, id.clone(), None, AgentFramework::OctosDirect);
+
+        assert!(!added_again);
+        assert_eq!(app_state.agent_registry.len(), 1);
+        assert_eq!(
+            app_state.agent_registry.get(id.as_ref()).unwrap().framework,
+            AgentFramework::OctosDirect,
+        );
+    }
+
+    #[test]
+    fn test_octos_direct_binding_rejects_localpart() {
+        let app_state = AppState::default();
+        let error = parse_agent_user_id("myagent").unwrap_err();
+
+        assert!(error.contains("Matrix user ID"));
+        // An invalid identifier never reaches registration, so nothing is added.
+        assert_eq!(app_state.agent_registry.len(), 0);
     }
 
     #[test]
