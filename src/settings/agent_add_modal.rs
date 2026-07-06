@@ -126,7 +126,7 @@ script_mod! {
             align: Align{y: 0.5}
             spacing: 12
             new_batch: true
-            padding: Inset{left: 14, right: 14, top: 8, bottom: 8}
+            padding: Inset{left: 14, right: 14, top: 6, bottom: 6}
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE)
@@ -136,8 +136,8 @@ script_mod! {
             }
 
             card_tile := RoundedView {
-                width: 48
-                height: 48
+                width: 40
+                height: 40
                 align: Align{x: 0.5, y: 0.5}
                 new_batch: true
                 show_bg: true
@@ -419,10 +419,10 @@ script_mod! {
                     // Per-framework visuals (mono, name, tag, blurb, colors) are
                     // populated from Rust in `populate_framework_cards` to avoid
                     // deep DSL overrides (unreliable in this Makepad fork).
-                    hermes_card := FrameworkCard {}
-                    openclaw_card := FrameworkCard {}
                     octos_card := FrameworkCard {}
                     octos_direct_card := FrameworkCard {}
+                    hermes_card := FrameworkCard {}
+                    openclaw_card := FrameworkCard {}
                 }
 
                 // ---------- STEP 2: detect/bind ----------
@@ -838,10 +838,10 @@ impl WidgetMatchEvent for AddAgentModal {
         // Framework card selection (step 1).
         if self.step == 1 {
             let cards = [
-                (AgentFramework::Hermes, ids!(hermes_card.card_click)),
-                (AgentFramework::OpenClaw, ids!(openclaw_card.card_click)),
                 (AgentFramework::Octos, ids!(octos_card.card_click)),
                 (AgentFramework::OctosDirect, ids!(octos_direct_card.card_click)),
+                (AgentFramework::Hermes, ids!(hermes_card.card_click)),
+                (AgentFramework::OpenClaw, ids!(openclaw_card.card_click)),
             ];
             for (framework, click_id) in cards {
                 if self.view.button(cx, click_id).clicked(actions) {
@@ -1174,10 +1174,10 @@ impl AddAgentModal {
 
     fn update_framework_cards(&mut self, cx: &mut Cx) {
         let cards = [
-            (AgentFramework::Hermes, ids!(hermes_card)),
-            (AgentFramework::OpenClaw, ids!(openclaw_card)),
             (AgentFramework::Octos, ids!(octos_card)),
             (AgentFramework::OctosDirect, ids!(octos_direct_card)),
+            (AgentFramework::Hermes, ids!(hermes_card)),
+            (AgentFramework::OpenClaw, ids!(openclaw_card)),
         ];
         for (framework, card_id) in cards {
             let selected = self.selected_framework == Some(framework);
