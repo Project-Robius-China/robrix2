@@ -14,7 +14,6 @@ use makepad_widgets::*;
 use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
 use serde::{Deserialize, Serialize};
 use url::Url;
-use tokio::runtime::Handle;
 use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
