@@ -1,12 +1,20 @@
 //! Devices settings page: lists every device this user has signed in with,
 //! lets them remove individual sessions.
 //!
-//! Matches the matrix.org account-portal layout: a "Where you're signed in"
-//! header, a device count, then a vertical list of cards. Each card has the
-//! display_name (fallback "Unknown device"), the raw device_id, a "Last
-//! Active" timestamp, a "Signed in" timestamp (currently last_seen for both —
-//! Synapse doesn't expose creation time), and a destructive "Remove device"
-//! button.
+//! Visually this follows the shared "AI workspace" design system (see
+//! `docs/ui-visual-spec-zh.md` + `src/shared/design_tokens.rs`): a page title +
+//! session count + Refresh action, then a vertical list of white `RBX_*` cards.
+//! Each card has a device glyph in a soft-accent tile, the display_name
+//! (fallback "Unknown device"), the raw device_id, an optional "This device"
+//! badge for the current session, and a "Last active" / "IP address" detail row,
+//! plus a destructive "Remove" button.
+//!
+//! **Lazy rendering**: the list is a `PortalList`, so only the cards currently
+//! on screen are laid out and drawn (`set_item_range` + `next_visible_item`).
+//! The homeserver's `/devices` endpoint returns the full list in one response —
+//! the Matrix spec / ruma `get_devices` request has no `from`/`limit`/`next_batch`
+//! params, so there is no server-side pagination to lean on; virtualization at
+//! the UI layer is where the win is.
 //!
 //! Click → fires `ConfirmDeleteAction::Show(…)` which opens the global
 //! delete-confirmation modal (defined in `app.rs`). On confirmation the
@@ -32,120 +40,166 @@ script_mod! {
     use mod.widgets.*
 
     // ─────────────────────────── DeviceCard ────────────────────────────
-    // One row in the device list.
+    // One card in the device list. The DeviceCard root is a transparent layout
+    // wrapper (a plain custom-widget root does NOT reliably paint its own
+    // draw_bg in this Makepad fork — see the "plain View draws nothing" pitfall),
+    // so the visible white surface + border lives on the inner `device_card_body`
+    // RoundedView. The wrapper's bottom margin gives the gap between cards.
     mod.widgets.DeviceCard = #(DeviceCard::register_widget(vm)) {
         width: Fill, height: Fit
         flow: Down
-        padding: Inset{top: 12, bottom: 12, left: 14, right: 14}
-        margin: Inset{top: 6, bottom: 6}
-        show_bg: true
-        draw_bg +: {
-            color: (RBX_BG_SURFACE)
-            border_radius: (RBX_RADIUS_SM)
-            border_size: 1.0
-            border_color: (RBX_STROKE_SOFT)
-        }
-        spacing: 6
+        margin: Inset{top: 0, bottom: (SPACE_MD)}
 
-        // Top row: icon + name/id column + remove button
-        device_card_top_row := View {
+        device_card_body := RoundedView {
             width: Fill, height: Fit
-            flow: Right
-            spacing: 12
-            align: Align{y: 0.5}
-
-            // Generic device glyph in a soft-tint circle. Matrix's `/devices`
-            // endpoint doesn't expose a device type, so we don't try to guess
-            // laptop vs phone vs browser — one icon for all.
-            device_card_icon_circle := CircleView {
-                width: 40, height: 40
-                align: Align{x: 0.5, y: 0.5}
-                show_bg: true
-                draw_bg +: { color: (RBX_INFO_BG) }
-                device_card_icon := Label {
-                    width: Fit, height: Fit
-                    align: Align{x: 0.5, y: 0.5}
-                    draw_text +: {
-                        text_style: theme.font_regular { font_size: 19.0 }
-                    }
-                    text: "💻"
-                }
+            flow: Down
+            padding: Inset{top: (SPACE_MD), bottom: (SPACE_MD), left: (SPACE_MD), right: (SPACE_MD)}
+            show_bg: true
+            draw_bg +: {
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_STRONG)
             }
+            spacing: (SPACE_SM)
 
-            device_card_name_col := View {
+            // Top row: icon tile + name/id column + remove button.
+            device_card_top_row := View {
                 width: Fill, height: Fit
-                flow: Down
-                spacing: 2
+                flow: Right
+                spacing: (SPACE_SM)
+                align: Align{y: 0.5}
 
-                device_card_display_name := Label {
+                // Generic device glyph in a soft-accent tile. Matrix's `/devices`
+                // endpoint doesn't expose a device type, so we don't try to guess
+                // laptop vs phone vs browser — one icon for all.
+                device_card_icon_circle := SettingsIconCircle {
+                    width: 40, height: 40
+                    draw_bg +: { color: (RBX_ACCENT_SOFT) }
+                    Icon {
+                        width: (RBX_ICON_MD), height: (RBX_ICON_MD)
+                        draw_icon +: { svg: (ICON_DEVICE), color: (RBX_ACCENT) }
+                        icon_walk: Walk{width: (RBX_ICON_MD), height: (RBX_ICON_MD)}
+                    }
+                }
+
+                device_card_name_col := View {
                     width: Fill, height: Fit
-                    text: "Unknown device"
-                    draw_text +: {
-                        color: (RBX_FG_PRIMARY)
-                        text_style: theme.font_bold { font_size: 14.0 }
+                    flow: Down
+                    spacing: 2
+
+                    device_card_name_row := View {
+                        width: Fill, height: Fit
+                        flow: Right
+                        align: Align{y: 0.5}
+                        spacing: (SPACE_XS)
+
+                        device_card_display_name := Label {
+                            width: Fit, height: Fit
+                            text: "Unknown device"
+                            draw_text +: {
+                                color: (RBX_FG_PRIMARY)
+                                text_style: RBX_TEXT_CARD_TITLE {}
+                            }
+                        }
+
+                        // Accent pill flagging the session Robrix is running as.
+                        // Toggled per-card in DeviceCard::draw_walk.
+                        device_card_current_badge := RoundedView {
+                            visible: false
+                            width: Fit, height: Fit
+                            align: Align{y: 0.5}
+                            padding: Inset{left: 9, right: 9, top: 3, bottom: 3}
+                            show_bg: true
+                            draw_bg +: {
+                                color: (RBX_ACCENT_SOFT)
+                                border_radius: (RBX_RADIUS_PILL)
+                            }
+                            Label {
+                                width: Fit, height: Fit
+                                draw_text +: {
+                                    text_style: RBX_TEXT_BADGE {}
+                                    color: (RBX_ACCENT)
+                                }
+                                text: "This device"
+                            }
+                        }
+                    }
+                    device_card_device_id := Label {
+                        width: Fill, height: Fit
+                        text: ""
+                        draw_text +: {
+                            color: (RBX_FG_TERTIARY)
+                            text_style: RBX_TEXT_META {}
+                        }
                     }
                 }
-                device_card_device_id := Label {
+
+                // Destructive action — red text on the standard "negative"
+                // outlined background.
+                device_card_remove_button := RobrixNegativeIconButton {
+                    width: Fit, height: (RBX_CONTROL_H_SM)
+                    padding: Inset{top: 6, bottom: 6, left: 12, right: 12}
+                    spacing: 5
+                    text: "Remove"
+                    draw_icon.svg: (ICON_TRASH)
+                    icon_walk: Walk{width: 14, height: 14}
+                    draw_bg +: { border_radius: (RBX_RADIUS_XS) }
+                }
+            }
+
+            device_card_divider := LineH {
+                height: 1.0
+                margin: Inset{top: (SPACE_XS), bottom: (SPACE_XS)}
+                draw_bg.color: (RBX_STROKE_SOFT)
+            }
+
+            // Detail row: Last active + IP address.
+            device_card_detail_row := View {
+                width: Fill, height: Fit
+                flow: Right
+                spacing: (SPACE_LG)
+
+                device_card_last_active_col := View {
                     width: Fill, height: Fit
-                    text: ""
-                    draw_text +: {
-                        color: (RBX_FG_SECONDARY)
-                        text_style: theme.font_regular { font_size: 11.0 }
+                    flow: Down
+                    spacing: 2
+
+                    Label {
+                        text: "Last active"
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY)
+                            text_style: RBX_TEXT_META {}
+                        }
+                    }
+                    device_card_last_active_value := Label {
+                        width: Fill, height: Fit
+                        text: "—"
+                        draw_text +: {
+                            color: (RBX_FG_PRIMARY)
+                            text_style: RBX_TEXT_BODY {}
+                        }
                     }
                 }
-            }
+                device_card_ip_col := View {
+                    width: Fill, height: Fit
+                    flow: Down
+                    spacing: 2
 
-            // Destructive action — red text on the standard "negative"
-            // outlined background. The plain `Button` widget had white
-            // text on white background, invisible.
-            device_card_remove_button := RobrixNegativeIconButton {
-                text: "Remove device"
-                width: Fit, height: 32
-            }
-        }
-
-        // Detail row: Last active + Signed in
-        device_card_detail_row := View {
-            width: Fill, height: Fit
-            flow: Right
-            spacing: 16
-            margin: Inset{top: 6}
-
-            device_card_last_active_col := View {
-                width: Fill, height: Fit
-                flow: Down
-
-                device_card_last_active_label := Label {
-                    text: "Last Active"
-                    draw_text +: {
-                        color: (RBX_FG_SECONDARY)
-                        text_style: theme.font_regular { font_size: 11.0 }
+                    Label {
+                        text: "IP address"
+                        draw_text +: {
+                            color: (RBX_FG_SECONDARY)
+                            text_style: RBX_TEXT_META {}
+                        }
                     }
-                }
-                device_card_last_active_value := Label {
-                    text: "—"
-                    draw_text +: {
-                        color: (RBX_FG_PRIMARY)
-                        text_style: theme.font_regular { font_size: 12.0 }
-                    }
-                }
-            }
-            device_card_device_id_col := View {
-                width: Fill, height: Fit
-                flow: Down
-
-                device_card_id_label := Label {
-                    text: "Device ID"
-                    draw_text +: {
-                        color: (RBX_FG_SECONDARY)
-                        text_style: theme.font_regular { font_size: 11.0 }
-                    }
-                }
-                device_card_id_value := Label {
-                    text: "—"
-                    draw_text +: {
-                        color: (RBX_FG_PRIMARY)
-                        text_style: theme.font_regular { font_size: 12.0 }
+                    device_card_ip_value := Label {
+                        width: Fill, height: Fit
+                        text: "—"
+                        draw_text +: {
+                            color: (RBX_FG_PRIMARY)
+                            text_style: RBX_TEXT_BODY {}
+                        }
                     }
                 }
             }
@@ -156,64 +210,107 @@ script_mod! {
     mod.widgets.DevicesScreen = #(DevicesScreen::register_widget(vm)) {
         width: Fill, height: Fill
         flow: Down
-        padding: Inset{top: 8, bottom: 8, left: 8, right: 8}
-        spacing: 8
+        padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM)}
+        spacing: (SPACE_LG)
 
-        // Header
+        // Header: title + session count on the left, Refresh on the right.
         devices_header_row := View {
             width: Fill, height: Fit
             flow: Right
             align: Align{y: 0.5}
-            spacing: 8
+            spacing: (SPACE_SM)
 
-            devices_header_label := Label {
+            devices_header_col := View {
                 width: Fill, height: Fit
-                text: "Where you're signed in"
-                draw_text +: {
-                    color: (RBX_FG_PRIMARY)
-                    text_style: theme.font_bold { font_size: 16.0 }
+                flow: Down
+                spacing: 2
+
+                devices_header_label := Label {
+                    width: Fill, height: Fit
+                    text: "Where you're signed in"
+                    draw_text +: {
+                        color: (RBX_FG_PRIMARY)
+                        text_style: RBX_TEXT_PAGE_TITLE {}
+                    }
+                }
+                devices_count_label := Label {
+                    width: Fill, height: Fit
+                    text: "Checking your sessions…"
+                    draw_text +: {
+                        color: (RBX_FG_SECONDARY)
+                        text_style: RBX_TEXT_META {}
+                    }
                 }
             }
-            devices_refresh_button := RobrixNeutralIconButton {
+
+            devices_refresh_button := RobrixIconButton {
+                width: Fit, height: (RBX_CONTROL_H_MD)
+                padding: Inset{top: 8, bottom: 8, left: 12, right: 12}
+                spacing: 5
                 text: "Refresh"
-                width: Fit, height: 32
+                draw_icon.svg: (ICON_ROTATE_CW)
+                draw_icon.color: (RBX_ACCENT)
+                icon_walk: Walk{width: 14, height: 14}
+                draw_bg +: {
+                    color: (RBX_BG_SURFACE)
+                    color_hover: (RBX_BG_HOVER)
+                    color_down: (RBX_BG_PRESSED)
+                    border_radius: (RBX_RADIUS_XS)
+                    border_size: 1.0
+                    border_color: (RBX_STROKE_SOFT)
+                }
+                draw_text +: {
+                    color: (RBX_ACCENT)
+                    color_hover: (RBX_ACCENT)
+                    color_down: (RBX_ACCENT)
+                }
             }
         }
 
-        // Subtitle: count
-        devices_count_label := Label {
-            width: Fill, height: Fit
-            text: "0 devices"
-            margin: Inset{top: 4}
-            draw_text +: {
-                color: (RBX_FG_SECONDARY)
-                text_style: theme.font_regular { font_size: 12.0 }
-            }
-        }
-
-        // Empty/loading status
-        devices_status_label := Label {
-            width: Fill, height: Fit
-            text: "Loading…"
-            margin: Inset{top: 16, bottom: 16}
-            align: Align{x: 0.5, y: 0.5}
-            draw_text +: {
-                color: (RBX_FG_TERTIARY)
-                text_style: theme.font_regular { font_size: 13.0 }
-            }
-        }
-
-        // The list itself.
-        devices_list := FlatList {
-            width: Fill
-            height: Fill
+        // The list itself — a PortalList so off-screen cards are never laid out
+        // or drawn (true UI-level virtualization). Loading / empty / error are
+        // rendered as list entries so they sit inside the scroll region.
+        devices_list := PortalList {
+            width: Fill, height: Fill
+            keep_invisible: false
+            max_pull_down: 0.0
+            auto_tail: false
             flow: Down
-            spacing: 0
             grab_key_focus: false
-            drag_scrolling: false
             scroll_bars +: { show_scroll_x: false, show_scroll_y: true }
 
             device_item := mod.widgets.DeviceCard {}
+
+            devices_loading_entry := View {
+                width: Fill, height: 90
+                flow: Right
+                align: Align{x: 0.5, y: 0.5}
+                LoadingSpinner {
+                    width: 26, height: 26
+                    draw_bg +: {
+                        color: (RBX_ACCENT)
+                        border_size: 3.0
+                    }
+                }
+            }
+
+            devices_status_entry := View {
+                width: Fill, height: Fit
+                padding: Inset{top: 28, bottom: 28, left: 16, right: 16}
+                flow: Down
+                align: Align{x: 0.5, y: 0.5}
+                spacing: (SPACE_XS)
+
+                devices_status_label := Label {
+                    width: Fit, height: Fit
+                    align: Align{x: 0.5}
+                    draw_text +: {
+                        color: (RBX_FG_TERTIARY)
+                        text_style: RBX_TEXT_BODY {}
+                    }
+                    text: "No devices found."
+                }
+            }
         }
     }
 }
@@ -278,11 +375,14 @@ impl Widget for DeviceCard {
                 .label(cx, ids!(device_card_device_id))
                 .set_text(cx, &device.device_id);
             self.view
-                .label(cx, ids!(device_card_id_value))
-                .set_text(cx, &device.device_id);
+                .view(cx, ids!(device_card_current_badge))
+                .set_visible(cx, device.is_current);
             self.view
                 .label(cx, ids!(device_card_last_active_value))
                 .set_text(cx, &format_last_active(device));
+            self.view
+                .label(cx, ids!(device_card_ip_value))
+                .set_text(cx, device.last_seen_ip.as_deref().unwrap_or("—"));
         }
         self.view.draw_walk(cx, scope, walk)
     }
@@ -293,14 +393,14 @@ impl Widget for DeviceCard {
 #[derive(Script, ScriptHook, Widget)]
 pub struct DevicesScreen {
     #[deref] view: View,
-    /// The current device list, freshest-first (the homeserver returns them
-    /// in arbitrary order; we sort by `last_seen_ts_ms` desc on update).
+    /// The current device list, current-session-first then freshest-first (the
+    /// homeserver returns them in arbitrary order; we sort on update).
     #[rust] devices: Vec<DeviceInfo>,
     /// One-shot init flag so we only auto-fetch on first draw.
     #[rust] initialized: bool,
     /// `true` while we have a `GetDeviceList` in flight.
     #[rust] fetching: bool,
-    /// Last status string shown in the empty-state label.
+    /// Message shown in the empty / error list entry.
     #[rust] status_text: String,
 }
 
@@ -336,13 +436,8 @@ impl Widget for DevicesScreen {
                         }
                         AccountDataAction::DeviceListFetchFailed(err) => {
                             self.fetching = false;
-                            self.status_text = format!("Failed to load devices: {err}");
-                            self.view
-                                .label(cx, ids!(devices_status_label))
-                                .set_text(cx, &self.status_text);
-                            self.view
-                                .label(cx, ids!(devices_status_label))
-                                .set_visible(cx, true);
+                            self.status_text = format!("Couldn't load devices: {err}");
+                            self.update_count_label(cx);
                             self.view.redraw(cx);
                         }
                         AccountDataAction::DeviceDeleteResult { device_id, outcome } => {
@@ -352,7 +447,7 @@ impl Widget for DevicesScreen {
                                     // Drop the device from local state instantly
                                     // and trigger a background refresh to confirm.
                                     self.devices.retain(|d| &d.device_id != device_id);
-                                    self.refresh_count_label(cx);
+                                    self.update_count_label(cx);
                                     self.view.redraw(cx);
                                     self.request_fetch(cx);
                                 }
@@ -395,16 +490,37 @@ impl Widget for DevicesScreen {
             self.request_fetch(cx);
         }
 
-        while let Some(subview) = self.view.draw_walk(cx, scope, walk).step() {
-            let flat_list_ref = subview.as_flat_list();
-            let Some(mut list) = flat_list_ref.borrow_mut() else {
+        while let Some(widget_to_draw) = self.view.draw_walk(cx, scope, walk).step() {
+            let plist = widget_to_draw.as_portal_list();
+            let Some(mut list) = plist.borrow_mut() else {
                 continue;
             };
-            for (index, device) in self.devices.iter().enumerate() {
-                let item_id = LiveId(index as u64);
-                let item = list.item(cx, item_id, id!(device_item)).unwrap();
-                let mut scope = Scope::with_props(device);
-                item.draw_all(cx, &mut scope);
+
+            let n = self.devices.len();
+            // First load with nothing yet → spinner. Empty after a completed
+            // fetch (or a failure) → status message. Otherwise the cards. A
+            // refresh over an already-populated list keeps the cards visible.
+            let show_loading = self.fetching && n == 0;
+            let show_status = !self.fetching && n == 0;
+            let total = if show_loading || show_status { 1 } else { n };
+            list.set_item_range(cx, 0, total);
+
+            while let Some(item_id) = list.next_visible_item(cx) {
+                if show_loading {
+                    let item = list.item(cx, item_id, id!(devices_loading_entry));
+                    item.draw_all(cx, scope);
+                } else if show_status {
+                    let item = list.item(cx, item_id, id!(devices_status_entry));
+                    item.child_by_path(ids!(devices_status_label))
+                        .as_label()
+                        .set_text(cx, &self.status_text);
+                    item.draw_all(cx, scope);
+                } else if item_id < n {
+                    let device = self.devices[item_id].clone();
+                    let item = list.item(cx, item_id, id!(device_item));
+                    let mut props_scope = Scope::with_props(&device);
+                    item.draw_all(cx, &mut props_scope);
+                }
             }
         }
         DrawStep::done()
@@ -414,45 +530,41 @@ impl Widget for DevicesScreen {
 impl DevicesScreen {
     fn request_fetch(&mut self, cx: &mut Cx) {
         self.fetching = true;
-        self.status_text = "Loading…".to_string();
-        self.view
-            .label(cx, ids!(devices_status_label))
-            .set_text(cx, &self.status_text);
-        self.view
-            .label(cx, ids!(devices_status_label))
-            .set_visible(cx, true);
+        self.update_count_label(cx);
         self.view.redraw(cx);
         submit_async_request(MatrixRequest::GetDeviceList);
     }
 
     fn apply_device_list(&mut self, cx: &mut Cx, mut list: Vec<DeviceInfo>) {
+        // Current session first, then freshest-last-active first.
         list.sort_by(|a, b| {
-            b.last_seen_ts_ms
-                .unwrap_or(0)
-                .cmp(&a.last_seen_ts_ms.unwrap_or(0))
+            b.is_current
+                .cmp(&a.is_current)
+                .then_with(|| {
+                    b.last_seen_ts_ms
+                        .unwrap_or(0)
+                        .cmp(&a.last_seen_ts_ms.unwrap_or(0))
+                })
         });
         self.devices = list;
         self.fetching = false;
-        self.refresh_count_label(cx);
-        let empty = self.devices.is_empty();
-        if empty {
+        if self.devices.is_empty() {
             self.status_text = "No devices found.".to_string();
-            self.view
-                .label(cx, ids!(devices_status_label))
-                .set_text(cx, &self.status_text);
         }
-        self.view
-            .label(cx, ids!(devices_status_label))
-            .set_visible(cx, empty);
+        self.update_count_label(cx);
         self.view.redraw(cx);
     }
 
-    fn refresh_count_label(&self, cx: &mut Cx) {
-        let n = self.devices.len();
-        let text = if n == 1 {
-            "1 device".to_string()
+    /// Update the subtitle under the page title to reflect the current state.
+    fn update_count_label(&self, cx: &mut Cx) {
+        let text = if self.fetching && self.devices.is_empty() {
+            "Checking your sessions…".to_string()
         } else {
-            format!("{n} devices")
+            match self.devices.len() {
+                0 => "No active sessions".to_string(),
+                1 => "1 active session".to_string(),
+                n => format!("{n} active sessions"),
+            }
         };
         self.view
             .label(cx, ids!(devices_count_label))
@@ -536,7 +648,6 @@ fn format_last_active(device: &DeviceInfo) -> String {
         return "—".to_string();
     };
     let local = dt.with_timezone(&Local);
-    // e.g. "Active Tue, May 19, 2026 at 5:17 PM"
-    format!("Active {}", local.format("%a, %b %-d, %Y at %-I:%M %p"))
+    // e.g. "Tue, May 19, 2026 at 5:17 PM"
+    local.format("%a, %b %-d, %Y at %-I:%M %p").to_string()
 }
-

@@ -768,6 +768,10 @@ pub struct DeviceInfo {
     pub last_seen_ip: Option<String>,
     /// Unix-millisecond timestamp of the last server-side activity.
     pub last_seen_ts_ms: Option<i64>,
+    /// `true` if this entry is the session Robrix is currently running as
+    /// (matched against `client.device_id()`). Used to render the "This device"
+    /// badge and to sort the current session to the top of the list.
+    pub is_current: bool,
 }
 
 /// Outcome of attempting to delete a single device.
@@ -4089,18 +4093,29 @@ async fn matrix_worker_task(
             MatrixRequest::GetDeviceList => {
                 let Some(client) = get_client() else { continue };
                 let _get_device_list_task = Handle::current().spawn(async move {
+                    // The device id of the session we're currently running as, so the
+                    // UI can flag it. Convert to an owned String before the await so we
+                    // don't hold a borrow of `client` across it.
+                    let current_device_id = client.device_id().map(|id| id.to_string());
                     match client.devices().await {
                         Ok(resp) => {
                             let devices = resp
                                 .devices
                                 .into_iter()
-                                .map(|d| DeviceInfo {
-                                    device_id: d.device_id.to_string(),
-                                    display_name: d.display_name,
-                                    last_seen_ip: d.last_seen_ip,
-                                    last_seen_ts_ms: d
-                                        .last_seen_ts
-                                        .map(|ts| ts.get().into()),
+                                .map(|d| {
+                                    let device_id = d.device_id.to_string();
+                                    let is_current = current_device_id
+                                        .as_deref()
+                                        == Some(device_id.as_str());
+                                    DeviceInfo {
+                                        device_id,
+                                        display_name: d.display_name,
+                                        last_seen_ip: d.last_seen_ip,
+                                        last_seen_ts_ms: d
+                                            .last_seen_ts
+                                            .map(|ts| ts.get().into()),
+                                        is_current,
+                                    }
                                 })
                                 .collect::<Vec<_>>();
                             log!("Fetched {} device(s)", devices.len());
