@@ -30,7 +30,7 @@ fn bot_binding_known_bot_user_ids(app_state: &AppState) -> Vec<OwnedUserId> {
         if app_state
             .agent_registry
             .get(agent_user_id.as_ref())
-            .is_some_and(|entry| entry.framework == AgentFramework::Octos)
+            .is_some_and(|entry| matches!(entry.framework, AgentFramework::Octos | AgentFramework::OctosDirect))
         {
             push_unique_bot_user_id(&mut known_bot_user_ids, agent_user_id);
         }
@@ -763,6 +763,31 @@ mod tests {
         assert!(
             known_bots.iter().any(|user_id| user_id.as_str() == octos_id.as_str()),
             "room bot picker should offer globally registered Octos agents without requiring manual re-entry",
+        );
+    }
+
+    #[test]
+    fn room_bot_picker_includes_registered_octos_direct_agents() {
+        let mut app_state = AppState::default();
+        let octos_direct_id: OwnedUserId = "@myagent:matrix.palpo.im".try_into().unwrap();
+
+        app_state.agent_registry.register(
+            octos_direct_id.clone(),
+            AgentEntry {
+                framework: AgentFramework::OctosDirect,
+                ..Default::default()
+            },
+        );
+
+        let known_bots = bot_binding_known_bot_user_ids(&app_state);
+
+        assert!(
+            known_bots.iter().any(|user_id| user_id.as_str() == octos_direct_id.as_str()),
+            "room bot picker should offer OctosDirect agents registered through Agent Lab",
+        );
+        assert!(
+            !app_state.bot_settings.known_bot_user_ids.contains(&octos_direct_id),
+            "OctosDirect recognition should come from AgentRegistry, not AppService known-bot persistence",
         );
     }
 

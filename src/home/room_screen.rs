@@ -1298,7 +1298,7 @@ fn detected_bot_binding_for_members(
         }
     }
 
-    let known_bot_user_ids = app_state.bot_settings.known_bot_user_ids();
+    let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
     if let Some(bot_member) = non_self_members
         .iter()
         .find(|room_member|
@@ -14358,6 +14358,26 @@ mod tests {
         assert!(!room_info_title_shows_agent_badge(
             Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
         ));
+    }
+
+    #[test]
+    fn test_detected_bot_binding_uses_registry_augmented_known_bots() {
+        let src = include_str!("room_screen.rs");
+        let fn_pos = src
+            .find("fn detected_bot_binding_for_members")
+            .expect("detected_bot_binding_for_members should exist");
+        let fn_src = &src[fn_pos..src[fn_pos..].find("fn is_likely_bot_user_id")
+            .map(|end| fn_pos + end)
+            .unwrap_or(src.len())];
+
+        assert!(
+            fn_src.contains("timeline_known_bot_user_ids(app_state)"),
+            "DM bot binding detection should include AgentRegistry agents such as OctosDirect",
+        );
+        assert!(
+            !fn_src.contains("app_state.bot_settings.known_bot_user_ids()"),
+            "DM bot binding detection must not read only raw AppService known-bots",
+        );
     }
 
     #[test]
