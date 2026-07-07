@@ -1442,12 +1442,16 @@ mod tests {
     }
 
     #[test]
-    fn test_add_modal_offers_three_framework_cards() {
-        // The framework selector lives in the add-agent modal as selectable cards.
+    fn test_add_modal_offers_framework_cards() {
+        // The framework selector lives in the add-agent modal as a PortalList of
+        // selectable cards — one reusable template drawn once per
+        // framework_options() entry (Octos AppService, Octos Direct, Hermes,
+        // OpenClaw), styled per-item. Driving it from framework_options() keeps
+        // "add a new framework" a one-line change here.
         let src = include_str!("agent_add_modal.rs");
-        assert!(src.contains("octos_card"));
-        assert!(src.contains("hermes_card"));
-        assert!(src.contains("openclaw_card"));
+        assert!(src.contains("framework_list := PortalList"));
+        assert!(src.contains("framework_card := FrameworkCard"));
+        assert!(src.contains("framework_options()"));
     }
 
     #[test]

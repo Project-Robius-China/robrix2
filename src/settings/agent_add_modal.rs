@@ -21,7 +21,7 @@ use crate::{
     profile::user_profile::UserProfile,
     shared::avatar::AvatarState,
     settings::{
-        agent_settings::{framework_label, framework_mono, parse_agent_user_id, register_agent_from_search},
+        agent_settings::{framework_label, framework_mono, framework_options, parse_agent_user_id, register_agent_from_search},
         bot_settings::{OctosHealthState, OctosHealthStatus},
     },
     sliding_sync::{
@@ -392,16 +392,21 @@ script_mod! {
                 }
             }
 
-            body_scroll := ScrollYView {
+            body_scroll := View {
                 width: Fill
                 height: 382
                 flow: Down
                 spacing: 0
 
                 // ---------- STEP 1: framework picker ----------
+                // A PortalList (not a plain ScrollYView) so the cards drag-scroll
+                // on touch: PortalList owns the finger and disambiguates a tap
+                // (select a card) from a drag (scroll). A ScrollYView can't --
+                // the full-cover card button captures the drag and it never
+                // scrolls on Android.
                 step1_view := View {
                     width: Fill
-                    height: Fit
+                    height: Fill
                     flow: Down
                     spacing: 4
 
@@ -416,19 +421,21 @@ script_mod! {
                         text: "Pick the agent framework."
                     }
 
-                    // Per-framework visuals (mono, name, tag, blurb, colors) are
-                    // populated from Rust in `populate_framework_cards` to avoid
-                    // deep DSL overrides (unreliable in this Makepad fork).
-                    octos_card := FrameworkCard {}
-                    octos_direct_card := FrameworkCard {}
-                    hermes_card := FrameworkCard {}
-                    openclaw_card := FrameworkCard {}
+                    // One reusable card template; the four frameworks are drawn
+                    // and populated per-item in `draw_walk` (mono/name/tag/blurb/
+                    // colors/selection), keyed by list index.
+                    framework_list := PortalList {
+                        width: Fill
+                        height: Fill
+                        grab_key_focus: false
+                        framework_card := FrameworkCard {}
+                    }
                 }
 
                 // ---------- STEP 2: detect/bind ----------
-                step2_view := View {
+                step2_view := ScrollYView {
                     width: Fill
-                    height: Fit
+                    height: Fill
                     flow: Down
                     spacing: 8
                     visible: false
@@ -814,7 +821,29 @@ impl Widget for AddAgentModal {
         if let Some(mut sheet) = self.view.view(cx, ids!(sheet)).borrow_mut() {
             sheet.walk.margin.bottom = margin_bottom;
         }
-        self.view.draw_walk(cx, scope, walk)
+
+        // Drive the step-1 framework picker's PortalList. Stepping the view's
+        // draw yields the PortalList when it needs external population; we map
+        // each visible index -> framework_options()[index] and style one shared
+        // `framework_card` template. PortalList owns the finger, so a tap
+        // selects and a drag scrolls (the reason for this whole widget: a
+        // full-cover card button in a ScrollYView never scrolled on Android).
+        // Adding a framework later is a one-line change in framework_options().
+        let frameworks = framework_options();
+        let app_language = self.app_language;
+        let selected = self.selected_framework;
+        while let Some(widget) = self.view.draw_walk(cx, scope, walk).step() {
+            let portal_list = widget.as_portal_list();
+            let Some(mut list) = portal_list.borrow_mut() else { continue };
+            list.set_item_range(cx, 0, frameworks.len());
+            while let Some(index) = list.next_visible_item(cx) {
+                let Some(framework) = frameworks.get(index).copied() else { continue };
+                let item = list.item(cx, index, id!(framework_card));
+                Self::style_framework_card(cx, &item, framework, selected == Some(framework), app_language);
+                item.draw_all(cx, &mut Scope::empty());
+            }
+        }
+        DrawStep::done()
     }
 }
 
@@ -835,19 +864,20 @@ impl WidgetMatchEvent for AddAgentModal {
             return;
         }
 
-        // Framework card selection (step 1).
+        // Framework card selection (step 1). The picker is a PortalList of one
+        // shared `framework_card` template, so a click is matched by list index
+        // -> framework_options()[index] rather than a named card.
+        // `items_with_actions` returns only the items that fired this pass.
         if self.step == 1 {
-            let cards = [
-                (AgentFramework::Octos, ids!(octos_card.card_click)),
-                (AgentFramework::OctosDirect, ids!(octos_direct_card.card_click)),
-                (AgentFramework::Hermes, ids!(hermes_card.card_click)),
-                (AgentFramework::OpenClaw, ids!(openclaw_card.card_click)),
-            ];
-            for (framework, click_id) in cards {
-                if self.view.button(cx, click_id).clicked(actions) {
-                    self.selected_framework = Some(framework);
-                    self.update_framework_cards(cx);
-                    self.sync_primary_button(cx);
+            let frameworks = framework_options();
+            let list = self.view.portal_list(cx, ids!(framework_list));
+            for (index, item) in list.items_with_actions(actions) {
+                if item.button(cx, ids!(card_click)).clicked(actions) {
+                    if let Some(framework) = frameworks.get(index).copied() {
+                        self.selected_framework = Some(framework);
+                        self.redraw(cx);
+                        self.sync_primary_button(cx);
+                    }
                 }
             }
         }
@@ -1108,96 +1138,78 @@ impl AddAgentModal {
         }
     }
 
-    fn populate_framework_cards(&mut self, cx: &mut Cx) {
-        // Text content.
-        let text = |key| tr_key(self.app_language, key);
-        self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono))
-            .set_text(cx, text("settings.labs.agents.framework.octos.mono"));
-        self.view.label(cx, ids!(octos_card.card_body.card_col.card_name))
-            .set_text(cx, text("settings.labs.agents.framework.octos.name"));
-        self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label))
-            .set_text(cx, text("settings.labs.agents.framework.octos.tag"));
-        self.view.label(cx, ids!(octos_card.card_body.card_col.card_blurb))
-            .set_text(cx, text("settings.labs.agents.framework.octos.blurb"));
-        self.view.label(cx, ids!(octos_direct_card.card_body.card_tile.card_mono))
-            .set_text(cx, text("settings.labs.agents.framework.octos_direct.mono"));
-        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_name))
-            .set_text(cx, text("settings.labs.agents.framework.octos_direct.name"));
-        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_tag.card_tag_label))
-            .set_text(cx, text("settings.labs.agents.framework.octos_direct.tag"));
-        self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_blurb))
-            .set_text(cx, text("settings.labs.agents.framework.octos_direct.blurb"));
-        self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono)).set_text(cx, "He");
-        self.view.label(cx, ids!(hermes_card.card_body.card_col.card_name)).set_text(cx, "Hermes");
-        self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
-        self.view.label(cx, ids!(hermes_card.card_body.card_col.card_blurb)).set_text(cx, "Registered as a Matrix friend.");
-        self.view.label(cx, ids!(openclaw_card.card_body.card_tile.card_mono)).set_text(cx, "Cl");
-        self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_name)).set_text(cx, "OpenClaw");
-        self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
-        self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_blurb)).set_text(cx, "Registered as a Matrix friend.");
+    /// Populate + style one framework card in the picker `PortalList`. Called
+    /// per visible item in `draw_walk`, keyed by list index -> framework, so a
+    /// tap selects and a drag scrolls (PortalList disambiguates on touch).
+    fn style_framework_card(
+        cx: &mut Cx2d,
+        card: &WidgetRef,
+        framework: AgentFramework,
+        selected: bool,
+        app_language: AppLanguage,
+    ) {
+        let (name, tag, blurb): (&str, &str, &str) = match framework {
+            AgentFramework::Octos => (
+                tr_key(app_language, "settings.labs.agents.framework.octos.name"),
+                tr_key(app_language, "settings.labs.agents.framework.octos.tag"),
+                tr_key(app_language, "settings.labs.agents.framework.octos.blurb"),
+            ),
+            AgentFramework::OctosDirect => (
+                tr_key(app_language, "settings.labs.agents.framework.octos_direct.name"),
+                tr_key(app_language, "settings.labs.agents.framework.octos_direct.tag"),
+                tr_key(app_language, "settings.labs.agents.framework.octos_direct.blurb"),
+            ),
+            AgentFramework::Hermes => ("Hermes", "DIRECT AGENT", "Registered as a Matrix friend."),
+            AgentFramework::OpenClaw => ("OpenClaw", "DIRECT AGENT", "Registered as a Matrix friend."),
+            AgentFramework::Unknown => ("Agent", "AGENT", ""),
+        };
+        card.label(cx, ids!(card_body.card_tile.card_mono)).set_text(cx, framework_mono(framework));
+        card.label(cx, ids!(card_body.card_col.card_name)).set_text(cx, name);
+        card.label(cx, ids!(card_body.card_col.card_tag.card_tag_label)).set_text(cx, tag);
+        card.label(cx, ids!(card_body.card_col.card_blurb)).set_text(cx, blurb);
 
-        // Per-framework colors (tile fill + mono text + tag text).
-        let mut octos_tile = self.view.view(cx, ids!(octos_card.card_body.card_tile));
-        script_apply_eval!(cx, octos_tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-        let mut octos_mono = self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono));
-        script_apply_eval!(cx, octos_mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
-        let mut octos_tag = self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label));
-        script_apply_eval!(cx, octos_tag, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
-        let mut octos_tag_pill = self.view.view(cx, ids!(octos_card.card_body.card_col.card_tag));
-        script_apply_eval!(cx, octos_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-
-        // OctosDirect reuses the Octos framework palette (it is an Octos agent,
-        // just added directly instead of via App Service).
-        let mut octos_direct_tile = self.view.view(cx, ids!(octos_direct_card.card_body.card_tile));
-        script_apply_eval!(cx, octos_direct_tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-        let mut octos_direct_mono = self.view.label(cx, ids!(octos_direct_card.card_body.card_tile.card_mono));
-        script_apply_eval!(cx, octos_direct_mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
-        let mut octos_direct_tag = self.view.label(cx, ids!(octos_direct_card.card_body.card_col.card_tag.card_tag_label));
-        script_apply_eval!(cx, octos_direct_tag, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
-        let mut octos_direct_tag_pill = self.view.view(cx, ids!(octos_direct_card.card_body.card_col.card_tag));
-        script_apply_eval!(cx, octos_direct_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-
-        let mut hermes_tile = self.view.view(cx, ids!(hermes_card.card_body.card_tile));
-        script_apply_eval!(cx, hermes_tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-        let mut hermes_mono = self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono));
-        script_apply_eval!(cx, hermes_mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
-        let mut hermes_tag = self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag.card_tag_label));
-        script_apply_eval!(cx, hermes_tag, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
-        let mut hermes_tag_pill = self.view.view(cx, ids!(hermes_card.card_body.card_col.card_tag));
-        script_apply_eval!(cx, hermes_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-
-        let mut openclaw_tile = self.view.view(cx, ids!(openclaw_card.card_body.card_tile));
-        script_apply_eval!(cx, openclaw_tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-        let mut openclaw_mono = self.view.label(cx, ids!(openclaw_card.card_body.card_tile.card_mono));
-        script_apply_eval!(cx, openclaw_mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
-        let mut openclaw_tag = self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_tag.card_tag_label));
-        script_apply_eval!(cx, openclaw_tag, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
-        let mut openclaw_tag_pill = self.view.view(cx, ids!(openclaw_card.card_body.card_col.card_tag));
-        script_apply_eval!(cx, openclaw_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-    }
-
-    fn update_framework_cards(&mut self, cx: &mut Cx) {
-        let cards = [
-            (AgentFramework::Octos, ids!(octos_card)),
-            (AgentFramework::OctosDirect, ids!(octos_direct_card)),
-            (AgentFramework::Hermes, ids!(hermes_card)),
-            (AgentFramework::OpenClaw, ids!(openclaw_card)),
-        ];
-        for (framework, card_id) in cards {
-            let selected = self.selected_framework == Some(framework);
-            self.view.widget(cx, &[card_id[0], live_id!(card_body), live_id!(card_radio), live_id!(card_radio_check)])
-                .set_visible(cx, selected);
-            let mut radio = self.view.view(cx, &[card_id[0], live_id!(card_body), live_id!(card_radio)]);
-            let mut card = self.view.view(cx, &[card_id[0], live_id!(card_body)]);
-            if selected {
-                script_apply_eval!(cx, radio, { draw_bg +: { color: mod.widgets.RBX_ACCENT, border_color: mod.widgets.RBX_ACCENT } });
-                script_apply_eval!(cx, card, { draw_bg +: { border_size: 1.5, border_color: mod.widgets.RBX_ACCENT, color: mod.widgets.RBX_ACCENT_SOFT } });
-            } else {
-                script_apply_eval!(cx, radio, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE, border_color: mod.widgets.RBX_STROKE_STRONG } });
-                script_apply_eval!(cx, card, { draw_bg +: { border_size: 1.0, border_color: mod.widgets.RBX_STROKE_SOFT, color: mod.widgets.RBX_BG_SURFACE } });
+        let mut tile = card.view(cx, ids!(card_body.card_tile));
+        let mut mono = card.label(cx, ids!(card_body.card_tile.card_mono));
+        let mut tag_label = card.label(cx, ids!(card_body.card_col.card_tag.card_tag_label));
+        let mut tag_pill = card.view(cx, ids!(card_body.card_col.card_tag));
+        match framework {
+            // OctosDirect reuses the Octos palette (it is an Octos agent).
+            AgentFramework::Octos | AgentFramework::OctosDirect => {
+                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
+                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+                script_apply_eval!(cx, tag_label, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+                script_apply_eval!(cx, tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
+            }
+            AgentFramework::Hermes => {
+                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
+                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
+                script_apply_eval!(cx, tag_label, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
+                script_apply_eval!(cx, tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
+            }
+            AgentFramework::OpenClaw => {
+                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
+                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
+                script_apply_eval!(cx, tag_label, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
+                script_apply_eval!(cx, tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
+            }
+            AgentFramework::Unknown => {
+                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE_SUBTLE } });
+                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
+                script_apply_eval!(cx, tag_label, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
+                script_apply_eval!(cx, tag_pill, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
             }
         }
-        self.view.redraw(cx);
+
+        card.widget(cx, ids!(card_body.card_radio.card_radio_check)).set_visible(cx, selected);
+        let mut radio = card.view(cx, ids!(card_body.card_radio));
+        let mut body = card.view(cx, ids!(card_body));
+        if selected {
+            script_apply_eval!(cx, radio, { draw_bg +: { color: mod.widgets.RBX_ACCENT, border_color: mod.widgets.RBX_ACCENT } });
+            script_apply_eval!(cx, body, { draw_bg +: { border_size: 1.5, border_color: mod.widgets.RBX_ACCENT, color: mod.widgets.RBX_ACCENT_SOFT } });
+        } else {
+            script_apply_eval!(cx, radio, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE, border_color: mod.widgets.RBX_STROKE_STRONG } });
+            script_apply_eval!(cx, body, { draw_bg +: { border_size: 1.0, border_color: mod.widgets.RBX_STROKE_SOFT, color: mod.widgets.RBX_BG_SURFACE } });
+        }
     }
 
     fn sync_steps(&mut self, cx: &mut Cx) {
@@ -1206,11 +1218,12 @@ impl AddAgentModal {
         self.view.view(cx, ids!(step2_view)).set_visible(cx, step2);
         self.view.button(cx, ids!(back_button)).set_visible(cx, step2);
         self.view.view(cx, ids!(footer)).set_visible(cx, !step2);
-        // Both steps share one fixed-height ScrollYView (`body_scroll`). The
-        // step-1 framework picker (now 4 cards) can overflow it, so reset the
-        // scroll to the top on every step switch — otherwise a stale step-1
-        // offset clips step-2's header + Matrix ID input at the top.
-        self.view.view(cx, ids!(body_scroll)).set_scroll_pos(cx, Vec2d { x: 0.0, y: 0.0 });
+        // Reset both steps' scroll to the top on every step switch so a stale
+        // offset never clips the next step's top. Step 1 scrolls via its
+        // framework-picker PortalList (reset its first visible item); step 2
+        // via its own ScrollYView.
+        self.view.portal_list(cx, ids!(framework_list)).set_first_id(0);
+        self.view.view(cx, ids!(step2_view)).set_scroll_pos(cx, Vec2d { x: 0.0, y: 0.0 });
 
         if step2 {
             let fw = self.selected_framework.map(framework_label).unwrap_or("agent");
@@ -1367,8 +1380,8 @@ impl AddAgentModal {
         self.view.text_input(cx, ids!(octos_section.octos_url_field.field_input)).set_text(cx, BotSettingsState::DEFAULT_OCTOS_SERVICE_URL);
         self.view.button(cx, ids!(octos_section.save_appservice_button)).set_text(cx, "Save AppService");
         self.set_add_friend_label(cx, "Add friend & bind");
-        self.populate_framework_cards(cx);
-        self.update_framework_cards(cx);
+        // The framework cards populate + style themselves per-item in draw_walk
+        // (keyed by framework_options() index); sync_steps + redraw drive it.
         self.sync_steps(cx);
         self.view.redraw(cx);
     }
@@ -1394,7 +1407,6 @@ impl AddAgentModal {
             .set_text(cx, &url);
         self.view.button(cx, ids!(octos_section.save_appservice_button))
             .set_text(cx, "Save AppService");
-        self.update_framework_cards(cx);
         self.sync_steps(cx);
         let id_input = self.view.text_input(cx, ids!(id_field.field_input));
         if let Some(existing_octos_agent_user_id) = existing_octos_agent_user_id
@@ -1565,9 +1577,11 @@ mod tests {
         let body = &src[start..end];
 
         assert!(
-            body.contains("body_scroll") && body.contains("set_scroll_pos"),
-            "sync_steps must reset body_scroll to the top on step switch, so an \
-             overflowing step-1 picker does not clip step-2's top",
+            body.contains("set_first_id") && body.contains("set_scroll_pos"),
+            "sync_steps must reset both steps' scroll to the top on step switch \
+             (step-1 framework PortalList via set_first_id, step-2 ScrollYView \
+             via set_scroll_pos), so an overflowing step-1 picker does not clip \
+             step-2's top",
         );
     }
 
@@ -1769,18 +1783,19 @@ mod tests {
             tr_key(AppLanguage::ChineseSimplified, "settings.labs.agents.framework.octos_direct.blurb"),
             "Octos, 作为 Matrix 好友直接添加。",
         );
+        // name/tag/blurb are read from i18n per-item in style_framework_card;
+        // the mono badge comes from framework_mono() (shared with the step-2
+        // header), so it is not asserted here.
         for key in [
-            "settings.labs.agents.framework.octos_direct.mono",
             "settings.labs.agents.framework.octos_direct.name",
             "settings.labs.agents.framework.octos_direct.tag",
             "settings.labs.agents.framework.octos_direct.blurb",
         ] {
             assert!(
-                src.contains(&format!("text(\"{key}\")")),
+                src.contains(&format!("tr_key(app_language, \"{key}\")")),
                 "OctosDirect card text should read {key} from i18n resources",
             );
         }
-        assert!(src.contains("let text = |key| tr_key(self.app_language, key);"));
         assert!(
             !src.contains(".set_text(cx, \"Octos (Direct)\")"),
             "OctosDirect card name should not be hardcoded in AddAgentModal",
@@ -1884,12 +1899,18 @@ mod tests {
         let src = production_src(include_str!("agent_add_modal.rs"));
 
         assert!(src.contains("height: 592"));
-        assert!(src.contains("body_scroll := ScrollYView"));
+        // body_scroll is a fixed-height View container; step 1 scrolls via its
+        // PortalList and step 2 via its own ScrollYView (see step2_view).
+        assert!(src.contains("body_scroll := View"));
         assert!(
-            src.contains("body_scroll := ScrollYView {\n                width: Fill\n                height: 382"),
+            src.contains("body_scroll := View {\n                width: Fill\n                height: 382"),
             "body_scroll must not Fill over the sticky footer hit area on Android",
         );
-        let body_pos = src.find("body_scroll := ScrollYView").expect("modal should have a scroll body");
+        assert!(
+            src.contains("step2_view := ScrollYView"),
+            "step 2 keeps its own vertical scroll for the detect/bind form",
+        );
+        let body_pos = src.find("body_scroll := View").expect("modal should have a body");
         let footer_pos = src.find("footer := View").expect("modal should keep a footer");
         assert!(body_pos < footer_pos, "footer should be outside and after the scroll body");
     }
@@ -1898,7 +1919,7 @@ mod tests {
     fn test_add_modal_sheet_does_not_steal_text_input_focus() {
         let src = production_src(include_str!("agent_add_modal.rs"));
         let sheet_pos = src.find("sheet := RoundedView").expect("modal should have a sheet");
-        let body_pos = src.find("body_scroll := ScrollYView").expect("modal should have a body");
+        let body_pos = src.find("body_scroll := View").expect("modal should have a body");
         let sheet_block = &src[sheet_pos..body_pos];
 
         assert!(sheet_block.contains("cursor: MouseCursor.Default"));
@@ -1912,13 +1933,27 @@ mod tests {
     #[test]
     fn test_framework_picker_matches_handoff_order_and_tile_size() {
         let src = production_src(include_str!("agent_add_modal.rs"));
-        let hermes_pos = src.find("hermes_card := FrameworkCard").expect("Hermes card should exist");
-        let openclaw_pos = src.find("openclaw_card := FrameworkCard").expect("OpenClaw card should exist");
-        let octos_pos = src.find("octos_card := FrameworkCard").expect("Octos card should exist");
-
-        assert!(hermes_pos < openclaw_pos);
-        assert!(openclaw_pos < octos_pos);
-        assert!(src.contains("card_tile := RoundedView {\n                width: 48\n                height: 48"));
+        // The picker is a single PortalList of one reusable FrameworkCard
+        // template; the four frameworks — and their order (Octos AppService,
+        // Octos Direct, Hermes, OpenClaw) — come from framework_options(),
+        // mapped by list index in draw_walk. This is what makes the cards
+        // drag-scroll on touch, and keeps "add a 5th framework" a one-line
+        // change in agent_settings::framework_options().
+        assert!(src.contains("framework_list := PortalList"));
+        assert!(src.contains("framework_card := FrameworkCard"));
+        assert!(
+            src.contains("let frameworks = framework_options();"),
+            "draw_walk (and the click handler) must drive the picker from framework_options()",
+        );
+        assert!(
+            src.contains("frameworks.get(index)"),
+            "each visible PortalList index maps to framework_options()[index]",
+        );
+        // No per-framework named cards remain — that was the source of the
+        // Android tap-vs-scroll bug this refactor removed.
+        assert!(!src.contains("octos_card := FrameworkCard"));
+        assert!(!src.contains("hermes_card := FrameworkCard"));
+        assert!(src.contains("card_tile := RoundedView {\n                width: 40\n                height: 40"));
     }
 
     #[test]
