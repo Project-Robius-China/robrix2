@@ -330,9 +330,7 @@ script_mod! {
 
     let AgentStatTile = RoundedView {
         width: Fill
-        // Fixed height so all three stat tiles stay equal even when a longer
-        // label (e.g. "Octos AppService") wraps to two lines on mobile.
-        height: 64
+        height: Fit
         flow: Down
         spacing: 2
         padding: Inset{left: 10, right: 10, top: 9, bottom: 9}
@@ -427,7 +425,7 @@ script_mod! {
                 stat_label.text: "Direct"
             }
             octos_agents_stat := AgentStatTile {
-                stat_label.text: "Octos AppService"
+                stat_label.text: "AppService"
             }
         }
 
