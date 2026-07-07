@@ -182,6 +182,10 @@ enum PopupMode {
     None,
     Mention,
     SlashCommand,
+    /// The `/invitebot` second-stage picker: a list of registered agents not yet
+    /// in the room. Selecting one emits
+    /// [`MentionableTextInputAction::InviteBotSelected`] instead of any text.
+    BotInvite,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -293,6 +297,62 @@ const MANAGEMENT_ROOM_SLASH_COMMANDS: &[SlashCommand] = &[
         needs_args: true,
     },
 ];
+
+/// Client-side `/invitebot` command. Unlike the BotFather management commands
+/// above (which are sent as message text for the appservice bot to interpret),
+/// selecting `/invitebot` NEVER sends message text — it opens the inline
+/// bot-invite picker (`PopupMode::BotInvite`), and picking a bot fires a local
+/// `MatrixRequest::InviteUser`. Offered in any room where the user has invite
+/// permission, independent of the `is_management_bot_room` gating.
+/// `needs_args` is unused for it (selection is special-cased before the
+/// submit/insert paths in `on_slash_command_selected`).
+const INVITEBOT_SLASH_COMMAND: SlashCommand = SlashCommand {
+    command: "/invitebot",
+    description_key: "slash_command.invitebot.description",
+    needs_args: false,
+};
+
+const INVITE_SLASH_COMMANDS: &[SlashCommand] = &[INVITEBOT_SLASH_COMMAND];
+
+/// The invite command set offered for a room, gated only on the user's
+/// room-level invite permission.
+fn invite_slash_commands(can_invite: bool) -> &'static [SlashCommand] {
+    if can_invite {
+        INVITE_SLASH_COMMANDS
+    } else {
+        &[]
+    }
+}
+
+/// True if the first whitespace-delimited token of `text` is exactly
+/// `/invitebot` — used by the selection and submission handlers to divert to
+/// the bot-invite picker instead of the message-send path.
+pub(crate) fn is_invitebot_command(text: &str) -> bool {
+    text.split_whitespace().next() == Some(INVITEBOT_SLASH_COMMAND.command)
+}
+
+/// A registered agent that can be offered in the `/invitebot` picker.
+/// Computed by `room_screen` from the global `AgentRegistry` and passed in
+/// through `RoomScreenProps`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvitableAgent {
+    pub user_id: OwnedUserId,
+    pub display_name: String,
+}
+
+/// Filters the registered-agent list down to agents not already present in
+/// the room (`present_user_ids` = members of any membership state we know of,
+/// including pending invites).
+pub(crate) fn filter_invitable_agents(
+    agents: &[InvitableAgent],
+    present_user_ids: &[OwnedUserId],
+) -> Vec<InvitableAgent> {
+    agents
+        .iter()
+        .filter(|agent| !present_user_ids.contains(&agent.user_id))
+        .cloned()
+        .collect()
+}
 
 /// agent-chat demo workflow commands. Unlike the bot commands above, robrix2 does
 /// NOT handle these on submit — they are plain text that the `wf_coordinator` agent
@@ -1281,6 +1341,13 @@ pub enum MentionableTextInputAction {
         /// Whether we currently have cached members
         has_members: bool,
     },
+    /// Emitted by the `/invitebot` picker when the user picks a bot to invite.
+    /// Unlike the variants above (which flow INTO the widget), this flows OUT:
+    /// the owning room screen dispatches it as a `MatrixRequest::InviteUser`.
+    InviteBotSelected {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
 }
 
 /// Widget that extends CommandTextInput with @mention capabilities
@@ -1378,7 +1445,7 @@ impl Widget for MentionableTextInput {
             }
         }
 
-        if self.is_slash_command_popup_active() {
+        if self.is_slash_command_popup_active() || self.is_bot_invite_popup_active() {
             if let Event::KeyDown(key_event) = event {
                 if key_event.key_code == KeyCode::Escape {
                     self.close_mention_popup(cx);
@@ -1386,6 +1453,28 @@ impl Widget for MentionableTextInput {
                     self.redraw(cx);
                     return;
                 }
+            }
+        }
+
+        // `/invitebot` is a client-side command that must never be submitted as
+        // message text: if the user typed it out fully (popup no longer selecting,
+        // e.g. after a trailing space) and presses Return, divert to the
+        // bot-invite picker instead of the send path.
+        if let Event::KeyDown(KeyEvent {
+            key_code: KeyCode::ReturnKey,
+            ..
+        }) = event {
+            let popup_selecting = self.cmd_text_input.view(cx, ids!(popup)).visible()
+                && self.cmd_text_input.keyboard_focus_index().is_some();
+            if !popup_selecting
+                && is_invitebot_command(&self.text())
+                && scope
+                    .props
+                    .get::<RoomScreenProps>()
+                    .is_some_and(|room_props| room_props.can_invite)
+            {
+                self.open_bot_invite_picker(cx, scope);
+                return;
             }
         }
 
@@ -1507,6 +1596,9 @@ impl Widget for MentionableTextInput {
                 // Handle MentionableTextInputAction actions
                 if let Some(action) = action.downcast_ref::<MentionableTextInputAction>() {
                     match action {
+                        // Outward-flowing action emitted BY this widget; consumed by
+                        // the owning room screen, not by us.
+                        MentionableTextInputAction::InviteBotSelected { .. } => {}
                         MentionableTextInputAction::PowerLevelsUpdated {
                             room_id,
                             can_notify_room,
@@ -1786,6 +1878,10 @@ impl MentionableTextInput {
         self.active_popup_mode == PopupMode::SlashCommand
     }
 
+    fn is_bot_invite_popup_active(&self) -> bool {
+        self.active_popup_mode == PopupMode::BotInvite
+    }
+
     /// Generate the next unique identifier for a background search job.
     fn allocate_search_id(&mut self) -> u64 {
         if self.next_search_id == 0 {
@@ -2037,6 +2133,9 @@ impl MentionableTextInput {
             &room_props.known_bot_user_ids,
         );
         let bot_enabled = bot_context != SlashCommandDiscoveryContext::None;
+        // `/invitebot` is a client-side command gated only on the user's invite
+        // permission — independent of the appservice/BotFather management gating.
+        let invite_enabled = room_props.can_invite;
         // agent-chat demo: offer the workflow `/` commands when a coordinator agent is
         // in the room (robrix2 has no built-in "agent-chat room" concept). Match ANY
         // team's coordinator — `wf_coordinator`, `alpha_coordinator`, … — on display name
@@ -2059,7 +2158,7 @@ impl MentionableTextInput {
             });
         #[cfg(not(feature = "agent_chat"))]
         let workflow_enabled = false;
-        if !bot_enabled && !workflow_enabled {
+        if !bot_enabled && !workflow_enabled && !invite_enabled {
             if self.active_popup_mode != PopupMode::None {
                 self.close_mention_popup(cx);
             }
@@ -2078,11 +2177,17 @@ impl MentionableTextInput {
         // Filter each enabled command set separately so they render as labelled,
         // visually-separated sections (a room like octos-public has BOTH Octos bots and
         // the wf_coordinator agent, so both sets are active).
-        let bot_matches = if bot_enabled {
+        let mut bot_matches = if bot_enabled {
             matching_slash_commands_for_context(bot_context, search_text)
         } else {
             Vec::new()
         };
+        // `/invitebot` renders inside the same "Bot Commands" section as the
+        // management commands, but is offered purely on invite permission.
+        bot_matches.extend(matching_slash_commands_in(
+            invite_slash_commands(invite_enabled),
+            search_text,
+        ));
         #[cfg(feature = "agent_chat")]
         let workflow_matches = if workflow_enabled {
             matching_slash_commands_in(WORKFLOW_SLASH_COMMANDS, search_text)
@@ -2335,9 +2440,17 @@ impl MentionableTextInput {
         finalize_popup_selection(cx, self);
     }
 
-    fn on_slash_command_selected(&mut self, cx: &mut Cx, selected: WidgetRef) {
+    fn on_slash_command_selected(&mut self, cx: &mut Cx, scope: &mut Scope, selected: WidgetRef) {
         let command = selected.label(cx, ids!(command_name)).text();
         if command.is_empty() {
+            return;
+        }
+
+        // `/invitebot` is a client-side command: selecting it opens the second-stage
+        // bot picker. It must never take the submit path (send as message text) nor
+        // the insert path (wait for typed args).
+        if is_invitebot_command(&command) {
+            self.open_bot_invite_picker(cx, scope);
             return;
         }
 
@@ -2386,9 +2499,127 @@ impl MentionableTextInput {
     fn on_popup_item_selected(&mut self, cx: &mut Cx, scope: &mut Scope, selected: WidgetRef) {
         match self.active_popup_mode {
             PopupMode::Mention => self.on_user_selected(cx, scope, selected),
-            PopupMode::SlashCommand => self.on_slash_command_selected(cx, selected),
+            PopupMode::SlashCommand => self.on_slash_command_selected(cx, scope, selected),
+            PopupMode::BotInvite => self.on_bot_invite_selected(cx, scope, selected),
             PopupMode::None => {}
         }
+    }
+
+    /// Opens the second-stage `/invitebot` picker: clears the command trigger text
+    /// (it must never be sent as a message) and fills the popup with the registered
+    /// agents that are not yet in this room, or a non-selectable hint when there is
+    /// nothing to invite.
+    fn open_bot_invite_picker(&mut self, cx: &mut Cx, scope: &mut Scope) {
+        let Some(room_props) = scope.props.get::<RoomScreenProps>() else {
+            return;
+        };
+        let agents = room_props.invitable_agents.clone();
+        let has_registered_agents = room_props.has_registered_agents;
+        let app_language = Self::current_app_language(scope);
+
+        // Clear the "/invitebot" trigger text. `set_input_text_preserving_mentions`
+        // updates `last_text` directly without a text-change round trip, so it
+        // cannot close the picker we are about to open.
+        reset_visible_mention_tracking_for_programmatic_text_set(
+            &mut self.tracked_visible_mentions,
+            &mut self.possible_room_mention,
+        );
+        self.set_input_text_preserving_mentions(cx, "");
+
+        self.cancel_active_search();
+        self.search_state = MentionSearchState::Idle;
+        self.last_search_text = None;
+        self.loading_indicator_ref = None;
+        self.active_popup_mode = PopupMode::BotInvite;
+
+        self.cmd_text_input.clear_items(cx);
+        self.cmd_text_input.reset_list_scroll(cx);
+        self.set_popup_header_text(cx, tr_key(app_language, "slash_command.invitebot.description"));
+
+        const USER_ITEM_HEIGHT: f64 = 36.0;
+        const STATUS_ITEM_HEIGHT: f64 = 48.0;
+        const LIST_PADDING: f64 = 4.0;
+
+        let content_height = if agents.is_empty() {
+            let hint_key = if has_registered_agents {
+                "slash_command.invitebot.all_present_hint"
+            } else {
+                "slash_command.invitebot.empty_hint"
+            };
+            self.add_bot_invite_hint_item(cx, tr_key(app_language, hint_key));
+            STATUS_ITEM_HEIGHT + LIST_PADDING
+        } else {
+            let items_added = self.add_bot_invite_items(cx, &agents);
+            (items_added as f64 * USER_ITEM_HEIGHT) + LIST_PADDING
+        };
+
+        let max_scroll_height = if cx.display_context.is_desktop() {
+            DESKTOP_MAX_SCROLL_HEIGHT
+        } else {
+            MOBILE_MAX_SCROLL_HEIGHT
+        };
+        self.set_list_scroll_height(cx, content_height.min(max_scroll_height));
+
+        self.cmd_text_input.view(cx, ids!(popup)).set_visible(cx, true);
+        self.pending_draw_focus_restore = true;
+        self.redraw(cx);
+    }
+
+    /// Renders one selectable row per invitable agent, reusing the mention list's
+    /// `user_list_item` template (display name + MXID + text-initial avatar).
+    fn add_bot_invite_items(&mut self, cx: &mut Cx, agents: &[InvitableAgent]) -> usize {
+        let Some(user_list_item_ptr) = self.user_list_item else {
+            return 0;
+        };
+
+        let mut items_added = 0;
+        for (index, agent) in agents.iter().enumerate() {
+            let item = crate::widget_ref_from_live_ptr(cx, Some(user_list_item_ptr));
+            item.label(cx, ids!(username)).set_text(cx, &agent.display_name);
+            item.label(cx, ids!(user_id)).set_text(cx, agent.user_id.as_str());
+            item.avatar(cx, ids!(avatar))
+                .show_text(cx, None, None, &agent.display_name);
+            self.cmd_text_input.add_item(cx, item);
+            if index == 0 {
+                self.cmd_text_input.set_keyboard_focus_index(0);
+            }
+            items_added += 1;
+        }
+        items_added
+    }
+
+    /// Adds the non-selectable "nothing to invite" hint row, reusing the
+    /// no-matches indicator template with picker-specific text.
+    fn add_bot_invite_hint_item(&mut self, cx: &mut Cx, hint_text: &str) {
+        let Some(ptr) = self.no_matches_indicator else {
+            return;
+        };
+        let hint_item = crate::widget_ref_from_live_ptr(cx, Some(ptr));
+        hint_item
+            .label(cx, ids!(no_matches_text))
+            .set_text(cx, hint_text);
+        self.add_popup_status_item(cx, hint_item, PopupStatusItemKind::NoMatches);
+    }
+
+    /// A bot row was picked in the `/invitebot` picker: emit the invite action for
+    /// the room screen to dispatch as a `MatrixRequest::InviteUser`, and close the
+    /// popup. No message text is ever produced.
+    fn on_bot_invite_selected(&mut self, cx: &mut Cx, scope: &mut Scope, selected: WidgetRef) {
+        let user_id_text = selected.label(cx, ids!(user_id)).text();
+        let Ok(user_id) = OwnedUserId::try_from(user_id_text.as_str()) else {
+            // Non-agent rows (e.g. the hint item) carry no valid MXID; just close.
+            self.close_mention_popup(cx);
+            return;
+        };
+        let Some(room_props) = scope.props.get::<RoomScreenProps>() else {
+            return;
+        };
+        cx.action(MentionableTextInputAction::InviteBotSelected {
+            room_id: room_props.room_name_id.room_id().clone(),
+            user_id,
+        });
+        self.close_mention_popup(cx);
+        self.pending_draw_focus_restore = true;
     }
 
     /// Core text change handler that manages mention context
@@ -2495,7 +2726,11 @@ impl MentionableTextInput {
 
             // Redraw to ensure UI updates are visible
             self.redraw(cx);
-        } else if self.is_searching() || self.is_slash_command_popup_active() {
+        } else if self.is_searching()
+            || self.is_slash_command_popup_active()
+            // Typing normal text dismisses the /invitebot picker.
+            || self.is_bot_invite_popup_active()
+        {
             self.close_mention_popup(cx);
         }
     }
@@ -3617,6 +3852,76 @@ mod tests {
             })
         );
         assert_eq!(classify_known_slash_command_for_submission("/unknown arg"), None);
+    }
+
+    #[test]
+    fn test_invitebot_offered_when_can_invite() {
+        let commands = matching_slash_commands_in(invite_slash_commands(true), "inv");
+        assert_eq!(slash_command_names(&commands), vec!["/invitebot"]);
+    }
+
+    #[test]
+    fn test_invitebot_hidden_without_can_invite() {
+        assert!(matching_slash_commands_in(invite_slash_commands(false), "inv").is_empty());
+    }
+
+    #[test]
+    fn test_invitebot_matches_case_insensitive_prefix() {
+        let commands = matching_slash_commands_in(invite_slash_commands(true), "INV");
+        assert_eq!(slash_command_names(&commands), vec!["/invitebot"]);
+    }
+
+    #[test]
+    fn test_invitebot_never_classified_for_message_submission() {
+        // `/invitebot` must never ride the message-submission path: it is not in any
+        // management catalog, and the selection/submission handlers detect it via
+        // `is_invitebot_command` to open the bot picker instead.
+        assert_eq!(classify_known_slash_command_for_submission("/invitebot"), None);
+        assert!(is_invitebot_command("/invitebot"));
+        assert!(is_invitebot_command("/invitebot  "));
+    }
+
+    #[test]
+    fn test_is_invitebot_command_rejects_lookalikes() {
+        assert!(!is_invitebot_command("/invitebotx"));
+        assert!(!is_invitebot_command("/invite"));
+        assert!(!is_invitebot_command(""));
+        assert!(!is_invitebot_command("hello /invitebot"));
+    }
+
+    fn invitable_agent(user_id: &str, display_name: &str) -> InvitableAgent {
+        InvitableAgent {
+            user_id: user_id.try_into().expect("test mxid should be valid"),
+            display_name: display_name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn test_invitable_agents_excludes_room_members() {
+        let agents = vec![
+            invitable_agent("@octos:server", "Octos"),
+            invitable_agent("@hermes:server", "Hermes"),
+        ];
+        let present: Vec<OwnedUserId> =
+            vec!["@octos:server".try_into().expect("test mxid should be valid")];
+        let filtered = filter_invitable_agents(&agents, &present);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].user_id.as_str(), "@hermes:server");
+    }
+
+    #[test]
+    fn test_invitable_agents_empty_registry() {
+        let present: Vec<OwnedUserId> =
+            vec!["@octos:server".try_into().expect("test mxid should be valid")];
+        assert!(filter_invitable_agents(&[], &present).is_empty());
+    }
+
+    #[test]
+    fn test_invitable_agents_all_in_room() {
+        let agents = vec![invitable_agent("@octos:server", "Octos")];
+        let present: Vec<OwnedUserId> =
+            vec!["@octos:server".try_into().expect("test mxid should be valid")];
+        assert!(filter_invitable_agents(&agents, &present).is_empty());
     }
 
     #[test]
