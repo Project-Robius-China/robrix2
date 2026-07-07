@@ -569,11 +569,12 @@ script_mod! {
     }
 
     mod.widgets.CreateRoomModal = #(CreateRoomModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 400 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 400
+        RoundedShadowView {
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -581,8 +582,13 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: #fff
-                border_radius: 4.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title_view := View {
@@ -598,7 +604,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 15}
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                     text: "Create New Room"
                 }
@@ -648,11 +654,12 @@ script_mod! {
     }
 
     mod.widgets.StartChatModal = #(StartChatModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 400 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 400
+        RoundedShadowView {
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -660,8 +667,13 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: #fff
-                border_radius: 4.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title_view := View {
@@ -677,7 +689,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 15}
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                     text: "Direct Messages"
                 }
