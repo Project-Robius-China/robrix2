@@ -126,7 +126,7 @@ script_mod! {
             align: Align{y: 0.5}
             spacing: 12
             new_batch: true
-            padding: Inset{left: 14, right: 14, top: 6, bottom: 6}
+            padding: Inset{left: 14, right: 14, top: 4, bottom: 4}
             show_bg: true
             draw_bg +: {
                 color: (RBX_BG_SURFACE)
@@ -160,7 +160,7 @@ script_mod! {
                 width: Fill
                 height: Fit
                 flow: Down
-                spacing: 2
+                spacing: 1
                 card_name := Label {
                     width: Fill
                     height: Fit
@@ -403,7 +403,7 @@ script_mod! {
                     width: Fill
                     height: Fit
                     flow: Down
-                    spacing: 6
+                    spacing: 4
 
                     step1_intro := Label {
                         width: Fill
@@ -411,7 +411,7 @@ script_mod! {
                         margin: Inset{bottom: 1}
                         draw_text +: {
                             color: (RBX_FG_SECONDARY)
-                            text_style: RBX_TEXT_BODY {}
+                            text_style: RBX_TEXT_META {}
                         }
                         text: "Pick the agent framework."
                     }
