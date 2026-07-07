@@ -20,8 +20,6 @@
 
 use std::sync::mpsc::{self as std_mpsc, Sender};
 
-use makepad_widgets::log;
-
 /// Commands that drive the ringtone audio thread.
 #[derive(Clone, Copy, Debug)]
 pub enum RingtoneCmd {
@@ -90,7 +88,7 @@ fn run_audio_worker(cmd_rx: std_mpsc::Receiver<RingtoneCmd>) {
         match OutputStream::try_default() {
             Ok(pair) => Some(pair),
             Err(err) => {
-                log!("RingtonePlayer: failed to open audio output: {}", err);
+                makepad_widgets::log!("RingtonePlayer: failed to open audio output: {}", err);
                 None
             }
         }

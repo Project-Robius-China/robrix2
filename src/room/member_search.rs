@@ -241,7 +241,7 @@ fn send_search_update(
     };
 
     if sender.send(search_result).is_err() {
-        log!("Failed to send search results - receiver dropped");
+        makepad_widgets::log!("Failed to send search results - receiver dropped");
         return false;
     }
 

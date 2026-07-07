@@ -30,7 +30,6 @@ pub use notify_event::{
 pub use ringer::{IncomingRing, Ringer, RingerAction};
 pub use ringtone::{RingtoneCmd, RingtonePlayer};
 
-use makepad_widgets::log;
 use matrix_sdk::{Client, Room};
 
 /// Register the client-side handler that watches for inbound
