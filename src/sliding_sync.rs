@@ -2073,6 +2073,30 @@ mod matrix_request_tests {
     }
 
     #[test]
+    fn test_should_restore_loaded_app_state_with_registered_agents_and_empty_dock() {
+        // Regression for the issue #94 class: a user who only registered agents
+        // (e.g. a direct Hermes / OpenClaw / OctosDirect agent, which does NOT
+        // touch bot_settings) and never opened a room must still have the
+        // registry restored on relaunch. The gate previously ignored
+        // agent_registry, so the whole registry was silently dropped on mobile
+        // force-quit + relaunch while the Matrix session (a separate file)
+        // restored — leaving the user logged in with an empty Agent Lab.
+        let mut app_state = crate::app::AppState::default();
+        app_state.agent_registry.register(
+            "@helper:example.org".try_into().unwrap(),
+            crate::app::AgentEntry {
+                framework: crate::app::AgentFramework::Hermes,
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            should_restore_loaded_app_state(&app_state),
+            "registered agents are persisted state and must restore even when dock is empty and bot_settings are default",
+        );
+    }
+
+    #[test]
     fn test_should_not_restore_loaded_default_app_state() {
         assert!(
             !should_restore_loaded_app_state(&crate::app::AppState::default()),
@@ -7510,6 +7534,11 @@ fn should_restore_loaded_app_state(app_state: &crate::app::AppState) -> bool {
             .values()
             .any(saved_dock_state_has_content)
         || app_state.bot_settings != crate::app::BotSettingsState::default()
+        // Registered agents are persisted state too. Direct agents (Hermes /
+        // OpenClaw / OctosDirect) populate only the registry — not bot_settings —
+        // so without this the whole Agent Lab registry is dropped on mobile
+        // force-quit + relaunch (issue #94 class).
+        || !app_state.agent_registry.is_empty()
         || app_state.app_language != crate::i18n::AppLanguage::default()
         || app_state.app_prefs != crate::settings::app_preferences::AppPreferences::default()
         || app_state.translation != crate::room::translation::TranslationConfig::default()
