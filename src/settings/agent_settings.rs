@@ -1147,7 +1147,8 @@ impl AgentSettings {
             }
             OctosHealthStatus::Unreachable if octos_count > 0 => format!("0/{octos_count} online"),
             _ if app_state.bot_settings.enabled && octos_count == 0 => "No Octos bound".to_string(),
-            _ => format!("{octos_count} Octos"),
+            // Just the count; the card title already says "Octos AppService".
+            _ => octos_count.to_string(),
         };
         self.view.label(cx, ids!(appservice_summary_card.appservice_summary_header.appservice_online_pill.appservice_online_label))
             .set_text(cx, &label);
