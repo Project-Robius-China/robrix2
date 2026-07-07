@@ -1220,9 +1220,9 @@ impl AddAgentModal {
         self.view.view(cx, ids!(footer)).set_visible(cx, !step2);
         // Reset both steps' scroll to the top on every step switch so a stale
         // offset never clips the next step's top. Step 1 scrolls via its
-        // framework-picker PortalList (reset its first visible item); step 2
-        // via its own ScrollYView.
-        self.view.portal_list(cx, ids!(framework_list)).set_first_id(0);
+        // framework-picker PortalList (reset both first item and pixel offset);
+        // step 2 via its own ScrollYView.
+        self.view.portal_list(cx, ids!(framework_list)).set_first_id_and_scroll(0, 0.0);
         self.view.view(cx, ids!(step2_view)).set_scroll_pos(cx, Vec2d { x: 0.0, y: 0.0 });
 
         if step2 {
@@ -1577,11 +1577,12 @@ mod tests {
         let body = &src[start..end];
 
         assert!(
-            body.contains("set_first_id") && body.contains("set_scroll_pos"),
+            body.contains("set_first_id_and_scroll(0, 0.0)")
+                && body.contains("ids!(step2_view)).set_scroll_pos"),
             "sync_steps must reset both steps' scroll to the top on step switch \
-             (step-1 framework PortalList via set_first_id, step-2 ScrollYView \
-             via set_scroll_pos), so an overflowing step-1 picker does not clip \
-             step-2's top",
+             (step-1 framework PortalList via set_first_id_and_scroll(0, 0.0), \
+             step-2 ScrollYView via set_scroll_pos), so a partial PortalList \
+             scroll offset does not clip the next visible step",
         );
     }
 
