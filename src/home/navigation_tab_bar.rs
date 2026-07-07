@@ -34,7 +34,7 @@ use crate::{
     app::AppState, avatar_cache::{self, AvatarCacheEntry}, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
         user_profile::UserProfile,
         user_profile_cache::{self, UserProfileUpdate},
-    }, home::spaces_bar::SpacesBarWidgetExt, shared::{
+    }, home::{spaces_bar::SpacesBarWidgetExt, add_menu::AddMenuAction}, shared::{
         avatar::{AvatarState, AvatarWidgetExt}, styles::*, verification_badge::VerificationBadgeWidgetExt
     }, settings::app_preferences::{effective_is_desktop, AppPreferencesGlobal, AppPreferencesAction, ViewModeOverride}, sliding_sync::{current_user_id, AccountDataAction, AccountSwitchAction}, utils::{self, RoomNameId}
 };
@@ -357,13 +357,12 @@ script_mod! {
 
                 // Labels are set in the DSL (English) so they always render; the
                 // runtime i18n pass in handle_event localizes them when possible.
+                // "Add Room" moved out of the bottom bar to the rooms header's
+                // top-right "+" (which opens the add menu). The bottom bar now
+                // carries just Home and Settings.
                 home_button := mod.widgets.MobileTabButton {
                     text: "Home"
                     draw_icon +: { svg: (ICON_HOME) }
-                }
-                add_room_button := mod.widgets.MobileTabButton {
-                    text: "Add Room"
-                    draw_icon +: { svg: (ICON_ADD) }
                 }
                 settings_button := mod.widgets.MobileTabButton {
                     text: "Settings"
@@ -720,16 +719,35 @@ impl Widget for NavigationTabBar {
             // Handle a tab being clicked (selected).
             // Note: `settings_button` only exists in the Mobile variant; on
             // Desktop the avatar `profile_icon` opens Settings instead (below).
-            let radio_button_set = self.view.radio_button_set(cx, ids_array!(
-                home_button,
-                add_room_button,
-                settings_button,
-            ));
-            match radio_button_set.selected(cx, actions) {
-                Some(0) => cx.action(NavigationBarAction::GoToHome),
-                Some(1) => cx.action(NavigationBarAction::GoToAddRoom),
-                Some(2) => cx.action(NavigationBarAction::OpenSettings),
-                _ => { }
+            // The desktop rail and the mobile bar carry DIFFERENT buttons
+            // (desktop: Home + "+"; mobile: Home + Settings). `RadioButtonSet::selected`
+            // compacts to the buttons that actually exist, so a single 3-id set would
+            // shift Settings into the "+" slot on mobile (index 1). Index a per-layout
+            // set instead.
+            if effective_is_desktop(cx) {
+                let rail_set = self.view.radio_button_set(cx, ids_array!(home_button, add_room_button));
+                match rail_set.selected(cx, actions) {
+                    Some(0) => cx.action(NavigationBarAction::GoToHome),
+                    Some(1) => {
+                        // The desktop rail "+" opens the add menu (anchored to its
+                        // right) instead of navigating to a page.
+                        let rect = self.view.widget(cx, ids!(add_room_button)).area().rect(cx);
+                        cx.action(AddMenuAction::Open {
+                            pos: dvec2(rect.pos.x + rect.size.x + 4.0, rect.pos.y),
+                        });
+                        // Don't leave "+" visually selected: re-project the real
+                        // selected tab's highlight on the next sync.
+                        self.applied_selected_tab = None;
+                    }
+                    _ => { }
+                }
+            } else {
+                let bar_set = self.view.radio_button_set(cx, ids_array!(home_button, settings_button));
+                match bar_set.selected(cx, actions) {
+                    Some(0) => cx.action(NavigationBarAction::GoToHome),
+                    Some(1) => cx.action(NavigationBarAction::OpenSettings),
+                    _ => { }
+                }
             }
 
             for action in actions {

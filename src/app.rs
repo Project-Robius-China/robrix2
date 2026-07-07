@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
-        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
+        add_menu::{AddMenuAction, AddMenuWidgetRefExt},
+        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, JoinRoomModalAction, JoinRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, set_room_info_action_modal_open}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
@@ -128,6 +129,11 @@ script_mod! {
                         // but behind verification modals.
                         new_message_context_menu := NewMessageContextMenu { }
                         room_context_menu := RoomContextMenu { }
+
+                        // The "add" popup menu (New room / DM / Join / Explore),
+                        // anchored next to the "+" button. Like the context menus,
+                        // it is a self-positioning overlay in front of the content.
+                        add_menu := AddMenu { }
 
                         // A modal to confirm sending out an invite to a room.
                         invite_confirmation_modal := Modal {
@@ -298,6 +304,14 @@ script_mod! {
                                 width: Fill, height: Fill,
                                 align: Align{x: 0.5, y: 0.5},
                                 start_chat_modal_inner := StartChatModal {}
+                            }
+                        }
+
+                        join_room_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
+                                join_room_modal_inner := JoinRoomModal {}
                             }
                         }
 
@@ -1471,6 +1485,24 @@ impl MatchEvent for App {
                 continue;
             }
 
+            // Handle an action requesting to open the "+" add menu, anchored at the
+            // absolute position `pos` (already right-aligned by the emitter as needed).
+            if let Some(AddMenuAction::Open { pos }) = action.downcast_ref::<AddMenuAction>() {
+                self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
+                let add_menu = self.ui.add_menu(cx, ids!(add_menu));
+                let expected_dimensions = add_menu.show(cx, self.app_state.app_language);
+                let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);
+                let pos_x = (pos.x - rect.pos.x).min(rect.size.x - expected_dimensions.x).max(0.0);
+                let pos_y = (pos.y - rect.pos.y).min(rect.size.y - expected_dimensions.y).max(0.0);
+                let margin = Inset { left: pos_x, top: pos_y, right: 0.0, bottom: 0.0 };
+                let mut main_content_view = add_menu.view(cx, ids!(main_content));
+                script_apply_eval!(cx, main_content_view, {
+                    margin: #(margin)
+                });
+                self.ui.redraw(cx);
+                continue;
+            }
+
             // A new room has been selected; push the appropriate view onto the mobile
             // StackNavigation and update the app state.
             // In Desktop mode, MainDesktopUI also handles this action to manage dock tabs;
@@ -2016,6 +2048,19 @@ impl MatchEvent for App {
                 }
                 Some(StartChatModalAction::Close) => {
                     self.ui.modal(cx, ids!(start_chat_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
+            match action.downcast_ref() {
+                Some(JoinRoomModalAction::Open) => {
+                    self.ui.join_room_modal(cx, ids!(join_room_modal_inner)).show(cx);
+                    self.ui.modal(cx, ids!(join_room_modal)).open(cx);
+                    continue;
+                }
+                Some(JoinRoomModalAction::Close) => {
+                    self.ui.modal(cx, ids!(join_room_modal)).close(cx);
                     continue;
                 }
                 _ => {}
