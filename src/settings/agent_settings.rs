@@ -502,7 +502,7 @@ script_mod! {
                     color: (RBX_FG_SECONDARY)
                     text_style: RBX_TEXT_META {}
                 }
-                text: "Robrix stays a normal Matrix client. It binds local Octos services and runs the matching slash commands."
+                text: "Robrix stays a normal Matrix client. It binds an Octos AppService and runs the matching slash commands."
             }
 
             appservice_config_row := View {
@@ -1121,7 +1121,7 @@ impl AgentSettings {
         let body = if app_state.bot_settings.enabled && octos_count == 0 {
             "AppService URL is saved. Bind an Octos Matrix ID to make it usable in Agent Access."
         } else {
-            "Robrix stays a normal Matrix client. It binds local Octos services and runs the matching slash commands."
+            "Robrix stays a normal Matrix client. It binds an Octos AppService and runs the matching slash commands."
         };
         self.view.label(cx, ids!(appservice_summary_card.appservice_summary_body))
             .set_text(cx, body);
