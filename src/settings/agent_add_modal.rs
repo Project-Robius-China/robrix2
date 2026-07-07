@@ -137,6 +137,24 @@ script_mod! {
                     color: (RBX_BG_SURFACE_SUBTLE)
                     border_radius: (RBX_RADIUS_XXS)
                 }
+                card_logo_octos := Image {
+                    visible: false
+                    width: 34, height: 34
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_OCTOS)
+                }
+                card_logo_hermes := Image {
+                    visible: false
+                    width: 34, height: 34
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_HERMES)
+                }
+                card_logo_openclaw := Image {
+                    visible: false
+                    width: 34, height: 34
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_OPENCLAW)
+                }
                 card_mono := Label {
                     width: Fit
                     height: Fit
@@ -441,11 +459,29 @@ script_mod! {
                                 color: (RBX_BG_SURFACE_SUBTLE)
                                 border_radius: (RBX_RADIUS_XXS)
                             }
+                            step2_logo_octos := Image {
+                                visible: false
+                                width: 18, height: 18
+                                fit: ImageFit.Stretch
+                                src: (IMG_FW_OCTOS)
+                            }
+                            step2_logo_hermes := Image {
+                                visible: false
+                                width: 18, height: 18
+                                fit: ImageFit.Stretch
+                                src: (IMG_FW_HERMES)
+                            }
+                            step2_logo_openclaw := Image {
+                                visible: false
+                                width: 18, height: 18
+                                fit: ImageFit.Stretch
+                                src: (IMG_FW_OPENCLAW)
+                            }
                             step2_framework_mono := Label {
                                 width: Fit
                                 height: Fit
                                 draw_text +: {
-                                    color: (RBX_FG_PRIMARY)
+                                    color: (RBX_FG_SECONDARY)
                                     text_style: TITLE_TEXT { font_size: 10.5 }
                                 }
                                 text: ""
@@ -1100,42 +1136,38 @@ impl AddAgentModal {
 
     fn populate_framework_cards(&mut self, cx: &mut Cx) {
         // Text content.
-        self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono)).set_text(cx, "Oc");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_name)).set_text(cx, "Octos");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "APPSERVICE");
         self.view.label(cx, ids!(octos_card.card_body.card_col.card_blurb)).set_text(cx, "Friend plus local AppService.");
-        self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono)).set_text(cx, "He");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_name)).set_text(cx, "Hermes");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
         self.view.label(cx, ids!(hermes_card.card_body.card_col.card_blurb)).set_text(cx, "Registered as a Matrix friend.");
-        self.view.label(cx, ids!(openclaw_card.card_body.card_tile.card_mono)).set_text(cx, "Cl");
         self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_name)).set_text(cx, "OpenClaw");
         self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_tag.card_tag_label)).set_text(cx, "DIRECT AGENT");
         self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_blurb)).set_text(cx, "Registered as a Matrix friend.");
 
-        // Per-framework colors (tile fill + mono text + tag text).
-        let mut octos_tile = self.view.view(cx, ids!(octos_card.card_body.card_tile));
-        script_apply_eval!(cx, octos_tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-        let mut octos_mono = self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono));
-        script_apply_eval!(cx, octos_mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+        // Brand logo in each card's identity tile; each card shows only its own
+        // framework's logo and hides the monogram fallback. The other two logos
+        // in the shared template stay hidden by their `visible: false` default.
+        self.view.image(cx, ids!(octos_card.card_body.card_tile.card_logo_octos)).set_visible(cx, true);
+        self.view.image(cx, ids!(hermes_card.card_body.card_tile.card_logo_hermes)).set_visible(cx, true);
+        self.view.image(cx, ids!(openclaw_card.card_body.card_tile.card_logo_openclaw)).set_visible(cx, true);
+        self.view.label(cx, ids!(octos_card.card_body.card_tile.card_mono)).set_visible(cx, false);
+        self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono)).set_visible(cx, false);
+        self.view.label(cx, ids!(openclaw_card.card_body.card_tile.card_mono)).set_visible(cx, false);
+
+        // Framework color lives on the tag pill; the tile stays neutral behind
+        // the full-color logo (matching the Agent Access registry rows).
         let mut octos_tag = self.view.label(cx, ids!(octos_card.card_body.card_col.card_tag.card_tag_label));
         script_apply_eval!(cx, octos_tag, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
         let mut octos_tag_pill = self.view.view(cx, ids!(octos_card.card_body.card_col.card_tag));
         script_apply_eval!(cx, octos_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
 
-        let mut hermes_tile = self.view.view(cx, ids!(hermes_card.card_body.card_tile));
-        script_apply_eval!(cx, hermes_tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-        let mut hermes_mono = self.view.label(cx, ids!(hermes_card.card_body.card_tile.card_mono));
-        script_apply_eval!(cx, hermes_mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
         let mut hermes_tag = self.view.label(cx, ids!(hermes_card.card_body.card_col.card_tag.card_tag_label));
         script_apply_eval!(cx, hermes_tag, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
         let mut hermes_tag_pill = self.view.view(cx, ids!(hermes_card.card_body.card_col.card_tag));
         script_apply_eval!(cx, hermes_tag_pill, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
 
-        let mut openclaw_tile = self.view.view(cx, ids!(openclaw_card.card_body.card_tile));
-        script_apply_eval!(cx, openclaw_tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-        let mut openclaw_mono = self.view.label(cx, ids!(openclaw_card.card_body.card_tile.card_mono));
-        script_apply_eval!(cx, openclaw_mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
         let mut openclaw_tag = self.view.label(cx, ids!(openclaw_card.card_body.card_col.card_tag.card_tag_label));
         script_apply_eval!(cx, openclaw_tag, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
         let mut openclaw_tag_pill = self.view.view(cx, ids!(openclaw_card.card_body.card_col.card_tag));
@@ -1195,28 +1227,21 @@ impl AddAgentModal {
     }
 
     fn sync_step2_framework_header(&mut self, cx: &mut Cx, framework: AgentFramework) {
-        self.view.label(cx, ids!(step2_agent_header.step2_framework_tile.step2_framework_mono))
-            .set_text(cx, framework_mono(framework));
+        // Same treatment as the Agent Access registry rows: show the selected
+        // framework's brand logo, hide the others, and fall back to the monogram
+        // only for `Unknown`. The tile stays neutral behind the full-color logo.
+        self.view.image(cx, ids!(step2_agent_header.step2_framework_tile.step2_logo_octos))
+            .set_visible(cx, framework == AgentFramework::Octos);
+        self.view.image(cx, ids!(step2_agent_header.step2_framework_tile.step2_logo_hermes))
+            .set_visible(cx, framework == AgentFramework::Hermes);
+        self.view.image(cx, ids!(step2_agent_header.step2_framework_tile.step2_logo_openclaw))
+            .set_visible(cx, framework == AgentFramework::OpenClaw);
 
-        let mut tile = self.view.view(cx, ids!(step2_agent_header.step2_framework_tile));
-        let mut mono = self.view.label(cx, ids!(step2_agent_header.step2_framework_tile.step2_framework_mono));
-        match framework {
-            AgentFramework::Octos => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
-            }
-            AgentFramework::Hermes => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
-            }
-            AgentFramework::OpenClaw => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
-            }
-            AgentFramework::Unknown => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
-            }
+        let is_unknown = framework == AgentFramework::Unknown;
+        let mono = self.view.label(cx, ids!(step2_agent_header.step2_framework_tile.step2_framework_mono));
+        mono.set_visible(cx, is_unknown);
+        if is_unknown {
+            mono.set_text(cx, framework_mono(framework));
         }
     }
 

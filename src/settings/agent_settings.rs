@@ -186,11 +186,29 @@ script_mod! {
                     color: (RBX_BG_SURFACE_SUBTLE)
                     border_radius: (RBX_RADIUS_XXS)
                 }
+                agent_logo_octos := Image {
+                    visible: false
+                    width: 22, height: 22
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_OCTOS)
+                }
+                agent_logo_hermes := Image {
+                    visible: false
+                    width: 22, height: 22
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_HERMES)
+                }
+                agent_logo_openclaw := Image {
+                    visible: false
+                    width: 22, height: 22
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_OPENCLAW)
+                }
                 agent_tile_mono := Label {
                     width: Fit
                     height: Fit
                     draw_text +: {
-                        color: (RBX_FG_PRIMARY)
+                        color: (RBX_FG_SECONDARY)
                         text_style: TITLE_TEXT { font_size: 13.0 }
                     }
                     text: ""
@@ -747,12 +765,10 @@ impl Widget for AgentRegistryRow {
                 .label(cx, ids!(agent_top_row.agent_text_col.agent_mxid_label))
                 .set_text(cx, props.user_id.as_str());
             self.view
-                .label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono))
-                .set_text(cx, framework_mono(framework));
-            self.view
                 .label(cx, ids!(agent_top_row.agent_framework_badge.agent_framework_label))
                 .set_text(cx, framework_label(framework));
 
+            self.apply_framework_tile(cx, framework);
             self.apply_framework_colors(cx, framework);
 
             // Health dot: Octos rows only, colored by the probed health status.
@@ -793,35 +809,51 @@ impl Widget for AgentRegistryRow {
 }
 
 impl AgentRegistryRow {
-    /// Colors this row's framework tile + badge by framework (literal tokens per
-    /// branch, since `script_apply_eval!` cannot take runtime token values).
+    /// Shows the brand logo matching this row's framework in the identity tile
+    /// and hides the others. `Unknown` (migrated legacy bots) has no logo, so it
+    /// falls back to the two-letter monogram. Each logo is a fixed, pre-declared
+    /// `Image`, so we only toggle visibility here — no runtime image loading —
+    /// mirroring how the row already resolves colors per framework.
+    fn apply_framework_tile(&mut self, cx: &mut Cx, framework: AgentFramework) {
+        self.view
+            .image(cx, ids!(agent_top_row.agent_tile.agent_logo_octos))
+            .set_visible(cx, framework == AgentFramework::Octos);
+        self.view
+            .image(cx, ids!(agent_top_row.agent_tile.agent_logo_hermes))
+            .set_visible(cx, framework == AgentFramework::Hermes);
+        self.view
+            .image(cx, ids!(agent_top_row.agent_tile.agent_logo_openclaw))
+            .set_visible(cx, framework == AgentFramework::OpenClaw);
+
+        let is_unknown = framework == AgentFramework::Unknown;
+        let mono = self.view.label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono));
+        mono.set_visible(cx, is_unknown);
+        if is_unknown {
+            mono.set_text(cx, framework_mono(framework));
+        }
+    }
+
+    /// Colors this row's framework badge by framework (literal tokens per branch,
+    /// since `script_apply_eval!` cannot take runtime token values). The identity
+    /// tile stays neutral now that it carries a full-color brand logo, so the
+    /// framework color lives only on the badge.
     fn apply_framework_colors(&mut self, cx: &mut Cx, framework: AgentFramework) {
-        let mut tile = self.view.view(cx, ids!(agent_top_row.agent_tile));
-        let mut mono = self.view.label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono));
         let mut badge = self.view.view(cx, ids!(agent_top_row.agent_framework_badge));
         let mut label = self.view.label(cx, ids!(agent_top_row.agent_framework_badge.agent_framework_label));
         match framework {
             AgentFramework::Octos => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
             }
             AgentFramework::Hermes => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
             }
             AgentFramework::OpenClaw => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
             }
             AgentFramework::Unknown => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE_SUBTLE } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
             }
