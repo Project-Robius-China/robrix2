@@ -2741,6 +2741,10 @@ pub enum AgentFramework {
     Unknown,
     /// Octos app-service backed agent.
     Octos,
+    /// Octos added as a direct agent (user-account mode; NOT App Service /
+    /// BotFather). robrix only interacts with it over Matrix via its MXID; its
+    /// deployment location is invisible to robrix.
+    OctosDirect,
     /// Hermes external client integration.
     Hermes,
     /// OpenClaw external client integration.
