@@ -1178,6 +1178,15 @@ impl AgentSettings {
             .set_visible(cx, app_state.bot_settings.enabled);
 
         let mut dot = self.view.view(cx, ids!(appservice_summary_card.appservice_summary_header.appservice_online_pill.appservice_online_dot));
+        // Hide the status dot in the bare-count / no-agents states so the number
+        // sits centered in the pill; show it only when it carries a real online
+        // status (checking / reachable / unreachable with agents bound).
+        let show_dot = octos_count > 0 && match self.octos_health.status {
+            OctosHealthStatus::Reachable => app_state.bot_settings.enabled,
+            OctosHealthStatus::Checking | OctosHealthStatus::Unreachable => true,
+            OctosHealthStatus::Unknown => false,
+        };
+        dot.set_visible(cx, show_dot);
         let mut config_pill = self.view.view(cx, ids!(appservice_summary_card.appservice_config_row.appservice_config_state_pill));
         let mut config_pill_label = self.view.label(cx, ids!(appservice_summary_card.appservice_config_row.appservice_config_state_pill.appservice_config_state_label));
         if app_state.bot_settings.enabled {
