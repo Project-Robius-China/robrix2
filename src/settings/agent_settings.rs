@@ -189,7 +189,9 @@ script_mod! {
                 show_bg: true
                 draw_bg +: {
                     color: (RBX_BG_SURFACE_SUBTLE)
-                    border_radius: (RBX_RADIUS_XXS)
+                    border_radius: (RBX_RADIUS_PILL)
+                    border_size: 1.0
+                    border_color: (RBX_STROKE_SOFT)
                 }
                 agent_logo_octos := Image {
                     visible: false
