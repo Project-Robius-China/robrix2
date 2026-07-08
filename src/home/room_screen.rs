@@ -6106,7 +6106,13 @@ impl Widget for RoomScreen {
                             title_text: tr_key(app_language, "room_screen.modal.invite.title").into(),
                             body_text: tr_fmt(app_language, "room_screen.modal.invite.body", &[("username", username)]).into(),
                             accept_button_text: Some(tr_key(app_language, "room_screen.modal.invite.accept").into()),
-                            on_accept_clicked: Some(Box::new(move |_cx| {
+                            on_accept_clicked: Some(Box::new(move |cx| {
+                                // Record pending ownership in every RoomScreen of this
+                                // room BEFORE the result arrives (see InviteUserRequested).
+                                cx.action(InviteAction::InviteUserRequested {
+                                    room_id: room_id.clone(),
+                                    user_id: user_id.clone(),
+                                });
                                 submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
                             })),
                             ..Default::default()
@@ -6193,6 +6199,17 @@ impl Widget for RoomScreen {
                     }
                 }
 
+                // An invite was just submitted from a closure-based initiator
+                // (knock-approve, Retry) or the invite modal: record pending
+                // ownership so the InviteResultAction feedback below fires.
+                if let Some(InviteAction::InviteUserRequested { room_id, user_id }) =
+                    action.downcast_ref()
+                {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pending_invited_users.insert(user_id.clone());
+                    }
+                }
+
                 // Handle InviteResultAction to show popup notifications.
                 if let Some(InviteResultAction::Sent { room_id, user_id }) = action.downcast_ref() {
                     // Only the RoomScreen that originated the invite owns its UI feedback.
@@ -6246,7 +6263,13 @@ impl Widget for RoomScreen {
                                 ("error", error_text.as_str()),
                             ]).into(),
                             actions: vec![
-                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |cx| {
+                                    // Re-establish pending ownership (the Failed handler
+                                    // just removed it) so the retry's result shows feedback.
+                                    cx.action(InviteAction::InviteUserRequested {
+                                        room_id: room_id_retry.clone(),
+                                        user_id: user_id_retry.clone(),
+                                    });
                                     submit_async_request(MatrixRequest::InviteUser {
                                         room_id: room_id_retry.clone(),
                                         user_id: user_id_retry.clone(),
@@ -13271,6 +13294,17 @@ pub enum InviteAction {
     /// and that that one entity can take ownership of the content object,
     /// which avoids having to clone it.
     ShowInviteConfirmationModal(RefCell<Option<ConfirmationModalContent>>),
+    /// Announces that an invite request was just submitted for `user_id` in
+    /// `room_id`, so every RoomScreen showing that room records it in
+    /// `pending_invited_users` and thus owns the resulting
+    /// [`InviteResultAction`] feedback. Emitted by invite initiators that run
+    /// in closures (knock-approve modal, failed-invite Retry) and by the
+    /// invite modal; the `/invitebot` picker instead records pending directly
+    /// in its widget-addressed handler.
+    InviteUserRequested {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
 }
 
 /// The result of inviting a user to a room.
