@@ -85,6 +85,13 @@ const TRANSLATION_LANG_POPUP_HEIGHT: f64 = TRANSLATION_LANG_POPUP_SCROLL_HEIGHT 
 const TRANSLATION_LANG_POPUP_GAP: f64 = 6.0;
 const TRANSLATION_LANG_POPUP_MARGIN: f64 = 8.0;
 
+fn invite_result_belongs_to_room_screen(
+    pending_invited_users: &HashSet<OwnedUserId>,
+    user_id: &OwnedUserId,
+) -> bool {
+    pending_invited_users.contains(user_id)
+}
+
 fn tl_idx_from_item_id(item_id: usize, has_encryption_notice: bool) -> Option<usize> {
     if has_encryption_notice {
         item_id.checked_sub(1)
@@ -6188,8 +6195,10 @@ impl Widget for RoomScreen {
 
                 // Handle InviteResultAction to show popup notifications.
                 if let Some(InviteResultAction::Sent { room_id, user_id }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                    // Only the RoomScreen that originated the invite owns its UI feedback.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id)
+                        && invite_result_belongs_to_room_screen(&self.pending_invited_users, user_id)
+                    {
                         self.pending_invited_users.insert(user_id.clone());
                         enqueue_popup_notification(
                             "Invite sent. Waiting for acceptance.",
@@ -6221,8 +6230,10 @@ impl Widget for RoomScreen {
                     }
                 }
                 if let Some(InviteResultAction::Failed { room_id, user_id, error }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                    // Only the RoomScreen that originated the invite owns its UI feedback.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id)
+                        && invite_result_belongs_to_room_screen(&self.pending_invited_users, user_id)
+                    {
                         self.pending_invited_users.remove(user_id);
                         let error_text = error.to_string();
                         let error_display = error_text.clone();
@@ -13858,6 +13869,17 @@ mod tests {
 
     fn make_state(text: &str) -> StreamingAnimState {
         StreamingAnimState::new(text, true)
+    }
+
+    #[test]
+    fn test_invite_result_belongs_only_to_pending_screen() {
+        let invited_user = OwnedUserId::try_from("@octos:example.org").unwrap();
+        let other_user = OwnedUserId::try_from("@hermes:example.org").unwrap();
+        let pending = HashSet::from([invited_user.clone()]);
+
+        assert!(invite_result_belongs_to_room_screen(&pending, &invited_user));
+        assert!(!invite_result_belongs_to_room_screen(&pending, &other_user));
+        assert!(!invite_result_belongs_to_room_screen(&HashSet::new(), &invited_user));
     }
 
     #[test]
