@@ -2231,7 +2231,11 @@ impl MentionableTextInput {
             items_added += self.add_slash_command_items(cx, app_language, &workflow_matches);
         }
 
-        const SLASH_COMMAND_ITEM_HEIGHT: f64 = 48.0;
+        // Measured rendered height of a SlashCommandListItem (height: Fit — two text
+        // lines + 16px vertical padding) is ~60 logical px; 64 leaves headroom so a
+        // single-match list (e.g. `/invitebot` in a normal room) never clips the
+        // description. A slightly-too-tall viewport only adds whitespace.
+        const SLASH_COMMAND_ITEM_HEIGHT: f64 = 64.0;
         const SLASH_SECTION_HEADER_HEIGHT: f64 = 24.0;
         const LIST_PADDING: f64 = 4.0;
         let max_scroll_height = if cx.display_context.is_desktop() {
