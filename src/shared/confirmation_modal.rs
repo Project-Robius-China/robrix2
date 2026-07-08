@@ -19,30 +19,39 @@ script_mod! {
         height: Fit
         margin: Inset{left: 12, right: 12}
 
-        wrapper := RoundedView {
+        // Unified modal card: white RBX surface, soft border, and a drop shadow
+        // so the dialog reads as an elevated sheet above the scrim. This one
+        // recipe (RoundedShadowView + RBX tokens) is the shared visual all
+        // confirm-style modals inherit (Positive/Negative variants below).
+        wrapper := RoundedShadowView {
             width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
-            padding: Inset{top: 28, right: 28, bottom: 18, left: 28}
+            padding: Inset{top: 24, right: 24, bottom: 16, left: 24}
 
             show_bg: true
             draw_bg +: {
-                color: (COLOR_PRIMARY)
-                border_radius: 4.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title_view := View {
                 width: Fill,
                 height: Fit,
-                padding: Inset{top: 0, bottom: 25}
+                padding: Inset{top: 0, bottom: 20}
                 align: Align{x: 0.5, y: 0.0}
 
                 title := Label {
                     flow: Flow.Right{wrap: true},
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 13},
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                 }
             }
@@ -56,7 +65,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true},
                     draw_text +: {
                         text_style: REGULAR_TEXT {font_size: 11.5},
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                 }
             }

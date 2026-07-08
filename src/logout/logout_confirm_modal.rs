@@ -10,22 +10,35 @@ script_mod! {
     use mod.widgets.*
 
 
-    // A modal dialog that displays logout confirmation
+    // A modal dialog that displays logout confirmation.
+    // Responsive width via `Fill { max: 400 }` (caps at 400 on desktop, shrinks
+    // on narrow screens) — NOT a manual width sync, which previously caused a
+    // big→small shrink loop. Card uses the shared unified modal recipe
+    // (RoundedShadowView + RBX tokens), matching ConfirmationModal.
     mod.widgets.LogoutConfirmModal = #(LogoutConfirmModal::register_widget(vm)) {
-        width: Fit,
+        width: Fill { max: 400 },
         height: Fit,
+        margin: Inset{left: 12, right: 12}
 
-        modal_card := RoundedView {
-            width: 400,
+        modal_card := RoundedShadowView {
+            width: Fill,
             height: Fit,
             flow: Down,
             align: Align{x: 0.5},
-            padding: 25,
+            padding: 24,
             margin: 0
             spacing: 10,
 
             show_bg: true,
-            draw_bg.color: (COLOR_PRIMARY)
+            draw_bg +: {
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
+            }
 
             View {
                 width: Fill,
@@ -38,7 +51,7 @@ script_mod! {
                     text: "Confirm Logout",
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 18},
-                        color: #000000
+                        color: (RBX_FG_PRIMARY)
                     }
                 }
             }
@@ -51,7 +64,7 @@ script_mod! {
                     text_style: REGULAR_TEXT {
                         font_size: 14,
                     },
-                    color: #000000,
+                    color: (RBX_FG_PRIMARY),
                 },
                 text: "Are you sure you want to logout?"
             }
@@ -86,7 +99,6 @@ script_mod! {
 #[derive(Script, ScriptHook, Widget)]
 pub struct LogoutConfirmModal {
     #[deref] view: View,
-    #[rust] modal_width: f64,
     /// Whether the modal is in a final state, meaning the user can only click "Okay" to close it.
     ///
     /// * Set to `Some(true)` after a successful logout Action
@@ -169,7 +181,6 @@ pub enum ClearedComponentType {
 
 impl Widget for LogoutConfirmModal {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
-        self.sync_modal_layout(cx);
         self.view.handle_event(cx, event, scope);
         self.widget_match_event(cx, event, scope);
     }
@@ -295,23 +306,6 @@ impl WidgetMatchEvent for LogoutConfirmModal {
 }
 
 impl LogoutConfirmModal {
-    fn sync_modal_layout(&mut self, cx: &mut Cx) {
-        let rect = self.view.area().rect(cx);
-        if rect.size.x <= 1.0 {
-            return;
-        }
-        let available_width = (rect.size.x - 28.0).max(280.0);
-        let modal_width = available_width.min(400.0);
-        if (self.modal_width - modal_width).abs() <= 0.5 {
-            return;
-        }
-        self.modal_width = modal_width;
-        let mut modal_card = self.view.view(cx, ids!(modal_card));
-        script_apply_eval!(cx, modal_card, {
-            width: #(modal_width)
-        });
-    }
-
     /// Sets the message text displayed in the body of the modal.
     pub fn set_message(&mut self, cx: &mut Cx, message: &str) {
         self.label(cx, ids!(message)).set_text(cx, message);
