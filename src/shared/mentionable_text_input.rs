@@ -107,7 +107,7 @@ use crate::sliding_sync::{submit_async_request, MatrixRequest};
 use makepad_widgets::{makepad_draw::text::selection::Cursor, *};
 use matrix_sdk::ruma::{
     events::{room::message::RoomMessageEventContent, Mentions},
-    OwnedRoomId, OwnedUserId,
+    OwnedMxcUri, OwnedRoomId, OwnedUserId,
 };
 use matrix_sdk::RoomMemberships;
 use unicode_segmentation::UnicodeSegmentation;
@@ -324,20 +324,29 @@ fn invite_slash_commands(can_invite: bool) -> &'static [SlashCommand] {
     }
 }
 
-/// True if the first whitespace-delimited token of `text` is exactly
-/// `/invitebot` — used by the selection and submission handlers to divert to
-/// the bot-invite picker instead of the message-send path.
+/// True if `text`, trimmed, is exactly the bare `/invitebot` command
+/// (ASCII case-insensitive) — used by every submission path (Return,
+/// Cmd/Ctrl+Return, send button) and the selection handler to divert to the
+/// bot-invite picker instead of the message-send path.
+///
+/// Deliberately EXACT-match: input with trailing text (e.g. "/invitebot is
+/// broken, see logs") is an ordinary message — it is sent as text and the
+/// user's composed content is never cleared.
 pub(crate) fn is_invitebot_command(text: &str) -> bool {
-    text.split_whitespace().next() == Some(INVITEBOT_SLASH_COMMAND.command)
+    text.trim()
+        .eq_ignore_ascii_case(INVITEBOT_SLASH_COMMAND.command)
 }
 
 /// A registered agent that can be offered in the `/invitebot` picker.
-/// Computed by `room_screen` from the global `AgentRegistry` and passed in
-/// through `RoomScreenProps`.
+/// Built at picker-open time from the global `AgentRegistry` (never on the
+/// per-frame props path).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvitableAgent {
     pub user_id: OwnedUserId,
     pub display_name: String,
+    /// Avatar MXC URI from the registry entry, if known; rows fall back to a
+    /// text-initial avatar when absent or not yet fetched.
+    pub avatar: Option<OwnedMxcUri>,
 }
 
 /// Filters the registered-agent list down to agents not already present in
@@ -728,6 +737,14 @@ fn member_data_change_requires_popup_refresh(
             search_state,
             MentionSearchState::WaitingForMembers { .. } | MentionSearchState::Searching { .. }
         )
+}
+
+fn deferred_focus_cleanup_should_close_popup(
+    active_popup_mode: PopupMode,
+    has_focus: bool,
+    is_searching: bool,
+) -> bool {
+    !has_focus && !is_searching && active_popup_mode != PopupMode::BotInvite
 }
 
 fn build_user_mention_insertion(
@@ -1326,8 +1343,11 @@ script_mod! {
 // /// from normal `@` characters.
 // const MENTION_START_STRING: &str = "\u{8288}@\u{8288}";
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum MentionableTextInputAction {
+    /// Required by the widget-action cast machinery; carries no meaning.
+    #[default]
+    None,
     /// Notifies the MentionableTextInput about updated power levels for the room.
     PowerLevelsUpdated {
         room_id: OwnedRoomId,
@@ -1420,6 +1440,17 @@ pub struct MentionableTextInput {
     /// Which kind of popup content is currently active.
     #[rust]
     active_popup_mode: PopupMode,
+
+    /// When true (set via DSL — e.g. the message-editing pane), this instance
+    /// does not offer the client-side `/invitebot` command at all.
+    #[live]
+    disable_invite_commands: bool,
+
+    /// Room id seen in scope props on the last event pass; when it changes,
+    /// any open popup is dismissed so a pinned picker (or stale mention list)
+    /// can never carry one room's candidates into another room.
+    #[rust]
+    last_scope_room_id: Option<OwnedRoomId>,
 }
 
 impl Widget for MentionableTextInput {
@@ -1456,22 +1487,54 @@ impl Widget for MentionableTextInput {
             }
         }
 
-        // `/invitebot` is a client-side command that must never be submitted as
-        // message text: if the user typed it out fully (popup no longer selecting,
-        // e.g. after a trailing space) and presses Return, divert to the
-        // bot-invite picker instead of the send path.
+        // Tapping/clicking outside the bot-invite picker dismisses it. This is
+        // position-based (not focus-based) so it behaves identically on desktop
+        // and Android — the pin below intentionally suppresses focus-loss closes
+        // because Android's tap-selection focus dance emits spurious ones.
+        if self.is_bot_invite_popup_active() {
+            let down_pos = match event {
+                Event::MouseDown(e) => Some(e.abs),
+                Event::TouchUpdate(e) => e
+                    .touches
+                    .iter()
+                    .find(|t| matches!(t.state, makepad_widgets::event::TouchState::Start))
+                    .map(|t| t.abs),
+                _ => None,
+            };
+            if let Some(pos) = down_pos {
+                let popup_rect = self.cmd_text_input.view(cx, ids!(popup)).area().rect(cx);
+                let input_rect = self.cmd_text_input.text_input_ref().area().rect(cx);
+                if !popup_rect.contains(pos) && !input_rect.contains(pos) {
+                    self.close_mention_popup(cx);
+                    self.redraw(cx);
+                }
+            }
+        }
+
+        // The bare `/invitebot` command must never be submitted as message text:
+        // if this focused input holds exactly the bare command (any case, see
+        // `is_invitebot_command`) and Return is pressed, divert to the picker
+        // instead of the send path. Text with trailing content is an ordinary
+        // message and passes through untouched.
         if let Event::KeyDown(KeyEvent {
             key_code: KeyCode::ReturnKey,
             ..
         }) = event {
+            // Focus gate: an unfocused instance (another room tab, the edit pane
+            // closed in the background) must not hijack Enter pressed elsewhere.
+            let has_focus = cx.has_key_focus(self.cmd_text_input.text_input_ref().area());
             let popup_selecting = self.cmd_text_input.view(cx, ids!(popup)).visible()
                 && self.cmd_text_input.keyboard_focus_index().is_some();
-            if !popup_selecting
-                && is_invitebot_command(&self.text())
+            if has_focus
+                && !popup_selecting
+                && !self.disable_invite_commands
                 && scope
                     .props
                     .get::<RoomScreenProps>()
-                    .is_some_and(|room_props| room_props.can_invite)
+                    .is_some_and(|room_props| {
+                        room_props.can_invite && room_props.room_members.is_some()
+                    })
+                && is_invitebot_command(&self.text())
             {
                 self.open_bot_invite_picker(cx, scope);
                 return;
@@ -1525,6 +1588,17 @@ impl Widget for MentionableTextInput {
             )
         };
 
+        // This shared widget persists across room switches (save/restore never
+        // touches popup state): dismiss any open popup when the scoped room
+        // changes, so a pinned picker or stale mention list can never offer one
+        // room's candidates inside another room.
+        if self.last_scope_room_id.as_ref() != Some(&scope_room_id) {
+            if self.last_scope_room_id.is_some() && self.active_popup_mode != PopupMode::None {
+                self.close_mention_popup(cx);
+            }
+            self.last_scope_room_id = Some(scope_room_id.clone());
+        }
+
         self.refresh_popup_for_member_change(
             cx,
             scope,
@@ -1551,8 +1625,13 @@ impl Widget for MentionableTextInput {
                 // Only close if input still doesn't have focus and we're not actively searching
                 let has_focus = cx.has_key_focus(text_input_area);
 
-                // If user refocused or is actively typing/searching, don't cleanup
-                if !has_focus && !self.is_searching() {
+                // If user refocused, is actively searching, or is in the pinned
+                // /invitebot picker, don't cleanup.
+                if deferred_focus_cleanup_should_close_popup(
+                    self.active_popup_mode,
+                    has_focus,
+                    self.is_searching(),
+                ) {
                     self.close_mention_popup(cx);
                 }
             }
@@ -1585,7 +1664,16 @@ impl Widget for MentionableTextInput {
                 if let Some(widget_action) = action.as_widget_action() {
                     if widget_action.widget_uid == text_input_uid {
                         if let TextInputAction::Changed(text) = widget_action.cast() {
-                            if has_focus {
+                            // Freshness gate for ALL popup modes: on Android
+                            // (unlike desktop), programmatic `set_text` emits
+                            // queued Changed actions that arrive after later
+                            // edits (e.g. select_item's trigger removal, mention
+                            // insertion, the picker's clear). A change is only
+                            // real if its payload matches the input's current
+                            // contents; stale echoes would corrupt last_text /
+                            // tracked-mention reconciliation or kill a popup
+                            // that was just rebuilt.
+                            if has_focus && text == text_input_ref.text() {
                                 self.handle_text_change(cx, scope, text.to_owned());
                             }
                             continue; // Continue processing other actions
@@ -1599,6 +1687,7 @@ impl Widget for MentionableTextInput {
                         // Outward-flowing action emitted BY this widget; consumed by
                         // the owning room screen, not by us.
                         MentionableTextInputAction::InviteBotSelected { .. } => {}
+                        MentionableTextInputAction::None => {}
                         MentionableTextInputAction::PowerLevelsUpdated {
                             room_id,
                             can_notify_room,
@@ -2133,9 +2222,14 @@ impl MentionableTextInput {
             &room_props.known_bot_user_ids,
         );
         let bot_enabled = bot_context != SlashCommandDiscoveryContext::None;
-        // `/invitebot` is a client-side command gated only on the user's invite
-        // permission — independent of the appservice/BotFather management gating.
-        let invite_enabled = room_props.can_invite;
+        // `/invitebot` is a client-side command gated on the user's invite
+        // permission — independent of the appservice/BotFather management
+        // gating. Additionally requires loaded room members (so already-present
+        // bots can be filtered from the picker) and is suppressed entirely for
+        // instances that opt out (the message-editing pane).
+        let invite_enabled = room_props.can_invite
+            && room_props.room_members.is_some()
+            && !self.disable_invite_commands;
         // agent-chat demo: offer the workflow `/` commands when a coordinator agent is
         // in the room (robrix2 has no built-in "agent-chat room" concept). Match ANY
         // team's coordinator — `wf_coordinator`, `alpha_coordinator`, … — on display name
@@ -2170,6 +2264,8 @@ impl MentionableTextInput {
         self.last_search_text = None;
         self.loading_indicator_ref = None;
         self.active_popup_mode = PopupMode::SlashCommand;
+        // Slash-command list is not pinned; only the bot-invite picker is.
+        self.cmd_text_input.set_keep_popup_open_on_focus_loss(false);
 
         self.cmd_text_input.clear_items(cx);
         self.cmd_text_input.reset_list_scroll(cx);
@@ -2517,8 +2613,42 @@ impl MentionableTextInput {
         let Some(room_props) = scope.props.get::<RoomScreenProps>() else {
             return;
         };
-        let agents = room_props.invitable_agents.clone();
-        let has_registered_agents = room_props.has_registered_agents;
+        // Build the candidate list HERE, at picker-open time — never on the
+        // per-frame props path. Candidates = every registered agent that is
+        // neither a known room member nor pending one of our sent invites.
+        let (agents, has_registered_agents) = scope
+            .data
+            .get::<AppState>()
+            .map(|app_state| {
+                let registered_agents: Vec<InvitableAgent> = app_state
+                    .agent_registry
+                    .agents()
+                    .map(|(user_id, entry)| InvitableAgent {
+                        user_id: user_id.clone(),
+                        // Display-name fallback mirrors Agent Lab: blank /
+                        // whitespace-only names fall back to the localpart.
+                        display_name: entry
+                            .display_name
+                            .clone()
+                            .filter(|name| !name.trim().is_empty())
+                            .unwrap_or_else(|| user_id.localpart().to_owned()),
+                        avatar: entry.avatar.clone(),
+                    })
+                    .collect();
+                let has_registered_agents = !registered_agents.is_empty();
+                let present_user_ids: Vec<OwnedUserId> = room_props
+                    .room_members
+                    .iter()
+                    .flat_map(|members| members.iter())
+                    .map(|member| member.user_id().to_owned())
+                    .chain(room_props.pending_invited_users.iter().cloned())
+                    .collect();
+                (
+                    filter_invitable_agents(&registered_agents, &present_user_ids),
+                    has_registered_agents,
+                )
+            })
+            .unwrap_or((Vec::new(), false));
         let app_language = Self::current_app_language(scope);
 
         // Clear the "/invitebot" trigger text. `set_input_text_preserving_mentions`
@@ -2535,6 +2665,12 @@ impl MentionableTextInput {
         self.last_search_text = None;
         self.loading_indicator_ref = None;
         self.active_popup_mode = PopupMode::BotInvite;
+        self.pending_popup_cleanup = false;
+        // Pin the popup for the picker's lifetime: on Android the selection tap
+        // triggers a multi-step focus dance whose KeyFocusLost events would
+        // otherwise close the picker we are about to open (unpinned again in
+        // `close_mention_popup` and when other popup modes rebuild the list).
+        self.cmd_text_input.set_keep_popup_open_on_focus_loss(true);
 
         self.cmd_text_input.clear_items(cx);
         self.cmd_text_input.reset_list_scroll(cx);
@@ -2570,7 +2706,8 @@ impl MentionableTextInput {
     }
 
     /// Renders one selectable row per invitable agent, reusing the mention list's
-    /// `user_list_item` template (display name + MXID + text-initial avatar).
+    /// `user_list_item` template (display name + MXID + avatar, with the same
+    /// fetch-or-initials avatar behavior as the mention rows).
     fn add_bot_invite_items(&mut self, cx: &mut Cx, agents: &[InvitableAgent]) -> usize {
         let Some(user_list_item_ptr) = self.user_list_item else {
             return 0;
@@ -2581,8 +2718,21 @@ impl MentionableTextInput {
             let item = crate::widget_ref_from_live_ptr(cx, Some(user_list_item_ptr));
             item.label(cx, ids!(username)).set_text(cx, &agent.display_name);
             item.label(cx, ids!(user_id)).set_text(cx, agent.user_id.as_str());
-            item.avatar(cx, ids!(avatar))
-                .show_text(cx, None, None, &agent.display_name);
+            let avatar = item.avatar(cx, ids!(avatar));
+            match agent
+                .avatar
+                .as_ref()
+                .map(|mxc_uri| get_or_fetch_avatar(cx, mxc_uri))
+            {
+                Some(AvatarCacheEntry::Loaded(avatar_data)) => {
+                    let _ = avatar.show_image(cx, None, |cx, img| {
+                        utils::load_png_or_jpg(&img, cx, &avatar_data)
+                    });
+                }
+                _ => {
+                    avatar.show_text(cx, None, None, &agent.display_name);
+                }
+            }
             self.cmd_text_input.add_item(cx, item);
             if index == 0 {
                 self.cmd_text_input.set_keyboard_focus_index(0);
@@ -2618,15 +2768,25 @@ impl MentionableTextInput {
         let Some(room_props) = scope.props.get::<RoomScreenProps>() else {
             return;
         };
-        cx.action(MentionableTextInputAction::InviteBotSelected {
-            room_id: room_props.room_name_id.room_id().clone(),
-            user_id,
-        });
+        // Addressed to the owning room screen's widget uid (not broadcast):
+        // structurally exactly-once even when the same room is shown by more
+        // than one RoomScreen (e.g. main timeline + a thread tab).
+        cx.widget_action(
+            room_props.room_screen_widget_uid,
+            MentionableTextInputAction::InviteBotSelected {
+                room_id: room_props.room_name_id.room_id().clone(),
+                user_id,
+            },
+        );
         self.close_mention_popup(cx);
         self.pending_draw_focus_restore = true;
     }
 
-    /// Core text change handler that manages mention context
+    /// Core text change handler that manages mention context.
+    ///
+    /// Callers must only pass FRESH changes (payload == the input's current
+    /// text); stale programmatic-set_text echoes are dropped at the
+    /// `TextInputAction::Changed` dispatch site in `handle_event`.
     fn handle_text_change(&mut self, cx: &mut Cx, scope: &mut Scope, text: String) {
         let previous_text = std::mem::replace(&mut self.last_text, text.clone());
         let tracked_visible_mentions = std::mem::take(&mut self.tracked_visible_mentions);
@@ -2960,6 +3120,8 @@ impl MentionableTextInput {
             .expect("RoomScreenProps should be available in scope for MentionableTextInput");
 
         self.active_popup_mode = PopupMode::Mention;
+        // Mention list is not pinned; only the bot-invite picker is.
+        self.cmd_text_input.set_keep_popup_open_on_focus_loss(false);
         self.set_popup_header_for_mentions(cx);
 
         // Get trigger position from current state (if in searching mode)
@@ -3309,6 +3471,9 @@ impl MentionableTextInput {
 
     /// Cleanup helper for closing mention popup
     fn close_mention_popup(&mut self, cx: &mut Cx) {
+        // Unpin the popup: only the /invitebot picker keeps it open across
+        // text-input focus loss (see open_bot_invite_picker).
+        self.cmd_text_input.set_keep_popup_open_on_focus_loss(false);
         // Reset all search-related state
         self.reset_search_state(cx);
 
@@ -3398,6 +3563,16 @@ impl MentionableTextInputRef {
     pub fn open_slash_command_popup(&self, cx: &mut Cx, scope: &mut Scope) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.open_slash_command_popup(cx, scope);
+        }
+    }
+
+    /// Opens the `/invitebot` bot picker, clearing the (bare-command) input.
+    /// Used by the send path in `room_input_bar` so that submitting the bare
+    /// command via the send button diverts to the picker instead of sending
+    /// the command as message text.
+    pub fn open_bot_invite_picker(&self, cx: &mut Cx, scope: &mut Scope) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.open_bot_invite_picker(cx, scope);
         }
     }
 
@@ -3506,6 +3681,20 @@ mod tests {
     fn popup_status_items_are_never_selectable() {
         assert!(!popup_status_item_is_selectable(PopupStatusItemKind::Loading));
         assert!(!popup_status_item_is_selectable(PopupStatusItemKind::NoMatches));
+    }
+
+    #[test]
+    fn bot_invite_picker_ignores_deferred_focus_cleanup() {
+        assert!(!deferred_focus_cleanup_should_close_popup(
+            PopupMode::BotInvite,
+            false,
+            false,
+        ));
+        assert!(deferred_focus_cleanup_should_close_popup(
+            PopupMode::SlashCommand,
+            false,
+            false,
+        ));
     }
 
     #[test]
@@ -3878,11 +4067,14 @@ mod tests {
     #[test]
     fn test_invitebot_never_classified_for_message_submission() {
         // `/invitebot` must never ride the message-submission path: it is not in any
-        // management catalog, and the selection/submission handlers detect it via
+        // management catalog, and every submission path detects it via
         // `is_invitebot_command` to open the bot picker instead.
         assert_eq!(classify_known_slash_command_for_submission("/invitebot"), None);
         assert!(is_invitebot_command("/invitebot"));
         assert!(is_invitebot_command("/invitebot  "));
+        assert!(is_invitebot_command("  /invitebot  "));
+        assert!(is_invitebot_command("/INVITEBOT"));
+        assert!(is_invitebot_command("/Invitebot"));
     }
 
     #[test]
@@ -3891,12 +4083,17 @@ mod tests {
         assert!(!is_invitebot_command("/invite"));
         assert!(!is_invitebot_command(""));
         assert!(!is_invitebot_command("hello /invitebot"));
+        // Trailing text = ordinary message: it is sent as text and the user's
+        // composed content is never cleared.
+        assert!(!is_invitebot_command("/invitebot is broken, see logs"));
+        assert!(!is_invitebot_command("/invitebot @octos:server"));
     }
 
     fn invitable_agent(user_id: &str, display_name: &str) -> InvitableAgent {
         InvitableAgent {
             user_id: user_id.try_into().expect("test mxid should be valid"),
             display_name: display_name.to_owned(),
+            avatar: None,
         }
     }
 

@@ -47,9 +47,7 @@ use crate::home::search_messages::{
 use crate::home::streaming_animation::StreamingAnimState;
 use crate::room::room_input_bar::RoomInputBarWidgetExt;
 use crate::room::room_top_bar::{RoomTab, RoomTopBarAction, RoomTopBarWidgetExt};
-use crate::shared::mentionable_text_input::{
-    InvitableAgent, MentionableTextInputAction, filter_invitable_agents,
-};
+use crate::shared::mentionable_text_input::MentionableTextInputAction;
 use crate::shared::audio_message_player::AudioMessagePlayerWidgetRefExt;
 use crate::shared::video_message_player::VideoMessagePlayerWidgetRefExt;
 use crate::event_preview::{summarize_audio_message, summarize_video_message};
@@ -6168,17 +6166,23 @@ impl Widget for RoomScreen {
                 }
 
                 // Handle a bot picked in the `/invitebot` picker: dispatch the invite.
-                // Success/failure feedback arrives via the InviteResultAction pipeline below.
-                if let Some(MentionableTextInputAction::InviteBotSelected { room_id, user_id }) =
-                    action.downcast_ref()
-                {
-                    // Only handle if this is for the current room, so a single invite
-                    // is dispatched even with multiple room screens open.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
-                        submit_async_request(MatrixRequest::InviteUser {
-                            room_id: room_id.clone(),
-                            user_id: user_id.clone(),
-                        });
+                // The action is widget-addressed to exactly this RoomScreen (see
+                // on_bot_invite_selected), so even when the same room is shown by
+                // multiple RoomScreens (main timeline + thread tab) only one
+                // instance dispatches. Success/failure feedback arrives via the
+                // InviteResultAction pipeline below.
+                if let Some(widget_action) = action.as_widget_action() {
+                    if widget_action.widget_uid == self.widget_uid() {
+                        if let MentionableTextInputAction::InviteBotSelected { room_id, user_id } =
+                            widget_action.cast()
+                        {
+                            // Optimistically record the pending invite so a
+                            // reopened picker can't offer the same bot again
+                            // during the network round-trip; the
+                            // InviteResultAction::Failed handler rolls it back.
+                            self.pending_invited_users.insert(user_id.clone());
+                            submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
+                        }
                     }
                 }
 
@@ -7482,43 +7486,6 @@ impl RoomScreen {
                 })
                 .unwrap_or((false, false, false, None, None, Vec::new(), Vec::new(), Vec::new()));
 
-            // Candidates for the `/invitebot` picker: every registered agent that is
-            // neither a room member already nor pending one of our sent invites.
-            let (invitable_agents, has_registered_agents) = scope
-                .data
-                .get::<AppState>()
-                .map(|app_state| {
-                    let registered_agents: Vec<InvitableAgent> = app_state
-                        .agent_registry
-                        .agent_user_ids()
-                        .into_iter()
-                        .map(|user_id| {
-                            let display_name = app_state
-                                .agent_registry
-                                .get(&user_id)
-                                .and_then(|entry| entry.display_name.clone())
-                                .unwrap_or_else(|| user_id.localpart().to_owned());
-                            InvitableAgent {
-                                user_id,
-                                display_name,
-                            }
-                        })
-                        .collect();
-                    let has_registered_agents = !registered_agents.is_empty();
-                    let present_user_ids: Vec<OwnedUserId> = room_members
-                        .as_ref()
-                        .map(|members| members.iter().map(|m| m.user_id().to_owned()).collect::<Vec<_>>())
-                        .unwrap_or_default()
-                        .into_iter()
-                        .chain(self.pending_invited_users.iter().cloned())
-                        .collect();
-                    (
-                        filter_invitable_agents(&registered_agents, &present_user_ids),
-                        has_registered_agents,
-                    )
-                })
-                .unwrap_or((Vec::new(), false));
-
             Some(RoomScreenProps {
                 room_screen_widget_uid,
                 room_name_id: self.room_name_id.clone().unwrap_or_else(|| RoomNameId::empty(room_id.clone())),
@@ -7538,8 +7505,7 @@ impl RoomScreen {
                 persisted_bound_bot_user_ids,
                 known_bot_user_ids,
                 can_invite: tl.user_power.can_invite(),
-                invitable_agents,
-                has_registered_agents,
+                pending_invited_users: self.pending_invited_users.iter().cloned().collect(),
             })
         } else {
             self.room_name_id.as_ref().map(|room_name| RoomScreenProps {
@@ -7562,8 +7528,7 @@ impl RoomScreen {
                 persisted_bound_bot_user_ids: Vec::new(),
                 known_bot_user_ids: Vec::new(),
                 can_invite: false,
-                invitable_agents: Vec::new(),
-                has_registered_agents: false,
+                pending_invited_users: Vec::new(),
             })
         }
     }
@@ -10483,12 +10448,10 @@ pub struct RoomScreenProps {
     /// Whether the current user has permission to invite users to this room.
     /// Gates the `/invitebot` slash command.
     pub can_invite: bool,
-    /// Registered agents (from the global `AgentRegistry`) not yet present in
-    /// this room — the candidates offered by the `/invitebot` picker.
-    pub invitable_agents: Vec<InvitableAgent>,
-    /// Whether ANY agents are registered at all, used to pick between the
-    /// "register one first" and "all already here" empty-picker hints.
-    pub has_registered_agents: bool,
+    /// Invites this client has sent that are still awaiting acceptance —
+    /// consumed by the `/invitebot` picker (at open time) to keep its
+    /// candidate filtering idempotent during the invite round-trip.
+    pub pending_invited_users: Vec<OwnedUserId>,
 }
 
 
