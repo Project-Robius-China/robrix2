@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -1031,7 +1031,10 @@ thread_local! {
     static ROOM_INFO_ACTION_MODAL_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
-fn set_room_info_action_modal_open(open: bool) {
+/// Set by app.rs each frame from the GLOBAL room-info-action modals
+/// (report / leave-confirm), so the room info sliding pane knows not to
+/// self-close on Escape / tap-outside while one of them is open over it.
+pub fn set_room_info_action_modal_open(open: bool) {
     ROOM_INFO_ACTION_MODAL_OPEN.with(|state| state.set(open));
 }
 
@@ -1299,7 +1302,7 @@ fn detected_bot_binding_for_members(
         }
     }
 
-    let known_bot_user_ids = app_state.bot_settings.known_bot_user_ids();
+    let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
     if let Some(bot_member) = non_self_members
         .iter()
         .find(|room_member|
@@ -4085,11 +4088,12 @@ script_mod! {
     }
 
     mod.widgets.ReportRoomModal = #(ReportRoomModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 430 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 430
+        RoundedShadowView {
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -4098,8 +4102,13 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: (COLOR_PRIMARY)
-                border_radius: 6.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title := Label {
@@ -4107,7 +4116,7 @@ script_mod! {
                 height: Fit
                 draw_text +: {
                     text_style: TITLE_TEXT { font_size: 13 }
-                    color: #000
+                    color: (RBX_FG_PRIMARY)
                 }
                 text: "Report Room"
             }
@@ -4672,19 +4681,6 @@ script_mod! {
                     delete_bot_modal_inner := mod.widgets.DeleteBotModal {}
                 }
             }
-
-            report_room_modal := Modal {
-                content +: {
-                    report_room_modal_inner := mod.widgets.ReportRoomModal {}
-                }
-            }
-
-            leave_room_confirm_modal := Modal {
-                content +: {
-                    leave_room_confirm_modal_inner := mod.widgets.NegativeConfirmationModal {}
-                }
-            }
-
 
             /*
              * TODO: add the action bar back in as a series of floating buttons.
@@ -5868,6 +5864,12 @@ impl RoomInfoSlidingPaneRef {
 
 #[derive(Clone, Debug)]
 pub enum ReportRoomModalAction {
+    /// Emitted by RoomScreen to open the (now global, app-root) report modal
+    /// for a specific room. Carries the room so app.rs can route the result.
+    Open {
+        room_id: OwnedRoomId,
+        room_name_id: RoomNameId,
+    },
     Close,
     Submit(String),
 }
@@ -6095,10 +6097,6 @@ impl Widget for RoomScreen {
         // uid, so route them the same as the overlay pane's.
         let info_content_widget_uid = self.room_info_sliding_pane(cx, ids!(info_content)).widget_uid();
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
-        set_room_info_action_modal_open(
-            self.view.modal(cx, ids!(report_room_modal)).is_open()
-                || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open()
-        );
 
         // Streaming animation frame handler
         if let Some(_ne) = self.streaming_next_frame.is_event(event) {
@@ -6453,22 +6451,6 @@ impl Widget for RoomScreen {
                     RoomTopBarAction::None => {}
                 }
 
-                if let Some(RoomsListAction::Selected(selected_room)) = action.downcast_ref() {
-                    if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
-                        self.close_report_room_modal(cx);
-                        self.close_leave_room_confirm_modal(cx);
-                    }
-                }
-                if let Some(AppStateAction::RoomFocused(selected_room)) = action.downcast_ref() {
-                    if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
-                        self.close_report_room_modal(cx);
-                        self.close_leave_room_confirm_modal(cx);
-                    }
-                }
-                if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
-                    self.close_report_room_modal(cx);
-                    self.close_leave_room_confirm_modal(cx);
-                }
                 if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
                     if room_info_sliding_pane.is_currently_shown(cx) {
                         self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
@@ -6551,32 +6533,6 @@ impl Widget for RoomScreen {
                                 }),
                             ],
                             auto_dismissal_duration: None,
-                            ..Default::default()
-                        });
-                    }
-                }
-                if let Some(ReportRoomResultAction::Sent { room_id }) = action.downcast_ref() {
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
-                        enqueue_popup_notification(
-                            "Room reported successfully.",
-                            PopupKind::Success,
-                            Some(4.0),
-                        );
-                    }
-                }
-                if let Some(ReportRoomResultAction::Failed { room_id, error }) = action.downcast_ref() {
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
-                        let error_display = error.to_string();
-                        enqueue_notification(NotificationItem {
-                            kind: PopupKind::Error,
-                            title: Some("Report failed".into()),
-                            message: format!("Failed to report room.\n\nError: {error}").into(),
-                            actions: vec![
-                                NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
-                                    cx.copy_to_clipboard(&error_display);
-                                }),
-                            ],
-                            auto_dismissal_duration: Some(5.0),
                             ..Default::default()
                         });
                     }
@@ -6687,10 +6643,37 @@ impl Widget for RoomScreen {
                         );
                     }
                     RoomInfoPaneAction::ReportRoom => {
-                        self.open_report_room_modal(cx);
+                        // Open the GLOBAL report modal (app root) so it survives
+                        // mobile<->desktop AdaptiveView rebuilds. Carry the room.
+                        if let Some(room_name_id) = self.room_name_id.clone() {
+                            cx.action(ReportRoomModalAction::Open {
+                                room_id: room_name_id.room_id().clone(),
+                                room_name_id,
+                            });
+                        }
                     }
                     RoomInfoPaneAction::LeaveRoom => {
-                        self.open_leave_room_confirm_modal(cx);
+                        // Route to the GLOBAL delete-confirmation modal (app root)
+                        // so it survives mobile<->desktop AdaptiveView rebuilds.
+                        // The room_id is captured in the accept callback.
+                        if let Some(room_id) = self.room_id().cloned() {
+                            let room_name = self
+                                .room_name_id
+                                .as_ref()
+                                .map(|r| r.to_string())
+                                .unwrap_or_default();
+                            let content = ConfirmationModalContent {
+                                title_text: String::from("Leave Room").into(),
+                                body_text: format!("Are you sure you want to leave {room_name}?").into(),
+                                accept_button_text: Some(String::from("Leave").into()),
+                                cancel_button_text: Some(String::from("Cancel").into()),
+                                on_accept_clicked: Some(Box::new(move |_cx| {
+                                    submit_async_request(MatrixRequest::LeaveRoom { room_id });
+                                })),
+                                ..Default::default()
+                            };
+                            cx.action(ConfirmDeleteAction::Show(RefCell::new(Some(content))));
+                        }
                     }
                     // Bubbled by the pane itself into `OpenPeopleProfile`
                     // (handled above); nothing to do here.
@@ -6842,9 +6825,9 @@ impl Widget for RoomScreen {
         // We check which overlay views are visible in the order of those views' z-ordering,
         // such that the top-most views get a chance to handle the event first.
         //
-        let room_info_action_modal_open =
-            self.view.modal(cx, ids!(report_room_modal)).is_open()
-            || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open();
+        // Report / leave-confirm are now GLOBAL modals (app root); the flag is
+        // maintained by app.rs. Read it so the pane still yields correctly.
+        let room_info_action_modal_open = is_room_info_action_modal_open();
         let is_interactive_hit = utils::is_interactive_hit_event(event);
         let is_pane_shown: bool;
         if room_info_action_modal_open {
@@ -6896,9 +6879,6 @@ impl Widget for RoomScreen {
             } else {
                 Scope::with_props(&room_props)
             };
-            let leave_room_confirm_modal_uid = self
-                .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
-                .widget_uid();
 
 
             // Forward the event to the inner timeline view, but capture any actions it produces
@@ -7099,42 +7079,6 @@ impl Widget for RoomScreen {
                         return false;
                     }
                     None => {}
-                }
-
-                match action.downcast_ref::<ReportRoomModalAction>() {
-                    Some(ReportRoomModalAction::Close) => {
-                        self.close_report_room_modal(cx);
-                        return false;
-                    }
-                    Some(ReportRoomModalAction::Submit(reason)) => {
-                        let Some(room_id) = self.room_id().cloned() else {
-                            self.close_report_room_modal(cx);
-                            return false;
-                        };
-                        submit_async_request(MatrixRequest::ReportRoom {
-                            room_id,
-                            reason: reason.clone(),
-                        });
-                        self.close_report_room_modal(cx);
-                        return false;
-                    }
-                    None => {}
-                }
-
-                if let ConfirmationModalAction::Close(accepted) = action
-                    .as_widget_action()
-                    .widget_uid_eq(leave_room_confirm_modal_uid)
-                    .cast()
-                {
-                    self.close_leave_room_confirm_modal(cx);
-                    if accepted {
-                        if let Some(room_id) = self.room_id().cloned() {
-                            submit_async_request(MatrixRequest::LeaveRoom {
-                                room_id,
-                            });
-                        }
-                    }
-                    return false;
                 }
 
                 if let MessageAction::ToggleAppServiceActions = action
@@ -7986,14 +7930,6 @@ impl RoomScreen {
         self.view.modal(cx, ids!(delete_bot_modal)).close(cx);
     }
 
-    fn close_report_room_modal(&self, cx: &mut Cx) {
-        self.view.modal(cx, ids!(report_room_modal)).close(cx);
-    }
-
-    fn close_leave_room_confirm_modal(&self, cx: &mut Cx) {
-        self.view.modal(cx, ids!(leave_room_confirm_modal)).close(cx);
-    }
-
     fn open_create_bot_modal(&mut self, cx: &mut Cx) {
         let Some(room_name_id) = self.room_name_id.clone() else {
             return;
@@ -8016,38 +7952,10 @@ impl RoomScreen {
         self.view.modal(cx, ids!(delete_bot_modal)).open(cx);
     }
 
-    fn open_report_room_modal(&mut self, cx: &mut Cx) {
-        let Some(room_name_id) = self.room_name_id.as_ref() else {
-            return;
-        };
-        self.view
-            .report_room_modal(cx, ids!(report_room_modal_inner))
-            .show(cx, room_name_id);
-        self.view.modal(cx, ids!(report_room_modal)).open(cx);
-    }
-
-    fn open_leave_room_confirm_modal(&mut self, cx: &mut Cx) {
-        let Some(room_name_id) = self.room_name_id.as_ref() else {
-            return;
-        };
-        self.view
-            .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
-            .show(cx, ConfirmationModalContent {
-                title_text: String::from("Leave Room").into(),
-                body_text: format!("Are you sure you want to leave {}?", room_name_id).into(),
-                accept_button_text: Some(String::from("Leave").into()),
-                cancel_button_text: Some(String::from("Cancel").into()),
-                ..Default::default()
-            });
-        self.view.modal(cx, ids!(leave_room_confirm_modal)).open(cx);
-    }
-
     fn reset_app_service_ui(&mut self, cx: &mut Cx) {
         self.set_app_service_actions_visible(cx, false);
         self.close_create_bot_modal(cx);
         self.close_delete_bot_modal(cx);
-        self.close_report_room_modal(cx);
-        self.close_leave_room_confirm_modal(cx);
     }
 
     fn resolved_app_service_bot_user_id(
@@ -14794,6 +14702,26 @@ mod tests {
         assert!(!room_info_title_shows_agent_badge(
             Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
         ));
+    }
+
+    #[test]
+    fn test_detected_bot_binding_uses_registry_augmented_known_bots() {
+        let src = include_str!("room_screen.rs");
+        let fn_pos = src
+            .find("fn detected_bot_binding_for_members")
+            .expect("detected_bot_binding_for_members should exist");
+        let fn_src = &src[fn_pos..src[fn_pos..].find("fn is_likely_bot_user_id")
+            .map(|end| fn_pos + end)
+            .unwrap_or(src.len())];
+
+        assert!(
+            fn_src.contains("timeline_known_bot_user_ids(app_state)"),
+            "DM bot binding detection should include AgentRegistry agents such as OctosDirect",
+        );
+        assert!(
+            !fn_src.contains("app_state.bot_settings.known_bot_user_ids()"),
+            "DM bot binding detection must not read only raw AppService known-bots",
+        );
     }
 
     #[test]

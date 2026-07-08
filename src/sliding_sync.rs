@@ -797,6 +797,10 @@ pub struct DeviceInfo {
     pub last_seen_ip: Option<String>,
     /// Unix-millisecond timestamp of the last server-side activity.
     pub last_seen_ts_ms: Option<i64>,
+    /// `true` if this entry is the session Robrix is currently running as
+    /// (matched against `client.device_id()`). Used to render the "This device"
+    /// badge and to sort the current session to the top of the list.
+    pub is_current: bool,
 }
 
 /// Outcome of attempting to delete a single device.
@@ -2134,6 +2138,30 @@ mod matrix_request_tests {
         assert!(
             should_restore_loaded_app_state(&app_state),
             "selected_room is persisted state and must restore even when dock state is empty",
+        );
+    }
+
+    #[test]
+    fn test_should_restore_loaded_app_state_with_registered_agents_and_empty_dock() {
+        // Regression for the issue #94 class: a user who only registered agents
+        // (e.g. a direct Hermes / OpenClaw / OctosDirect agent, which does NOT
+        // touch bot_settings) and never opened a room must still have the
+        // registry restored on relaunch. The gate previously ignored
+        // agent_registry, so the whole registry was silently dropped on mobile
+        // force-quit + relaunch while the Matrix session (a separate file)
+        // restored — leaving the user logged in with an empty Agent Lab.
+        let mut app_state = crate::app::AppState::default();
+        app_state.agent_registry.register(
+            "@helper:example.org".try_into().unwrap(),
+            crate::app::AgentEntry {
+                framework: crate::app::AgentFramework::Hermes,
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            should_restore_loaded_app_state(&app_state),
+            "registered agents are persisted state and must restore even when dock is empty and bot_settings are default",
         );
     }
 
@@ -4195,18 +4223,29 @@ async fn matrix_worker_task(
             MatrixRequest::GetDeviceList => {
                 let Some(client) = get_client() else { continue };
                 let _get_device_list_task = Handle::current().spawn(async move {
+                    // The device id of the session we're currently running as, so the
+                    // UI can flag it. Convert to an owned String before the await so we
+                    // don't hold a borrow of `client` across it.
+                    let current_device_id = client.device_id().map(|id| id.to_string());
                     match client.devices().await {
                         Ok(resp) => {
                             let devices = resp
                                 .devices
                                 .into_iter()
-                                .map(|d| DeviceInfo {
-                                    device_id: d.device_id.to_string(),
-                                    display_name: d.display_name,
-                                    last_seen_ip: d.last_seen_ip,
-                                    last_seen_ts_ms: d
-                                        .last_seen_ts
-                                        .map(|ts| ts.get().into()),
+                                .map(|d| {
+                                    let device_id = d.device_id.to_string();
+                                    let is_current = current_device_id
+                                        .as_deref()
+                                        == Some(device_id.as_str());
+                                    DeviceInfo {
+                                        device_id,
+                                        display_name: d.display_name,
+                                        last_seen_ip: d.last_seen_ip,
+                                        last_seen_ts_ms: d
+                                            .last_seen_ts
+                                            .map(|ts| ts.get().into()),
+                                        is_current,
+                                    }
                                 })
                                 .collect::<Vec<_>>();
                             log!("Fetched {} device(s)", devices.len());
@@ -7917,6 +7956,11 @@ fn should_restore_loaded_app_state(app_state: &crate::app::AppState) -> bool {
             .values()
             .any(saved_dock_state_has_content)
         || app_state.bot_settings != crate::app::BotSettingsState::default()
+        // Registered agents are persisted state too. Direct agents (Hermes /
+        // OpenClaw / OctosDirect) populate only the registry — not bot_settings —
+        // so without this the whole Agent Lab registry is dropped on mobile
+        // force-quit + relaunch (issue #94 class).
+        || !app_state.agent_registry.is_empty()
         || app_state.app_language != crate::i18n::AppLanguage::default()
         || app_state.app_prefs != crate::settings::app_preferences::AppPreferences::default()
         || app_state.translation != crate::room::translation::TranslationConfig::default()

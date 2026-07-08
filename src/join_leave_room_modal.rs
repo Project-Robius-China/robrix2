@@ -16,18 +16,26 @@ script_mod! {
 
 
     mod.widgets.JoinLeaveRoomModal = #(JoinLeaveRoomModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 400 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
+        RoundedShadowView {
             flow: Down
-            width: 400
+            width: Fill
             height: Fit
             padding: Inset{top: 30, right: 40, bottom: 20, left: 40}
 
             show_bg: true
-            draw_bg.color: (COLOR_PRIMARY)
-            draw_bg.border_radius: 4.0
+            draw_bg +: {
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
+            }
 
             title_view := View {
                 width: Fill,
@@ -39,7 +47,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true},
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 13},
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                 }
             }

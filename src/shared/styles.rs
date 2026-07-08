@@ -10,6 +10,13 @@ script_mod! {
     mod.widgets.ICON_MICROPHONE_OFF   = crate_resource("self://resources/icons/microphone_off.svg")
     mod.widgets.ICON_VIDEO            = crate_resource("self://resources/icons/video.svg")
     mod.widgets.ICON_PHONE            = crate_resource("self://resources/icons/phone.svg")
+
+    // Agent framework brand logos (Settings > Labs > Agent Access + Add-agent modal).
+    // Bundled high-res transparent PNGs; the GPU downscales them into the small
+    // tiles, so they stay crisp on high-DPI Android/iOS without @2x/@3x variants.
+    mod.widgets.IMG_FW_OCTOS          = crate_resource("self://resources/img/agent_octos.png")
+    mod.widgets.IMG_FW_HERMES         = crate_resource("self://resources/img/agent_hermes.png")
+    mod.widgets.IMG_FW_OPENCLAW       = crate_resource("self://resources/img/agent_openclaw.png")
     mod.widgets.ICON_ADD_REACTION     = crate_resource("self://resources/icons/add_reaction.svg")
     mod.widgets.ICON_ADD_USER         = crate_resource("self://resources/icons/add_user.svg") // TODO: FIX
     mod.widgets.ICON_ADD_WALLET       = crate_resource("self://resources/icons/add_wallet.svg")
@@ -64,6 +71,7 @@ script_mod! {
     mod.widgets.ICON_STAR_FILLED      = crate_resource("self://resources/icons/star_filled.svg")
     mod.widgets.ICON_ROBOT            = crate_resource("self://resources/icons/robot.svg")
     mod.widgets.ICON_PEOPLE           = crate_resource("self://resources/icons/people.svg")
+    mod.widgets.ICON_DEVICE           = crate_resource("self://resources/icons/device.svg")
 
     mod.widgets.TITLE_TEXT = theme.font_regular {
         font_size: (13),
