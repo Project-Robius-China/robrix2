@@ -91,9 +91,15 @@ rustls = { version = "0.23.37", default-features = false, features = ["ring", "s
 webpki-roots = "1.0"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
-rfd = "0.15"
 cargo-packager-updater = "0.2"
 semver = "1"
+
+## `rfd` (native file dialog) has no OpenHarmony backend and would pull in
+## wayland/ashpd/zbus, none of which can cross-compile for OHOS. Because OHOS
+## reuses `target_os = "linux"`, it must be excluded explicitly here; all call
+## sites fall back to the same mobile stubs used on iOS/Android.
+[target.'cfg(all(any(target_os = "macos", target_os = "windows", target_os = "linux"), not(target_env = "ohos")))'.dependencies]
+rfd = "0.15"
 
 ## Dependencies for TSP support.
 ## Commit "f0bc4625dcd729e07e4a36257df2f1d94c81cef4" is the most recent one without the invalid change to pin serde to 1.0.219.

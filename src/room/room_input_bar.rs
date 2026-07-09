@@ -22,7 +22,7 @@ use ruma::events::room::message::AddMentions;
 use matrix_sdk_ui::timeline::{EmbeddedEvent, EventTimelineItem, TimelineEventItemId};
 use ruma::{events::room::message::{LocationMessageEventContent, MessageType, ReplyWithinThread, RoomMessageEventContent}, OwnedRoomId, OwnedUserId, UserId};
 use crate::{app::AppState, home::{editing_pane::{EditingPaneState, EditingPaneWidgetExt, EditingPaneWidgetRefExt}, location_preview::{LocationPreviewWidgetExt, LocationPreviewWidgetRefExt}, room_screen::{MessageAction, RoomScreenProps, is_known_or_likely_bot, populate_preview_of_timeline_item}, tombstone_footer::{SuccessorRoomDetails, TombstoneFooterWidgetExt}, upload_progress::UploadProgressViewWidgetRefExt}, i18n::{AppLanguage, tr_fmt, tr_key}, location::init_location_subscriber, room::translation::{self, TRANSLATION_REQUEST_ID}, shared::{avatar::AvatarWidgetRefExt, file_upload_modal::{FileData, FileLoadedData, FilePreviewerAction}, html_or_plaintext::HtmlOrPlaintextWidgetRefExt, mentionable_text_input::{MentionableTextInputWidgetExt, SlashCommandDiscoveryContext, classify_known_slash_command_for_submission_in_context, parse_command_with_at_suffix}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}}, sliding_sync::{MatrixRequest, TimelineKind, UserPowerLevels, submit_async_request}, utils};
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
 use crate::shared::file_upload_modal::{FilePreviewerMetaData, ThumbnailData};
 
 #[cfg(test)]
@@ -2078,7 +2078,7 @@ impl RoomInputBar {
     }
 
     /// Opens the native file picker dialog to select a file for upload.
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
     fn open_file_picker(&mut self, cx: &mut Cx) {
         // Run file dialog on main thread (required for non-windowed environments)
         let dialog = rfd::FileDialog::new()
@@ -2093,7 +2093,7 @@ impl RoomInputBar {
     }
 
     /// Shows a "not supported" message on mobile platforms.
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "android", target_env = "ohos"))]
     fn open_file_picker(&mut self, _cx: &mut Cx) {
         enqueue_popup_notification(
             "File uploads are not yet supported on this platform.",
@@ -2102,7 +2102,7 @@ impl RoomInputBar {
         );
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
     fn handle_file_drag_drop(&mut self, cx: &mut Cx, event: &Event) {
         match event.drag_hits(cx, self.view.area()) {
             DragHit::Drag(drag_hit) => {
@@ -2128,10 +2128,10 @@ impl RoomInputBar {
         }
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "android", target_env = "ohos"))]
     fn handle_file_drag_drop(&mut self, _cx: &mut Cx, _event: &Event) {}
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
     fn start_file_preview_load(&mut self, cx: &mut Cx, file_path: std::path::PathBuf) {
         let metadata = match std::fs::metadata(&file_path) {
             Ok(metadata) => metadata,
@@ -2466,12 +2466,12 @@ fn convert_loaded_data_to_file_data(loaded: FileLoadedData) -> FileData {
     }
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
 fn first_dropped_file_path(items: &[DragItem]) -> Option<std::path::PathBuf> {
     dropped_file_paths(items).into_iter().next()
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
 fn dropped_file_paths(items: &[DragItem]) -> Vec<std::path::PathBuf> {
     items
         .iter()
@@ -2595,7 +2595,7 @@ mod tests {
         assert!(popup_pos.y < 0.0);
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
     #[test]
     fn dropped_file_paths_extracts_file_items_only() {
         let items = vec![
