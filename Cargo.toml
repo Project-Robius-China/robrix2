@@ -187,6 +187,16 @@ askar-storage = { git = "https://github.com/openwallet-foundation/askar.git" }
 [patch."https://github.com/ruma/ruma"]
 ruma = { git = "https://github.com/project-robius/ruma.git", branch = "tsp" }
 
+## OpenHarmony (HarmonyOS) build support.
+## The pinned makepad `dev` commit (3d18a137) does not build for OHOS — it treats
+## OHOS as desktop Linux in a few places (video/GL bridge/xkbcommon/openssl).
+## This fork branch is that exact commit + minimal `target_env="ohos"` carve-outs,
+## so the desktop/mobile builds are unchanged. See harmony/README.md.
+## Remove once these fixes land upstream in makepad.
+[patch."https://github.com/makepad/makepad"]
+makepad-widgets     = { git = "https://github.com/Project-Robius-China/makepad", rev = "96d2f42f91fd2d325f64d9f1a519055b231d42fa", version = "=2.0.0" }
+makepad-code-editor = { git = "https://github.com/Project-Robius-China/makepad", rev = "96d2f42f91fd2d325f64d9f1a519055b231d42fa", version = "=2.0.0" }
+
 [build-dependencies]
 toml = "1"
 
