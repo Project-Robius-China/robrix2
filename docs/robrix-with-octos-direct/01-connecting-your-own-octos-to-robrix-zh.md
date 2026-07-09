@@ -138,6 +138,8 @@ octos gateway 跑起来、bot 已登录后，到 Robrix 里把它登记为一个
 4. **Step 1 of 2 · Choose a framework** —— 选 **「Octos (Direct)」** 那张卡片（角标 `OD`，标签「直接 Agent」）
 5. **Step 2** —— 在 **Agent Matrix ID** 里填你 bot 的完整 MXID（如 `@myagent:example.org`），点 **「Add friend & bind」**
 
+<img src="images/add-agent-octos-direct.png" width="360" alt="Robrix「添加 agent」弹窗 Step 1:四张框架卡片中选中「Octos (Direct)」(DIRECT AGENT,Octos, added as a Matrix friend.)">
+
 Robrix 会向该 MXID 发一个好友请求。因为配置了 `auto_join: "always"`，octos bot 会**自动接受**，随后它就作为一个已识别的 **Octos (Direct)** agent 出现在列表里。
 
 > **提示：** 这一步是**客户端本地动作**（在 AgentRegistry 里登记 + 建私聊），不是发给 bot 的聊天命令。它和 Hermes / OpenClaw 的绑定流程完全一样。

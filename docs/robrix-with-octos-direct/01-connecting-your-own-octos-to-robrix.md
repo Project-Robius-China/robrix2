@@ -170,6 +170,8 @@ Once the gateway is running and the bot has logged in, register it as an agent i
 4. **Step 1 of 2 · Choose a framework** — pick the **"Octos (Direct)"** card (badge `OD`, tag "Direct Agent")
 5. **Step 2** — enter your bot's full MXID in **Agent Matrix ID** (e.g. `@myagent:example.org`), then **"Add friend & bind"**
 
+<img src="images/add-agent-octos-direct.png" width="360" alt="Robrix 'Add an agent' modal, Step 1: the 'Octos (Direct)' card selected among the four framework cards (DIRECT AGENT, 'Octos, added as a Matrix friend.')">
+
 Robrix sends a friend request to that MXID. Because `auto_join: "always"` is set, the
 octos bot **auto-accepts**, and it then appears as a recognized **Octos (Direct)** agent.
 
