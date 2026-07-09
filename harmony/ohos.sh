@@ -11,11 +11,20 @@
 #   harmony/ohos.sh logs       # stream hilog for the app
 #   harmony/ohos.sh shot       # grab a screenshot to harmony/robrix_screen.jpeg
 #
+#   EMULATOR (default):  harmony/ohos.sh run
+#   REAL DEVICE:         MAKEPAD= harmony/ohos.sh run   <-- MUST unset ohos_sim!
+#                        ohos_sim is emulator-only; on a real device it renders
+#                        wrong / runs slow. Real devices also usually need
+#                        DevEco (Huawei-account) signing, not the bundled
+#                        OpenHarmony debug materials. See harmony/README.md.
+#   The script warns if the connected target (emulator vs real device) does not
+#   match MAKEPAD, so you don't build the wrong mode by accident.
+#
 # Prereqs: DevEco Studio installed; a HarmonyOS emulator running (or a device via USB).
 # Override the DevEco path with:  DEVECO_HOME=/path/to/DevEco-Studio.app/Contents
 #
-# NOTE: this build depends on local patches to the makepad `dev` checkout that fix
-# its OpenHarmony support (see harmony/README.md). Those are NOT yet upstreamed.
+# NOTE: the makepad OHOS fixes are pinned via a `[patch]` in Cargo.toml
+# (Project-Robius-China/makepad); no manual makepad edits needed. See harmony/README.md.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -54,10 +63,42 @@ export DEVECO_HOME
 # override with an empty value:  MAKEPAD= harmony/ohos.sh run
 export MAKEPAD="${MAKEPAD-ohos_sim}"
 
+CMD="${1:-run}"
+
+# Warn if the connected target (emulator vs real device) doesn't match MAKEPAD,
+# so a real device isn't accidentally built in emulator mode (ohos_sim) and vice
+# versa. Emulator NEEDS ohos_sim (virtualized GLES); a real device must NOT use it.
+# Heuristic: the emulator connects over localhost TCP (127.0.0.1:*); a real device
+# shows a USB serial. Best-effort — only warns, never blocks.
+check_target_mode() {
+  local target
+  target="$("$HDC" list targets 2>/dev/null | head -1 | tr -d '[:space:]')"
+  [[ -z "$target" || "$target" == "[Empty]" ]] && return 0   # nothing connected; skip
+  local on_sim=0; case "${MAKEPAD:-}" in *ohos_sim*) on_sim=1 ;; esac
+  local is_emu=0; case "$target" in 127.0.0.1:*|localhost:*|emulator*|*-emulator*) is_emu=1 ;; esac
+  if (( on_sim && ! is_emu )); then
+    echo "########################################################################"
+    echo "#  WARNING: building in EMULATOR mode (MAKEPAD=ohos_sim) but a REAL"
+    echo "#  DEVICE is connected: $target"
+    echo "#  ohos_sim uses the emulator EGL + full texture uploads; on a real"
+    echo "#  device the app may render wrong or run slow."
+    echo "#  -> Build for a real device with:   MAKEPAD= harmony/ohos.sh $CMD"
+    echo "########################################################################"
+  elif (( ! on_sim && is_emu )); then
+    echo "########################################################################"
+    echo "#  WARNING: MAKEPAD is empty (real-device mode) but the EMULATOR is"
+    echo "#  connected: $target"
+    echo "#  The emulator needs ohos_sim or icons/text render black."
+    echo "#  -> Build for the emulator with:    harmony/ohos.sh $CMD"
+    echo "########################################################################"
+  fi
+  return 0
+}
+
 makepad() { cargo makepad ohos --deveco-home="$DEVECO_HOME" --arch="$ARCH" "$@" -p "$CRATE"; }
 
-cmd_deveco() { makepad deveco; }
-cmd_build()  { makepad build; }
+cmd_deveco() { check_target_mode; makepad deveco; }
+cmd_build()  { check_target_mode; makepad build; }
 
 cmd_sign() {
   [[ -f "$HAP_UNSIGNED" ]] || { echo "error: no unsigned HAP; run 'build' first"; exit 1; }
@@ -126,7 +167,7 @@ cmd_shot() {
   echo "screenshot -> $SIGN_DIR/robrix_screen.jpeg"
 }
 
-case "${1:-run}" in
+case "$CMD" in
   deveco) cmd_deveco ;;
   build)  cmd_build ;;
   sign)   cmd_sign ;;

@@ -70,6 +70,20 @@ harmony/ohos.sh shot      # 截图到 harmony/robrix_screen.jpeg
 
 > 真机构建（关掉模拟器专用的 ohos_sim）：`MAKEPAD= harmony/ohos.sh run`
 
+### 2.1 真机 vs 模拟器（重要，别搞混）
+
+**核心一句话：真机构建务必 `MAKEPAD=` 留空，别带 `ohos_sim`。**
+
+| | 模拟器 | 真机 |
+|---|--------|------|
+| **构建命令** | `harmony/ohos.sh run`（默认已带 `MAKEPAD=ohos_sim`） | `MAKEPAD= harmony/ohos.sh run`（**MAKEPAD 留空**） |
+| **为什么** | 模拟器虚拟 GLES 需要 `ohos_sim`（全量纹理上传 + 模拟器 EGL），否则图标/文字全黑（§4.4 / §6.1） | `ohos_sim` 是模拟器专用；真机带上它会走错渲染路径，可能**渲染异常 / 变慢**，且真机 GPU 支持浮点纹理，本来就不需要它 |
+| **签名** | SDK 自带 OpenHarmony 调试证书即可，脚本全自动（§5） | 鸿蒙 NEXT 真机多半**不认** OpenHarmony 调试证书，需 **DevEco 自动签名（华为账号）+ 开发者模式 + 设备注册**（见下） |
+| **文字渲染** | ⚠️ 不显示（浮点纹理限制，§6.1） | ✅ 预期正常（真机 GPU 支持 RGBA32F） |
+
+- **脚本自带防呆**：`ohos.sh` 在构建前会用 `hdc list targets` 检测连的是模拟器（`127.0.0.1:*`）还是真机（USB 串号）。如果和 `MAKEPAD` 不匹配（比如插着真机却带 `ohos_sim`，或空 `MAKEPAD` 却连着模拟器），会打印醒目 `WARNING` 提示你换正确命令（只告警、不拦截）。
+- **真机签名怎么弄**：把生成的工程 `target/makepad-open-harmony/robrix/` 用 DevEco Studio 打开 → `File` → `Project Structure` → `Signing Configs` → `Sign in`（华为账号）→ `Apply`。DevEco 会自动往 `build-profile.json5` 写 `signingConfigs`，之后 hvigor 自己签名 —— 这时**不要**再用 `ohos.sh sign`，直接让 DevEco 部署或 `harmony/ohos.sh build` + `hdc install`。⚠️ 别再跑 `harmony/ohos.sh deveco`（会重建工程、清掉刚写好的签名配置）。
+
 ---
 
 ## 3. 完整流程详解
@@ -240,6 +254,8 @@ harmony/ohos.sh shot      # 截图到 harmony/robrix_screen.jpeg
 | `verify certificate chain failed`（签名时） | app leaf 证书用错了（用了自签的）。要用模板里内嵌的 CA 签发 leaf（§5 第 1 步）。 |
 | `bm install` 报设备不匹配 | profile 的 `device-ids` 没含当前模拟器 UDID。`ohos.sh sign` 会自动取 `hdc shell bm get --udid`。 |
 | 有文字但不显示 | §6.1，模拟器浮点纹理限制，先真机验证。 |
+| 真机上图标/文字异常或很慢 | 误用了 `ohos_sim` 编真机包。真机要 `MAKEPAD= harmony/ohos.sh run`（§2.1）；脚本检测到不匹配会告警。 |
+| 真机 `bm install` 报签名/证书不受信任 | 真机不认 OpenHarmony 调试证书。用 DevEco 自动签名（华为账号）+ 开发者模式 + 设备注册（§2.1）。 |
 
 ---
 
