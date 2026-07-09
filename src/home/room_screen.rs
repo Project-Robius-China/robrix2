@@ -85,6 +85,13 @@ const TRANSLATION_LANG_POPUP_HEIGHT: f64 = TRANSLATION_LANG_POPUP_SCROLL_HEIGHT 
 const TRANSLATION_LANG_POPUP_GAP: f64 = 6.0;
 const TRANSLATION_LANG_POPUP_MARGIN: f64 = 8.0;
 
+fn invite_result_belongs_to_room_screen(
+    pending_invited_users: &HashSet<OwnedUserId>,
+    user_id: &OwnedUserId,
+) -> bool {
+    pending_invited_users.contains(user_id)
+}
+
 fn tl_idx_from_item_id(item_id: usize, has_encryption_notice: bool) -> Option<usize> {
     if has_encryption_notice {
         item_id.checked_sub(1)
@@ -6099,7 +6106,13 @@ impl Widget for RoomScreen {
                             title_text: tr_key(app_language, "room_screen.modal.invite.title").into(),
                             body_text: tr_fmt(app_language, "room_screen.modal.invite.body", &[("username", username)]).into(),
                             accept_button_text: Some(tr_key(app_language, "room_screen.modal.invite.accept").into()),
-                            on_accept_clicked: Some(Box::new(move |_cx| {
+                            on_accept_clicked: Some(Box::new(move |cx| {
+                                // Record pending ownership in every RoomScreen of this
+                                // room BEFORE the result arrives (see InviteUserRequested).
+                                cx.action(InviteAction::InviteUserRequested {
+                                    room_id: room_id.clone(),
+                                    user_id: user_id.clone(),
+                                });
                                 submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
                             })),
                             ..Default::default()
@@ -6165,10 +6178,44 @@ impl Widget for RoomScreen {
                     }
                 }
 
+                // Handle a bot picked in the `/invitebot` picker: dispatch the invite.
+                // The action is widget-addressed to exactly this RoomScreen (see
+                // on_bot_invite_selected), so even when the same room is shown by
+                // multiple RoomScreens (main timeline + thread tab) only one
+                // instance dispatches. Success/failure feedback arrives via the
+                // InviteResultAction pipeline below.
+                if let Some(widget_action) = action.as_widget_action() {
+                    if widget_action.widget_uid == self.widget_uid() {
+                        if let MentionableTextInputAction::InviteBotSelected { room_id, user_id } =
+                            widget_action.cast()
+                        {
+                            // Optimistically record the pending invite so a
+                            // reopened picker can't offer the same bot again
+                            // during the network round-trip; the
+                            // InviteResultAction::Failed handler rolls it back.
+                            self.pending_invited_users.insert(user_id.clone());
+                            submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
+                        }
+                    }
+                }
+
+                // An invite was just submitted from a closure-based initiator
+                // (knock-approve, Retry) or the invite modal: record pending
+                // ownership so the InviteResultAction feedback below fires.
+                if let Some(InviteAction::InviteUserRequested { room_id, user_id }) =
+                    action.downcast_ref()
+                {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pending_invited_users.insert(user_id.clone());
+                    }
+                }
+
                 // Handle InviteResultAction to show popup notifications.
                 if let Some(InviteResultAction::Sent { room_id, user_id }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                    // Only the RoomScreen that originated the invite owns its UI feedback.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id)
+                        && invite_result_belongs_to_room_screen(&self.pending_invited_users, user_id)
+                    {
                         self.pending_invited_users.insert(user_id.clone());
                         enqueue_popup_notification(
                             "Invite sent. Waiting for acceptance.",
@@ -6200,8 +6247,10 @@ impl Widget for RoomScreen {
                     }
                 }
                 if let Some(InviteResultAction::Failed { room_id, user_id, error }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                    // Only the RoomScreen that originated the invite owns its UI feedback.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id)
+                        && invite_result_belongs_to_room_screen(&self.pending_invited_users, user_id)
+                    {
                         self.pending_invited_users.remove(user_id);
                         let error_text = error.to_string();
                         let error_display = error_text.clone();
@@ -6214,7 +6263,13 @@ impl Widget for RoomScreen {
                                 ("error", error_text.as_str()),
                             ]).into(),
                             actions: vec![
-                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |cx| {
+                                    // Re-establish pending ownership (the Failed handler
+                                    // just removed it) so the retry's result shows feedback.
+                                    cx.action(InviteAction::InviteUserRequested {
+                                        room_id: room_id_retry.clone(),
+                                        user_id: user_id_retry.clone(),
+                                    });
                                     submit_async_request(MatrixRequest::InviteUser {
                                         room_id: room_id_retry.clone(),
                                         user_id: user_id_retry.clone(),
@@ -7483,6 +7538,8 @@ impl RoomScreen {
                 resolved_parent_bot_user_id,
                 persisted_bound_bot_user_ids,
                 known_bot_user_ids,
+                can_invite: tl.user_power.can_invite(),
+                pending_invited_users: self.pending_invited_users.iter().cloned().collect(),
             })
         } else {
             self.room_name_id.as_ref().map(|room_name| RoomScreenProps {
@@ -7504,6 +7561,8 @@ impl RoomScreen {
                 resolved_parent_bot_user_id: None,
                 persisted_bound_bot_user_ids: Vec::new(),
                 known_bot_user_ids: Vec::new(),
+                can_invite: false,
+                pending_invited_users: Vec::new(),
             })
         }
     }
@@ -10420,6 +10479,13 @@ pub struct RoomScreenProps {
     pub resolved_parent_bot_user_id: Option<OwnedUserId>,
     pub persisted_bound_bot_user_ids: Vec<OwnedUserId>,
     pub known_bot_user_ids: Vec<OwnedUserId>,
+    /// Whether the current user has permission to invite users to this room.
+    /// Gates the `/invitebot` slash command.
+    pub can_invite: bool,
+    /// Invites this client has sent that are still awaiting acceptance —
+    /// consumed by the `/invitebot` picker (at open time) to keep its
+    /// candidate filtering idempotent during the invite round-trip.
+    pub pending_invited_users: Vec<OwnedUserId>,
 }
 
 
@@ -13228,6 +13294,17 @@ pub enum InviteAction {
     /// and that that one entity can take ownership of the content object,
     /// which avoids having to clone it.
     ShowInviteConfirmationModal(RefCell<Option<ConfirmationModalContent>>),
+    /// Announces that an invite request was just submitted for `user_id` in
+    /// `room_id`, so every RoomScreen showing that room records it in
+    /// `pending_invited_users` and thus owns the resulting
+    /// [`InviteResultAction`] feedback. Emitted by invite initiators that run
+    /// in closures (knock-approve modal, failed-invite Retry) and by the
+    /// invite modal; the `/invitebot` picker instead records pending directly
+    /// in its widget-addressed handler.
+    InviteUserRequested {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
 }
 
 /// The result of inviting a user to a room.
@@ -13826,6 +13903,17 @@ mod tests {
 
     fn make_state(text: &str) -> StreamingAnimState {
         StreamingAnimState::new(text, true)
+    }
+
+    #[test]
+    fn test_invite_result_belongs_only_to_pending_screen() {
+        let invited_user = OwnedUserId::try_from("@octos:example.org").unwrap();
+        let other_user = OwnedUserId::try_from("@hermes:example.org").unwrap();
+        let pending = HashSet::from([invited_user.clone()]);
+
+        assert!(invite_result_belongs_to_room_screen(&pending, &invited_user));
+        assert!(!invite_result_belongs_to_room_screen(&pending, &other_user));
+        assert!(!invite_result_belongs_to_room_screen(&HashSet::new(), &invited_user));
     }
 
     #[test]

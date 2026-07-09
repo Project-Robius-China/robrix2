@@ -218,6 +218,13 @@ pub struct CommandTextInput {
     #[rust]
     prev_cursor_position: usize,
 
+    /// While true, losing text-input key focus does NOT hide the popup.
+    /// Set by owners that reopen the popup right after a selection (e.g. the
+    /// `/invitebot` bot picker) and must survive Android's multi-step focus
+    /// dance (tap steals focus, draw restores it, IME may drop it again).
+    /// Cleared whenever the owner closes or rebuilds the popup.
+    #[rust]
+    keep_popup_open_on_focus_loss: bool,
 }
 
 impl Widget for CommandTextInput {
@@ -355,8 +362,18 @@ impl Widget for CommandTextInput {
             for action in actions.iter().filter_map(|a| a.as_widget_action()) {
                 if action.widget_uid == self.key_controller_text_input_ref().widget_uid() {
                     if let TextInputAction::KeyFocusLost = action.cast() {
-                        self.hide_popup(cx);
-                        self.redraw(cx);
+                        // On Android, tapping a popup item physically steals key focus
+                        // from the text input as part of the selection gesture — and the
+                        // focus dance continues past the next draw (restore, IME churn),
+                        // delivering further KeyFocusLost events. Only treat focus loss
+                        // as "clicked away" (close the popup) when neither a programmatic
+                        // focus restore is pending nor an owner has pinned the popup open
+                        // (e.g. the /invitebot bot picker). Desktop mouse clicks don't
+                        // emit KeyFocusLost here, so this is a no-op outside that window.
+                        if !self.is_text_input_focus_pending && !self.keep_popup_open_on_focus_loss {
+                            self.hide_popup(cx);
+                            self.redraw(cx);
+                        }
                     }
                 }
 
@@ -508,6 +525,12 @@ impl CommandTextInput {
     fn hide_popup(&mut self, cx: &mut Cx) {
         self.clear_popup(cx);
         self.view(cx, ids!(popup)).set_visible(cx, false);
+    }
+
+    /// Pins (or unpins) the popup so it survives text-input key-focus loss.
+    /// See `keep_popup_open_on_focus_loss`.
+    pub fn set_keep_popup_open_on_focus_loss(&mut self, keep_open: bool) {
+        self.keep_popup_open_on_focus_loss = keep_open;
     }
 
     /// Clear all text and hide the popup going back to initial state.

@@ -2980,6 +2980,12 @@ impl AgentRegistry {
     pub fn agent_user_ids(&self) -> Vec<OwnedUserId> {
         self.agents.keys().cloned().collect()
     }
+
+    /// Iterates all registered agents with their entries, in deterministic
+    /// (sorted) order — one O(n) pass, no per-id lookups.
+    pub fn agents(&self) -> impl Iterator<Item = (&OwnedUserId, &AgentEntry)> {
+        self.agents.iter()
+    }
 }
 
 impl AppState {
