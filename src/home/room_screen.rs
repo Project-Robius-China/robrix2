@@ -53,6 +53,7 @@ use crate::shared::video_message_player::VideoMessagePlayerWidgetRefExt;
 use crate::event_preview::{summarize_audio_message, summarize_video_message};
 use crate::shared::animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt};
 use crate::settings::app_preferences::effective_is_desktop;
+use crate::voip::voip_screen::VoipScreenWidgetExt;
 
 use rangemap::RangeSet;
 
@@ -2671,44 +2672,9 @@ script_mod! {
                     }
                     text: ""
                 }
-
-                avatar_row := mod.widgets.AvatarRow {}
             }
-        }
-    }
 
-    // The summary row shown for a collapsed group of adjacent small state events.
-    mod.widgets.SmallStateEventsSummary = View {
-        width: Fill,
-        height: Fit,
-        flow: Right,
-        margin: Inset{ top: 4.0, bottom: 4.0}
-        padding: Inset{ left: 50.0, top: 1.0, bottom: 1.0, right: 10.0 }
-        spacing: 7.0
-        cursor: MouseCursor.Default
-
-        summary_label := Label {
-            width: Fit,
-            height: Fit
-            flow: Right
-            margin: Inset{top: 1.5}
-            draw_text +: {
-                text_style: SMALL_STATE_TEXT_STYLE {}
-                color: (SMALL_STATE_TEXT_COLOR)
-            }
-            text: ""
-        }
-
-        spacer := View {
-            width: Fill
-            height: Fit
-        }
-
-        state_group_toggle_button := mod.widgets.SmallStateGroupToggleButton {
-            width: Fit
-            height: Fit
-            margin: Inset{ left: 2.0, top: 1.0 }
-            text: ""
+            avatar_row := mod.widgets.AvatarRow {}
         }
     }
 
@@ -2840,14 +2806,14 @@ script_mod! {
 
     // Floating circular button that opens the `ThreadsSlidingPane`.
     // Mirrors `SearchMessagesButton`'s layout (Fill/Fill overlay aligned
-    // top-right) but reserves 96px on the right so it sits to the left of the
-    // search (48px) and info (rightmost) buttons.
+    // top-right) but reserves 192px on the right so it sits to the left of the
+    // voice-call (144px), video-call (96px), search (48px) and info buttons.
     mod.widgets.ThreadsButton = #(ThreadsButton::register_widget(vm)) {
         width: Fill,
         height: Fill,
         flow: Overlay,
         align: Align{x: 1.0, y: 0.0},
-        padding: Inset{right: 96},
+        padding: Inset{right: 192},
         visible: true,
 
         View {
@@ -2906,6 +2872,90 @@ script_mod! {
 
                 draw_icon +: {
                     svg: (ICON_INFO),
+                    color: #555,
+                }
+                icon_walk: Walk{width: 18, height: 18}
+
+                draw_bg +: {
+                    background_color: #edededce,
+                    background_color_hover: #d0d0d0ce,
+                    pixel: fn() {
+                        let sdf = Sdf2d.viewport(self.pos * self.rect_size);
+                        let c = self.rect_size * 0.5;
+                        sdf.circle(c.x, c.x, c.x);
+                        sdf.fill_keep(mix(self.background_color, self.background_color_hover, self.hover));
+                        return sdf.result
+                    }
+                }
+            }
+        }
+    }
+
+    // Floating circular call button — voice only. Sits at right: 144, between
+    // threads (192px) and video-call (96px).
+    mod.widgets.VoiceCallButton = #(VoiceCallButton::register_widget(vm)) {
+        width: Fill,
+        height: Fill,
+        flow: Overlay,
+        align: Align{x: 1.0, y: 0.0},
+        padding: Inset{right: 144},
+        visible: true,
+
+        View {
+            width: 65, height: 65,
+            align: Align{x: 0.5, y: 0.0},
+            flow: Overlay,
+
+            inner_button := RobrixIconButton {
+                spacing: 0,
+                width: 40, height: 40,
+                align: Align{x: 0.5, y: 0.5},
+                margin: Inset{top: 8},
+
+                draw_icon +: {
+                    svg: (ICON_PHONE),
+                    color: #555,
+                }
+                icon_walk: Walk{width: 18, height: 18}
+
+                draw_bg +: {
+                    background_color: #edededce,
+                    background_color_hover: #d0d0d0ce,
+                    pixel: fn() {
+                        let sdf = Sdf2d.viewport(self.pos * self.rect_size);
+                        let c = self.rect_size * 0.5;
+                        sdf.circle(c.x, c.x, c.x);
+                        sdf.fill_keep(mix(self.background_color, self.background_color_hover, self.hover));
+                        return sdf.result
+                    }
+                }
+            }
+        }
+    }
+
+    // Floating circular call button — video/group call. Sits at right: 96,
+    // between voice-call (144px) and search (48px).
+    mod.widgets.VideoCallButton = #(VideoCallButton::register_widget(vm)) {
+        width: Fill,
+        height: Fill,
+        flow: Overlay,
+        align: Align{x: 1.0, y: 0.0},
+        padding: Inset{right: 96},
+        visible: true,
+
+        View {
+            width: 65, height: 65,
+            align: Align{x: 0.5, y: 0.0},
+            flow: Overlay,
+
+            inner_button := RobrixIconButton {
+                spacing: 0,
+                width: 40, height: 40,
+                align: Align{x: 0.5, y: 0.5},
+                margin: Inset{top: 8},
+
+                draw_icon +: {
+                    svg: (ICON_VIDEO),
                     color: #555,
                 }
                 icon_walk: Walk{width: 18, height: 18}
@@ -4355,6 +4405,7 @@ script_mod! {
             CondensedStickerMessage := mod.widgets.CondensedStickerMessage {}
             SmallStateEvent := mod.widgets.SmallStateEvent {}
             SmallStateEventsSummary := mod.widgets.SmallStateEventsSummary {}
+            RtcNotificationEvent := mod.widgets.RtcNotificationEvent {}
             Empty := mod.widgets.Empty {}
             EncryptionNotice := mod.widgets.EncryptionNotice {}
             DateDivider := mod.widgets.DateDivider {}
@@ -4370,8 +4421,8 @@ script_mod! {
         // Clicking it opens the `room_info_sliding_pane` (desktop only).
         info_button := mod.widgets.InfoButton { }
 
-        // Floating threads button at the top-right, sitting left of the search
-        // and info buttons. Clicking it opens the `threads_sliding_pane`.
+        // Floating threads button at the top-right, sitting left of the voice/video
+        // call, search, and info buttons. Clicking it opens the `threads_sliding_pane`.
         threads_button := mod.widgets.ThreadsButton { }
 
         // Floating search button at the top-right (mirrors jump-to-bottom).
@@ -4381,6 +4432,14 @@ script_mod! {
         // so it composites OVER the timeline's `new_batch` cards. Defining it
         // inside this Timeline overlay let those cards z-fight through it.
         search_messages_button := mod.widgets.SearchMessagesButton { }
+
+        // Floating voice-call button (phone icon), sitting between threads and
+        // video-call. Desktop only.
+        voice_call_button := mod.widgets.VoiceCallButton { }
+
+        // Floating video-call button (camera icon), sitting between voice-call
+        // and search. Desktop only.
+        video_call_button := mod.widgets.VideoCallButton { }
     }
 
     mod.widgets.TranslationLangPopupButton = RobrixIconButton {
@@ -4565,6 +4624,51 @@ script_mod! {
             // as `room_info_sliding_pane`, which has no z-order glitch.
             search_messages_pane := mod.widgets.SearchMessagesSlidingPane { }
 
+            // Active call banner - shown when there's an ongoing call in the room
+            active_call_banner := View {
+                width: Fill
+                height: Fit
+                visible: false
+                padding: Inset{top: 8, bottom: 8, left: 16, right: 16}
+                align: Align{x: 0.5, y: 0.0}
+                show_bg: true
+                draw_bg +: {
+                    color: #7b1fa2
+                }
+
+                <View> {
+                    width: Fit
+                    height: Fit
+                    flow: Right
+                    spacing: 12
+                    align: Align{y: 0.5}
+
+                    <Icon> {
+                        icon_path: dep("crate://self/resources/icons/video.svg")
+                        draw_icon: { color: #fff }
+                        icon_size: vec2(20.0, 20.0)
+                    }
+
+                    <Label> {
+                        text: "Ongoing call in this room"
+                        draw_text: { color: #fff, text_style: { font_size: 11.0 } }
+                    }
+
+                    join_call_banner_button := Button {
+                        text: "Join Call"
+                        padding: Inset{top: 6, bottom: 6, left: 16, right: 16}
+                        draw_bg +: {
+                            color: #fff
+                            border_radius: 2.0
+                        }
+                        draw_text +: {
+                            color: #7b1fa2
+                            text_style: { font_size: 11.0 }
+                        }
+                    }
+                }
+            }
+
             // The user profile sliding pane should be displayed on top of other "static" subviews
             // (on top of all other views that are always visible).
             user_profile_sliding_pane := mod.widgets.UserProfileSlidingPane { }
@@ -4650,6 +4754,34 @@ pub enum InfoButtonAction {
 impl ActionDefaultRef for InfoButtonAction {
     fn default_ref() -> &'static Self {
         static DEFAULT: InfoButtonAction = InfoButtonAction::None;
+        &DEFAULT
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+pub enum VoiceCallButtonAction {
+    Clicked,
+    #[default]
+    None,
+}
+
+impl ActionDefaultRef for VoiceCallButtonAction {
+    fn default_ref() -> &'static Self {
+        static DEFAULT: VoiceCallButtonAction = VoiceCallButtonAction::None;
+        &DEFAULT
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+pub enum VideoCallButtonAction {
+    Clicked,
+    #[default]
+    None,
+}
+
+impl ActionDefaultRef for VideoCallButtonAction {
+    fn default_ref() -> &'static Self {
+        static DEFAULT: VideoCallButtonAction = VideoCallButtonAction::None;
         &DEFAULT
     }
 }
@@ -5028,6 +5160,90 @@ impl Widget for InfoButton {
         if let Event::Actions(actions) = event {
             if self.button(cx, ids!(inner_button)).clicked(actions) {
                 cx.widget_action(self.widget_uid(), InfoButtonAction::OpenRequested);
+            }
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct VoiceCallButton {
+    #[deref] view: View,
+}
+
+impl Widget for VoiceCallButton {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let button_area = self.button(cx, ids!(inner_button)).area();
+        match event.hits(cx, button_area) {
+            Hit::FingerHoverIn(_) | Hit::FingerLongPress(_) => {
+                cx.widget_action(
+                    self.widget_uid(),
+                    TooltipAction::HoverIn {
+                        text: String::from("Voice Call"),
+                        widget_rect: button_area.rect(cx),
+                        options: CalloutTooltipOptions {
+                            position: TooltipPosition::Left,
+                            ..Default::default()
+                        },
+                    },
+                );
+            }
+            Hit::FingerHoverOut(_) => {
+                cx.widget_action(self.widget_uid(), TooltipAction::HoverOut);
+            }
+            _ => {}
+        }
+
+        self.view.handle_event(cx, event, scope);
+
+        if let Event::Actions(actions) = event {
+            if self.button(cx, ids!(inner_button)).clicked(actions) {
+                cx.widget_action(self.widget_uid(), VoiceCallButtonAction::Clicked);
+            }
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct VideoCallButton {
+    #[deref] view: View,
+}
+
+impl Widget for VideoCallButton {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let button_area = self.button(cx, ids!(inner_button)).area();
+        match event.hits(cx, button_area) {
+            Hit::FingerHoverIn(_) | Hit::FingerLongPress(_) => {
+                cx.widget_action(
+                    self.widget_uid(),
+                    TooltipAction::HoverIn {
+                        text: String::from("Video Call"),
+                        widget_rect: button_area.rect(cx),
+                        options: CalloutTooltipOptions {
+                            position: TooltipPosition::Left,
+                            ..Default::default()
+                        },
+                    },
+                );
+            }
+            Hit::FingerHoverOut(_) => {
+                cx.widget_action(self.widget_uid(), TooltipAction::HoverOut);
+            }
+            _ => {}
+        }
+
+        self.view.handle_event(cx, event, scope);
+
+        if let Event::Actions(actions) = event {
+            if self.button(cx, ids!(inner_button)).clicked(actions) {
+                cx.widget_action(self.widget_uid(), VideoCallButtonAction::Clicked);
             }
         }
     }
@@ -5804,6 +6020,10 @@ pub struct RoomScreen {
     #[rust] octos_action_button_contexts: HashMap<WidgetUid, OctosActionButtonContext>,
     #[rust] disabled_octos_action_source_event_ids: HashSet<OwnedEventId>,
     #[rust] selected_octos_action_by_source_event_id: HashMap<OwnedEventId, SelectedOctosActionState>,
+    /// Whether the VoIP call screen is currently visible for this room.
+    #[rust] show_voip_screen: bool,
+    /// Whether this room has an active call (from RTC notifications).
+    #[rust] has_active_call: bool,
     /// Per-room state for the server-side search pane. Tracks the active
     /// query, the room it targets, the most recent `next_batch` token, and
     /// whether a request is currently in flight.
@@ -6119,6 +6339,94 @@ impl Widget for RoomScreen {
                         };
                         cx.action(InviteAction::ShowInviteConfirmationModal(RefCell::new(Some(content))));
                     }
+                }
+
+                // Handle the join_call_button (in an RtcNotificationEvent) being clicked.
+                if wr.button(cx, ids!(join_call_button)).clicked(actions) {
+                    let Some(room_name_id) = self.room_name_id.clone() else { continue };
+                    log!("Join call button clicked for room: {}", room_name_id.room_id());
+                    #[cfg(any(target_os = "android", target_os = "ios", target_os = "windows"))]
+                    {
+                        let _ = room_name_id;
+                        enqueue_popup_notification(
+                            "VoIP calls are not supported on this platform.",
+                            PopupKind::Warning,
+                            Some(4.0),
+                        );
+                    }
+                    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
+                    cx.widget_action(
+                        self.widget_uid(),
+                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
+                    );
+                }
+            }
+
+            // Handle the voice_call_button (top-right floating button) being clicked.
+            // Signals `voice_only: true` so VoipScreen opens with no camera preview.
+            for action in actions {
+                if let VoiceCallButtonAction::Clicked = action.as_widget_action().cast_ref() {
+                    if let Some(room_name_id) = self.room_name_id.clone() {
+                        log!("Voice call button clicked for room: {}", room_name_id.room_id());
+                        #[cfg(any(target_os = "android", target_os = "ios", target_os = "windows"))]
+                        {
+                            let _ = room_name_id;
+                            enqueue_popup_notification(
+                                "Voice calls are not supported on this platform.",
+                                PopupKind::Warning,
+                                Some(4.0),
+                            );
+                        }
+                        #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
+                        cx.widget_action(
+                            self.widget_uid(),
+                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: true }),
+                        );
+                    }
+                }
+            }
+
+            // Handle the video_call_button (top-right floating button) being clicked.
+            for action in actions {
+                if let VideoCallButtonAction::Clicked = action.as_widget_action().cast_ref() {
+                    if let Some(room_name_id) = self.room_name_id.clone() {
+                        log!("Video call button clicked for room: {}", room_name_id.room_id());
+                        #[cfg(any(target_os = "android", target_os = "ios", target_os = "windows"))]
+                        {
+                            let _ = room_name_id;
+                            enqueue_popup_notification(
+                                "VoIP calls are not supported on this platform.",
+                                PopupKind::Warning,
+                                Some(4.0),
+                            );
+                        }
+                        #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
+                        cx.widget_action(
+                            self.widget_uid(),
+                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
+                        );
+                    }
+                }
+            }
+
+            // Handle the join_call_banner_button (in active call banner) being clicked.
+            if self.view.button(cx, ids!(join_call_banner_button)).clicked(actions) {
+                if let Some(room_name_id) = self.room_name_id.clone() {
+                    log!("Join call banner button clicked for room: {}", room_name_id.room_id());
+                    #[cfg(any(target_os = "android", target_os = "ios", target_os = "windows"))]
+                    {
+                        let _ = room_name_id;
+                        enqueue_popup_notification(
+                            "VoIP calls are not supported on this platform.",
+                            PopupKind::Warning,
+                            Some(4.0),
+                        );
+                    }
+                    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
+                    cx.widget_action(
+                        self.widget_uid(),
+                        RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
+                    );
                 }
             }
 
@@ -6964,6 +7272,8 @@ impl Widget for RoomScreen {
         let is_desktop = effective_is_desktop(cx);
         self.view.widget(cx, ids!(timeline.search_messages_button)).set_visible(cx, is_desktop);
         self.view.widget(cx, ids!(timeline.threads_button)).set_visible(cx, is_desktop);
+        self.view.widget(cx, ids!(timeline.voice_call_button)).set_visible(cx, is_desktop);
+        self.view.widget(cx, ids!(timeline.video_call_button)).set_visible(cx, is_desktop);
         self.view.widget(cx, ids!(timeline.info_button)).set_visible(cx, is_desktop);
 
         // Drive the Robrix-owned mobile room header (RoomTopBar) and the
@@ -7250,6 +7560,25 @@ impl Widget for RoomScreen {
                                 None,
                                 collapse_button_text_for_expanded_group,
                             ),
+                            TimelineItemContent::CallInvite | TimelineItemContent::RtcNotification => {
+                                // Update active call state and show banner
+                                if !self.has_active_call {
+                                    self.has_active_call = true;
+                                    let banner = self.view.view(cx, ids!(active_call_banner));
+                                    banner.set_visible(cx, true);
+                                    banner.redraw(cx);
+                                    self.view.redraw(cx);
+                                }
+
+                                populate_rtc_notification_event(
+                                    cx,
+                                    list,
+                                    item_id,
+                                    &tl_state.kind,
+                                    event_tl_item,
+                                    item_drawn_status,
+                                )
+                            },
                             unhandled => {
                                 let item = list.item(cx, item_id, id!(SmallStateEvent));
                                 item.label(cx, ids!(event_row.content)).set_text(
@@ -10317,6 +10646,10 @@ impl RoomScreen {
         // Reset the the state of the inner loading pane.
         self.loading_pane(cx, ids!(loading_pane)).take_state();
 
+        // Reset active call state when switching rooms
+        self.has_active_call = false;
+        self.view.view(cx, ids!(active_call_banner)).set_visible(cx, false);
+
         self.room_name_id = Some(room_name_id.clone());
         self.room_avatar_url = get_client()
             .and_then(|client| client.get_room(room_name_id.room_id()))
@@ -10455,6 +10788,39 @@ impl RoomScreenRef {
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.set_displayed_room(cx, room_name_id, thread_root_event_id);
+    }
+
+    /// Shows or hides the VoIP call screen for this room.
+    /// When visible, hides the timeline and shows VoIP as the main content.
+    /// Note: On desktop, VoIP is handled via standalone VoipScreen tabs, so this
+    /// may fail to borrow (which is expected and harmless).
+    pub fn set_voip_visible(&self, cx: &mut Cx, visible: bool, room_id: Option<OwnedRoomId>) {
+        let Some(mut inner) = self.borrow_mut() else {
+            // Expected on desktop where MainDesktopUI handles VoIP via standalone VoipScreen tabs
+            return;
+        };
+        inner.show_voip_screen = visible;
+
+        // Hide/show the timeline area (keyboard_view contains timeline, typing notice, input bar)
+        inner.view.view(cx, ids!(keyboard_view)).set_visible(cx, !visible);
+
+        if visible {
+            // Initialize the VoIP screen if showing
+            let voip_screen = inner.view.voip_screen(cx, ids!(voip_screen));
+            if let Some(room_id) = room_id {
+                log!("RoomScreen: Showing VoIP screen for room {}", room_id);
+                // This embedded-VoipScreen path (mobile / RoomScreen
+                // overlay) has no voice/video distinction at the call
+                // site; default to the original video-call behavior.
+                voip_screen.initialize(cx, room_id, false);
+            }
+        } else {
+            let voip_screen = inner.view.voip_screen(cx, ids!(voip_screen));
+            voip_screen.hangup(cx);
+        }
+
+        // Force a redraw to ensure visibility changes take effect
+        inner.view.redraw(cx);
     }
 }
 
@@ -13282,6 +13648,64 @@ fn get_profile_display_name(event_tl_item: &EventTimelineItem) -> Option<String>
     }
 }
 
+/// Creates, populates, and adds an RtcNotificationEvent widget to the given `PortalList`
+/// with the given `item_id`.
+///
+/// This is used for CallInvite and RtcNotification timeline events.
+fn populate_rtc_notification_event(
+    cx: &mut Cx,
+    list: &mut PortalList,
+    item_id: usize,
+    timeline_kind: &TimelineKind,
+    event_tl_item: &EventTimelineItem,
+    item_drawn_status: ItemDrawnStatus,
+) -> (WidgetRef, ItemDrawnStatus) {
+    let mut new_drawn_status = item_drawn_status;
+    let (item, existed) = list.item_with_existed(cx, item_id, id!(RtcNotificationEvent));
+
+    let skip_redrawing_profile = existed && item_drawn_status.profile_drawn;
+    let skip_redrawing_content = skip_redrawing_profile && item_drawn_status.content_drawn;
+
+    populate_read_receipts(&item, cx, timeline_kind, event_tl_item);
+
+    if skip_redrawing_content {
+        return (item, new_drawn_status);
+    }
+
+    // Get username for display
+    let username = if skip_redrawing_profile {
+        get_profile_display_name(event_tl_item)
+            .unwrap_or_else(|| event_tl_item.sender().to_string())
+    } else {
+        let avatar_ref = item.avatar(cx, ids!(avatar));
+        let (username, profile_drawn) = avatar_ref.set_avatar_and_get_username(
+            cx,
+            timeline_kind,
+            event_tl_item.sender(),
+            Some(event_tl_item.sender_profile()),
+            event_tl_item.event_id(),
+            true,
+        );
+        // Draw the timestamp as part of the profile.
+        if let Some(dt) = unix_time_millis_to_datetime(event_tl_item.timestamp()) {
+            item.timestamp(cx, ids!(left_container.timestamp)).set_date_time(cx, dt);
+        }
+        new_drawn_status.profile_drawn = profile_drawn;
+        username
+    };
+
+    // Set the content text based on the event type
+    let content_text = match event_tl_item.content() {
+        TimelineItemContent::CallInvite => format!("{} started a call", username),
+        TimelineItemContent::RtcNotification => format!("{} is in a call", username),
+        _ => format!("{} - call notification", username),
+    };
+    item.label(cx, ids!(content)).set_text(cx, &content_text);
+
+    new_drawn_status.content_drawn = true;
+    (item, new_drawn_status)
+}
+
 
 /// Actions related to invites within a room.
 ///
@@ -13304,6 +13728,18 @@ pub enum InviteAction {
     InviteUserRequested {
         room_id: OwnedRoomId,
         user_id: OwnedUserId,
+    },
+}
+
+/// Actions related to RTC (Real-Time Communication) calls.
+///
+/// These are NOT widget actions, just regular actions.
+#[derive(Debug, Clone)]
+pub enum RtcCallAction {
+    /// The user clicked the "Join Call" button on an RTC notification event.
+    /// Navigate to the VoIP screen with the given room ID.
+    JoinCall {
+        room_id: OwnedRoomId,
     },
 }
 

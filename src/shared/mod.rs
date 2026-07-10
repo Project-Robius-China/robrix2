@@ -29,7 +29,8 @@ pub mod verification_badge;
 pub mod restore_status_view;
 pub mod image_viewer;
 pub mod video_message_player;
-pub mod video_message_player_modal;
+pub mod video_message_player_modal;pub mod webcam_capture;
+pub mod webrtc_video;
 
 pub fn script_mod(vm: &mut ScriptVm) {
     // Order matters here, as some widget definitions depend on others.
@@ -64,4 +65,6 @@ pub fn script_mod(vm: &mut ScriptVm) {
     forward_modal::script_mod(vm);
     video_message_player::script_mod(vm);
     video_message_player_modal::script_mod(vm);
+    webrtc_video::script_mod(vm);
+    webcam_capture::script_mod(vm);
 }

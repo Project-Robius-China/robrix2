@@ -6,6 +6,10 @@ script_mod! {
     use mod.widgets.*
 
     mod.widgets.ICON_ADD              = crate_resource("self://resources/icons/add.svg")
+    mod.widgets.ICON_MICROPHONE       = crate_resource("self://resources/icons/microphone.svg")
+    mod.widgets.ICON_MICROPHONE_OFF   = crate_resource("self://resources/icons/microphone_off.svg")
+    mod.widgets.ICON_VIDEO            = crate_resource("self://resources/icons/video.svg")
+    mod.widgets.ICON_PHONE            = crate_resource("self://resources/icons/phone.svg")
 
     // Agent framework brand logos (Settings > Labs > Agent Access + Add-agent modal).
     // Bundled high-res transparent PNGs; the GPU downscales them into the small

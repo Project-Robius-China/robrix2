@@ -3,6 +3,15 @@
 [target.'cfg(all())']
 rustflags = ["--cfg", "ruma_identifiers_storage=\"Arc\""]
 
+## LiveKit/libwebrtc requires -ObjC linker flag on macOS
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-args=-Wl,-ObjC"]
+
+[target.x86_64-pc-windows-msvc]                                                                                                                 
+rustflags = ["-C", "target-feature=-crt-static"]                                                                                                
+                                                                                                                                                
+[target.aarch64-pc-windows-msvc]                                                                                                                
+rustflags = ["-C", "target-feature=-crt-static"]
 ## Override the bundle/package ID that Makepad uses by default with Robrix's ID.
 [env]
 MAKEPAD_BUNDLE_IDENTIFIER = { value = "rs.robius.robrix", force = true }

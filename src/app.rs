@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 use makepad_widgets::*;
+use makepad_widgets::makepad_platform::permission::Permission;
 use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -25,7 +26,8 @@ use crate::{
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
-    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
+    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop},
+    voip::{VoipGlobalState, VoipAction, PipVoipOverlayWidgetRefExt},
 };
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
@@ -183,6 +185,18 @@ script_mod! {
                                 width: Fill,
                                 align: Align{x: 0.5, y: 0.5},
                                 bot_binding_modal_inner := BotBindingModal {}
+                            }
+                        }
+                        // Full-screen modal that surfaces incoming 1:1
+                        // voice calls. Driven by `OneOnOneUiAction` —
+                        // opens on `ShowIncomingModal`, closes on
+                        // `HideIncomingModal` / Accept / Decline /
+                        // ring timeout.
+                        incoming_call_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill
+                                align: Align{x: 0.5, y: 0.4}
+                                incoming_call_modal_inner := IncomingCallModal {}
                             }
                         }
                         room_filter_modal := Modal {
@@ -451,6 +465,9 @@ script_mod! {
                                 }
                             }
                         }
+
+                        // PiP overlay for VoIP calls (shown when switching away from active call)
+                        pip_voip_overlay := PipVoipOverlay {}
 
                         PopupList {}
 
@@ -777,6 +794,15 @@ impl MatchEvent for App {
         self.skipped_update_version = load_skipped_update_version();
         self.start_auto_update_check(cx);
 
+        // Install the process-level rustls CryptoProvider before any
+        // TLS connection is attempted. matrix-sdk + livekit both pull
+        // in rustls 0.23 without selecting a provider; the first
+        // rustls user that hits a `get_default()` call (LiveKit's
+        // webrtc-sys handshake) panics if we skip this. Calling
+        // install_default twice returns Err — we ignore it because
+        // multiple modules may try (e.g. TSP init also installs).
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         log!("App::Startup: starting matrix sdk loop");
         let _tokio_rt_handle = crate::sliding_sync::start_matrix_tokio().unwrap();
 
@@ -784,6 +810,13 @@ impl MatchEvent for App {
             log!("App::Startup: initializing TSP (Trust Spanning Protocol) module.");
             crate::tsp::tsp_init(_tokio_rt_handle).unwrap();
         }
+
+        // Initialize VoIP global state and pre-warm camera permission + video input
+        // enumeration at launch. Doing this here (instead of when the VoIP lobby opens)
+        // hides the slow AVFoundation device enumeration — especially with DAL plugins
+        // like the OBS Studio virtual camera — behind the home-screen load rather than
+        // making the user wait at "Waiting for camera permission..." in the lobby.
+        VoipGlobalState::initialize(cx);
     }
 
     fn handle_signal(&mut self, cx: &mut Cx) {
@@ -799,10 +832,23 @@ impl MatchEvent for App {
             let keywords = std::mem::take(&mut self.pending_room_filter_keywords);
             self.update_room_filter_modal_results(cx, &keywords);
         }
-    }
-
-    fn handle_audio_devices(&mut self, cx: &mut Cx, devices: &AudioDevicesEvent) {
-        cx.use_audio_outputs(&devices.default_output());
+        // 1:1 voice call ring timer. Lives on `VoipGlobalState` because
+        // the call FSM survives screen navigation; firing it transitions
+        // the FSM to `Ended { Missed }`.
+        let ring_timer_fired = if cx.has_global::<VoipGlobalState>() {
+            let state = cx.get_global::<VoipGlobalState>();
+            state.ring_timer.is_timer(event).is_some()
+        } else { false };
+        if ring_timer_fired {
+            if cx.has_global::<VoipGlobalState>() {
+                let state = cx.get_global::<VoipGlobalState>();
+                state.ring_timer = Timer::default();
+            }
+            VoipGlobalState::apply_call_event(
+                cx,
+                crate::voip::oneonone::OneOnOneEvent::RingTimeout,
+            );
+        }
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
@@ -1521,6 +1567,42 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            // Handle VoIP PiP overlay actions
+            match action.downcast_ref() {
+                Some(VoipAction::ShowPip { room_id }) => {
+                    log!("App: VoipAction::ShowPip received for room {}", room_id);
+                    self.ui.pip_voip_overlay(cx, ids!(pip_voip_overlay)).show(cx, room_id.clone());
+                    continue;
+                }
+                Some(VoipAction::HidePip) => {
+                    log!("App: VoipAction::HidePip received");
+                    self.ui.pip_voip_overlay(cx, ids!(pip_voip_overlay)).hide(cx);
+                    continue;
+                }
+                Some(VoipAction::ReturnToVoipTab { room_id }) => {
+                    log!("App: VoipAction::ReturnToVoipTab received for room {}", room_id);
+                    // Hide the PiP overlay
+                    self.ui.pip_voip_overlay(cx, ids!(pip_voip_overlay)).hide(cx);
+                    // Navigate back to the VoIP tab by emitting a RoomsListAction::Selected
+                    // We need to look up the room name from RoomsList
+                    if let Some(room_name_id) = cx.get_global::<RoomsListRef>().get_room_name(room_id) {
+                        cx.widget_action(
+                            self.ui.widget_uid(),
+                            RoomsListAction::Selected(SelectedRoom::Voip { room_name_id, voice_only: false }),
+                        );
+                    }
+                    self.ui.redraw(cx);
+                    continue;
+                }
+                Some(VoipAction::PipHangup { room_id }) => {
+                    log!("App: VoipAction::PipHangup received for room {}", room_id);
+                    // Hide the PiP overlay - the VoipScreen will handle the actual hangup
+                    self.ui.pip_voip_overlay(cx, ids!(pip_voip_overlay)).hide(cx);
+                    // The action will continue to propagate to VoipScreen
+                }
+                _ => {}
+            }
+
             // When a stack navigation pop is initiated (back button pressed),
             // pop the mobile nav stack so it stays in sync with StackNavigation.
             if let StackNavigationAction::Pop = action.as_widget_action().cast() {
@@ -1605,6 +1687,10 @@ impl MatchEvent for App {
                             }
                         }
                     }
+
+                    // Restore VoIP token state to global state for caching
+                    VoipGlobalState::restore_token_state(cx, self.app_state.voip_tokens.clone());
+
                     cx.action(MainDesktopUiAction::LoadDockFromAppState);
                     continue;
                 }
@@ -2267,6 +2353,8 @@ impl AppMain for App {
         crate::join_leave_room_modal::script_mod(vm);
         crate::verification_modal::script_mod(vm);
         crate::profile::script_mod(vm);
+        crate::voip::voip_screen::script_mod(vm);
+        crate::voip::pip_overlay::script_mod(vm);
         crate::home::script_mod(vm);
         crate::login::script_mod(vm);
         crate::register::script_mod(vm);
@@ -2283,6 +2371,18 @@ impl AppMain for App {
             if !self.app_state.app_prefs.ui_zoom.is_default() {
                 self.app_state.app_prefs.on_ui_zoom_changed(cx);
             }
+        }
+
+        // Update VoipGlobalState from camera-related platform events at the App
+        // level so the state is populated even before a VoipScreen widget exists.
+        match event {
+            Event::PermissionResult(result) if result.permission == Permission::Camera => {
+                VoipGlobalState::handle_permission_result(cx, result.status);
+            }
+            Event::VideoInputs(ev) => {
+                VoipGlobalState::handle_video_inputs(cx, ev);
+            }
+            _ => {}
         }
 
         self.handle_ui_zoom_shortcuts(cx, event);
@@ -2791,6 +2891,12 @@ impl App {
                     .set_displayed_space(cx, space_name_id);
                 id!(space_lobby_view)
             }
+            SelectedRoom::Voip { room_name_id, .. } => {
+                // VoIP uses RoomScreen with VoIP as main content (no timeline)
+                let room_screen = self.ui.room_screen(cx, ids!(room_screen_0));
+                room_screen.set_voip_visible(cx, true, Some(room_name_id.room_id().clone()));
+                id!(room_view_0)
+            }
         };
 
         // Set the generic StackNavigation header title. This header is only
@@ -2849,6 +2955,12 @@ pub struct AppState {
     pub adding_account: bool,
     /// Local configuration and UI state for bot-assisted room binding.
     pub bot_settings: BotSettingsState,
+    /// The room ID for VoIP calls, set when navigating to VoIP screen from a call notification.
+    #[serde(skip)]
+    pub voip_room_id: Option<OwnedRoomId>,
+    /// Cached VoIP tokens (OpenID and LiveKit JWT) for faster reconnection.
+    #[serde(default)]
+    pub voip_tokens: crate::voip::VoipTokenState,
     /// Global source of truth for agent identities, keyed by agent MXID.
     ///
     /// Persisted per Matrix account. Old saved states that predate this field
@@ -3445,6 +3557,17 @@ pub enum SelectedRoom {
     Space {
         space_name_id: RoomNameId,
     },
+    Voip {
+        room_name_id: RoomNameId,
+        /// When true, open VoipScreen in voice-only mode: no camera
+        /// preview in the lobby, microphone-only publish, avatar tiles
+        /// instead of video tiles. Driven by the voice-call button.
+        /// `#[serde(default)]` keeps backward compat with persisted
+        /// app state from before this field existed (defaults to false
+        /// = the original group/video call behavior).
+        #[serde(default)]
+        voice_only: bool,
+    },
 }
 
 impl SelectedRoom {
@@ -3454,6 +3577,8 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id.room_id(),
             SelectedRoom::Space { space_name_id } => space_name_id.room_id(),
             SelectedRoom::Thread { room_name_id, .. } => room_name_id.room_id(),
+            SelectedRoom::Voip { room_name_id, .. } => room_name_id.room_id(),
+
         }
     }
 
@@ -3463,6 +3588,26 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id,
             SelectedRoom::Space { space_name_id } => space_name_id,
             SelectedRoom::Thread { room_name_id, .. } => room_name_id,
+            SelectedRoom::Voip { room_name_id, .. } => room_name_id,
+        }
+    }
+
+    /// Returns the `TimelineKind` for this room, if applicable.
+    /// Returns `None` for invited rooms, spaces, and VoIP rooms which don't have timelines.
+    pub fn timeline_kind(&self) -> Option<TimelineKind> {
+        match self {
+            SelectedRoom::JoinedRoom { room_name_id } => {
+                Some(TimelineKind::MainRoom { room_id: room_name_id.room_id().clone() })
+            }
+            SelectedRoom::Thread { room_name_id, thread_root_event_id } => {
+                Some(TimelineKind::Thread {
+                    room_id: room_name_id.room_id().clone(),
+                    thread_root_event_id: thread_root_event_id.clone(),
+                })
+            }
+            SelectedRoom::InvitedRoom { .. } => None,
+            SelectedRoom::Space { .. } => None,
+            SelectedRoom::Voip { .. } => None,
         }
     }
 
@@ -3493,6 +3638,12 @@ impl SelectedRoom {
                     &format!("{}##{}", room_name_id.room_id(), thread_root_event_id)
                 )
             }
+            SelectedRoom::Voip { room_name_id, .. } => {
+                // VoIP tabs get a distinct ID to differentiate from normal room tabs
+                LiveId::from_str(
+                    &format!("{}##voip", room_name_id.room_id())
+                )
+            }
             other => LiveId::from_str(other.room_id().as_str()),
         }
     }
@@ -3504,26 +3655,7 @@ impl SelectedRoom {
             SelectedRoom::InvitedRoom { room_name_id } => room_name_id.to_string(),
             SelectedRoom::Space { space_name_id } => format!("[Space] {space_name_id}"),
             SelectedRoom::Thread { room_name_id, .. } => format!("[Thread] {room_name_id}"),
-        }
-    }
-
-    /// Returns the `TimelineKind` for this selected room.
-    ///
-    /// Returns `None` for `InvitedRoom` and `Space` variants, as they don't have timelines.
-    pub fn timeline_kind(&self) -> Option<TimelineKind> {
-        match self {
-            SelectedRoom::JoinedRoom { room_name_id } => {
-                Some(TimelineKind::MainRoom {
-                    room_id: room_name_id.room_id().clone(),
-                })
-            }
-            SelectedRoom::Thread { room_name_id, thread_root_event_id } => {
-                Some(TimelineKind::Thread {
-                    room_id: room_name_id.room_id().clone(),
-                    thread_root_event_id: thread_root_event_id.clone(),
-                })
-            }
-            SelectedRoom::InvitedRoom { .. } | SelectedRoom::Space { .. } => None,
+            SelectedRoom::Voip { room_name_id, .. } => format!("[VoIP] {room_name_id}"),
         }
     }
 }
@@ -3587,6 +3719,7 @@ impl SavedDockState {
 impl PartialEq for SelectedRoom {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            // Threads are equal if room_id and thread_root_event_id match
             (
                 SelectedRoom::Thread {
                     room_name_id: lhs_room_name_id,
@@ -3600,7 +3733,19 @@ impl PartialEq for SelectedRoom {
                 lhs_room_name_id.room_id() == rhs_room_name_id.room_id()
                     && lhs_thread_root_event_id == rhs_thread_root_event_id
             }
+            // Thread is never equal to non-Thread
             (SelectedRoom::Thread { .. }, _) | (_, SelectedRoom::Thread { .. }) => false,
+            // VoIP rooms are equal only to other VoIP rooms with same room_id.
+            // `voice_only` is intentionally ignored: clicking voice in a
+            // room that already has a video call tab open should focus
+            // that tab rather than opening a duplicate.
+            (
+                SelectedRoom::Voip { room_name_id: lhs, .. },
+                SelectedRoom::Voip { room_name_id: rhs, .. },
+            ) => lhs.room_id() == rhs.room_id(),
+            // VoIP is never equal to non-VoIP (even if same room_id)
+            (SelectedRoom::Voip { .. }, _) | (_, SelectedRoom::Voip { .. }) => false,
+            // All other variants compare by room_id only
             _ => self.room_id() == other.room_id(),
         }
     }
