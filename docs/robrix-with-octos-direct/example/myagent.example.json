@@ -12,16 +12,12 @@
         }
       }
     },
-    "provider": "deepseek",
-    "model": "deepseek-chat",
-    "api_key_env": "DEEPSEEK_API_KEY",
     "admin_mode": false,
     "channels": [
       {
         "type": "matrix",
         "mode": "user",
         "homeserver": "https://matrix.example.org",
-        "server_name": "example.org",
         "user_id": "@myagent:example.org",
         "password": "REPLACE_WITH_YOUR_BOT_ACCOUNT_PASSWORD",
         "device_name": "octos-personal",
@@ -33,7 +29,6 @@
     ],
     "gateway": {
       "max_history": 50,
-      "queue_mode": "followup",
       "max_output_tokens": 8000
     }
   },

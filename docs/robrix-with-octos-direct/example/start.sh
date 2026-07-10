@@ -3,7 +3,7 @@
 # Run your personal Octos agent in Matrix user-account (Direct) mode.
 #
 # Usage:
-#   1. cp myagent.example.json myagent.json   # then edit the 4 values marked below
+#   1. cp myagent.example.json myagent.json   # then edit its 4 account/access values
 #   2. cp .env.example .env                    # then put your real DEEPSEEK_API_KEY in it
 #   3. ./start.sh
 #
@@ -34,14 +34,18 @@ set -a; . "$DIR/.env"; set +a
   || { echo "ERROR: DEEPSEEK_API_KEY is empty in .env" >&2; exit 1; }
 
 # --- 3. proxy guard (the #1 reason a native octos never replies) -----------
-# If your shell has a global proxy (Clash etc.), octos would route the
-# homeserver /sync through it too and fail with 502 Bad Gateway. Exclude ONLY
-# your homeserver host so external calls (DeepSeek) still use the proxy.
+# If your shell has a global proxy (Clash etc.), octos may route a local/LAN
+# homeserver /sync through it and fail with 502 Bad Gateway. Add only that host
+# to the existing exclusions so external calls (DeepSeek) still use the proxy.
 #
-# Replace the host below with YOUR homeserver's host/IP (the part after the
-# colon in server_name). For a public HTTPS homeserver you usually do not need
-# a proxy at all and can leave this as-is.
-export NO_PROXY="127.0.0.1,localhost,matrix.example.org"
+# For a local/LAN homeserver, set MATRIX_NO_PROXY_HOST in .env to the hostname
+# or IP from the homeserver URL. Preserve any exclusions already set by the user.
+NO_PROXY_BASE="127.0.0.1,localhost"
+if [ -n "${MATRIX_NO_PROXY_HOST:-}" ]; then
+  NO_PROXY_BASE="$NO_PROXY_BASE,$MATRIX_NO_PROXY_HOST"
+fi
+EXISTING_NO_PROXY="${NO_PROXY:-${no_proxy:-}}"
+export NO_PROXY="$NO_PROXY_BASE${EXISTING_NO_PROXY:+,$EXISTING_NO_PROXY}"
 export no_proxy="$NO_PROXY"
 
 # --- 4. launch -------------------------------------------------------------
