@@ -352,5 +352,5 @@ used_underscore_binding = "allow"
 ## Use the local makepad fork, which contains the OpenHarmony (ohos) build fixes
 ## that upstream makepad dev doesn't have yet (gl_render_bridge / cx_api gating).
 [patch."https://github.com/makepad/makepad"]
-makepad-widgets = { path = "../fork-makepad/widgets" }
-makepad-code-editor = { path = "../fork-makepad/code_editor" }
+makepad-widgets = { git = "https://github.com/ZhangHanDong/makepad", branch = "native-textinput-macos-poc" }
+makepad-code-editor = { git = "https://github.com/ZhangHanDong/makepad", branch = "native-textinput-macos-poc" }
