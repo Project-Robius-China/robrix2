@@ -89,8 +89,9 @@ url = "2.5.0"
 ## src/proxy_config.rs::webpki_rustls_config.
 rustls = { version = "0.23.37", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1.0"
+aws-lc-rs = { version = "1", features = ["bindgen"] }
 
-[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 rfd = "0.15"
 cargo-packager-updater = "0.2"
 semver = "1"
@@ -347,3 +348,9 @@ module_name_repetitions = "allow"
 too_many_arguments = "allow"
 uninlined_format_args = "allow"
 used_underscore_binding = "allow"
+
+## Use the local makepad fork, which contains the OpenHarmony (ohos) build fixes
+## that upstream makepad dev doesn't have yet (gl_render_bridge / cx_api gating).
+[patch."https://github.com/makepad/makepad"]
+makepad-widgets = { path = "../fork-makepad/widgets" }
+makepad-code-editor = { path = "../fork-makepad/code_editor" }

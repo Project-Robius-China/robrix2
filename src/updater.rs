@@ -12,10 +12,10 @@ pub enum UpdateCheckOutcome {
     Error(String),
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 use crate::proxy_config::{build_policy_reqwest_client, resolve_effective_proxy_url};
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 const DEFAULT_UPDATER_ENDPOINT: &str = "https://github.com/Project-Robius-China/robrix2/releases/latest/download/latest.json";
 const RELEASES_BASE_URL: &str = "https://github.com/Project-Robius-China/robrix2/releases";
 const SKIPPED_UPDATE_VERSION_FILE_NAME: &str = "skipped_update_version";
@@ -62,7 +62,7 @@ pub fn save_skipped_update_version(skipped_version: Option<&str>) -> Result<(), 
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 fn parse_latest_version_payload(payload_text: &str) -> Result<Option<String>, String> {
     use serde_json::Value;
     let payload: Value = serde_json::from_str(payload_text)
@@ -76,14 +76,14 @@ fn parse_latest_version_payload(payload_text: &str) -> Result<Option<String>, St
     Ok(latest_version)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 fn endpoint_with_current_tag(endpoint: &str, current_version: &str) -> Option<String> {
     endpoint
         .strip_suffix("/releases/latest/download/latest.json")
         .map(|base| format!("{base}/releases/download/v{current_version}/latest.json"))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 fn check_latest_version_without_signature(endpoint: &str, current_version: &str) -> Result<Option<String>, String> {
     use matrix_sdk::reqwest::StatusCode;
     use tokio::runtime::Runtime;
@@ -127,7 +127,7 @@ fn check_latest_version_without_signature(endpoint: &str, current_version: &str)
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 fn build_updater_http_client(
     proxy_url: Option<&str>,
 ) -> Result<matrix_sdk::reqwest::Client, String> {
@@ -138,7 +138,7 @@ fn build_updater_http_client(
         .map_err(|error| format!("Failed to build updater HTTP client: {error}"))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 fn resolve_updater_pubkey() -> Option<String> {
     option_env!("ROBRIX_UPDATER_PUBKEY")
         .map(str::trim)
@@ -150,7 +150,7 @@ fn resolve_updater_pubkey() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 fn resolve_updater_endpoint() -> String {
     option_env!("ROBRIX_UPDATER_ENDPOINT")
         .map(str::trim)
@@ -162,7 +162,7 @@ fn resolve_updater_endpoint() -> String {
         .unwrap_or_else(|| DEFAULT_UPDATER_ENDPOINT.to_string())
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 pub fn check_for_updates() -> UpdateCheckOutcome {
     use cargo_packager_updater::{Config, check_update};
     use semver::Version;
@@ -229,12 +229,12 @@ pub fn check_for_updates() -> UpdateCheckOutcome {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")))))]
 pub fn check_for_updates() -> UpdateCheckOutcome {
     UpdateCheckOutcome::UnsupportedPlatform
 }
 
-#[cfg(all(test, any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")))))]
 mod tests {
     use super::*;
 

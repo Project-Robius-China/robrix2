@@ -113,7 +113,7 @@ impl DownloadKind {
 }
 
 /// Opens the rfd save dialog with sensible defaults for `info`.
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
 fn build_save_dialog(info: &DownloadableAttachment) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new().set_file_name(&info.filename);
     if let Some(user_dirs) = robius_directories::UserDirs::new() {
@@ -130,7 +130,7 @@ fn build_save_dialog(info: &DownloadableAttachment) -> rfd::AsyncFileDialog {
 /// Pass `update_sender` if the caller wants spinner updates routed back to
 /// a specific timeline; pass `None` from contexts without one (e.g. the
 /// image viewer overlay).
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
 pub fn start_attachment_download(
     info: DownloadableAttachment,
     update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
@@ -164,7 +164,7 @@ pub fn start_attachment_download(
 /// Like `start_attachment_download` but for callers that already have the
 /// bytes in memory (e.g. the image viewer). Skips the matrix worker
 /// round-trip and writes straight to disk.
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
 pub fn save_loaded_attachment(info: DownloadableAttachment, bytes: Arc<[u8]>) {
     use crate::sliding_sync::spawn_async_task;
 
@@ -188,7 +188,7 @@ pub fn save_loaded_attachment(info: DownloadableAttachment, bytes: Arc<[u8]>) {
 }
 
 /// Mobile: rfd doesn't have a save dialog there, so just tell the user.
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_env = "ohos"))]
 pub fn start_attachment_download(
     _info: DownloadableAttachment,
     _update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
@@ -200,7 +200,7 @@ pub fn start_attachment_download(
     );
 }
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_env = "ohos"))]
 pub fn save_loaded_attachment(_info: DownloadableAttachment, _bytes: Arc<[u8]>) {
     enqueue_popup_notification(
         "Saving attachments is not yet supported on mobile.",

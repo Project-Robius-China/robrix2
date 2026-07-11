@@ -2091,7 +2091,7 @@ impl RoomInputBar {
     }
 
     /// Opens the native file picker dialog to select a file for upload.
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_env = "ohos")))]
     fn open_file_picker(&mut self, cx: &mut Cx) {
         // Run file dialog on main thread (required for non-windowed environments)
         let dialog = rfd::FileDialog::new()
@@ -2106,7 +2106,7 @@ impl RoomInputBar {
     }
 
     /// Shows a "not supported" message on mobile platforms.
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "android", target_env = "ohos"))]
     fn open_file_picker(&mut self, _cx: &mut Cx) {
         enqueue_popup_notification(
             "File uploads are not yet supported on this platform.",
