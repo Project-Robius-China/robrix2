@@ -565,6 +565,7 @@ fn is_packaged_build() -> bool {
     let Ok(exe_path) = std::env::current_exe() else {
         return false;
     };
+    #[cfg_attr(target_env = "ohos", allow(unused_variables))]
     let exe_path_str = exe_path.to_string_lossy();
 
     #[cfg(target_os = "macos")]
@@ -582,7 +583,7 @@ fn is_packaged_build() -> bool {
             || exe_lower.contains("appdata\\local\\programs")
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         // Check if running from system directories or AppImage
         exe_path_str.starts_with("/usr/")
@@ -591,7 +592,7 @@ fn is_packaged_build() -> bool {
             || std::env::var("APPIMAGE").is_ok()
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")))))]
     {
         false
     }
@@ -659,6 +660,7 @@ fn write_to_log_file(message: &str) {
 /// - Linux: `~/.local/share/robrix/logs/` (or `$XDG_DATA_HOME/robrix/logs/`)
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn logs_dir() -> std::path::PathBuf {
+    #[cfg_attr(target_env = "ohos", allow(unused_imports))]
     use std::path::PathBuf;
 
     #[cfg(target_os = "macos")]
@@ -680,7 +682,7 @@ pub fn logs_dir() -> std::path::PathBuf {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         // Linux: Use XDG_DATA_HOME if set, otherwise ~/.local/share/
         if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {

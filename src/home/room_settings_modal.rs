@@ -692,7 +692,7 @@ impl WidgetMatchEvent for RoomSettingsModal {
 
         // Pencil / edit avatar button — open native file picker
         if self.view.button(cx, ids!(pencil_button)).clicked(actions) {
-            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
             if let Some(room_id) = self.room_id.clone() {
                 use rfd::FileDialog;
                 if let Some(path) = FileDialog::new()
@@ -702,7 +702,7 @@ impl WidgetMatchEvent for RoomSettingsModal {
                     cx.action(RoomSettingsAction::UploadRoomAvatar { room_id, avatar_path: path });
                 }
             }
-            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")))))]
             if let Some(_room_id) = self.room_id.clone() {
                 use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
                 enqueue_popup_notification(

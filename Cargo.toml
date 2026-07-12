@@ -90,7 +90,16 @@ url = "2.5.0"
 rustls = { version = "0.23.37", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1.0"
 
-[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+## aws-lc-sys has no pregenerated bindings for aarch64-unknown-linux-ohos, so the
+## `bindgen` feature is required there to generate them at build time. Keep it
+## scoped to ohos: enabling it globally forces build-time bindgen on Android too,
+## where the NDK sysroot isn't wired up for libclang and the build fails with
+## "bits/libc-header-start.h file not found" (Android otherwise uses aws-lc-sys's
+## pregenerated bindings and needs no bindgen at all).
+[target.'cfg(target_env = "ohos")'.dependencies]
+aws-lc-rs = { version = "1", features = ["bindgen"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 rfd = "0.15"
 cargo-packager-updater = "0.2"
 semver = "1"
@@ -347,3 +356,11 @@ module_name_repetitions = "allow"
 too_many_arguments = "allow"
 uninlined_format_args = "allow"
 used_underscore_binding = "allow"
+
+## Use the ZhangHanDong/makepad fork, whose `dev` branch carries the OpenHarmony
+## (ohos) build fixes that upstream makepad dev doesn't have yet (EGL context,
+## sandbox dirs, mobile-layout detection, ArkUI native inputs), with the legacy
+## `old/` crate copies removed so the repo resolves as a cargo git dependency.
+[patch."https://github.com/makepad/makepad"]
+makepad-widgets = { git = "https://github.com/ZhangHanDong/makepad", branch = "dev" }
+makepad-code-editor = { git = "https://github.com/ZhangHanDong/makepad", branch = "dev" }
