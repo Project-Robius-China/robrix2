@@ -290,14 +290,14 @@ fn resolve_target(
         ExplicitOverride::Bot(bot_user_id) => ResolvedTarget::ExplicitBot(bot_user_id.clone()),
         ExplicitOverride::Room => ResolvedTarget::ExplicitRoom,
         ExplicitOverride::None => {
-            // DM rooms (user + bot, ≤2 members) default to routing to the bot,
-            // so users can chat without @mention. Multi-member rooms default to
-            // "explicit room" so the user doesn't accidentally send bot-directed
-            // messages while chatting with other humans. Users can override via
-            // the target chip either way.
+            // A room-bound bot is a UI preference (picker defaults), NOT an
+            // implicit message target: without an explicit override, a reply
+            // to a bot, or a mention, messages go to the room — in DM rooms
+            // too. The no-mention reply experience in a true 1:1 agent DM is
+            // provided by the octos mention gate's DM exemption, not by
+            // client-side hidden targeting (spec: task-agent-mention-gating).
             match (is_dm_room, bound_bot_user_id) {
-                (true, Some(bot_user_id)) => ResolvedTarget::ExplicitBot(bot_user_id.to_owned()),
-                (false, Some(_)) => ResolvedTarget::ExplicitRoom,
+                (_, Some(_)) => ResolvedTarget::ExplicitRoom,
                 (_, None) => ResolvedTarget::NoTarget,
             }
         }
@@ -2639,7 +2639,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bot_bound_room_defaults_to_explicit_room() {
+    fn test_resolve_target_group_room_with_bound_bot_is_room() {
         let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
 
         assert_eq!(
@@ -2660,26 +2660,57 @@ mod tests {
     }
 
     #[test]
-    fn test_direct_message_room_defaults_to_explicit_bot() {
+    fn test_resolve_target_dm_with_bound_bot_returns_no_target() {
+        // Spec task-agent-mention-gating: a room-bound bot is a UI preference,
+        // not an implicit message target — in DM rooms too. The outgoing
+        // message must not carry `org.octos.target_user_id`; the no-mention
+        // reply experience in a true 1:1 agent DM comes from the octos-side
+        // mention gate's DM exemption.
         let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
+
+        let resolved = resolve_target(
+            &ExplicitOverride::None,
+            None,
+            Some(bound_bot_user_id.as_ref()),
+            Some(bound_bot_user_id.as_ref()),
+            &[],
+            true, // direct room
+        );
+        assert_ne!(
+            resolved,
+            ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
+            "DM binding must not implicitly target the bot",
+        );
+        assert_eq!(resolved, ResolvedTarget::ExplicitRoom);
+        assert_eq!(
+            routing_directives_for_message(&resolved, false),
+            (None, true),
+            "no target_user_id, explicit_room marker set",
+        );
+    }
+
+    #[test]
+    fn test_resolve_target_explicit_bot_override_targets_bot() {
+        // Explicit user intent (the To @bot chip) still targets the bot.
+        let bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
 
         assert_eq!(
             resolve_target(
-                &ExplicitOverride::None,
+                &ExplicitOverride::Bot(bot_user_id.clone()),
                 None,
-                Some(bound_bot_user_id.as_ref()),
-                Some(bound_bot_user_id.as_ref()),
+                Some(bot_user_id.as_ref()),
+                Some(bot_user_id.as_ref()),
                 &[],
                 true, // direct room
             ),
-            ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
+            ResolvedTarget::ExplicitBot(bot_user_id.clone()),
         );
         assert_eq!(
             routing_directives_for_message(
-                &ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
+                &ResolvedTarget::ExplicitBot(bot_user_id.clone()),
                 false,
             ),
-            (Some(bound_bot_user_id), false),
+            (Some(bot_user_id), false),
         );
     }
 
@@ -2723,7 +2754,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reply_to_bot_still_targets_bot() {
+    fn test_resolve_target_reply_to_bot_targets_bot() {
         let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
 
         assert_eq!(
@@ -2775,7 +2806,9 @@ mod tests {
     }
 
     #[test]
-    fn test_reply_to_human_in_direct_message_room_still_targets_bound_bot() {
+    fn test_reply_to_human_in_direct_message_room_routes_to_room() {
+        // Replying to a human never implicitly targets the bound bot,
+        // in DM rooms included (spec task-agent-mention-gating).
         let bound_bot_user_id = test_user_id("@octosbot:127.0.0.1:8128");
         let reply_sender = test_user_id("@alice:127.0.0.1:8128");
 
@@ -2788,14 +2821,11 @@ mod tests {
                 &[],
                 true, // direct room
             ),
-            ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
+            ResolvedTarget::ExplicitRoom,
         );
         assert_eq!(
-            routing_directives_for_message(
-                &ResolvedTarget::ExplicitBot(bound_bot_user_id.clone()),
-                false,
-            ),
-            (Some(bound_bot_user_id), false),
+            routing_directives_for_message(&ResolvedTarget::ExplicitRoom, false),
+            (None, true),
         );
     }
 
