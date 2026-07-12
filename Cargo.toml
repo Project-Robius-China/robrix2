@@ -349,8 +349,10 @@ too_many_arguments = "allow"
 uninlined_format_args = "allow"
 used_underscore_binding = "allow"
 
-## Use the local makepad fork, which contains the OpenHarmony (ohos) build fixes
-## that upstream makepad dev doesn't have yet (gl_render_bridge / cx_api gating).
+## Use the ZhangHanDong/makepad fork, whose `dev` branch carries the OpenHarmony
+## (ohos) build fixes that upstream makepad dev doesn't have yet (EGL context,
+## sandbox dirs, mobile-layout detection, ArkUI native inputs), with the legacy
+## `old/` crate copies removed so the repo resolves as a cargo git dependency.
 [patch."https://github.com/makepad/makepad"]
-makepad-widgets = { git = "https://github.com/ZhangHanDong/makepad", branch = "robrix-ohos" }
-makepad-code-editor = { git = "https://github.com/ZhangHanDong/makepad", branch = "robrix-ohos" }
+makepad-widgets = { git = "https://github.com/ZhangHanDong/makepad", branch = "dev" }
+makepad-code-editor = { git = "https://github.com/ZhangHanDong/makepad", branch = "dev" }
