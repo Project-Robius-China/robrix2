@@ -963,6 +963,25 @@ impl std::fmt::Display for TimelineKind {
     }
 }
 
+#[cfg(feature = "agent_chat")]
+const AGENT_CHAT_AGENT_LOCALPART_PREFIX: &str = "ac_";
+#[cfg(feature = "agent_chat")]
+const AGENT_CHAT_BRIDGE_BOT_LOCALPART: &str = "agent-bridge";
+
+#[cfg(feature = "agent_chat")]
+fn agent_chat_bridge_bot_user_id_for_invited_user(user_id: &UserId) -> Option<OwnedUserId> {
+    if !user_id.localpart().starts_with(AGENT_CHAT_AGENT_LOCALPART_PREFIX) {
+        return None;
+    }
+
+    let bot_user_id = format!(
+        "@{}:{}",
+        AGENT_CHAT_BRIDGE_BOT_LOCALPART,
+        user_id.server_name(),
+    );
+    bot_user_id.try_into().ok()
+}
+
 /// How the worker should deliver the result of a [`MatrixRequest::GetRoomPreview`].
 #[derive(Clone, Debug)]
 pub enum RoomPreviewResponseMode {
@@ -3017,7 +3036,19 @@ async fn matrix_worker_task(
                     // not just a joined room.
                     if let Some(room) = client.get_room(&room_id) {
                         log!("Sending request to invite user {user_id} to room {room_id}...");
-                        match room.invite_user_by_id(&user_id).await {
+                        let invite_result = room.invite_user_by_id(&user_id).await;
+                        #[cfg(feature = "agent_chat")]
+                        if let Some(bridge_bot_user_id) =
+                            agent_chat_bridge_bot_user_id_for_invited_user(&user_id)
+                        {
+                            log!("Sending companion agent-chat bridge bot invite {bridge_bot_user_id} to room {room_id}...");
+                            if let Err(error) = room.invite_user_by_id(&bridge_bot_user_id).await {
+                                warning!(
+                                    "Failed to invite companion agent-chat bridge bot {bridge_bot_user_id} to room {room_id}: {error}"
+                                );
+                            }
+                        }
+                        match invite_result {
                             Ok(_) => Cx::post_action(InviteResultAction::Sent {
                                 room_id,
                                 user_id,
@@ -8954,6 +8985,40 @@ mod tests {
     #[test]
     fn worker_shutdown_is_unexpected_without_controlled_teardown() {
         assert!(worker_shutdown_is_unexpected(false, false));
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_chat_agent_invite_derives_companion_bridge_bot() {
+        let agent = user_id!("@ac_wf_coordinator:127.0.0.1:8128");
+
+        assert_eq!(
+            super::agent_chat_bridge_bot_user_id_for_invited_user(agent).as_deref(),
+            Some(user_id!("@agent-bridge:127.0.0.1:8128")),
+        );
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn non_agent_chat_invites_do_not_derive_bridge_bot() {
+        assert!(
+            super::agent_chat_bridge_bot_user_id_for_invited_user(user_id!(
+                "@alice:127.0.0.1:8128"
+            ))
+            .is_none()
+        );
+        assert!(
+            super::agent_chat_bridge_bot_user_id_for_invited_user(user_id!(
+                "@agent-bridge:127.0.0.1:8128"
+            ))
+            .is_none()
+        );
+        assert!(
+            super::agent_chat_bridge_bot_user_id_for_invited_user(user_id!(
+                "@octosbot:127.0.0.1:8128"
+            ))
+            .is_none()
+        );
     }
 
     #[test]
