@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -84,6 +84,13 @@ const TRANSLATION_LANG_POPUP_SCROLL_HEIGHT: f64 = 288.0;
 const TRANSLATION_LANG_POPUP_HEIGHT: f64 = TRANSLATION_LANG_POPUP_SCROLL_HEIGHT + 8.0;
 const TRANSLATION_LANG_POPUP_GAP: f64 = 6.0;
 const TRANSLATION_LANG_POPUP_MARGIN: f64 = 8.0;
+
+fn invite_result_belongs_to_room_screen(
+    pending_invited_users: &HashSet<OwnedUserId>,
+    user_id: &OwnedUserId,
+) -> bool {
+    pending_invited_users.contains(user_id)
+}
 
 fn tl_idx_from_item_id(item_id: usize, has_encryption_notice: bool) -> Option<usize> {
     if has_encryption_notice {
@@ -1030,7 +1037,10 @@ thread_local! {
     static ROOM_INFO_ACTION_MODAL_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
-fn set_room_info_action_modal_open(open: bool) {
+/// Set by app.rs each frame from the GLOBAL room-info-action modals
+/// (report / leave-confirm), so the room info sliding pane knows not to
+/// self-close on Escape / tap-outside while one of them is open over it.
+pub fn set_room_info_action_modal_open(open: bool) {
     ROOM_INFO_ACTION_MODAL_OPEN.with(|state| state.set(open));
 }
 
@@ -1298,7 +1308,7 @@ fn detected_bot_binding_for_members(
         }
     }
 
-    let known_bot_user_ids = app_state.bot_settings.known_bot_user_ids();
+    let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
     if let Some(bot_member) = non_self_members
         .iter()
         .find(|room_member|
@@ -4039,11 +4049,12 @@ script_mod! {
     }
 
     mod.widgets.ReportRoomModal = #(ReportRoomModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 430 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 430
+        RoundedShadowView {
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -4052,8 +4063,13 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: (COLOR_PRIMARY)
-                border_radius: 6.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title := Label {
@@ -4061,7 +4077,7 @@ script_mod! {
                 height: Fit
                 draw_text +: {
                     text_style: TITLE_TEXT { font_size: 13 }
-                    color: #000
+                    color: (RBX_FG_PRIMARY)
                 }
                 text: "Report Room"
             }
@@ -4572,19 +4588,6 @@ script_mod! {
                     delete_bot_modal_inner := mod.widgets.DeleteBotModal {}
                 }
             }
-
-            report_room_modal := Modal {
-                content +: {
-                    report_room_modal_inner := mod.widgets.ReportRoomModal {}
-                }
-            }
-
-            leave_room_confirm_modal := Modal {
-                content +: {
-                    leave_room_confirm_modal_inner := mod.widgets.NegativeConfirmationModal {}
-                }
-            }
-
 
             /*
              * TODO: add the action bar back in as a series of floating buttons.
@@ -5656,6 +5659,12 @@ impl RoomInfoSlidingPaneRef {
 
 #[derive(Clone, Debug)]
 pub enum ReportRoomModalAction {
+    /// Emitted by RoomScreen to open the (now global, app-root) report modal
+    /// for a specific room. Carries the room so app.rs can route the result.
+    Open {
+        room_id: OwnedRoomId,
+        room_name_id: RoomNameId,
+    },
     Close,
     Submit(String),
 }
@@ -5879,10 +5888,6 @@ impl Widget for RoomScreen {
         // uid, so route them the same as the overlay pane's.
         let info_content_widget_uid = self.room_info_sliding_pane(cx, ids!(info_content)).widget_uid();
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
-        set_room_info_action_modal_open(
-            self.view.modal(cx, ids!(report_room_modal)).is_open()
-                || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open()
-        );
 
         // Streaming animation frame handler
         if let Some(_ne) = self.streaming_next_frame.is_event(event) {
@@ -6105,7 +6110,13 @@ impl Widget for RoomScreen {
                             title_text: tr_key(app_language, "room_screen.modal.invite.title").into(),
                             body_text: tr_fmt(app_language, "room_screen.modal.invite.body", &[("username", username)]).into(),
                             accept_button_text: Some(tr_key(app_language, "room_screen.modal.invite.accept").into()),
-                            on_accept_clicked: Some(Box::new(move |_cx| {
+                            on_accept_clicked: Some(Box::new(move |cx| {
+                                // Record pending ownership in every RoomScreen of this
+                                // room BEFORE the result arrives (see InviteUserRequested).
+                                cx.action(InviteAction::InviteUserRequested {
+                                    room_id: room_id.clone(),
+                                    user_id: user_id.clone(),
+                                });
                                 submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
                             })),
                             ..Default::default()
@@ -6149,22 +6160,6 @@ impl Widget for RoomScreen {
                     RoomTopBarAction::None => {}
                 }
 
-                if let Some(RoomsListAction::Selected(selected_room)) = action.downcast_ref() {
-                    if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
-                        self.close_report_room_modal(cx);
-                        self.close_leave_room_confirm_modal(cx);
-                    }
-                }
-                if let Some(AppStateAction::RoomFocused(selected_room)) = action.downcast_ref() {
-                    if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
-                        self.close_report_room_modal(cx);
-                        self.close_leave_room_confirm_modal(cx);
-                    }
-                }
-                if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
-                    self.close_report_room_modal(cx);
-                    self.close_leave_room_confirm_modal(cx);
-                }
                 if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
                     if room_info_sliding_pane.is_currently_shown(cx) {
                         self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
@@ -6187,10 +6182,44 @@ impl Widget for RoomScreen {
                     }
                 }
 
+                // Handle a bot picked in the `/invitebot` picker: dispatch the invite.
+                // The action is widget-addressed to exactly this RoomScreen (see
+                // on_bot_invite_selected), so even when the same room is shown by
+                // multiple RoomScreens (main timeline + thread tab) only one
+                // instance dispatches. Success/failure feedback arrives via the
+                // InviteResultAction pipeline below.
+                if let Some(widget_action) = action.as_widget_action() {
+                    if widget_action.widget_uid == self.widget_uid() {
+                        if let MentionableTextInputAction::InviteBotSelected { room_id, user_id } =
+                            widget_action.cast()
+                        {
+                            // Optimistically record the pending invite so a
+                            // reopened picker can't offer the same bot again
+                            // during the network round-trip; the
+                            // InviteResultAction::Failed handler rolls it back.
+                            self.pending_invited_users.insert(user_id.clone());
+                            submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
+                        }
+                    }
+                }
+
+                // An invite was just submitted from a closure-based initiator
+                // (knock-approve, Retry) or the invite modal: record pending
+                // ownership so the InviteResultAction feedback below fires.
+                if let Some(InviteAction::InviteUserRequested { room_id, user_id }) =
+                    action.downcast_ref()
+                {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pending_invited_users.insert(user_id.clone());
+                    }
+                }
+
                 // Handle InviteResultAction to show popup notifications.
                 if let Some(InviteResultAction::Sent { room_id, user_id }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                    // Only the RoomScreen that originated the invite owns its UI feedback.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id)
+                        && invite_result_belongs_to_room_screen(&self.pending_invited_users, user_id)
+                    {
                         self.pending_invited_users.insert(user_id.clone());
                         enqueue_popup_notification(
                             "Invite sent. Waiting for acceptance.",
@@ -6222,8 +6251,10 @@ impl Widget for RoomScreen {
                     }
                 }
                 if let Some(InviteResultAction::Failed { room_id, user_id, error }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                    // Only the RoomScreen that originated the invite owns its UI feedback.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id)
+                        && invite_result_belongs_to_room_screen(&self.pending_invited_users, user_id)
+                    {
                         self.pending_invited_users.remove(user_id);
                         let error_text = error.to_string();
                         let error_display = error_text.clone();
@@ -6236,7 +6267,13 @@ impl Widget for RoomScreen {
                                 ("error", error_text.as_str()),
                             ]).into(),
                             actions: vec![
-                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |cx| {
+                                    // Re-establish pending ownership (the Failed handler
+                                    // just removed it) so the retry's result shows feedback.
+                                    cx.action(InviteAction::InviteUserRequested {
+                                        room_id: room_id_retry.clone(),
+                                        user_id: user_id_retry.clone(),
+                                    });
                                     submit_async_request(MatrixRequest::InviteUser {
                                         room_id: room_id_retry.clone(),
                                         user_id: user_id_retry.clone(),
@@ -6247,32 +6284,6 @@ impl Widget for RoomScreen {
                                 }),
                             ],
                             auto_dismissal_duration: None,
-                            ..Default::default()
-                        });
-                    }
-                }
-                if let Some(ReportRoomResultAction::Sent { room_id }) = action.downcast_ref() {
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
-                        enqueue_popup_notification(
-                            "Room reported successfully.",
-                            PopupKind::Success,
-                            Some(4.0),
-                        );
-                    }
-                }
-                if let Some(ReportRoomResultAction::Failed { room_id, error }) = action.downcast_ref() {
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
-                        let error_display = error.to_string();
-                        enqueue_notification(NotificationItem {
-                            kind: PopupKind::Error,
-                            title: Some("Report failed".into()),
-                            message: format!("Failed to report room.\n\nError: {error}").into(),
-                            actions: vec![
-                                NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
-                                    cx.copy_to_clipboard(&error_display);
-                                }),
-                            ],
-                            auto_dismissal_duration: Some(5.0),
                             ..Default::default()
                         });
                     }
@@ -6383,10 +6394,37 @@ impl Widget for RoomScreen {
                         );
                     }
                     RoomInfoPaneAction::ReportRoom => {
-                        self.open_report_room_modal(cx);
+                        // Open the GLOBAL report modal (app root) so it survives
+                        // mobile<->desktop AdaptiveView rebuilds. Carry the room.
+                        if let Some(room_name_id) = self.room_name_id.clone() {
+                            cx.action(ReportRoomModalAction::Open {
+                                room_id: room_name_id.room_id().clone(),
+                                room_name_id,
+                            });
+                        }
                     }
                     RoomInfoPaneAction::LeaveRoom => {
-                        self.open_leave_room_confirm_modal(cx);
+                        // Route to the GLOBAL delete-confirmation modal (app root)
+                        // so it survives mobile<->desktop AdaptiveView rebuilds.
+                        // The room_id is captured in the accept callback.
+                        if let Some(room_id) = self.room_id().cloned() {
+                            let room_name = self
+                                .room_name_id
+                                .as_ref()
+                                .map(|r| r.to_string())
+                                .unwrap_or_default();
+                            let content = ConfirmationModalContent {
+                                title_text: String::from("Leave Room").into(),
+                                body_text: format!("Are you sure you want to leave {room_name}?").into(),
+                                accept_button_text: Some(String::from("Leave").into()),
+                                cancel_button_text: Some(String::from("Cancel").into()),
+                                on_accept_clicked: Some(Box::new(move |_cx| {
+                                    submit_async_request(MatrixRequest::LeaveRoom { room_id });
+                                })),
+                                ..Default::default()
+                            };
+                            cx.action(ConfirmDeleteAction::Show(RefCell::new(Some(content))));
+                        }
                     }
                     // Bubbled by the pane itself into `OpenPeopleProfile`
                     // (handled above); nothing to do here.
@@ -6538,9 +6576,9 @@ impl Widget for RoomScreen {
         // We check which overlay views are visible in the order of those views' z-ordering,
         // such that the top-most views get a chance to handle the event first.
         //
-        let room_info_action_modal_open =
-            self.view.modal(cx, ids!(report_room_modal)).is_open()
-            || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open();
+        // Report / leave-confirm are now GLOBAL modals (app root); the flag is
+        // maintained by app.rs. Read it so the pane still yields correctly.
+        let room_info_action_modal_open = is_room_info_action_modal_open();
         let is_interactive_hit = utils::is_interactive_hit_event(event);
         let is_pane_shown: bool;
         if room_info_action_modal_open {
@@ -6592,9 +6630,6 @@ impl Widget for RoomScreen {
             } else {
                 Scope::with_props(&room_props)
             };
-            let leave_room_confirm_modal_uid = self
-                .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
-                .widget_uid();
 
 
             // Forward the event to the inner timeline view, but capture any actions it produces
@@ -6795,42 +6830,6 @@ impl Widget for RoomScreen {
                         return false;
                     }
                     None => {}
-                }
-
-                match action.downcast_ref::<ReportRoomModalAction>() {
-                    Some(ReportRoomModalAction::Close) => {
-                        self.close_report_room_modal(cx);
-                        return false;
-                    }
-                    Some(ReportRoomModalAction::Submit(reason)) => {
-                        let Some(room_id) = self.room_id().cloned() else {
-                            self.close_report_room_modal(cx);
-                            return false;
-                        };
-                        submit_async_request(MatrixRequest::ReportRoom {
-                            room_id,
-                            reason: reason.clone(),
-                        });
-                        self.close_report_room_modal(cx);
-                        return false;
-                    }
-                    None => {}
-                }
-
-                if let ConfirmationModalAction::Close(accepted) = action
-                    .as_widget_action()
-                    .widget_uid_eq(leave_room_confirm_modal_uid)
-                    .cast()
-                {
-                    self.close_leave_room_confirm_modal(cx);
-                    if accepted {
-                        if let Some(room_id) = self.room_id().cloned() {
-                            submit_async_request(MatrixRequest::LeaveRoom {
-                                room_id,
-                            });
-                        }
-                    }
-                    return false;
                 }
 
                 if let MessageAction::ToggleAppServiceActions = action
@@ -7543,6 +7542,8 @@ impl RoomScreen {
                 resolved_parent_bot_user_id,
                 persisted_bound_bot_user_ids,
                 known_bot_user_ids,
+                can_invite: tl.user_power.can_invite(),
+                pending_invited_users: self.pending_invited_users.iter().cloned().collect(),
             })
         } else {
             self.room_name_id.as_ref().map(|room_name| RoomScreenProps {
@@ -7564,6 +7565,8 @@ impl RoomScreen {
                 resolved_parent_bot_user_id: None,
                 persisted_bound_bot_user_ids: Vec::new(),
                 known_bot_user_ids: Vec::new(),
+                can_invite: false,
+                pending_invited_users: Vec::new(),
             })
         }
     }
@@ -7661,14 +7664,6 @@ impl RoomScreen {
         self.view.modal(cx, ids!(delete_bot_modal)).close(cx);
     }
 
-    fn close_report_room_modal(&self, cx: &mut Cx) {
-        self.view.modal(cx, ids!(report_room_modal)).close(cx);
-    }
-
-    fn close_leave_room_confirm_modal(&self, cx: &mut Cx) {
-        self.view.modal(cx, ids!(leave_room_confirm_modal)).close(cx);
-    }
-
     fn open_create_bot_modal(&mut self, cx: &mut Cx) {
         let Some(room_name_id) = self.room_name_id.clone() else {
             return;
@@ -7691,38 +7686,10 @@ impl RoomScreen {
         self.view.modal(cx, ids!(delete_bot_modal)).open(cx);
     }
 
-    fn open_report_room_modal(&mut self, cx: &mut Cx) {
-        let Some(room_name_id) = self.room_name_id.as_ref() else {
-            return;
-        };
-        self.view
-            .report_room_modal(cx, ids!(report_room_modal_inner))
-            .show(cx, room_name_id);
-        self.view.modal(cx, ids!(report_room_modal)).open(cx);
-    }
-
-    fn open_leave_room_confirm_modal(&mut self, cx: &mut Cx) {
-        let Some(room_name_id) = self.room_name_id.as_ref() else {
-            return;
-        };
-        self.view
-            .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
-            .show(cx, ConfirmationModalContent {
-                title_text: String::from("Leave Room").into(),
-                body_text: format!("Are you sure you want to leave {}?", room_name_id).into(),
-                accept_button_text: Some(String::from("Leave").into()),
-                cancel_button_text: Some(String::from("Cancel").into()),
-                ..Default::default()
-            });
-        self.view.modal(cx, ids!(leave_room_confirm_modal)).open(cx);
-    }
-
     fn reset_app_service_ui(&mut self, cx: &mut Cx) {
         self.set_app_service_actions_visible(cx, false);
         self.close_create_bot_modal(cx);
         self.close_delete_bot_modal(cx);
-        self.close_report_room_modal(cx);
-        self.close_leave_room_confirm_modal(cx);
     }
 
     fn resolved_app_service_bot_user_id(
@@ -10516,6 +10483,13 @@ pub struct RoomScreenProps {
     pub resolved_parent_bot_user_id: Option<OwnedUserId>,
     pub persisted_bound_bot_user_ids: Vec<OwnedUserId>,
     pub known_bot_user_ids: Vec<OwnedUserId>,
+    /// Whether the current user has permission to invite users to this room.
+    /// Gates the `/invitebot` slash command.
+    pub can_invite: bool,
+    /// Invites this client has sent that are still awaiting acceptance —
+    /// consumed by the `/invitebot` picker (at open time) to keep its
+    /// candidate filtering idempotent during the invite round-trip.
+    pub pending_invited_users: Vec<OwnedUserId>,
 }
 
 
@@ -13324,6 +13298,17 @@ pub enum InviteAction {
     /// and that that one entity can take ownership of the content object,
     /// which avoids having to clone it.
     ShowInviteConfirmationModal(RefCell<Option<ConfirmationModalContent>>),
+    /// Announces that an invite request was just submitted for `user_id` in
+    /// `room_id`, so every RoomScreen showing that room records it in
+    /// `pending_invited_users` and thus owns the resulting
+    /// [`InviteResultAction`] feedback. Emitted by invite initiators that run
+    /// in closures (knock-approve modal, failed-invite Retry) and by the
+    /// invite modal; the `/invitebot` picker instead records pending directly
+    /// in its widget-addressed handler.
+    InviteUserRequested {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
 }
 
 /// The result of inviting a user to a room.
@@ -13925,6 +13910,17 @@ mod tests {
     }
 
     #[test]
+    fn test_invite_result_belongs_only_to_pending_screen() {
+        let invited_user = OwnedUserId::try_from("@octos:example.org").unwrap();
+        let other_user = OwnedUserId::try_from("@hermes:example.org").unwrap();
+        let pending = HashSet::from([invited_user.clone()]);
+
+        assert!(invite_result_belongs_to_room_screen(&pending, &invited_user));
+        assert!(!invite_result_belongs_to_room_screen(&pending, &other_user));
+        assert!(!invite_result_belongs_to_room_screen(&HashSet::new(), &invited_user));
+    }
+
+    #[test]
     fn test_forward_menu() {
         let content = serde_json::json!({
             "msgtype": "m.text",
@@ -14362,6 +14358,26 @@ mod tests {
         assert!(!room_info_title_shows_agent_badge(
             Some(&app_state), room_id.as_ref(), None, std::iter::empty(),
         ));
+    }
+
+    #[test]
+    fn test_detected_bot_binding_uses_registry_augmented_known_bots() {
+        let src = include_str!("room_screen.rs");
+        let fn_pos = src
+            .find("fn detected_bot_binding_for_members")
+            .expect("detected_bot_binding_for_members should exist");
+        let fn_src = &src[fn_pos..src[fn_pos..].find("fn is_likely_bot_user_id")
+            .map(|end| fn_pos + end)
+            .unwrap_or(src.len())];
+
+        assert!(
+            fn_src.contains("timeline_known_bot_user_ids(app_state)"),
+            "DM bot binding detection should include AgentRegistry agents such as OctosDirect",
+        );
+        assert!(
+            !fn_src.contains("app_state.bot_settings.known_bot_user_ids()"),
+            "DM bot binding detection must not read only raw AppService known-bots",
+        );
     }
 
     #[test]

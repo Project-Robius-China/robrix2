@@ -13,18 +13,24 @@ script_mod! {
     use mod.widgets.*
 
     mod.widgets.RoomSettingsModal = #(RoomSettingsModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 680 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 680
+        RoundedShadowView {
+            width: Fill
             height: Fit
             flow: Down
             padding: Inset{top: 0, right: 0, bottom: 0, left: 0}
             show_bg: true
             draw_bg +: {
-                color: (COLOR_PRIMARY)
-                border_radius: 6.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             // ── Title bar ────────────────────────────────────────────────
@@ -41,7 +47,7 @@ script_mod! {
                     height: Fit
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 13}
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                     text: "Room Settings"
                 }
