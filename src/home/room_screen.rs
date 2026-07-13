@@ -898,6 +898,20 @@ fn compute_bot_timeline_render_state(raw_body: &str, is_bot_sender: bool) -> Bot
     }
 }
 
+/// The text that should land on the clipboard when copying a message body.
+///
+/// Bot-sent messages embed status / provider / `_metadata_` scaffolding lines
+/// in their raw body; the bubble strips them at render time via
+/// `compute_bot_timeline_render_state`, so copying must strip them the same
+/// way. Human messages are copied verbatim.
+fn clipboard_text_for_message_body(body: String, sender_is_bot: bool) -> String {
+    if sender_is_bot {
+        compute_bot_timeline_render_state(&body, true).body
+    } else {
+        body
+    }
+}
+
 fn display_bot_footer_text(footer: &str) -> &str {
     strip_streaming_cursor_suffix(footer)
         .strip_prefix('_')
@@ -1606,7 +1620,6 @@ script_mod! {
     mod.widgets.COLOR_BOT_CARD_BORDER = #xD8E3F0
     mod.widgets.COLOR_BOT_STATUS_BG = #xEEF4FB
     mod.widgets.COLOR_BOT_STATUS_TEXT = #x5A6F86
-    mod.widgets.COLOR_BOT_PROVIDER_TEXT = #x708399
     mod.widgets.COLOR_BOT_FOOTER_TEXT = #x8B98A7
     mod.widgets.COLOR_BOT_CODE_BG = #xECF2F8
     mod.widgets.COLOR_BOT_CODE_BORDER = #xD5E0ED
@@ -1910,6 +1923,54 @@ script_mod! {
     }
 
     // The view used for each text-based message event in a room's timeline.
+    // The per-message meta band: copy action (left) · bot model metadata
+    // (middle) · read receipts (right). Declared once and instantiated by both
+    // the Message and CondensedMessage templates — CondensedMessage re-declares
+    // its whole `body` subtree with `:=`, so it cannot inherit this from Message.
+    // (Named MessageMetaBand to avoid colliding with the retired floating
+    // MessageActionBar popup referenced in a commented-out block below.)
+    mod.widgets.MessageMetaBand = View {
+        width: Fill,
+        height: Fit
+        flow: Right,
+        align: Align{y: 0.5}
+        spacing: (SPACE_XS)
+
+        copy_button := RobrixNeutralIconButton {
+            visible: false
+            width: Fit,
+            height: Fit,
+            padding: (SPACE_XS)
+            // Optical alignment: cancel the button's own SPACE_XS padding so
+            // the icon glyph lines up with the message text's left edge.
+            margin: Inset{ left: -4 }
+            spacing: 0
+            draw_bg +: {
+                color: (RBX_TRANSPARENT)
+                color_hover: (RBX_HIT_HOVER)
+                color_down: (RBX_HIT_DOWN)
+                border_size: 0.0
+            }
+            draw_icon +: { svg: (ICON_COPY), color: (RBX_FG_TERTIARY) }
+            icon_walk: Walk{width: (RBX_ICON_SM), height: (RBX_ICON_SM)}
+            text: ""
+        }
+        metadata_label := Label {
+            visible: false
+            width: Fill,
+            height: Fit
+            padding: 0
+            max_lines: 1
+            text_overflow: Ellipsis
+            draw_text +: {
+                text_style: RBX_TEXT_META {}
+                color: (RBX_FG_TERTIARY)
+            }
+            text: ""
+        }
+        avatar_row := mod.widgets.AvatarRow {}
+    }
+
     mod.widgets.Message = set_type_default() do #(Message::register_widget(vm)) {
 
         width: Fill,
@@ -2013,9 +2074,6 @@ script_mod! {
                     width: #(MESSAGE_PROFILE_AVATAR_SIZE),
                     height: #(MESSAGE_PROFILE_AVATAR_SIZE),
                 }
-                timestamp := Timestamp {
-                    margin: Inset{ top: 5.9 }
-                }
                 edited_indicator := EditedIndicator { }
                 tsp_sign_indicator := TspSignIndicator { }
             }
@@ -2056,7 +2114,7 @@ script_mod! {
                         padding: Inset{left: #(BOT_BADGE_HORIZONTAL_PADDING), right: #(BOT_BADGE_HORIZONTAL_PADDING)}
                         show_bg: true
                         draw_bg +: {
-                            color: (COLOR_ACTIVE_PRIMARY)
+                            color: (RBX_ACCENT_SOFT)
                             border_radius: #(BOT_BADGE_BORDER_RADIUS)
                         }
                         bot_badge_label := Label {
@@ -2068,10 +2126,13 @@ script_mod! {
                                     font_size: #(BOT_BADGE_TEXT_FONT_SIZE)
                                     top_drop: #(BOT_BADGE_TEXT_TOP_DROP)
                                 }
-                                color: #fff
+                                color: (RBX_ACCENT)
                             }
                             text: "bot"
                         }
+                    }
+                    timestamp := Timestamp {
+                        margin: Inset{ left: (SPACE_XS) }
                     }
                 }
 
@@ -2128,34 +2189,6 @@ script_mod! {
                         }
                     }
 
-                    bot_metadata_footer := View {
-                        visible: false
-                        width: Fill
-                        height: Fit
-                        flow: Down
-                        spacing: 2.0
-                        padding: Inset{ left: 2.0 }
-
-                        bot_provider_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
-                            }
-                            text: ""
-                        }
-
-                        bot_footer_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
-                            }
-                            text: ""
-                        }
-                    }
                 }
 
                 message := HtmlOrPlaintext { }
@@ -2221,12 +2254,12 @@ script_mod! {
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
                 download_section := mod.widgets.MessageDownloadSection {}
+                message_action_bar := mod.widgets.MessageMetaBand {}
                 View {
                     width: Fill,
                     height: Fit
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2317,34 +2350,6 @@ script_mod! {
                         }
                     }
 
-                    bot_metadata_footer := View {
-                        visible: false
-                        width: Fill
-                        height: Fit
-                        flow: Down
-                        spacing: 2.0
-                        padding: Inset{ left: 2.0 }
-
-                        bot_provider_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
-                            }
-                            text: ""
-                        }
-
-                        bot_footer_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
-                            }
-                            text: ""
-                        }
-                    }
                 }
 
                 message := HtmlOrPlaintext { }
@@ -2409,12 +2414,12 @@ script_mod! {
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
                 download_section := mod.widgets.MessageDownloadSection {}
+                message_action_bar := mod.widgets.MessageMetaBand {}
                 View {
                     width: Fill,
                     height: Fit
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2450,7 +2455,6 @@ script_mod! {
                     height: Fit,
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2478,7 +2482,6 @@ script_mod! {
                     height: Fit,
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2509,7 +2512,6 @@ script_mod! {
                     height: Fit,
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2538,7 +2540,6 @@ script_mod! {
                     height: Fit,
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -8986,7 +8987,41 @@ impl RoomScreen {
                 MessageAction::CopyText(details) => {
                     let Some(tl) = self.tl_state.as_ref() else { return };
                     if let Some(event_tl_item) = Self::find_event_in_timeline(&tl.items, details, has_encryption_notice) {
-                        cx.copy_to_clipboard(&plaintext_body_of_timeline_item(event_tl_item));
+                        // Mirror the timeline's bot detection so the clipboard
+                        // matches what the bubble displays (scaffolding stripped).
+                        let (resolved_parent_bot_user_id, room_bot_user_ids, known_bot_user_ids) =
+                            compute_timeline_bot_context(
+                                scope.data.get::<AppState>(),
+                                tl.kind.room_id(),
+                                tl.room_members.as_ref(),
+                            );
+                        let sender_is_bot = is_timeline_sender_bot(
+                            event_tl_item.sender(),
+                            resolved_parent_bot_user_id.as_deref(),
+                            &room_bot_user_ids,
+                            &known_bot_user_ids,
+                        );
+                        let copy_text = clipboard_text_for_message_body(
+                            plaintext_body_of_timeline_item(event_tl_item),
+                            sender_is_bot,
+                        );
+                        // A bot message can be pure scaffolding (e.g. a progress/
+                        // metrics-only update) whose stripped body is empty —
+                        // don't overwrite the clipboard or claim success then.
+                        if copy_text.is_empty() {
+                            enqueue_popup_notification(
+                                tr_key(self.app_language, "room_screen.popup.message.copy_empty"),
+                                PopupKind::Info,
+                                Some(2.0),
+                            );
+                        } else {
+                            cx.copy_to_clipboard(&copy_text);
+                            enqueue_popup_notification(
+                                tr_key(self.app_language, "room_screen.popup.message.copied"),
+                                PopupKind::Success,
+                                Some(2.0),
+                            );
+                        }
                     }
                     else {
                         enqueue_popup_notification(
@@ -11276,6 +11311,9 @@ fn populate_message_view(
         &msg_like_content.kind,
         MsgLikeKind::Message(msg) if msg.mentions().is_some_and(|m| m.room)
     );
+    // Model/provider metadata for the meta band below the message content,
+    // produced by the bot populate path; None for everything else.
+    let mut band_metadata: Option<String> = None;
     let (item, used_cached_item) = match &msg_like_content.kind {
         MsgLikeKind::Message(msg) => {
             let room_mention_room_id = if msg.mentions().is_some_and(|m| m.room) {
@@ -11318,7 +11356,7 @@ fn populate_message_view(
                                 state.fill_display_buffer();
                                 (state.display_buffer.as_str(), None)
                             };
-                            let _ = populate_bot_text_message_content(
+                            let (_, stream_meta) = populate_bot_text_message_content(
                                 cx,
                                 &item,
                                 app_language,
@@ -11330,6 +11368,7 @@ fn populate_message_view(
                                 Some(link_preview_cache),
                                 sender_is_bot,
                             );
+                            band_metadata = stream_meta;
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
                             // Check for Splash card in custom event field
@@ -11351,7 +11390,7 @@ fn populate_message_view(
                                 // NORMAL MODE: existing logic
                                 let mut link_preview_ref =
                                     item.link_preview(cx, ids!(content.link_preview_view));
-                                new_drawn_status.content_drawn = populate_bot_text_message_content(
+                                let (bot_drawn, bot_meta) = populate_bot_text_message_content(
                                     cx,
                                     &item,
                                     app_language,
@@ -11363,6 +11402,8 @@ fn populate_message_view(
                                     Some(link_preview_cache),
                                     sender_is_bot,
                                 );
+                                new_drawn_status.content_drawn = bot_drawn;
+                                band_metadata = bot_meta;
                             }
                         }
                         (item, false)
@@ -11404,7 +11445,7 @@ fn populate_message_view(
                         }
                         let mut link_preview_ref =
                             item.link_preview(cx, ids!(content.link_preview_view));
-                        new_drawn_status.content_drawn = populate_bot_text_message_content(
+                        let (bot_drawn, bot_meta) = populate_bot_text_message_content(
                             cx,
                             &item,
                             app_language,
@@ -11416,6 +11457,8 @@ fn populate_message_view(
                             Some(link_preview_cache),
                             sender_is_bot,
                         );
+                        new_drawn_status.content_drawn = bot_drawn;
+                        band_metadata = bot_meta;
                         (item, false)
                     }
                 }
@@ -11872,7 +11915,27 @@ fn populate_message_view(
         )
         .map(|entry| entry.state.display())
         .unwrap_or_default();
-    item.as_message().set_data(cx, message_details, download_info, download_state);
+    // The copy button only applies to copyable conversational messages;
+    // media/sticker/redacted/UTD items keep it hidden (the band itself stays,
+    // hosting the read receipts and, for bot messages, the model metadata).
+    // Notices only get it from bot senders: agents replying via m.notice are
+    // real replies, while human-sent notices are management-plane feedback
+    // (e.g. the client's own "[App Service] ..." echoes).
+    let show_copy_button = matches!(
+        &msg_like_content.kind,
+        MsgLikeKind::Message(msg) if match msg.msgtype() {
+            MessageType::Text(_) | MessageType::Emote(_) => true,
+            MessageType::Notice(_) => sender_is_bot,
+            _ => false,
+        }
+    );
+    item.as_message().set_data(cx, message_details, download_info, download_state, show_copy_button);
+    // Fill the band's metadata line alongside the other freshly-drawn content.
+    // Cached items keep their previously-populated text (same semantics as the
+    // message body itself), so this must NOT run on the cached path.
+    if !used_cached_item {
+        item.as_message().set_band_metadata(cx, band_metadata);
+    }
 
 
     // If `used_cached_item` is false, we should always redraw the profile, even if profile_drawn is true.
@@ -11946,7 +12009,11 @@ fn populate_message_view(
 
     // Set the timestamp.
     if let Some(dt) = unix_time_millis_to_datetime(ts_millis) {
-        item.timestamp(cx, ids!(profile.timestamp)).set_date_time(cx, dt);
+        // Name-only lookup: resolves `username_view.timestamp` on the full
+        // Message template and `profile.timestamp` (gutter) on CondensedMessage.
+        // INVARIANT: each Message-derived template must contain exactly ONE
+        // widget named `timestamp`, or this lookup silently binds to the wrong one.
+        item.timestamp(cx, ids!(timestamp)).set_date_time(cx, dt);
     }
 
     // Suppress "edited" indicator for actively streaming messages.
@@ -12082,7 +12149,7 @@ fn populate_bot_text_message_content(
     media_cache: Option<&mut MediaCache>,
     link_preview_cache: Option<&mut LinkPreviewCache>,
     is_bot_sender: bool,
-) -> bool {
+) -> (bool, Option<String>) {
     let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
     let bot_card_view = item.view(cx, ids!(content.bot_message_card));
     let message_view = item.html_or_plaintext(cx, ids!(content.message));
@@ -12091,7 +12158,7 @@ fn populate_bot_text_message_content(
     message_view.set_visible(cx, !render_state.show_card);
 
     if !render_state.show_card {
-        return populate_text_message_content(
+        let drawn = populate_text_message_content(
             cx,
             &message_view,
             app_language,
@@ -12102,6 +12169,7 @@ fn populate_bot_text_message_content(
             media_cache,
             link_preview_cache,
         );
+        return (drawn, None);
     }
 
     let status_strip = item.view(cx, ids!(content.bot_message_card.bot_status_strip));
@@ -12111,23 +12179,19 @@ fn populate_bot_text_message_content(
             .set_text(cx, status);
     }
 
-    let provider_label = item.label(cx, ids!(content.bot_message_card.bot_metadata_footer.bot_provider_label));
-    if let Some(provider) = render_state.provider.as_ref() {
-        provider_label.set_text(cx, provider);
-        provider_label.set_visible(cx, true);
+    // The provider/footer metadata is rendered by the meta band below the card
+    // (content.message_action_bar.metadata_label), joined into a single line.
+    let band_metadata = if render_state.show_metadata_footer {
+        match (render_state.provider.as_ref(), render_state.footer.as_ref()) {
+            (Some(provider), Some(footer)) =>
+                Some(format!("{provider} · {}", display_bot_footer_text(footer))),
+            (Some(provider), None) => Some(provider.clone()),
+            (None, Some(footer)) => Some(display_bot_footer_text(footer).to_string()),
+            (None, None) => None,
+        }
     } else {
-        provider_label.set_visible(cx, false);
-    }
-
-    let footer_label = item.label(cx, ids!(content.bot_message_card.bot_metadata_footer.bot_footer_label));
-    if let Some(footer) = render_state.footer.as_ref() {
-        footer_label.set_text(cx, display_bot_footer_text(footer));
-        footer_label.set_visible(cx, true);
-    } else {
-        footer_label.set_visible(cx, false);
-    }
-    item.view(cx, ids!(content.bot_message_card.bot_metadata_footer))
-        .set_visible(cx, render_state.show_metadata_footer);
+        None
+    };
 
     let body_card = item.view(cx, ids!(content.bot_message_card.bot_body_card));
     body_card.set_visible(cx, render_state.show_body_card);
@@ -12139,7 +12203,7 @@ fn populate_bot_text_message_content(
     markdown_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Highlighted);
     markdown_plain_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Plain);
 
-    if render_state.show_body_card {
+    let drawn = if render_state.show_body_card {
         if code_block_mode != BotTimelineCodeBlockMode::None {
             match code_block_mode {
                 BotTimelineCodeBlockMode::Highlighted => markdown_widget.set_text(cx, &render_state.body),
@@ -12190,7 +12254,8 @@ fn populate_bot_text_message_content(
         }
     } else {
         true
-    }
+    };
+    (drawn, band_metadata)
 }
 
 fn populate_octos_action_buttons(
@@ -13638,6 +13703,14 @@ pub struct Message {
     /// Cached so `set_data` can reset_hover only on the button that just
     /// transitioned into visibility, not on every redraw.
     #[rust] download_state: DownloadDisplayState,
+    /// Whether the meta band's copy button is currently shown. Tracked so
+    /// `set_data` only touches the widget when the value flips, and so
+    /// `handle_event` can skip the per-Actions `clicked()` lookup entirely
+    /// while the button is hidden.
+    #[rust] show_copy_button: bool,
+    /// The meta band's model-metadata line currently displayed (None = hidden).
+    /// Tracked so recycled items only touch the label when the text changes.
+    #[rust] band_metadata: Option<String>,
 }
 
 impl Widget for Message {
@@ -13803,6 +13876,14 @@ impl Widget for Message {
                     MessageAction::CancelDownload(media_source_mxc(&info.media_source).clone()),
                 );
             }
+            if self.show_copy_button
+                && self.view.button(cx, ids!(content.message_action_bar.copy_button)).clicked(actions)
+            {
+                cx.widget_action(
+                    details.room_screen_widget_uid,
+                    MessageAction::CopyText(details.clone()),
+                );
+            }
             for action in actions {
                 match action.as_widget_action().widget_uid_eq(details.room_screen_widget_uid).cast_ref() {
                     MessageAction::HighlightMessage(id) if id == &details.item_id => {
@@ -13836,6 +13917,7 @@ impl Message {
         details: MessageDetails,
         download_info: Option<DownloadableAttachment>,
         download_state: DownloadDisplayState,
+        show_copy_button: bool,
     ) {
         let prev_section_visible = self.download_info.is_some();
         let prev_state = self.download_state;
@@ -13845,6 +13927,14 @@ impl Message {
         let section_visible = self.download_info.is_some();
         self.view.view(cx, ids!(content.download_section))
             .set_visible(cx, section_visible);
+        if self.show_copy_button != show_copy_button {
+            let copy_button = self.view.button(cx, ids!(content.message_action_bar.copy_button));
+            copy_button.set_visible(cx, show_copy_button);
+            if show_copy_button {
+                copy_button.reset_hover(cx);
+            }
+            self.show_copy_button = show_copy_button;
+        }
         if let Some(info) = self.download_info.as_ref() {
             let download_button = self.view.button(cx, ids!(content.download_section.download_button));
             let downloading_view = self.view.view(cx, ids!(content.download_section.downloading_view));
@@ -13868,6 +13958,21 @@ impl Message {
         }
         self.download_state = download_state;
     }
+
+    /// Sets the meta band's model-metadata line (None hides it).
+    ///
+    /// Only touches the label widget when the value actually changes, so
+    /// recycled PortalList items and the timeline-majority case (human
+    /// messages, metadata None → None) cost nothing beyond the comparison.
+    fn set_band_metadata(&mut self, cx: &mut Cx, band_metadata: Option<String>) {
+        if self.band_metadata == band_metadata {
+            return;
+        }
+        let label = self.view.label(cx, ids!(content.message_action_bar.metadata_label));
+        label.set_visible(cx, band_metadata.is_some());
+        label.set_text(cx, band_metadata.as_deref().unwrap_or(""));
+        self.band_metadata = band_metadata;
+    }
 }
 
 impl MessageRef {
@@ -13877,9 +13982,15 @@ impl MessageRef {
         details: MessageDetails,
         download_info: Option<DownloadableAttachment>,
         download_state: DownloadDisplayState,
+        show_copy_button: bool,
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.set_data(cx, details, download_info, download_state);
+        inner.set_data(cx, details, download_info, download_state, show_copy_button);
+    }
+
+    fn set_band_metadata(&self, cx: &mut Cx, band_metadata: Option<String>) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_band_metadata(cx, band_metadata);
     }
 }
 
@@ -15102,7 +15213,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bot_metadata_footer_renders_below_body() {
+    fn test_bot_metadata_extracted_for_meta_band() {
         let state = compute_bot_timeline_render_state(
             "via moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。\n\n_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_",
             true,
@@ -15114,6 +15225,23 @@ mod tests {
             state.footer.as_deref(),
             Some("_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_"),
         );
+    }
+
+    #[test]
+    fn test_clipboard_text_strips_bot_scaffolding() {
+        let raw = "via deepseek@api (deepseek-chat)\n\n我运行在 OctOS 平台上。\n\n_deepseek@api/deepseek-chat · 13.3K in · 162 out · 3s_";
+        let cleaned = clipboard_text_for_message_body(raw.to_string(), true);
+
+        assert!(cleaned.contains("我运行在 OctOS 平台上。"));
+        assert!(!cleaned.contains("deepseek@api/deepseek-chat"));
+    }
+
+    #[test]
+    fn test_clipboard_text_verbatim_for_human() {
+        let raw = "via someone@api (model)\nhello there";
+        let unchanged = clipboard_text_for_message_body(raw.to_string(), false);
+
+        assert_eq!(unchanged, raw);
     }
 
     #[test]
