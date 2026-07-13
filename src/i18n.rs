@@ -137,6 +137,21 @@ mod tests {
     }
 
     #[test]
+    fn message_action_bar_i18n_keys_exist_in_all_locales() {
+        for key in [
+            "room_screen.popup.message.copied",
+            "room_screen.popup.message.copy_empty",
+        ] {
+            for language in AppLanguage::ALL {
+                assert!(
+                    dictionary(language).contains_key(key),
+                    "missing i18n key {key:?} for language {language:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn translation_i18n_keys_exist_for_settings_and_room_input() {
         assert_eq!(
             tr_key(AppLanguage::English, "settings.labs.translation.title"),
