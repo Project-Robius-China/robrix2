@@ -38,7 +38,7 @@ script_mod! {
 
         show_bg: true
         draw_bg +: {
-            color: COLOR_SECONDARY
+            color: (mod.widgets.RBX_BG_SURFACE_SUBTLE)
         }
 
         replacement_reason := Label {
@@ -46,7 +46,7 @@ script_mod! {
             flow: Flow.Right{wrap: true},
             align: Align{x: 0.5}
             draw_text +: {
-                color: (TYPING_NOTICE_TEXT_COLOR),
+                color: (mod.widgets.RBX_FG_SECONDARY),
                 text_style: REGULAR_TEXT {font_size: 11}
             }
         }
@@ -75,7 +75,7 @@ script_mod! {
             align: Align{x: 0.5}
             draw_text +: {
                 text_style: TITLE_TEXT { font_size: 12 }
-                color: (COLOR_TEXT)
+                color: (mod.widgets.RBX_FG_PRIMARY)
             }
         }
     }

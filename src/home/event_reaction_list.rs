@@ -7,31 +7,14 @@ use crate::{LivePtr, widget_ref_from_live_ptr};
 use matrix_sdk::ruma::{OwnedRoomId, OwnedUserId};
 use matrix_sdk_ui::timeline::{ReactionInfo, ReactionsByKeyBySender, TimelineEventItemId};
 
-const EMOJI_BORDER_COLOR_INCLUDE_SELF: Vec4 = Vec4 {
-    x: 0.0,
-    y: 0.6,
-    z: 0.47,
-    w: 1.0,
-}; // DarkGreen
-const EMOJI_BORDER_COLOR_NOT_INCLUDE_SELF: Vec4 = Vec4 {
-    x: 0.714,
-    y: 0.73,
-    z: 0.75,
-    w: 1.0,
-}; // Grey
+use crate::shared::design_tokens::{RBX_ACCENT, RBX_ACCENT_SOFT, RBX_STROKE_SOFT, RBX_NEUTRAL_BG};
 
-const EMOJI_BG_COLOR_INCLUDE_SELF: Vec4 = Vec4 {
-    x: 0.89,
-    y: 0.967,
-    z: 0.929,
-    w: 1.0,
-}; // LightGreen
-const EMOJI_BG_COLOR_NOT_INCLUDE_SELF: Vec4 = Vec4 {
-    x: 0.968,
-    y: 0.976,
-    z: 0.98,
-    w: 1.0,
-}; // LightGrey
+// Reaction pills use the teal selection language: self-reacted = accent,
+// not-reacted = neutral (was legacy green / grey).
+const EMOJI_BORDER_COLOR_INCLUDE_SELF: Vec4 = RBX_ACCENT;
+const EMOJI_BORDER_COLOR_NOT_INCLUDE_SELF: Vec4 = RBX_STROKE_SOFT;
+const EMOJI_BG_COLOR_INCLUDE_SELF: Vec4 = RBX_ACCENT_SOFT;
+const EMOJI_BG_COLOR_NOT_INCLUDE_SELF: Vec4 = RBX_NEUTRAL_BG;
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -63,10 +46,10 @@ script_mod! {
                 reaction_bg_color: instance(mod.widgets.COLOR_BUTTON_GREY)
                 reaction_border_color: instance(#001A11)
                 // Override values from the base Button type.
-                color_hover: #fef65b
+                color_hover: (mod.widgets.RBX_BG_HOVER)
                 hover: 0.0
                 border_size: 1.5
-                border_radius: 3.0
+                border_radius: (mod.widgets.RBX_RADIUS_SM)
 
                 get_color: fn() -> vec4 {
                     return mix(self.reaction_bg_color, mix(self.reaction_bg_color, self.color_hover, 0.2), self.hover)
@@ -90,7 +73,7 @@ script_mod! {
             }
             draw_text +: {
                 text_style: REGULAR_TEXT {font_size: 10},
-                color: #000000
+                color: (mod.widgets.RBX_FG_PRIMARY)
                 get_color: fn() -> vec4 {
                     return self.color;
                 }

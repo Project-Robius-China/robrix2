@@ -41,7 +41,7 @@ script_mod! {
             padding: 0,
             flow: Right, // do not wrap
             draw_text +: {
-                color: #x0,
+                color: (mod.widgets.RBX_FG_SECONDARY),
                 text_style: TITLE_TEXT { font_size: 10}
             }
             text: ""
