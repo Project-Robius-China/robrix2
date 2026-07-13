@@ -327,7 +327,7 @@ Expected: build succeeds; all tests pass including `message_action_bar_i18n_keys
 
 - [ ] **Step 1: agent-spec mechanical verification**
 
-Run (repeated `--change` with relative paths — do NOT use `--change-scope`, it mis-absolutizes worktree paths):
+Run (repeated `--change` with relative paths — do NOT use `--change-scope`, it incorrectly absolutizes worktree paths):
 
 ```bash
 agent-spec lint specs/task-message-action-bar.spec.md --min-score 0.7
