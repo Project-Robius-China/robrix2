@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -245,6 +245,10 @@ struct ApprovalCardRenderState {
     title: String,
     summary: String,
     buttons_enabled: bool,
+    /// `risk_level == Critical` — drives the red "Critical" badge (§4.6).
+    risk_critical: bool,
+    /// One-line footer meta (tool + expiry, or who may approve).
+    meta: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -472,16 +476,52 @@ fn parse_octos_action_payload_for_render(
     }
 }
 
+/// Compact "YYYY-MM-DD HH:MM" from an ISO-8601 expiry; falls back to the raw
+/// (trimmed) string when it does not look like an ISO timestamp.
+fn format_approval_expiry(expires_at: &str) -> String {
+    let trimmed = expires_at.trim();
+    if trimmed.len() >= 16 && trimmed.as_bytes().get(10) == Some(&b'T') {
+        trimmed[..16].replace('T', " ")
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// One-line ApprovalCard footer meta (§4.6): tool + expiry when the local user
+/// can approve, otherwise who is allowed to approve.
+fn approval_card_meta_text(request: &OctosApprovalRequest, buttons_enabled: bool) -> String {
+    if buttons_enabled {
+        let expiry = format_approval_expiry(&request.expires_at);
+        if expiry.is_empty() {
+            format!("Tool: {}", request.tool_name)
+        } else {
+            format!("Tool: {} · Expires {}", request.tool_name, expiry)
+        }
+    } else {
+        let approvers = request.authorized_approvers.join(", ");
+        if approvers.is_empty() {
+            format!("Tool: {} · approval required", request.tool_name)
+        } else {
+            format!("Only {} can approve", approvers)
+        }
+    }
+}
+
 fn compute_action_button_render_state(
     actions: &[OctosActionButton],
     approval_request: Option<&OctosApprovalRequest>,
     current_user_id: Option<&UserId>,
 ) -> ActionButtonRenderState {
     let approval_card = approval_request
-        .and_then(|approval_request| (!actions.is_empty()).then(|| ApprovalCardRenderState {
-            title: approval_request.title.clone(),
-            summary: approval_request.summary.clone(),
-            buttons_enabled: local_user_can_approve(approval_request, current_user_id),
+        .and_then(|approval_request| (!actions.is_empty()).then(|| {
+            let buttons_enabled = local_user_can_approve(approval_request, current_user_id);
+            ApprovalCardRenderState {
+                title: approval_request.title.clone(),
+                summary: approval_request.summary.clone(),
+                buttons_enabled,
+                risk_critical: approval_request.risk_level == OctosApprovalRiskLevel::Critical,
+                meta: approval_card_meta_text(approval_request, buttons_enabled),
+            }
         }));
     let visible_slots = actions
         .iter()
@@ -891,6 +931,51 @@ fn compute_bot_timeline_render_state(raw_body: &str, is_bot_sender: bool) -> Bot
     }
 }
 
+/// Which timeline card a bot/agent message should render as.
+///
+/// Coordinator scaffold for the agent-message-response-cards work (design:
+/// `docs/superpowers/specs/2026-07-10-agent-message-response-cards.md`, §5.4).
+/// Introduced with the CodeOutputCard (④) increment. Behaviour-preserving for
+/// now — bot senders keep the existing 3-layer `BotTextCard`; the `AgentCard`
+/// branch is wired up in the AgentMessageCard (②) increment once a structured
+/// agent signal (e.g. `org.octos.steps`) is available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+enum AgentCardKind {
+    /// Ordinary user message — no bot/agent surface.
+    PlainMessage,
+    /// Existing Octos 3-layer bot text card (status strip / body / footer).
+    BotTextCard,
+    /// Rich `AgentMessageCard` (§4.5): step chips + analysis card. Requires a
+    /// structured agent signal that Octos does not emit yet.
+    AgentCard,
+}
+
+/// Inputs the coordinator uses to pick a card kind. Extend as new agent signals
+/// (steps, framework identity, tool phases) come online.
+#[allow(dead_code)]
+struct AgentRenderInputs {
+    /// Whether the message sender is classified as a bot/agent.
+    is_bot_sender: bool,
+    /// Whether the message carries a structured agent-progress signal
+    /// (reserved for a future `org.octos.steps`-style field).
+    has_structured_agent_signal: bool,
+}
+
+/// Decide which card a message renders as. Behaviour-preserving today: any bot
+/// sender → `BotTextCard`; the `AgentCard` upgrade is gated on a structured
+/// agent signal that Octos does not emit yet (§4.5).
+#[allow(dead_code)]
+fn compute_agent_render_state(inputs: &AgentRenderInputs) -> AgentCardKind {
+    if !inputs.is_bot_sender {
+        return AgentCardKind::PlainMessage;
+    }
+    if inputs.has_structured_agent_signal {
+        return AgentCardKind::AgentCard;
+    }
+    AgentCardKind::BotTextCard
+}
+
 fn display_bot_footer_text(footer: &str) -> &str {
     strip_streaming_cursor_suffix(footer)
         .strip_prefix('_')
@@ -1043,9 +1128,9 @@ fn is_room_info_action_modal_open() -> bool {
 
 
 /// #FFF4E5
-const COLOR_THREAD_SUMMARY_BG: Vec4 = vec4(1.0, 0.957, 0.898, 1.0);
+const COLOR_THREAD_SUMMARY_BG: Vec4 = vec4(0.984, 0.945, 0.867, 1.0); // == RBX_WARNING_BG
 /// #FFEACC
-const COLOR_THREAD_SUMMARY_BG_HOVER: Vec4 = vec4(1.0, 0.918, 0.8, 1.0);
+const COLOR_THREAD_SUMMARY_BG_HOVER: Vec4 = vec4(0.96, 0.90, 0.79, 1.0); // warning hover
 
 fn item_event_id(item: &Arc<TimelineItem>) -> Option<&EventId> {
     let TimelineItemKind::Event(event) = item.kind() else {
@@ -1587,14 +1672,14 @@ script_mod! {
 
     mod.widgets.COLOR_BG = #xfff8ee
     mod.widgets.COLOR_OVERLAY_BG = #x000000d8
-    mod.widgets.COLOR_READ_MARKER = #xeb2733
+    mod.widgets.COLOR_READ_MARKER = #x119FB3  // unified to RBX_ACCENT (new-messages boundary = brand, not alarm)
 
     mod.widgets.REACTION_TEXT_COLOR = #4c00b0
 
-    mod.widgets.COLOR_THREAD_SUMMARY_BG = #FFF4E5
-    mod.widgets.COLOR_THREAD_SUMMARY_BG_HOVER = #FFEACC
-    mod.widgets.COLOR_THREAD_SUMMARY_BORDER = #E8C99A
-    mod.widgets.COLOR_THREAD_SUMMARY_REPLY_COUNT = #A35A00
+    mod.widgets.COLOR_THREAD_SUMMARY_BG = #xFBF1DD          // == RBX_WARNING_BG
+    mod.widgets.COLOR_THREAD_SUMMARY_BG_HOVER = #xF5E6C8
+    mod.widgets.COLOR_THREAD_SUMMARY_BORDER = #xEAD9B5
+    mod.widgets.COLOR_THREAD_SUMMARY_REPLY_COUNT = #xC6790B // == RBX_WARNING_FG
     mod.widgets.COLOR_BOT_CARD_BG = #xF7FAFE
     mod.widgets.COLOR_BOT_CARD_BORDER = #xD8E3F0
     mod.widgets.COLOR_BOT_STATUS_BG = #xEEF4FB
@@ -1604,23 +1689,43 @@ script_mod! {
     mod.widgets.COLOR_BOT_CODE_BG = #xECF2F8
     mod.widgets.COLOR_BOT_CODE_BORDER = #xD5E0ED
 
-    mod.widgets.MessageActionPrimaryButton = RobrixPositiveIconButton {
+    // Primary action = teal RBX_ACCENT (was legacy green RobrixPositiveIconButton).
+    mod.widgets.MessageActionPrimaryButton = RobrixIconButton {
         width: Fit
         height: Fit
         spacing: 6.0
         padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        draw_bg +: {
+            color: (mod.widgets.RBX_ACCENT)
+            color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+            color_down: (mod.widgets.RBX_ACCENT_PRESSED)
+        }
         draw_text +: {
-            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+            text_style: mod.widgets.RBX_TEXT_BODY_STRONG {}
         }
     }
 
-    mod.widgets.MessageActionSecondaryButton = Button {
+    // Secondary action = ghost (surface + soft stroke + primary text).
+    mod.widgets.MessageActionSecondaryButton = RobrixIconButton {
         width: Fit
         height: Fit
         spacing: 6.0
         padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        icon_walk: Walk{ width: 0, height: 0 }
+        draw_bg +: {
+            border_size: 1.0
+            color: (mod.widgets.RBX_BG_SURFACE)
+            color_hover: (mod.widgets.RBX_BG_HOVER)
+            color_down: (mod.widgets.RBX_BG_PRESSED)
+            border_color: (mod.widgets.RBX_STROKE_SOFT)
+            border_color_hover: (mod.widgets.RBX_STROKE_SOFT)
+            border_color_down: (mod.widgets.RBX_STROKE_SOFT)
+        }
         draw_text +: {
-            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+            color: (mod.widgets.RBX_FG_PRIMARY)
+            color_hover: (mod.widgets.RBX_FG_PRIMARY)
+            color_down: (mod.widgets.RBX_FG_PRIMARY)
+            text_style: mod.widgets.RBX_TEXT_BODY_STRONG {}
         }
         text: ""
     }
@@ -1631,7 +1736,7 @@ script_mod! {
         spacing: 6.0
         padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
         draw_text +: {
-            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+            text_style: mod.widgets.RBX_TEXT_BODY_STRONG {}
         }
     }
 
@@ -1714,10 +1819,10 @@ script_mod! {
         }
         draw_block +: {
             line_color: (MESSAGE_TEXT_COLOR)
-            sep_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
-            quote_bg_color: #xEFF5FB
-            quote_fg_color: #x7892AC
-            code_color: (mod.widgets.COLOR_BOT_CODE_BG)
+            sep_color: (mod.widgets.RBX_STROKE_STRONG)
+            quote_bg_color: (mod.widgets.RBX_BG_SURFACE_SUBTLE)
+            quote_fg_color: (mod.widgets.RBX_FG_SECONDARY)
+            code_color: (mod.widgets.RBX_BG_SUNKEN)
         }
         code_layout: Layout{
             flow: Flow.Right{wrap: true}
@@ -1742,10 +1847,10 @@ script_mod! {
             padding: 0.0
             show_bg: true
             draw_bg +: {
-                color: (mod.widgets.COLOR_BOT_CODE_BG)
-                border_radius: 10.0
+                color: (mod.widgets.RBX_CODE_BG)
+                border_radius: (mod.widgets.RBX_RADIUS_SM)
                 border_size: 1.0
-                border_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
+                border_color: (mod.widgets.RBX_CODE_BORDER)
             }
 
             code_view := mod.widgets.CodeView {
@@ -1756,29 +1861,32 @@ script_mod! {
                     margin: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
                     draw_bg +: { color: #0000 }
                     draw_text +: {
+                        color: (mod.widgets.RBX_CODE_FG)
                         text_style: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
                             font_size: (MESSAGE_FONT_SIZE - 0.5)
                             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
                         }
                     }
+                    // Dark syntax map (was GitHub-light) so tokens stay readable
+                    // on the RBX_CODE_BG panel. See CodeOutputCard §4.7.
                     token_colors +: {
-                        whitespace: #x6a737d
-                        delimiter: #x24292e
-                        delimiter_highlight: #x005cc5
-                        error_decoration: #xcb2431
-                        warning_decoration: #xb08800
-                        unknown: #x24292e
-                        branch_keyword: #xd73a49
-                        constant: #x005cc5
-                        identifier: #x24292e
-                        loop_keyword: #xd73a49
-                        number: #x005cc5
-                        other_keyword: #xd73a49
-                        punctuator: #x24292e
-                        string: #x22863a
-                        function: #x6f42c1
-                        typename: #xe36209
-                        comment: #x6a737d
+                        whitespace: (mod.widgets.RBX_CODE_COMMENT)
+                        delimiter: (mod.widgets.RBX_CODE_PUNCT)
+                        delimiter_highlight: (mod.widgets.RBX_CODE_KEYWORD)
+                        error_decoration: (mod.widgets.RBX_CODE_ERROR)
+                        warning_decoration: (mod.widgets.RBX_CODE_WARNING)
+                        unknown: (mod.widgets.RBX_CODE_FG)
+                        branch_keyword: (mod.widgets.RBX_CODE_KEYWORD)
+                        constant: (mod.widgets.RBX_CODE_NUMBER)
+                        identifier: (mod.widgets.RBX_CODE_FG)
+                        loop_keyword: (mod.widgets.RBX_CODE_KEYWORD)
+                        number: (mod.widgets.RBX_CODE_NUMBER)
+                        other_keyword: (mod.widgets.RBX_CODE_KEYWORD)
+                        punctuator: (mod.widgets.RBX_CODE_PUNCT)
+                        string: (mod.widgets.RBX_CODE_STRING)
+                        function: (mod.widgets.RBX_CODE_FUNCTION)
+                        typename: (mod.widgets.RBX_CODE_TYPE)
+                        comment: (mod.widgets.RBX_CODE_COMMENT)
                     }
                 }
             }
@@ -1798,6 +1906,12 @@ script_mod! {
             height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
             padding: Inset{left: 12, right: 12}
             margin: 0
+            // Unify to the teal accent (was legacy blue via RobrixIconButton).
+            draw_bg +: {
+                color: (mod.widgets.RBX_ACCENT)
+                color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+                color_down: (mod.widgets.RBX_ACCENT_PRESSED)
+            }
             draw_icon.svg: (ICON_DOWNLOAD)
             icon_walk: Walk{width: 16, height: 16}
             text: "Download"
@@ -1813,7 +1927,7 @@ script_mod! {
 
             spinner := LoadingSpinner {
                 width: 16, height: 16
-                draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                draw_bg.color: (mod.widgets.RBX_ACCENT)
             }
             status_label := Label {
                 width: Fit, height: Fit
@@ -1821,7 +1935,7 @@ script_mod! {
                 margin: 0
                 draw_text +: {
                     text_style: REGULAR_TEXT { font_size: 11 },
-                    color: (COLOR_ACTIVE_PRIMARY)
+                    color: (mod.widgets.RBX_ACCENT)
                 }
                 text: "Downloading…"
             }
@@ -1917,21 +2031,24 @@ script_mod! {
         draw_bg +: {
             highlight: instance(0.0)
             hover: instance(0.0)
-            color: instance((COLOR_PRIMARY)) // default color)
+            color: instance((mod.widgets.RBX_BG_SURFACE)) // default row fill
 
-            mentions_bar_color: instance((COLOR_PRIMARY))
+            hover_color: instance((mod.widgets.RBX_BG_HOVER))
+            highlight_color: instance((mod.widgets.RBX_ACCENT_SOFT))
+
+            mentions_bar_color: instance((mod.widgets.RBX_BG_SURFACE))
             mentions_bar_width: instance(4.0)
 
             pixel: fn() {
                 let base_color = mix(
                     self.color,
-                    #fafafa,
+                    self.hover_color,
                     self.hover
                 );
 
                 let with_highlight = mix(
                     base_color,
-                    #c5d6fa,
+                    self.highlight_color,
                     self.highlight
                 );
 
@@ -2002,9 +2119,28 @@ script_mod! {
                 height: Fit,
                 margin: Inset{top: #(MESSAGE_PROFILE_TOP_MARGIN), right: 10}
                 flow: Down,
-                avatar := Avatar {
-                    width: #(MESSAGE_PROFILE_AVATAR_SIZE),
-                    height: #(MESSAGE_PROFILE_AVATAR_SIZE),
+                avatar_wrap := View {
+                    width: Fit
+                    height: Fit
+                    flow: Overlay
+                    avatar := Avatar {
+                        width: #(MESSAGE_PROFILE_AVATAR_SIZE),
+                        height: #(MESSAGE_PROFILE_AVATAR_SIZE),
+                    }
+                    // §4.5 agent online dot, pinned to the avatar's bottom-right.
+                    agent_online_dot := RoundedView {
+                        visible: false
+                        width: 12.0
+                        height: 12.0
+                        margin: Inset{ left: 36.0, top: 36.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.RBX_SUCCESS_FG)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                            border_size: 2.0
+                            border_color: (mod.widgets.RBX_BG_SURFACE)
+                        }
+                    }
                 }
                 timestamp := Timestamp {
                     margin: Inset{ top: 5.9 }
@@ -2049,7 +2185,7 @@ script_mod! {
                         padding: Inset{left: #(BOT_BADGE_HORIZONTAL_PADDING), right: #(BOT_BADGE_HORIZONTAL_PADDING)}
                         show_bg: true
                         draw_bg +: {
-                            color: (COLOR_ACTIVE_PRIMARY)
+                            color: (mod.widgets.RBX_ACCENT)
                             border_radius: #(BOT_BADGE_BORDER_RADIUS)
                         }
                         bot_badge_label := Label {
@@ -2063,7 +2199,7 @@ script_mod! {
                                 }
                                 color: #fff
                             }
-                            text: "bot"
+                            text: "Bot"
                         }
                     }
                 }
@@ -2076,28 +2212,51 @@ script_mod! {
                     spacing: 6.0
                     margin: Inset{ top: 1.0, bottom: 3.0 }
 
+                    bot_streaming_indicator := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: Fit
+                        align: Align{ x: 0.5, y: 0.5 }
+                        padding: Inset{ left: 8.0, right: 8.0, top: 5.0, bottom: 5.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.RBX_ACCENT_SOFT)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                        }
+                        bot_streaming_spinner := LoadingSpinner {
+                            width: 16.0
+                            height: 16.0
+                            draw_bg.color: (mod.widgets.RBX_ACCENT)
+                            draw_bg.stroke_width: 2.0
+                        }
+                    }
+
+                    // §4.5 StepChip (active): the parsed agent status renders as a
+                    // teal step pill. A multi-step chain needs backend org.octos.steps.
                     bot_status_strip := RoundedView {
                         visible: false
                         width: Fit
                         height: Fit
-                        padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
+                        align: Align{ y: 0.5 }
+                        padding: Inset{ left: 10.0, right: 10.0, top: 4.0, bottom: 4.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 10.0
+                            color: (mod.widgets.RBX_ACCENT_SOFT)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
                         }
 
                         bot_status_label := Label {
                             width: Fit
                             height: Fit
                             draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                                text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                color: (mod.widgets.RBX_ACCENT)
                             }
                             text: ""
                         }
                     }
 
+                    // Bot answer card: white RBX surface, tight corners.
                     bot_body_card := RoundedView {
                         width: Fill
                         height: Fit
@@ -2105,10 +2264,10 @@ script_mod! {
                         padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_CARD_BG)
-                            border_radius: 6.0
+                            color: (mod.widgets.RBX_BG_SURFACE)
+                            border_radius: (mod.widgets.RBX_RADIUS_XS)
                             border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                            border_color: (mod.widgets.RBX_STROKE_SOFT)
                         }
 
                         bot_card_body := HtmlOrPlaintext { }
@@ -2134,7 +2293,7 @@ script_mod! {
                             height: Fit
                             draw_text +: {
                                 text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
+                                color: (mod.widgets.RBX_FG_SECONDARY)
                             }
                             text: ""
                         }
@@ -2144,7 +2303,7 @@ script_mod! {
                             height: Fit
                             draw_text +: {
                                 text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
+                                color: (mod.widgets.RBX_FG_TERTIARY)
                             }
                             text: ""
                         }
@@ -2166,32 +2325,95 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Down
-                        spacing: 4.0
-                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                        spacing: 6.0
+                        padding: Inset{ left: 16.0, right: 16.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 12.0
+                            color: (mod.widgets.RBX_WARNING_BG)
+                            border_radius: (mod.widgets.RBX_RADIUS_XS)
                             border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                            border_color: (mod.widgets.RBX_WARNING_FG)
                         }
 
-                        approval_title_label := Label {
+                        approval_header_row := View {
                             width: Fill
                             height: Fit
-                            draw_text +: {
-                                text_style: theme.font_bold { font_size: 10.5 }
-                                color: (mod.widgets.COLOR_TEXT)
+                            flow: Right
+                            align: Align{ y: 0.5 }
+                            spacing: 6.0
+
+                            approval_title_label := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: mod.widgets.RBX_TEXT_CARD_TITLE {}
+                                    color: (mod.widgets.RBX_WARNING_FG)
+                                }
+                                text: ""
                             }
-                            text: ""
+
+                            approval_critical_badge := RoundedView {
+                                visible: false
+                                width: Fit
+                                height: Fit
+                                align: Align{ x: 0.5, y: 0.5 }
+                                padding: Inset{ left: 8.0, right: 8.0, top: 2.0, bottom: 2.0 }
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (mod.widgets.RBX_DANGER_BG)
+                                    border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                                }
+                                approval_critical_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                        color: (mod.widgets.RBX_DANGER_FG)
+                                    }
+                                    text: "Critical"
+                                }
+                            }
+
+                            approval_pending_badge := RoundedView {
+                                width: Fit
+                                height: Fit
+                                align: Align{ x: 0.5, y: 0.5 }
+                                padding: Inset{ left: 8.0, right: 8.0, top: 2.0, bottom: 2.0 }
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (mod.widgets.RBX_BG_SURFACE)
+                                    border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                                    border_size: 1.0
+                                    border_color: (mod.widgets.RBX_WARNING_FG)
+                                }
+                                approval_pending_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                        color: (mod.widgets.RBX_WARNING_FG)
+                                    }
+                                    text: "Pending"
+                                }
+                            }
                         }
 
                         approval_summary_label := Label {
                             width: Fill
                             height: Fit
                             draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                                text_style: mod.widgets.RBX_TEXT_BODY {}
+                                color: (mod.widgets.RBX_FG_PRIMARY)
+                            }
+                            text: ""
+                        }
+
+                        approval_meta_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.RBX_TEXT_META {}
+                                color: (mod.widgets.RBX_FG_SECONDARY)
                             }
                             text: ""
                         }
@@ -2265,28 +2487,51 @@ script_mod! {
                     spacing: 6.0
                     margin: Inset{ top: 1.0, bottom: 3.0 }
 
+                    bot_streaming_indicator := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: Fit
+                        align: Align{ x: 0.5, y: 0.5 }
+                        padding: Inset{ left: 8.0, right: 8.0, top: 5.0, bottom: 5.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.RBX_ACCENT_SOFT)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                        }
+                        bot_streaming_spinner := LoadingSpinner {
+                            width: 16.0
+                            height: 16.0
+                            draw_bg.color: (mod.widgets.RBX_ACCENT)
+                            draw_bg.stroke_width: 2.0
+                        }
+                    }
+
+                    // §4.5 StepChip (active): the parsed agent status renders as a
+                    // teal step pill. A multi-step chain needs backend org.octos.steps.
                     bot_status_strip := RoundedView {
                         visible: false
                         width: Fit
                         height: Fit
-                        padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
+                        align: Align{ y: 0.5 }
+                        padding: Inset{ left: 10.0, right: 10.0, top: 4.0, bottom: 4.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 10.0
+                            color: (mod.widgets.RBX_ACCENT_SOFT)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
                         }
 
                         bot_status_label := Label {
                             width: Fit
                             height: Fit
                             draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                                text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                color: (mod.widgets.RBX_ACCENT)
                             }
                             text: ""
                         }
                     }
 
+                    // Bot answer card: white RBX surface, tight corners.
                     bot_body_card := RoundedView {
                         width: Fill
                         height: Fit
@@ -2294,10 +2539,10 @@ script_mod! {
                         padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_CARD_BG)
-                            border_radius: 6.0
+                            color: (mod.widgets.RBX_BG_SURFACE)
+                            border_radius: (mod.widgets.RBX_RADIUS_XS)
                             border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                            border_color: (mod.widgets.RBX_STROKE_SOFT)
                         }
 
                         bot_card_body := HtmlOrPlaintext { }
@@ -2323,7 +2568,7 @@ script_mod! {
                             height: Fit
                             draw_text +: {
                                 text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
+                                color: (mod.widgets.RBX_FG_SECONDARY)
                             }
                             text: ""
                         }
@@ -2333,7 +2578,7 @@ script_mod! {
                             height: Fit
                             draw_text +: {
                                 text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
+                                color: (mod.widgets.RBX_FG_TERTIARY)
                             }
                             text: ""
                         }
@@ -2354,32 +2599,95 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Down
-                        spacing: 4.0
-                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                        spacing: 6.0
+                        padding: Inset{ left: 16.0, right: 16.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 12.0
+                            color: (mod.widgets.RBX_WARNING_BG)
+                            border_radius: (mod.widgets.RBX_RADIUS_XS)
                             border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                            border_color: (mod.widgets.RBX_WARNING_FG)
                         }
 
-                        approval_title_label := Label {
+                        approval_header_row := View {
                             width: Fill
                             height: Fit
-                            draw_text +: {
-                                text_style: theme.font_bold { font_size: 10.5 }
-                                color: (mod.widgets.COLOR_TEXT)
+                            flow: Right
+                            align: Align{ y: 0.5 }
+                            spacing: 6.0
+
+                            approval_title_label := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: mod.widgets.RBX_TEXT_CARD_TITLE {}
+                                    color: (mod.widgets.RBX_WARNING_FG)
+                                }
+                                text: ""
                             }
-                            text: ""
+
+                            approval_critical_badge := RoundedView {
+                                visible: false
+                                width: Fit
+                                height: Fit
+                                align: Align{ x: 0.5, y: 0.5 }
+                                padding: Inset{ left: 8.0, right: 8.0, top: 2.0, bottom: 2.0 }
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (mod.widgets.RBX_DANGER_BG)
+                                    border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                                }
+                                approval_critical_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                        color: (mod.widgets.RBX_DANGER_FG)
+                                    }
+                                    text: "Critical"
+                                }
+                            }
+
+                            approval_pending_badge := RoundedView {
+                                width: Fit
+                                height: Fit
+                                align: Align{ x: 0.5, y: 0.5 }
+                                padding: Inset{ left: 8.0, right: 8.0, top: 2.0, bottom: 2.0 }
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (mod.widgets.RBX_BG_SURFACE)
+                                    border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                                    border_size: 1.0
+                                    border_color: (mod.widgets.RBX_WARNING_FG)
+                                }
+                                approval_pending_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                        color: (mod.widgets.RBX_WARNING_FG)
+                                    }
+                                    text: "Pending"
+                                }
+                            }
                         }
 
                         approval_summary_label := Label {
                             width: Fill
                             height: Fit
                             draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                                text_style: mod.widgets.RBX_TEXT_BODY {}
+                                color: (mod.widgets.RBX_FG_PRIMARY)
+                            }
+                            text: ""
+                        }
+
+                        approval_meta_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.RBX_TEXT_META {}
+                                color: (mod.widgets.RBX_FG_SECONDARY)
                             }
                             text: ""
                         }
@@ -2723,7 +3031,7 @@ script_mod! {
             padding: Inset{left: 7.0, right: 7.0}
             draw_text +: {
                 text_style: TEXT_SUB {},
-                color: (COLOR_DIVIDER_DARK)
+                color: (mod.widgets.RBX_FG_TERTIARY)
             }
             text: ""
         }
@@ -2757,7 +3065,7 @@ script_mod! {
         align: Align{x: 0.5, y: 0}
         flow: Right,
         show_bg: true,
-        draw_bg.color: #xDAF5E5F0, // mostly opaque light green
+        draw_bg.color: (mod.widgets.RBX_BG_SURFACE_SUBTLE), // loading-earlier banner
 
         label := Label {
             width: Fill,
@@ -2930,7 +3238,7 @@ script_mod! {
             height: Fill
             visible: false,
             show_bg: true
-            draw_bg.color: #000000BB
+            draw_bg.color: (mod.widgets.RBX_SCRIM)
         }
 
         main_content := SolidView {
@@ -3157,7 +3465,7 @@ script_mod! {
             height: Fill
             visible: false,
             show_bg: true
-            draw_bg.color: #000000BB
+            draw_bg.color: (mod.widgets.RBX_SCRIM)
         }
 
         main_content := SolidView {
@@ -5899,6 +6207,14 @@ impl Widget for RoomScreen {
                             redraw_candidate_indices.push(state.timeline_index);
                         }
                         needs_another_frame |= state.needs_frame();
+                    }
+
+                    // Keep re-drawing (not re-populating) a live stream every frame so
+                    // the "generating" spinner keeps spinning even in full-snapshot
+                    // markdown mode, where the typewriter is not ticking. ①
+                    if state.is_live {
+                        needs_another_frame = true;
+                        redraw_candidate_indices.push(state.timeline_index);
                     }
 
                     if state.is_complete() || state.is_timed_out() {
@@ -9115,18 +9431,27 @@ impl RoomScreen {
                 // }
 
                 MessageAction::DownloadAttachment(info) => {
+                    let app_language = self.app_language;
                     let Some(tl) = self.tl_state.as_mut() else { continue };
                     let mxc_uri = media_source_mxc(&info.media_source).clone();
                     if tl.pending_downloads.iter().any(|pending| pending.mxc == mxc_uri) {
                         continue;
                     }
                     tl.pending_downloads.push(PendingDownload {
-                        mxc: mxc_uri,
+                        mxc: mxc_uri.clone(),
                         state: PendingDownloadState::InProgress,
                     });
                     portal_list.redraw(cx);
                     let update_sender = tl.media_cache.timeline_update_sender().cloned();
-                    start_attachment_download(info.clone(), update_sender);
+                    // Route the download button through the same direct request as the
+                    // working inline mxc link: DownloadAndSaveFile bypasses MediaCache
+                    // and the non-ASCII Content-Disposition header parse that makes the
+                    // DownloadMediaToFile (get_media_content) path fail on some files.
+                    submit_async_request(MatrixRequest::DownloadAndSaveFile {
+                        mxc_uri,
+                        app_language,
+                        update_sender,
+                    });
                 }
                 MessageAction::CancelDownload(mxc) => {
                     if let Some(tl) = self.tl_state.as_mut()
@@ -10217,7 +10542,7 @@ impl RoomScreen {
 
         // 3. If there are active streaming animations that can still reveal text,
         //    re-request the NextFrame event so the animation loop resumes.
-        if tl_state.streaming_messages.values().any(|state| state.needs_frame()) {
+        if tl_state.streaming_messages.values().any(|state| state.needs_frame() || state.is_live) {
             self.streaming_next_frame = cx.new_next_frame();
         }
     }
@@ -11264,6 +11589,10 @@ fn populate_message_view(
                                 Some(link_preview_cache),
                                 sender_is_bot,
                             );
+                            // Show the animated "generating" indicator while the
+                            // stream is live (both typewriter and full-snapshot modes). ①
+                            item.view(cx, ids!(content.bot_message_card.bot_streaming_indicator))
+                                .set_visible(cx, state.is_live);
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
                             // Check for Splash card in custom event field
@@ -11417,7 +11746,7 @@ fn populate_message_view(
                         (item, true)
                     } else {
                         // Draw the profile up front here because we need the username for the emote body.
-                        let (username, profile_drawn) = item.avatar(cx, ids!(profile.avatar)).set_avatar_and_get_username(
+                        let (username, profile_drawn) = item.avatar(cx, ids!(profile.avatar_wrap.avatar)).set_avatar_and_get_username(
                             cx,
                             timeline_kind,
                             event_tl_item.sender(),
@@ -11821,7 +12150,7 @@ fn populate_message_view(
 
         if !is_server_notice { // the normal case
             let (username, profile_drawn) = set_username_and_get_avatar_retval.unwrap_or_else(||
-                item.avatar(cx, ids!(profile.avatar)).set_avatar_and_get_username(
+                item.avatar(cx, ids!(profile.avatar_wrap.avatar)).set_avatar_and_get_username(
                     cx,
                     timeline_kind,
                     event_tl_item.sender(),
@@ -11842,10 +12171,11 @@ fn populate_message_view(
 
             // Show/hide the bot badge based on sender's user ID
             item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, sender_is_bot);
+            item.view(cx, ids!(profile.avatar_wrap.agent_online_dot)).set_visible(cx, sender_is_bot);
         }
         else {
             // Server notices are drawn with a red color avatar background and username.
-            let avatar = item.avatar(cx, ids!(profile.avatar));
+            let avatar = item.avatar(cx, ids!(profile.avatar_wrap.avatar));
             avatar.show_text(cx, Some(COLOR_FG_DANGER_RED), None, "⚠");
             username_label.set_text(cx, tr_key(app_language, "room_screen.server_notice.username"));
             script_apply_eval!(cx, username_label, {
@@ -11854,6 +12184,7 @@ fn populate_message_view(
                 }
             });
             item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, false);
+            item.view(cx, ids!(profile.avatar_wrap.agent_online_dot)).set_visible(cx, false);
             new_drawn_status.profile_drawn = true;
         }
     }
@@ -12038,6 +12369,11 @@ fn populate_bot_text_message_content(
         );
     }
 
+    // Streaming "generating" indicator: hidden by default here; the streaming
+    // render path re-enables it while the message is live (①).
+    item.view(cx, ids!(content.bot_message_card.bot_streaming_indicator))
+        .set_visible(cx, false);
+
     let status_strip = item.view(cx, ids!(content.bot_message_card.bot_status_strip));
     status_strip.set_visible(cx, render_state.show_status_strip);
     if let Some(status) = render_state.status.as_ref() {
@@ -12166,10 +12502,14 @@ fn populate_octos_action_buttons(
     button_row.set_visible(cx, render_state.show_button_row && !visible_slots.is_empty());
     approval_request_view.set_visible(cx, render_state.approval_card.is_some());
     if let Some(approval_card) = render_state.approval_card.as_ref() {
-        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_title_label))
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_header_row.approval_title_label))
             .set_text(cx, &approval_card.title);
         item.label(cx, ids!(content.action_buttons.approval_request_view.approval_summary_label))
             .set_text(cx, &approval_card.summary);
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_meta_label))
+            .set_text(cx, &approval_card.meta);
+        item.view(cx, ids!(content.action_buttons.approval_request_view.approval_header_row.approval_critical_badge))
+            .set_visible(cx, approval_card.risk_critical);
     }
 
     for index in 0..MAX_OCTOS_ACTION_BUTTONS {
@@ -12418,16 +12758,11 @@ fn populate_file_message_content(
         .or_else(|| file_content.caption().map(|c| format!("<br><i>{}</i>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
-    // Build a clickable mxc:// link so the user can explicitly trigger download.
-    // The link is handled by `RobrixHtmlLinkAction` / `robius_open` in the room screen.
+    // Download is handled by the MessageDownloadSection button below, so plain
+    // files no longer render a redundant inline mxc link (unified download UI).
+    // Encrypted files keep the notice since the button can't download them.
     let download_link = match &file_content.source {
-        MediaSource::Plain(mxc_uri) => {
-            format!(
-                "<br>→ <a href=\"{}\">{}</a>",
-                htmlize::escape_text(mxc_uri.as_str()),
-                tr_key(app_language, "room_screen.file.download"),
-            )
-        }
+        MediaSource::Plain(_) => String::new(),
         MediaSource::Encrypted(_) => {
             format!("<br>→ <i>{}</i>", tr_key(app_language, "room_screen.file.encrypted_not_supported"))
         }
@@ -13742,8 +14077,8 @@ impl Widget for Message {
         if self.details.as_ref().is_some_and(|d| d.should_be_highlighted) {
             script_apply_eval!(cx, self, {
                 draw_bg +: {
-                    color: #ffffd1,
-                    mentions_bar_color: #ffd54f
+                    color: mod.widgets.RBX_ACCENT_SOFT,
+                    mentions_bar_color: mod.widgets.RBX_ACCENT
                 }
             });
         }
@@ -13826,6 +14161,31 @@ mod tests {
 
     fn make_state(text: &str) -> StreamingAnimState {
         StreamingAnimState::new(text, true)
+    }
+
+    #[test]
+    fn test_compute_agent_render_state_maps_senders() {
+        assert_eq!(
+            compute_agent_render_state(&AgentRenderInputs {
+                is_bot_sender: false,
+                has_structured_agent_signal: false,
+            }),
+            AgentCardKind::PlainMessage,
+        );
+        assert_eq!(
+            compute_agent_render_state(&AgentRenderInputs {
+                is_bot_sender: true,
+                has_structured_agent_signal: false,
+            }),
+            AgentCardKind::BotTextCard,
+        );
+        assert_eq!(
+            compute_agent_render_state(&AgentRenderInputs {
+                is_bot_sender: true,
+                has_structured_agent_signal: true,
+            }),
+            AgentCardKind::AgentCard,
+        );
     }
 
     #[test]
@@ -14667,6 +15027,34 @@ mod tests {
             state.approval_card.as_ref().map(|card| card.summary.as_str()),
             Some("rm -rf ~/tmp/cache"),
         );
+    }
+
+    #[test]
+    fn test_approval_card_meta_text_and_expiry() {
+        assert_eq!(format_approval_expiry("2026-04-14T14:30:00Z"), "2026-04-14 14:30");
+        assert_eq!(format_approval_expiry("soon"), "soon");
+
+        let mut request = OctosApprovalRequest {
+            request_id: "req_1".into(),
+            tool_name: "shell".into(),
+            tool_args_digest: "sha256:1".into(),
+            title: "Execute shell command".into(),
+            summary: "rm -rf ~/tmp/cache".into(),
+            risk_level: OctosApprovalRiskLevel::Critical,
+            authorized_approvers: vec!["@alice:example.org".into()],
+            expires_at: "2026-04-14T14:30:00Z".into(),
+            on_timeout: OctosApprovalTimeoutBehavior::Notify,
+        };
+        assert_eq!(
+            approval_card_meta_text(&request, true),
+            "Tool: shell · Expires 2026-04-14 14:30",
+        );
+        assert_eq!(
+            approval_card_meta_text(&request, false),
+            "Only @alice:example.org can approve",
+        );
+        request.expires_at = "".into();
+        assert_eq!(approval_card_meta_text(&request, true), "Tool: shell");
     }
 
     #[test]
