@@ -277,7 +277,6 @@ script_mod! {
             auto_tail: false
             flow: Down
             grab_key_focus: false
-            scroll_bars +: { show_scroll_x: false, show_scroll_y: true }
 
             device_item := mod.widgets.DeviceCard {}
 
