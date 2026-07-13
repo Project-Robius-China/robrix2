@@ -7,7 +7,7 @@ estimate: 1d
 
 ## Intent
 
-Restructure the per-message meta area into the approved V2 "single meta band" layout (design: `docs/superpowers/design/message-layout-variants.html`): one 24px row below the message content holding the copy button (left), bot model metadata (middle), and read-receipt avatars (right). The timestamp moves from the avatar column into the username row, and the bot badge switches from legacy blue to the accent pill style. This removes the current three scattered rows (metadata / copy / receipts) that make the message block feel loose. Builds directly on Phase 1 (`specs/task-message-action-bar.spec.md`).
+Restructure the per-message meta area into the approved V2 "single meta band" layout (chosen from an HTML design exploration reviewed on 2026-07-13; artifact kept locally, not committed): one 24px row below the message content holding the copy button (left), bot model metadata (middle), and read-receipt avatars (right). The timestamp moves from the avatar column into the username row, and the bot badge switches from legacy blue to the accent pill style. This removes the current three scattered rows (metadata / copy / receipts) that make the message block feel loose. Builds directly on Phase 1 (`specs/task-message-action-bar.spec.md`).
 
 ## Decisions
 
@@ -27,8 +27,6 @@ Restructure the per-message meta area into the approved V2 "single meta band" la
 ### Allowed Changes
 - src/home/room_screen.rs
 - specs/task-message-meta-band.spec.md
-- docs/superpowers/design/message-layout-variants.html
-- docs/superpowers/plans/2026-07-13-message-meta-band.md
 
 ### Forbidden
 - Do not modify the `MessageAction::CopyText` dispatch or handler (Phase 1 pipeline stays as-is)

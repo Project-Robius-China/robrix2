@@ -34,7 +34,6 @@ Add a Cherry Studio-style message action bar that is always visible below every 
 - resources/i18n/en.json
 - resources/i18n/zh-CN.json
 - specs/task-message-action-bar.spec.md
-- docs/superpowers/plans/2026-07-10-message-action-bar.md
 
 ### Forbidden
 - Do not modify the right-click / long-press context menu opening logic (`Hit::FingerDown` secondary / `Hit::FingerLongPress` handling)
