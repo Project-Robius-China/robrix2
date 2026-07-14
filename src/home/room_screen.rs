@@ -2312,6 +2312,66 @@ script_mod! {
 
                 message := HtmlOrPlaintext { }
                 splash_card := Splash { }
+
+                // org.octos.app mini-app card (A1: agent-to-app registry).
+                octos_app_card := RoundedView {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 8.0
+                    padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
+                    margin: Inset{ top: 1.0, bottom: 3.0 }
+                    show_bg: true
+                    draw_bg +: {
+                        color: (mod.widgets.RBX_BG_SURFACE)
+                        border_radius: (mod.widgets.RBX_RADIUS_XS)
+                        border_size: 1.0
+                        border_color: (mod.widgets.RBX_STROKE_SOFT)
+                    }
+
+                    app_card_header_row := View {
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        align: Align{ y: 0.5 }
+                        spacing: 8.0
+
+                        app_card_title := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.RBX_TEXT_CARD_TITLE {}
+                                color: (mod.widgets.RBX_FG_PRIMARY)
+                            }
+                            text: ""
+                        }
+
+                        app_card_badge := RoundedView {
+                            visible: false
+                            width: Fit
+                            height: Fit
+                            align: Align{ x: 0.5, y: 0.5 }
+                            padding: Inset{ left: 9.0, right: 9.0, top: 3.0, bottom: 3.0 }
+                            show_bg: true
+                            draw_bg +: {
+                                color: (mod.widgets.RBX_ACCENT_SOFT)
+                                border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                            }
+                            app_card_badge_label := Label {
+                                width: Fit
+                                height: Fit
+                                draw_text +: {
+                                    text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                    color: (mod.widgets.RBX_ACCENT)
+                                }
+                                text: ""
+                            }
+                        }
+                    }
+
+                    app_card_body := HtmlOrPlaintext { }
+                }
                 action_buttons := View {
                     visible: false
                     width: Fill
@@ -11595,20 +11655,22 @@ fn populate_message_view(
                                 .set_visible(cx, state.is_live);
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
-                            // Check for Splash card in custom event field
-                            let splash_code = latest_effective_event_content_json(event_tl_item)
-                                .and_then(|content|
-                                    content
-                                        .get("org.octos.splash_card")
-                                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                                );
+                            // Check for an org.octos.app mini-app card (A1). Only in
+                            // full (non-condensed) messages so a condensed row that
+                            // lacks the card slot never renders blank.
+                            let app_render = if use_compact_view {
+                                None
+                            } else {
+                                latest_effective_event_content_json(event_tl_item)
+                                    .and_then(|content| content.get("org.octos.app").cloned())
+                                    .filter(|app| app.is_object())
+                                    .and_then(|app| render_octos_app_card(&app))
+                            };
 
-                            if let Some(ref splash) = splash_code {
-                                // SPLASH CARD MODE: render native Makepad card
+                            if let Some(render) = app_render {
+                                // APP CARD MODE: render the native mini-app card.
                                 item.view(cx, ids!(content.message)).set_visible(cx, false);
-                                let splash_widget = item.splash(cx, ids!(content.splash_card));
-                                splash_widget.set_visible(cx, true);
-                                splash_widget.set_text(cx, splash);
+                                populate_octos_app_card(cx, &item, &render);
                                 new_drawn_status.content_drawn = true;
                             } else {
                                 // NORMAL MODE: existing logic
@@ -12336,6 +12398,143 @@ fn populate_text_message_content(
     }
 }
 
+/// Rendered content for an `org.octos.app` mini-app card (A1: agent-to-app
+/// card registry). Octos emits `content["org.octos.app"] = {type, version,
+/// initial_state}`; robrix renders known types natively and falls back to the
+/// plain message `body` for unknown/invalid types.
+struct OctosAppCardRender {
+    title: String,
+    badge: String,
+    body_html: String,
+}
+
+/// Dispatch an `org.octos.app` value to a type-specific renderer. Returns
+/// `None` for unknown/invalid types so the caller falls back to body text.
+fn render_octos_app_card(app: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let kind = app.get("type").and_then(|v| v.as_str())?;
+    let state = app.get("initial_state").filter(|s| s.is_object());
+    match (kind, state) {
+        ("weather", Some(state)) => render_weather_app_card(state),
+        ("mission_room", Some(state)) => render_mission_room_app_card(state),
+        (other, _) => {
+            warning!("org.octos.app: unsupported type '{other}', falling back to body text");
+            None
+        }
+    }
+}
+
+/// `weather` card: location + temperature + condition glyph.
+fn render_weather_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let location = state.get("location").and_then(|v| v.as_str()).unwrap_or("Weather");
+    let condition = state.get("condition").and_then(|v| v.as_str()).unwrap_or("");
+    let glyph = weather_condition_glyph(condition);
+    let body_html = match state.get("temp_c").and_then(|v| v.as_f64()) {
+        Some(t) => format!("<b>{glyph} {t:.0}°C</b>"),
+        None => format!("<b>{glyph}</b>"),
+    };
+    Some(OctosAppCardRender {
+        title: location.to_string(),
+        badge: condition.to_string(),
+        body_html,
+    })
+}
+
+fn weather_condition_glyph(condition: &str) -> &'static str {
+    match condition {
+        "sunny" => "☀",
+        "cloudy" => "☁",
+        "rainy" => "🌧",
+        "snowy" => "❄",
+        "stormy" => "⛈",
+        "foggy" => "🌫",
+        _ => "🌡",
+    }
+}
+
+/// `mission_room` board: goal + phase + task/agent/pending/decision/blocker lists.
+fn render_mission_room_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let goal = state.get("goal");
+    let title = goal
+        .and_then(|g| g.get("title"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Mission");
+    let badge = state.get("phase").and_then(|v| v.as_str())
+        .or_else(|| goal.and_then(|g| g.get("status")).and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_string();
+
+    let mut html = String::new();
+    append_mission_section(&mut html, "Tasks", state.get("tasks"));
+    append_mission_section(&mut html, "Agents", state.get("agents"));
+    append_mission_section(&mut html, "Waiting on you", state.get("pending_human_actions"));
+    append_mission_section(&mut html, "Decisions", state.get("decisions"));
+    append_mission_section(&mut html, "Blockers", state.get("blockers"));
+    if html.is_empty() {
+        html.push_str("<i>No details yet.</i>");
+    }
+    Some(OctosAppCardRender {
+        title: title.to_string(),
+        badge,
+        body_html: html,
+    })
+}
+
+fn append_mission_section(html: &mut String, heading: &str, items: Option<&serde_json::Value>) {
+    let Some(arr) = items.and_then(|v| v.as_array()).filter(|a| !a.is_empty()) else { return };
+    if !html.is_empty() {
+        html.push_str("<br>");
+    }
+    html.push_str(&format!("<b>{heading}</b><br>"));
+    for entry in arr {
+        let primary_raw = mission_item_primary(entry);
+        let primary = htmlize::escape_text(&primary_raw);
+        match mission_item_status(entry) {
+            Some(status) => html.push_str(&format!("• {} — <i>{}</i><br>", primary, htmlize::escape_text(&status))),
+            None => html.push_str(&format!("• {primary}<br>")),
+        }
+    }
+}
+
+/// Best-effort primary label from a free-form mission item (string or object).
+fn mission_item_primary(item: &serde_json::Value) -> String {
+    if let Some(s) = item.as_str() {
+        return s.to_string();
+    }
+    for key in ["title", "label", "name", "nickname", "text", "summary", "id"] {
+        if let Some(s) = item.get(key).and_then(|v| v.as_str()) {
+            return s.to_string();
+        }
+    }
+    item.to_string()
+}
+
+fn mission_item_status(item: &serde_json::Value) -> Option<String> {
+    for key in ["status", "state", "role"] {
+        if let Some(s) = item.get(key).and_then(|v| v.as_str()) {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
+/// Populate the `octos_app_card` slot from a rendered app card, hiding the
+/// plain message body and the bot text card.
+fn populate_octos_app_card(cx: &mut Cx, item: &WidgetRef, render: &OctosAppCardRender) {
+    item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
+    item.view(cx, ids!(content.octos_app_card)).set_visible(cx, true);
+    item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_title))
+        .set_text(cx, &render.title);
+    let badge = item.view(cx, ids!(content.octos_app_card.app_card_header_row.app_card_badge));
+    let show_badge = !render.badge.is_empty();
+    badge.set_visible(cx, show_badge);
+    if show_badge {
+        item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_badge.app_card_badge_label))
+            .set_text(cx, &render.badge);
+    }
+    item.html_or_plaintext(cx, ids!(content.octos_app_card.app_card_body))
+        .show_html(cx, &render.body_html);
+}
+
 fn populate_bot_text_message_content(
     cx: &mut Cx,
     item: &WidgetRef,
@@ -12354,6 +12553,8 @@ fn populate_bot_text_message_content(
 
     bot_card_view.set_visible(cx, render_state.show_card);
     message_view.set_visible(cx, !render_state.show_card);
+    // Not an org.octos.app card in this path — keep the app-card slot hidden.
+    item.view(cx, ids!(content.octos_app_card)).set_visible(cx, false);
 
     if !render_state.show_card {
         return populate_text_message_content(
