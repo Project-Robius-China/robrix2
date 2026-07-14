@@ -11585,6 +11585,23 @@ fn populate_message_view(
         _ => false,
     };
 
+    // An org.octos.app mini-app card must ALWAYS render as a full card: the
+    // CondensedMessage template has no card slot, so a condensed row silently
+    // falls back to plain body text. Detect the card up-front — bot senders only,
+    // so ordinary user text never pays the content deserialize — and force the
+    // non-condensed path. Overriding `use_compact_view` here (before the msgtype
+    // match) makes it flow to BOTH the template choice and the profile-draw
+    // logic below, so the forced-full card also draws its avatar/username.
+    let octos_app_render: Option<OctosAppCardRender> = if sender_is_bot {
+        latest_effective_event_content_json(event_tl_item)
+            .and_then(|content| content.get("org.octos.app").cloned())
+            .filter(|app| app.is_object())
+            .and_then(|app| render_octos_app_card(&app))
+    } else {
+        None
+    };
+    let use_compact_view = use_compact_view && octos_app_render.is_none();
+
     let has_html_body: bool;
 
     // Sometimes we need to call this up-front, so we save the result in this variable
@@ -11655,17 +11672,10 @@ fn populate_message_view(
                                 .set_visible(cx, state.is_live);
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
-                            // Check for an org.octos.app mini-app card (A1). Only in
-                            // full (non-condensed) messages so a condensed row that
-                            // lacks the card slot never renders blank.
-                            let app_render = if use_compact_view {
-                                None
-                            } else {
-                                latest_effective_event_content_json(event_tl_item)
-                                    .and_then(|content| content.get("org.octos.app").cloned())
-                                    .filter(|app| app.is_object())
-                                    .and_then(|app| render_octos_app_card(&app))
-                            };
+                            // Reuse the up-front org.octos.app detection (see the
+                            // top of populate_message_view); when a card is present
+                            // it already forced the full Message template + profile.
+                            let app_render = octos_app_render;
 
                             if let Some(render) = app_render {
                                 // APP CARD MODE: render the native mini-app card.
@@ -12402,9 +12412,20 @@ fn populate_text_message_content(
 /// card registry). Octos emits `content["org.octos.app"] = {type, version,
 /// initial_state}`; robrix renders known types natively and falls back to the
 /// plain message `body` for unknown/invalid types.
+/// Semantic color for an app-card status badge.
+#[derive(Clone, Copy)]
+#[allow(dead_code)] // Neutral reserved for future idle/pending statuses.
+enum AppCardBadgeKind {
+    Accent,
+    Success,
+    Danger,
+    Neutral,
+}
+
 struct OctosAppCardRender {
     title: String,
     badge: String,
+    badge_kind: AppCardBadgeKind,
     body_html: String,
 }
 
@@ -12416,6 +12437,14 @@ fn render_octos_app_card(app: &serde_json::Value) -> Option<OctosAppCardRender> 
     match (kind, state) {
         ("weather", Some(state)) => render_weather_app_card(state),
         ("mission_room", Some(state)) => render_mission_room_app_card(state),
+        ("tool_call", Some(state)) => render_tool_call_app_card(state),
+        ("diff_view" | "diff", Some(state)) => render_diff_app_card(state),
+        ("task_tree" | "tasks", Some(state)) => render_task_tree_app_card(state),
+        ("pipeline" | "pipeline_dag" | "dag", Some(state)) => render_pipeline_app_card(state),
+        ("run_summary" | "cost" | "usage", Some(state)) => render_run_summary_app_card(state),
+        ("user_question" | "ask_user", Some(state)) => render_user_question_app_card(state),
+        ("plan", Some(state)) => render_plan_app_card(state),
+        ("goal", Some(state)) => render_goal_app_card(state),
         (other, _) => {
             warning!("org.octos.app: unsupported type '{other}', falling back to body text");
             None
@@ -12435,6 +12464,7 @@ fn render_weather_app_card(state: &serde_json::Value) -> Option<OctosAppCardRend
     Some(OctosAppCardRender {
         title: location.to_string(),
         badge: condition.to_string(),
+        badge_kind: AppCardBadgeKind::Accent,
         body_html,
     })
 }
@@ -12475,7 +12505,822 @@ fn render_mission_room_app_card(state: &serde_json::Value) -> Option<OctosAppCar
     Some(OctosAppCardRender {
         title: title.to_string(),
         badge,
+        badge_kind: AppCardBadgeKind::Accent,
         body_html: html,
+    })
+}
+
+/// `tool_call` card (B1): a single agent tool invocation with a status badge.
+/// Octos emits this over Matrix by projecting a `tool/started|completed` event
+/// into an `org.octos.app` card; robrix renders tool name + args + result.
+fn render_tool_call_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let tool = state.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
+    let status = state.get("status").and_then(|v| v.as_str()).unwrap_or("running");
+    let (badge_text, badge_kind) = match status {
+        "completed" | "success" | "done" => ("Done", AppCardBadgeKind::Success),
+        "error" | "failed" => ("Error", AppCardBadgeKind::Danger),
+        _ => ("Running", AppCardBadgeKind::Accent),
+    };
+    let glyph = tool_call_glyph(tool);
+
+    let mut body = String::new();
+    if let Some(args) = tool_call_args_text(state) {
+        let a = truncate_app_preview(&args, 200);
+        body.push_str(&format!("<code>{}</code>", htmlize::escape_text(&a)));
+    }
+    if matches!(badge_kind, AppCardBadgeKind::Danger) {
+        if let Some(err) = state.get("error").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            if !body.is_empty() { body.push_str("<br>"); }
+            let e = truncate_app_preview(err, 300);
+            body.push_str(&format!("<i>{}</i>", htmlize::escape_text(&e)));
+        }
+    } else if let Some(out) = state.get("output_preview").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        if !body.is_empty() { body.push_str("<br>"); }
+        let o = truncate_app_preview(out, 300);
+        body.push_str(&htmlize::escape_text(&o).replace('\n', "<br>"));
+    }
+    if let Some(ms) = state.get("duration_ms").and_then(|v| v.as_f64()) {
+        if !body.is_empty() { body.push_str("<br>"); }
+        body.push_str(&format!("<i>took {}</i>", format_duration_ms(ms)));
+    }
+
+    Some(OctosAppCardRender {
+        title: format!("{glyph} {tool}"),
+        badge: badge_text.to_string(),
+        badge_kind,
+        body_html: body,
+    })
+}
+
+fn tool_call_glyph(tool: &str) -> &'static str {
+    match tool {
+        "shell" | "bash" | "exec_command" => "▶",
+        "web_search" | "search" | "deep_search" => "🔍",
+        "web_fetch" | "http" | "browser" | "deep_crawl" => "🌐",
+        "read_file" | "list_dir" | "glob" | "grep" | "code_structure" => "🔎",
+        "write_file" | "edit_file" | "diff_edit" | "apply_patch" => "📝",
+        "spawn" | "delegate" | "run_pipeline" => "🧩",
+        "send_file" | "send_app_card" | "message" => "📤",
+        "save_memory" | "recall_memory" => "🧠",
+        _ => "⚙",
+    }
+}
+
+fn tool_call_args_text(state: &serde_json::Value) -> Option<String> {
+    match state.get("arguments") {
+        Some(v) if v.is_string() => v.as_str().map(str::to_string),
+        Some(v) if v.is_object() || v.is_array() => Some(v.to_string()),
+        _ => None,
+    }
+}
+
+fn truncate_app_preview(s: &str, max: usize) -> String {
+    let t = s.trim();
+    if t.chars().count() <= max {
+        t.to_string()
+    } else {
+        format!("{}…", t.chars().take(max).collect::<String>())
+    }
+}
+
+fn format_duration_ms(ms: f64) -> String {
+    if ms >= 1000.0 {
+        format!("{:.1}s", ms / 1000.0)
+    } else {
+        format!("{:.0}ms", ms)
+    }
+}
+
+/// `diff_view` card (B2): a unified-diff preview. Octos emits this by projecting
+/// a `diff/preview` (`DiffPreview`) into an `org.octos.app` card; robrix renders
+/// per-file hunks with green additions / red deletions, colored via the
+/// `RBX_*` semantic tokens (`<font color>` in the shared card body).
+///
+/// Contract mirrors octos `DiffPreview`:
+/// ```json
+/// { "title"?, "files": [ { "path", "old_path"?, "status", "hunks": [
+///     { "header", "lines": [ { "kind": "context"|"added"|"removed", "content" } ] } ] } ] }
+/// ```
+fn render_diff_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let files = state.get("files").and_then(|v| v.as_array())?;
+    if files.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let del_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    // Budget so a huge diff stays a compact preview, not a wall of text.
+    const MAX_FILES: usize = 4;
+    const MAX_LINES_TOTAL: usize = 40;
+    const MAX_LINE_LEN: usize = 120;
+
+    // Pass 1: diff stat (added/removed) across ALL files, for the header badge.
+    let mut total_added = 0usize;
+    let mut total_removed = 0usize;
+    for file in files {
+        for hunk in file.get("hunks").and_then(|v| v.as_array()).into_iter().flatten() {
+            for line in hunk.get("lines").and_then(|v| v.as_array()).into_iter().flatten() {
+                match line.get("kind").and_then(|v| v.as_str()) {
+                    Some("added") => total_added += 1,
+                    Some("removed") => total_removed += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Pass 2: emit budgeted per-file hunk bodies.
+    let mut html = String::new();
+    let mut lines_emitted = 0usize;
+    let mut truncated_lines = false;
+    'files: for (fi, file) in files.iter().enumerate() {
+        if fi >= MAX_FILES {
+            break;
+        }
+        if lines_emitted >= MAX_LINES_TOTAL {
+            truncated_lines = true;
+            break;
+        }
+        let path = file.get("path").and_then(|v| v.as_str()).unwrap_or("(file)");
+        let status = file.get("status").and_then(|v| v.as_str()).unwrap_or("modified");
+        let (status_word, status_hex) = match status {
+            "added" => ("added", &add_hex),
+            "deleted" => ("deleted", &del_hex),
+            "renamed" => ("renamed", &muted_hex),
+            _ => ("modified", &muted_hex),
+        };
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        let path_disp = match file.get("old_path").and_then(|v| v.as_str()) {
+            Some(old) if !old.is_empty() && old != path => format!("{old} → {path}"),
+            _ => path.to_string(),
+        };
+        html.push_str(&format!(
+            "<font color=\"{status_hex}\"><b>{}</b></font> <font color=\"{muted_hex}\">{}</font><br>",
+            htmlize::escape_text(status_word),
+            htmlize::escape_text(&path_disp),
+        ));
+
+        for hunk in file.get("hunks").and_then(|v| v.as_array()).into_iter().flatten() {
+            if lines_emitted >= MAX_LINES_TOTAL {
+                truncated_lines = true;
+                break 'files;
+            }
+            if let Some(header) = hunk.get("header").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                html.push_str(&format!(
+                    "<font color=\"{muted_hex}\">{}</font><br>",
+                    htmlize::escape_text(&truncate_app_preview(header, MAX_LINE_LEN)),
+                ));
+            }
+            for line in hunk.get("lines").and_then(|v| v.as_array()).into_iter().flatten() {
+                if lines_emitted >= MAX_LINES_TOTAL {
+                    truncated_lines = true;
+                    break 'files;
+                }
+                let kind = line.get("kind").and_then(|v| v.as_str()).unwrap_or("context");
+                let content = truncate_app_preview(
+                    line.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+                    MAX_LINE_LEN,
+                );
+                let escaped = htmlize::escape_text(&content);
+                let (prefix, color) = match kind {
+                    "added" => ("+", &add_hex),
+                    "removed" => ("-", &del_hex),
+                    // Non-breaking space keeps context lines from collapsing their
+                    // leading indent, and colors them muted so +/- lines pop.
+                    _ => ("\u{00A0}", &muted_hex),
+                };
+                html.push_str(&format!("<font color=\"{color}\">{prefix} {escaped}</font><br>"));
+                lines_emitted += 1;
+            }
+        }
+    }
+
+    if files.len() > MAX_FILES {
+        html.push_str(&format!(
+            "<br><font color=\"{muted_hex}\"><i>… and {} more file(s)</i></font>",
+            files.len() - MAX_FILES,
+        ));
+    } else if truncated_lines {
+        html.push_str(&format!(
+            "<br><font color=\"{muted_hex}\"><i>… diff truncated</i></font>"
+        ));
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ if files.len() == 1 => files[0]
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Diff")
+            .to_string(),
+        _ => format!("{} files changed", files.len()),
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge: format!("+{total_added} -{total_removed}"),
+        badge_kind: AppCardBadgeKind::Accent,
+        body_html: html,
+    })
+}
+
+/// Normalized lifecycle state for a swarm task (B3).
+#[derive(Clone, Copy)]
+enum TaskStateKind {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Reads a task's lifecycle from either `state` (octos `TaskRuntimeState`) or a
+/// free-form `status`, mapping synonyms onto [`TaskStateKind`].
+fn task_state_norm(task: &serde_json::Value) -> TaskStateKind {
+    let s = task
+        .get("state")
+        .and_then(|v| v.as_str())
+        .or_else(|| task.get("status").and_then(|v| v.as_str()))
+        .unwrap_or("pending")
+        .to_ascii_lowercase();
+    match s.as_str() {
+        "completed" | "done" | "success" | "succeeded" => TaskStateKind::Completed,
+        "running" | "active" | "in_progress" => TaskStateKind::Running,
+        "failed" | "error" => TaskStateKind::Failed,
+        "cancelled" | "canceled" | "skipped" | "skip" => TaskStateKind::Cancelled,
+        _ => TaskStateKind::Pending,
+    }
+}
+
+/// Best label for a task: prefer a title, then role, then tool/id.
+fn task_display_name(task: &serde_json::Value) -> String {
+    for key in ["title", "role", "tool_name", "name", "id"] {
+        if let Some(s) = task.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            return s.to_string();
+        }
+    }
+    "task".to_string()
+}
+
+const MAX_TASK_DEPTH: usize = 3;
+
+/// Recursively tallies task states (including nested `children`) for the badge.
+fn count_task_states(
+    tasks: &[serde_json::Value],
+    total: &mut usize,
+    done: &mut usize,
+    running: &mut usize,
+    failed: &mut usize,
+) {
+    for task in tasks {
+        *total += 1;
+        match task_state_norm(task) {
+            TaskStateKind::Completed => *done += 1,
+            TaskStateKind::Running => *running += 1,
+            TaskStateKind::Failed => *failed += 1,
+            _ => {}
+        }
+        if let Some(children) = task.get("children").and_then(|v| v.as_array()) {
+            count_task_states(children, total, done, running, failed);
+        }
+    }
+}
+
+/// Recursively renders task nodes as glyph + name + colored state, nesting
+/// children under their parent with a non-breaking-space indent.
+fn append_task_nodes(html: &mut String, tasks: &[serde_json::Value], depth: usize) {
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let run_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_ACCENT);
+    let fail_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    for task in tasks {
+        let kind = task_state_norm(task);
+        let (glyph, state_label, color) = match kind {
+            TaskStateKind::Completed => ("✓", "done", &add_hex),
+            TaskStateKind::Running => ("●", "running", &run_hex),
+            TaskStateKind::Failed => ("✗", "failed", &fail_hex),
+            TaskStateKind::Cancelled => ("⊘", "cancelled", &muted_hex),
+            TaskStateKind::Pending => ("○", "queued", &muted_hex),
+        };
+        let indent = "\u{00A0}\u{00A0}".repeat(depth.min(MAX_TASK_DEPTH));
+        let name = task_display_name(task);
+        html.push_str(&format!(
+            "{indent}<font color=\"{color}\">{glyph}</font> <b>{}</b> <font color=\"{color}\">{}</font>",
+            htmlize::escape_text(&name),
+            htmlize::escape_text(state_label),
+        ));
+        // A failed task surfaces its error; otherwise its summary (if any).
+        let detail = match kind {
+            TaskStateKind::Failed => task.get("error").and_then(|v| v.as_str()),
+            _ => None,
+        }
+        .or_else(|| task.get("summary").and_then(|v| v.as_str()))
+        .filter(|s| !s.trim().is_empty());
+        if let Some(d) = detail {
+            let d = truncate_app_preview(d, 160);
+            html.push_str(&format!(
+                "<br>{indent}\u{00A0}\u{00A0}<font color=\"{muted_hex}\"><i>{}</i></font>",
+                htmlize::escape_text(&d),
+            ));
+        }
+        html.push_str("<br>");
+
+        if depth < MAX_TASK_DEPTH {
+            if let Some(children) = task
+                .get("children")
+                .and_then(|v| v.as_array())
+                .filter(|c| !c.is_empty())
+            {
+                append_task_nodes(html, children, depth + 1);
+            }
+        }
+    }
+}
+
+/// `task_tree` card (B3): a swarm / sub-agent task list. Octos emits this by
+/// projecting `task/list` + `task/updated` (`TaskListEntry` / `TaskUpdatedEvent`)
+/// into an `org.octos.app` card; robrix renders each task with a state glyph and
+/// a colored state label, nesting children under their parent.
+///
+/// Contract (a tree built from octos's flat task list via parent/child keys):
+/// ```json
+/// { "title"?, "tasks": [ { "id"?, "title"?, "role"?, "state", "summary"?,
+///     "error"?, "children"?: [ ...task ] } ] }
+/// ```
+fn render_task_tree_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let tasks = state.get("tasks").and_then(|v| v.as_array())?;
+    if tasks.is_empty() {
+        return None;
+    }
+
+    let (mut total, mut done, mut running, mut failed) = (0, 0, 0, 0);
+    count_task_states(tasks, &mut total, &mut done, &mut running, &mut failed);
+
+    let mut html = String::new();
+    append_task_nodes(&mut html, tasks, 0);
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => "Sub-agents".to_string(),
+    };
+    let (badge, badge_kind) = if failed > 0 {
+        (format!("{failed} failed"), AppCardBadgeKind::Danger)
+    } else if running > 0 {
+        (format!("{running} running"), AppCardBadgeKind::Accent)
+    } else {
+        (format!("{done}/{total} done"), AppCardBadgeKind::Success)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+/// `pipeline` card (B4): a staged workflow. Octos has no arbitrary DAG on the
+/// wire — workflows are tasks tagged `workflow_kind` with a `current_phase` — so
+/// this renders a linearized stage flow (plan → implement → review → …), each
+/// stage colored by status with the current phase emphasized.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "workflow_kind"?, "current_phase"?,
+///   "stages": [ { "name", "status" } ] }  // status: pending|running|completed|failed|skipped
+/// ```
+fn render_pipeline_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let stages = state.get("stages").and_then(|v| v.as_array())?;
+    if stages.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let run_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_ACCENT);
+    let fail_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let current_phase = state.get("current_phase").and_then(|v| v.as_str());
+
+    let (mut total, mut done, mut running, mut failed) = (0usize, 0usize, 0usize, 0usize);
+    let mut html = String::new();
+    for (i, stage) in stages.iter().enumerate() {
+        // A stage may be a bare name string or a { name, status } object.
+        let name = stage
+            .get("name")
+            .and_then(|v| v.as_str())
+            .or_else(|| stage.as_str())
+            .unwrap_or("stage");
+        let kind = task_state_norm(stage);
+        total += 1;
+        let (glyph, hex) = match kind {
+            TaskStateKind::Completed => {
+                done += 1;
+                ("✓", &add_hex)
+            }
+            TaskStateKind::Running => {
+                running += 1;
+                ("●", &run_hex)
+            }
+            TaskStateKind::Failed => {
+                failed += 1;
+                ("✗", &fail_hex)
+            }
+            TaskStateKind::Cancelled => ("⊘", &muted_hex),
+            TaskStateKind::Pending => ("○", &muted_hex),
+        };
+        if i > 0 {
+            html.push_str(&format!(" <font color=\"{muted_hex}\">→</font> "));
+        }
+        let escaped = htmlize::escape_text(name);
+        if current_phase == Some(name) {
+            html.push_str(&format!("<font color=\"{hex}\">{glyph} <b>{escaped}</b></font>"));
+        } else {
+            html.push_str(&format!("<font color=\"{hex}\">{glyph} {escaped}</font>"));
+        }
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => state
+            .get("workflow_kind")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|w| format!("{w} pipeline"))
+            .unwrap_or_else(|| "Pipeline".to_string()),
+    };
+    let (badge, badge_kind) = if failed > 0 {
+        (format!("{failed} failed"), AppCardBadgeKind::Danger)
+    } else if let Some(cp) = current_phase.filter(|s| !s.is_empty()) {
+        (cp.to_string(), AppCardBadgeKind::Accent)
+    } else if running > 0 {
+        (format!("{running} running"), AppCardBadgeKind::Accent)
+    } else {
+        (format!("{done}/{total}"), AppCardBadgeKind::Success)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+/// `run_summary` card (B5): a compact per-turn cost / reasoning footer. Octos
+/// emits this on `turn/completed`, coalescing mid-turn `token_cost_update`
+/// (`UiTokenCostUpdate`) events into the final figures.
+///
+/// Contract:
+/// ```json
+/// { "model"?, "input_tokens"?, "output_tokens"?, "reasoning_tokens"?,
+///   "total_tokens"?, "response_cost"?, "session_cost"?, "duration_ms"?, "reasoning"? }
+/// ```
+fn render_run_summary_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let u64f = |k: &str| state.get(k).and_then(|v| v.as_u64());
+    let f64f = |k: &str| state.get(k).and_then(|v| v.as_f64());
+    // Matrix canonical JSON forbids floats, so the octos emitter must send
+    // monetary values as an integer or a decimal string ("0.0021"); accept a
+    // raw float too for local/test payloads.
+    let money = |k: &str| -> Option<f64> {
+        state.get(k).and_then(|v| {
+            v.as_f64().or_else(|| {
+                v.as_str()
+                    .and_then(|s| s.trim().trim_start_matches('$').parse::<f64>().ok())
+            })
+        })
+    };
+
+    let input = u64f("input_tokens");
+    let output = u64f("output_tokens");
+    let reasoning_tok = u64f("reasoning_tokens");
+    let total = u64f("total_tokens").or(match (input, output) {
+        (Some(i), Some(o)) => Some(i + o),
+        _ => None,
+    });
+
+    // Token line: "1234 in · 567 out · 89 reasoning · 1890 total"
+    let mut token_parts: Vec<String> = Vec::new();
+    if let Some(i) = input {
+        token_parts.push(format!("{i} in"));
+    }
+    if let Some(o) = output {
+        token_parts.push(format!("{o} out"));
+    }
+    if let Some(r) = reasoning_tok.filter(|&r| r > 0) {
+        token_parts.push(format!("{r} reasoning"));
+    }
+    if let Some(t) = total {
+        token_parts.push(format!("{t} total"));
+    }
+
+    let mut body = String::new();
+    if !token_parts.is_empty() {
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\">{}</font>",
+            htmlize::escape_text(&token_parts.join(" · ")),
+        ));
+    }
+
+    // Cost + duration line.
+    let mut cost_parts: Vec<String> = Vec::new();
+    if let Some(c) = money("response_cost") {
+        cost_parts.push(format!("turn ${c:.4}"));
+    }
+    if let Some(c) = money("session_cost") {
+        cost_parts.push(format!("session ${c:.4}"));
+    }
+    if let Some(ms) = f64f("duration_ms") {
+        cost_parts.push(format_duration_ms(ms));
+    }
+    if !cost_parts.is_empty() {
+        if !body.is_empty() {
+            body.push_str("<br>");
+        }
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\">{}</font>",
+            htmlize::escape_text(&cost_parts.join(" · ")),
+        ));
+    }
+
+    // Optional short reasoning / thinking summary.
+    if let Some(r) = state
+        .get("reasoning")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+    {
+        let r = truncate_app_preview(r, 240);
+        if !body.is_empty() {
+            body.push_str("<br>");
+        }
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\"><i>{}</i></font>",
+            htmlize::escape_text(&r),
+        ));
+    }
+
+    if body.is_empty() {
+        return None;
+    }
+
+    let title = state
+        .get("model")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "Turn summary".to_string());
+    let badge = match money("response_cost") {
+        Some(c) => format!("${c:.4}"),
+        None => total.map(|t| format!("{t} tok")).unwrap_or_default(),
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind: AppCardBadgeKind::Neutral,
+        body_html: body,
+    })
+}
+
+/// `user_question` card (B6): the agent is asking the user to choose. Mirrors
+/// octos `UserQuestionRequestedEvent` (`user_question/requested`, UPCR-2026-023).
+/// The clickable options ride as a co-sent `org.octos.actions` payload (reusing
+/// the existing button + `org.octos.action_response` loop); this card styles the
+/// prompt and the per-option descriptions the plain buttons can't show.
+///
+/// Contract:
+/// ```json
+/// { "question_id"?, "title"?, "body"?,
+///   "questions": [ { "header"?, "question", "options": [ { "label", "description"? } ],
+///                    "multi_select"?, "allow_free_text"? } ] }
+/// ```
+fn render_user_question_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+    let questions = state.get("questions").and_then(|v| v.as_array());
+
+    let mut html = String::new();
+    let mut multi = false;
+    if let Some(questions) = questions.filter(|q| !q.is_empty()) {
+        for q in questions {
+            if q.get("multi_select").and_then(|v| v.as_bool()) == Some(true) {
+                multi = true;
+            }
+            if !html.is_empty() {
+                html.push_str("<br>");
+            }
+            if let Some(header) = q.get("header").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                html.push_str(&format!("<b>{}</b><br>", htmlize::escape_text(header)));
+            }
+            if let Some(question) = q.get("question").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                html.push_str(&htmlize::escape_text(question));
+            }
+            for opt in q.get("options").and_then(|v| v.as_array()).into_iter().flatten() {
+                let label = opt.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                let desc = opt.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                html.push_str("<br>");
+                if desc.is_empty() {
+                    html.push_str(&format!("• {}", htmlize::escape_text(label)));
+                } else {
+                    html.push_str(&format!(
+                        "• <b>{}</b> <font color=\"{muted_hex}\">— {}</font>",
+                        htmlize::escape_text(label),
+                        htmlize::escape_text(&truncate_app_preview(desc, 160)),
+                    ));
+                }
+            }
+        }
+    } else {
+        // No structured questions: fall back to the generic title/body text.
+        let body = state.get("body").and_then(|v| v.as_str()).unwrap_or("");
+        if body.is_empty() {
+            return None;
+        }
+        html.push_str(&htmlize::escape_text(body).replace('\n', "<br>"));
+    }
+
+    let title = state
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "Question".to_string());
+
+    Some(OctosAppCardRender {
+        title,
+        badge: if multi { "Select any".to_string() } else { "Question".to_string() },
+        badge_kind: AppCardBadgeKind::Accent,
+        body_html: html,
+    })
+}
+
+/// `plan` card (B7): the agent's working plan. Mirrors octos `UiPlanRecord`
+/// (`plan/updated` / `PlanUpdatedEvent`); renders a checklist with per-item
+/// status and an optional priority tag.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "items": [ { "id"?, "title", "status", "priority"? } ] }
+///   // status: pending | in_progress | completed
+/// ```
+fn render_plan_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let items = state.get("items").and_then(|v| v.as_array())?;
+    if items.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let run_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_ACCENT);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let (mut total, mut done) = (0usize, 0usize);
+    let mut html = String::new();
+    for item in items {
+        let title = item
+            .get("title")
+            .and_then(|v| v.as_str())
+            .or_else(|| item.as_str())
+            .unwrap_or("(step)");
+        total += 1;
+        // Plan items use octos PlanItemStatus (pending/in_progress/completed),
+        // which task_state_norm already maps. Glyphs are restricted to the ones
+        // the message font stack (IBMPlexSans + LXGWWenKai) actually covers —
+        // ballot boxes (☑ ◧ ☐) render as tofu, so use check / half / open circle.
+        let (glyph, hex) = match task_state_norm(item) {
+            TaskStateKind::Completed => {
+                done += 1;
+                ("✓", &add_hex)
+            }
+            TaskStateKind::Running => ("◐", &run_hex),
+            _ => ("○", &muted_hex),
+        };
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "<font color=\"{hex}\">{glyph}</font> {}",
+            htmlize::escape_text(title),
+        ));
+        if let Some(pri) = item
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            html.push_str(&format!(
+                " <font color=\"{muted_hex}\">({})</font>",
+                htmlize::escape_text(pri),
+            ));
+        }
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => "Plan".to_string(),
+    };
+    let (badge, badge_kind) = if done == total {
+        (format!("{done}/{total} done"), AppCardBadgeKind::Success)
+    } else {
+        (format!("{done}/{total}"), AppCardBadgeKind::Accent)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+/// Formats an elapsed-seconds count as a compact "…used" label.
+fn format_duration_secs(secs: u64) -> String {
+    if secs >= 3600 {
+        format!("{}h {}m used", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{}m {}s used", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s used")
+    }
+}
+
+/// `goal` card (B8): the session objective + budget. Mirrors octos
+/// `UiGoalRecord` (`session/goal/updated` / `SessionGoalUpdatedEvent`); renders
+/// the objective, a status badge, a token-budget bar, and elapsed time.
+///
+/// Contract:
+/// ```json
+/// { "objective", "status"?, "token_budget"?, "tokens_used"?, "time_used_seconds"? }
+/// ```
+fn render_goal_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let objective = state
+        .get("objective")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
+
+    let accent_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_ACCENT);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+    // Track color for the unfilled part of the bar. Uses a full block (█) in a
+    // light stroke color rather than the shade char (░), which is tofu in the
+    // message font stack (IBMPlexSans + LXGWWenKai).
+    let track_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_STROKE_STRONG);
+
+    let mut body = String::new();
+
+    // Token-budget bar (10 segments): filled = accent block, empty = track block.
+    let used = state.get("tokens_used").and_then(|v| v.as_u64());
+    let budget = state.get("token_budget").and_then(|v| v.as_u64()).filter(|&b| b > 0);
+    if let (Some(used), Some(budget)) = (used, budget) {
+        let pct = ((used as f64 / budget as f64) * 100.0).clamp(0.0, 100.0);
+        let filled = ((pct / 10.0).round() as usize).min(10);
+        let bar_full = "█".repeat(filled);
+        let bar_empty = "█".repeat(10 - filled);
+        body.push_str(&format!(
+            "<font color=\"{accent_hex}\">{bar_full}</font><font color=\"{track_hex}\">{bar_empty}</font> <font color=\"{muted_hex}\">{used} / {budget} tokens ({pct:.0}%)</font>",
+        ));
+    } else if let Some(used) = used {
+        body.push_str(&format!("<font color=\"{muted_hex}\">{used} tokens used</font>"));
+    }
+
+    if let Some(secs) = state
+        .get("time_used_seconds")
+        .and_then(|v| v.as_u64())
+        .filter(|&s| s > 0)
+    {
+        if !body.is_empty() {
+            body.push_str("<br>");
+        }
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\">{}</font>",
+            htmlize::escape_text(&format_duration_secs(secs)),
+        ));
+    }
+
+    if body.is_empty() {
+        body.push_str(&format!("<font color=\"{muted_hex}\"><i>In progress</i></font>"));
+    }
+
+    let badge = state
+        .get("status")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("goal")
+        .to_string();
+    let badge_kind = match badge.to_ascii_lowercase().as_str() {
+        "completed" | "done" | "achieved" => AppCardBadgeKind::Success,
+        "failed" | "abandoned" => AppCardBadgeKind::Danger,
+        _ => AppCardBadgeKind::Accent,
+    };
+
+    Some(OctosAppCardRender {
+        title: objective.to_string(),
+        badge,
+        badge_kind,
+        body_html: body,
     })
 }
 
@@ -12524,12 +13369,31 @@ fn populate_octos_app_card(cx: &mut Cx, item: &WidgetRef, render: &OctosAppCardR
     item.view(cx, ids!(content.octos_app_card)).set_visible(cx, true);
     item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_title))
         .set_text(cx, &render.title);
-    let badge = item.view(cx, ids!(content.octos_app_card.app_card_header_row.app_card_badge));
+    let mut badge = item.view(cx, ids!(content.octos_app_card.app_card_header_row.app_card_badge));
     let show_badge = !render.badge.is_empty();
     badge.set_visible(cx, show_badge);
     if show_badge {
-        item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_badge.app_card_badge_label))
-            .set_text(cx, &render.badge);
+        let mut badge_label = item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_badge.app_card_badge_label));
+        badge_label.set_text(cx, &render.badge);
+        // Recolor the badge per status kind (accent / success / danger / neutral).
+        match render.badge_kind {
+            AppCardBadgeKind::Accent => {
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_ACCENT_SOFT } });
+                script_apply_eval!(cx, badge_label, { draw_text +: { color: mod.widgets.RBX_ACCENT } });
+            }
+            AppCardBadgeKind::Success => {
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_SUCCESS_BG } });
+                script_apply_eval!(cx, badge_label, { draw_text +: { color: mod.widgets.RBX_SUCCESS_FG } });
+            }
+            AppCardBadgeKind::Danger => {
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_DANGER_BG } });
+                script_apply_eval!(cx, badge_label, { draw_text +: { color: mod.widgets.RBX_DANGER_FG } });
+            }
+            AppCardBadgeKind::Neutral => {
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
+                script_apply_eval!(cx, badge_label, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
+            }
+        }
     }
     item.html_or_plaintext(cx, ids!(content.octos_app_card.app_card_body))
         .show_html(cx, &render.body_html);
