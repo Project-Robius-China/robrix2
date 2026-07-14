@@ -178,12 +178,26 @@ the final figure). Reasoning text is optional and may be gated for privacy.
 - **Ordering.** A card edit must not arrive before its create. Serialize
   per-(session, card_id).
 
-## Robrix side (already done)
+## Robrix side (status)
 
 Renderers in `src/home/room_screen.rs` dispatch on `org.octos.app.type`
-(`render_octos_app_card`): `weather`, `mission_room`, `tool_call`, `diff_view`,
-`task_tree` built; `pipeline`, `run_summary` in progress. All render into the
-shared `octos_app_card` `HtmlOrPlaintext` slot; colors come from `RBX_*` tokens
-via `utils::vec4_to_hex` → `<font color>`. Unknown `type` falls back to body
+(`render_octos_app_card`). **Built:** `weather`, `mission_room`, `tool_call`,
+`diff_view`, `task_tree`, `pipeline`, `run_summary`, `user_question`, `plan`,
+`goal`, `artifact`. All render into the shared `octos_app_card`
+`HtmlOrPlaintext` slot; colors come from `RBX_*` tokens via `utils::vec4_to_hex`
+→ `<font color>`; glyphs are limited to the message font stack (IBMPlexSans +
+LXGWWenKai + NotoColorEmoji) to avoid tofu. Unknown `type` falls back to body
 text, so **the emitter can ship a type before robrix supports it** without
 breaking anything.
+
+Separately, robrix also renders octos's **already-emitted** `org.octos.swarm_event`
+key (envelope `octos.harness.event.v1`, kinds
+progress/phase/artifact/validator_result/retry/failure) via
+`render_swarm_event_card`, detected up-front alongside `org.octos.app`. This one
+needs no emitter — octos ships it into swarm-supervisor rooms today
+(`matrix_channel.rs`).
+
+> ⚠️ The swarm event's `progress` field is an `f64`. A fractional value
+> serializes as `0.6`/`60.0` and **fails Matrix canonical JSON**
+> (`float cannot be serialized`), so octos must send an integer percent or omit
+> it — otherwise the swarm_event send itself 400s. Same rule as the cost fields.
