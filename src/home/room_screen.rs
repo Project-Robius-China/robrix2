@@ -11593,10 +11593,20 @@ fn populate_message_view(
     // match) makes it flow to BOTH the template choice and the profile-draw
     // logic below, so the forced-full card also draws its avatar/username.
     let octos_app_render: Option<OctosAppCardRender> = if sender_is_bot {
-        latest_effective_event_content_json(event_tl_item)
-            .and_then(|content| content.get("org.octos.app").cloned())
-            .filter(|app| app.is_object())
-            .and_then(|app| render_octos_app_card(&app))
+        latest_effective_event_content_json(event_tl_item).and_then(|content| {
+            // An `org.octos.app` mini-app card, or octos's own
+            // `org.octos.swarm_event` harness envelope (a separate wire key).
+            content
+                .get("org.octos.app")
+                .filter(|app| app.is_object())
+                .and_then(render_octos_app_card)
+                .or_else(|| {
+                    content
+                        .get("org.octos.swarm_event")
+                        .filter(|ev| ev.is_object())
+                        .and_then(render_swarm_event_card)
+                })
+        })
     } else {
         None
     };
@@ -12445,6 +12455,7 @@ fn render_octos_app_card(app: &serde_json::Value) -> Option<OctosAppCardRender> 
         ("user_question" | "ask_user", Some(state)) => render_user_question_app_card(state),
         ("plan", Some(state)) => render_plan_app_card(state),
         ("goal", Some(state)) => render_goal_app_card(state),
+        ("artifact" | "artifacts", Some(state)) => render_artifact_app_card(state),
         (other, _) => {
             warning!("org.octos.app: unsupported type '{other}', falling back to body text");
             None
@@ -13318,6 +13329,238 @@ fn render_goal_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender>
 
     Some(OctosAppCardRender {
         title: objective.to_string(),
+        badge,
+        badge_kind,
+        body_html: body,
+    })
+}
+
+/// Emoji glyph for an artifact by its `kind` (rendered via NotoColorEmoji).
+fn artifact_kind_glyph(kind: &str) -> &'static str {
+    match kind {
+        "code" | "source" | "patch" | "diff" => "📝",
+        "image" | "screenshot" | "png" | "jpg" => "🖼",
+        "report" | "doc" | "document" | "markdown" | "md" => "📄",
+        "data" | "csv" | "json" | "table" => "📊",
+        "log" | "output" => "📃",
+        "archive" | "zip" => "🗜",
+        _ => "📎",
+    }
+}
+
+/// `artifact` card (B9): files/outputs the agent produced. Mirrors octos
+/// `UiAgentArtifact` / `TaskArtifactRecord` (`agent/artifact/list`); renders a
+/// list of artifacts with a kind glyph + kind/status tail + optional path.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "artifacts": [ { "id"?, "title", "kind"?, "status"?, "path"? } ] }
+/// ```
+/// A single bare artifact object (no `artifacts` wrapper) is also accepted.
+fn render_artifact_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let list: Vec<&serde_json::Value> = match state.get("artifacts").and_then(|v| v.as_array()) {
+        Some(arr) if !arr.is_empty() => arr.iter().collect(),
+        _ if state.get("title").is_some() || state.get("path").is_some() => vec![state],
+        _ => return None,
+    };
+
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    const MAX: usize = 12;
+    let mut html = String::new();
+    for a in list.iter().copied().take(MAX) {
+        let title = a
+            .get("title")
+            .and_then(|v| v.as_str())
+            .or_else(|| a.as_str())
+            .unwrap_or("(artifact)");
+        let kind = a.get("kind").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        let status = a.get("status").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        let path = a.get("path").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "{} <b>{}</b>",
+            artifact_kind_glyph(kind.unwrap_or("")),
+            htmlize::escape_text(title),
+        ));
+        let mut tail: Vec<&str> = Vec::new();
+        if let Some(k) = kind {
+            tail.push(k);
+        }
+        if let Some(s) = status {
+            tail.push(s);
+        }
+        if !tail.is_empty() {
+            html.push_str(&format!(
+                " <font color=\"{muted_hex}\">· {}</font>",
+                htmlize::escape_text(&tail.join(" · ")),
+            ));
+        }
+        if let Some(p) = path {
+            html.push_str(&format!(
+                "<br><font color=\"{muted_hex}\">{}</font>",
+                htmlize::escape_text(&truncate_app_preview(p, 120)),
+            ));
+        }
+    }
+    if list.len() > MAX {
+        html.push_str(&format!(
+            "<br><font color=\"{muted_hex}\"><i>… and {} more</i></font>",
+            list.len() - MAX,
+        ));
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ if list.len() == 1 => "Artifact".to_string(),
+        _ => format!("{} artifacts", list.len()),
+    };
+    Some(OctosAppCardRender {
+        title,
+        badge: if list.len() > 1 {
+            list.len().to_string()
+        } else {
+            String::new()
+        },
+        badge_kind: AppCardBadgeKind::Neutral,
+        body_html: html,
+    })
+}
+
+/// `org.octos.swarm_event` card (B10): a swarm-supervisor harness event. Unlike
+/// the app cards this is octos's OWN wire key (envelope schema
+/// `octos.harness.event.v1`), NOT an `org.octos.app` type — and octos ALREADY
+/// emits it into swarm-supervisor rooms. Renders one event, styled by `kind`.
+///
+/// Envelope:
+/// ```json
+/// { "schema", "kind", "agent_label"?, "session_id",
+///   "event": { "kind", "task_id", "phase"?, "message"?, "name"?, "path"?,
+///              "validator"?, "passed"?, "attempt"?, "retryable"?, "progress"? } }
+/// ```
+fn render_swarm_event_card(envelope: &serde_json::Value) -> Option<OctosAppCardRender> {
+    // Variant fields live under `event`; fall back to the envelope itself.
+    let event = envelope
+        .get("event")
+        .filter(|e| e.is_object())
+        .unwrap_or(envelope);
+    let kind = envelope
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .or_else(|| event.get("kind").and_then(|v| v.as_str()))?;
+    let agent = envelope
+        .get("agent_label")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let message = event
+        .get("message")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|m| truncate_app_preview(m, 300));
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+    let str_field = |k: &str| event.get(k).and_then(|v| v.as_str());
+
+    // Per-kind: (subject, badge, badge kind, body).
+    let (subject, badge, badge_kind, mut body): (&str, String, AppCardBadgeKind, String) = match kind
+    {
+        "progress" => {
+            let phase = str_field("phase").unwrap_or("progress").to_string();
+            let mut b = String::new();
+            if let Some(m) = &message {
+                b.push_str(&htmlize::escape_text(m));
+            }
+            if let Some(p) = event.get("progress").and_then(|v| v.as_f64()) {
+                // `progress` may be a 0..1 fraction or an already-scaled percent.
+                let pct = (if p <= 1.0 { p * 100.0 } else { p }).clamp(0.0, 100.0);
+                if !b.is_empty() {
+                    b.push(' ');
+                }
+                b.push_str(&format!("<font color=\"{muted_hex}\">({pct:.0}%)</font>"));
+            }
+            ("Progress", phase, AppCardBadgeKind::Accent, b)
+        }
+        "phase" => {
+            let phase = str_field("phase").unwrap_or("phase").to_string();
+            let mut b = String::new();
+            if let Some(m) = &message {
+                b.push_str(&htmlize::escape_text(m));
+            }
+            ("Phase", phase, AppCardBadgeKind::Accent, b)
+        }
+        "artifact" => {
+            let name = str_field("name").unwrap_or("artifact");
+            let mut b = format!("📎 <b>{}</b>", htmlize::escape_text(name));
+            if let Some(p) = str_field("path").filter(|s| !s.is_empty()) {
+                b.push_str(&format!(
+                    "<br><font color=\"{muted_hex}\">{}</font>",
+                    htmlize::escape_text(&truncate_app_preview(p, 120)),
+                ));
+            }
+            if let Some(m) = &message {
+                b.push_str(&format!("<br>{}", htmlize::escape_text(m)));
+            }
+            ("Artifact", "Artifact".to_string(), AppCardBadgeKind::Neutral, b)
+        }
+        "validator_result" => {
+            let validator = str_field("validator").unwrap_or("validator");
+            let passed = event.get("passed").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut b = format!("<b>{}</b>", htmlize::escape_text(validator));
+            if let Some(m) = &message {
+                b.push_str(&format!("<br>{}", htmlize::escape_text(m)));
+            }
+            let (badge, kind) = if passed {
+                ("Passed", AppCardBadgeKind::Success)
+            } else {
+                ("Failed", AppCardBadgeKind::Danger)
+            };
+            ("Validator", badge.to_string(), kind, b)
+        }
+        "retry" => {
+            let mut b = String::new();
+            if let Some(n) = event.get("attempt").and_then(|v| v.as_u64()) {
+                b.push_str(&format!("<font color=\"{muted_hex}\">attempt {n}</font>"));
+            }
+            if let Some(m) = &message {
+                if !b.is_empty() {
+                    b.push_str("<br>");
+                }
+                b.push_str(&htmlize::escape_text(m));
+            }
+            ("Retry", "Retry".to_string(), AppCardBadgeKind::Accent, b)
+        }
+        "failure" => {
+            let mut b = String::new();
+            if let Some(m) = &message {
+                b.push_str(&htmlize::escape_text(m));
+            }
+            if event.get("retryable").and_then(|v| v.as_bool()) == Some(true) {
+                if !b.is_empty() {
+                    b.push(' ');
+                }
+                b.push_str(&format!("<font color=\"{muted_hex}\">(retryable)</font>"));
+            }
+            ("Failure", "Failed".to_string(), AppCardBadgeKind::Danger, b)
+        }
+        other => {
+            warning!("org.octos.swarm_event: unsupported kind '{other}', falling back to body text");
+            return None;
+        }
+    };
+
+    if body.is_empty() {
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\"><i>{}</i></font>",
+            htmlize::escape_text(subject),
+        ));
+    }
+
+    // Title: prefer the agent label ("Reviewer"), else the event subject.
+    let title = agent.map(str::to_string).unwrap_or_else(|| subject.to_string());
+    Some(OctosAppCardRender {
+        title,
         badge,
         badge_kind,
         body_html: body,
