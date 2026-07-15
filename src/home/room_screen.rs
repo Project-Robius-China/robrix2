@@ -2414,6 +2414,13 @@ script_mod! {
                         }
                     }
 
+                    // Optional embedded image for a `visual`/`image`/`chart` card.
+                    app_card_image := TextOrImage {
+                        visible: false
+                        width: Fill, height: Fit,
+                        margin: Inset{ top: 2.0, bottom: 4.0 }
+                    }
+
                     app_card_body := HtmlOrPlaintext { }
                 }
                 action_buttons := View {
@@ -11697,24 +11704,29 @@ fn populate_message_view(
     // non-condensed path. Overriding `use_compact_view` here (before the msgtype
     // match) makes it flow to BOTH the template choice and the profile-draw
     // logic below, so the forced-full card also draws its avatar/username.
-    let octos_app_render: Option<OctosAppCardRender> = if sender_is_bot {
-        latest_effective_event_content_json(event_tl_item).and_then(|content| {
-            // An `org.octos.app` mini-app card, or octos's own
-            // `org.octos.swarm_event` harness envelope (a separate wire key).
-            content
-                .get("org.octos.app")
-                .filter(|app| app.is_object())
-                .and_then(render_octos_app_card)
-                .or_else(|| {
-                    content
-                        .get("org.octos.swarm_event")
-                        .filter(|ev| ev.is_object())
-                        .and_then(render_swarm_event_card)
-                })
-        })
-    } else {
-        None
-    };
+    // An `org.octos.app` mini-app card, or octos's own `org.octos.swarm_event`
+    // harness envelope (a separate wire key). A `visual`/`image` card also
+    // carries an mxc image, extracted alongside so it flows to the renderer
+    // without threading it through every text-card's return value.
+    let (octos_app_render, octos_app_image): (Option<OctosAppCardRender>, Option<OctosCardImage>) =
+        if sender_is_bot {
+            match latest_effective_event_content_json(event_tl_item) {
+                Some(content) => {
+                    if let Some(app) = content.get("org.octos.app").filter(|a| a.is_object()) {
+                        (render_octos_app_card(app), octos_app_card_image(app))
+                    } else if let Some(ev) =
+                        content.get("org.octos.swarm_event").filter(|a| a.is_object())
+                    {
+                        (render_swarm_event_card(ev), None)
+                    } else {
+                        (None, None)
+                    }
+                }
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
     let use_compact_view = use_compact_view && octos_app_render.is_none();
 
     let has_html_body: bool;
@@ -11799,8 +11811,16 @@ fn populate_message_view(
                             if let Some(render) = app_render {
                                 // APP CARD MODE: render the native mini-app card.
                                 item.view(cx, ids!(content.message)).set_visible(cx, false);
-                                populate_octos_app_card(cx, &item, &render);
-                                new_drawn_status.content_drawn = true;
+                                // `content_drawn` follows the (async) image load so
+                                // a visual card re-renders once its media arrives.
+                                new_drawn_status.content_drawn = populate_octos_app_card(
+                                    cx,
+                                    &item,
+                                    &render,
+                                    octos_app_image.as_ref(),
+                                    app_language,
+                                    media_cache,
+                                );
                             } else {
                                 // NORMAL MODE: existing logic
                                 let mut link_preview_ref =
@@ -12585,6 +12605,7 @@ fn render_octos_app_card(app: &serde_json::Value) -> Option<OctosAppCardRender> 
         ("weather", Some(state)) => render_weather_app_card(state),
         ("mission_room", Some(state)) => render_mission_room_app_card(state),
         ("tool_call", Some(state)) => render_tool_call_app_card(state),
+        ("tool_activity" | "tools", Some(state)) => render_tool_activity_app_card(state),
         ("diff_view" | "diff", Some(state)) => render_diff_app_card(state),
         ("task_tree" | "tasks", Some(state)) => render_task_tree_app_card(state),
         ("pipeline" | "pipeline_dag" | "dag", Some(state)) => render_pipeline_app_card(state),
@@ -12593,6 +12614,7 @@ fn render_octos_app_card(app: &serde_json::Value) -> Option<OctosAppCardRender> 
         ("plan", Some(state)) => render_plan_app_card(state),
         ("goal", Some(state)) => render_goal_app_card(state),
         ("artifact" | "artifacts", Some(state)) => render_artifact_app_card(state),
+        ("image" | "visual" | "chart", Some(state)) => render_image_app_card(state),
         (other, _) => {
             warning!("org.octos.app: unsupported type '{other}', falling back to body text");
             None
@@ -12720,6 +12742,88 @@ fn tool_call_args_text(state: &serde_json::Value) -> Option<String> {
         Some(v) if v.is_object() || v.is_array() => Some(v.to_string()),
         _ => None,
     }
+}
+
+/// `tool_activity` card: a per-turn LIST of tool invocations, so a research turn
+/// with many searches renders ONE card instead of one `tool_call` card per tool.
+/// Octos coalesces `ToolCompleted` events across a turn and emits this on turn
+/// end.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "tools": [ { "tool_name", "status": "completed"|"error",
+///     "duration_ms"?, "summary"? } ] }
+/// ```
+fn render_tool_activity_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let tools = state.get("tools").and_then(|v| v.as_array())?;
+    if tools.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let fail_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let mut failed = 0usize;
+    let mut html = String::new();
+    for t in tools {
+        let name = t.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
+        let is_err = matches!(
+            t.get("status").and_then(|v| v.as_str()),
+            Some("error") | Some("failed")
+        );
+        if is_err {
+            failed += 1;
+        }
+        let (mark, mark_hex) = if is_err {
+            ("✗", &fail_hex)
+        } else {
+            ("✓", &add_hex)
+        };
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "{} <b>{}</b> <font color=\"{mark_hex}\">{mark}</font>",
+            tool_call_glyph(name),
+            htmlize::escape_text(name),
+        ));
+        // Duration + a short "what it did" summary, muted and inline.
+        let mut tail: Vec<String> = Vec::new();
+        if let Some(ms) = t.get("duration_ms").and_then(|v| v.as_f64()) {
+            tail.push(format_duration_ms(ms));
+        }
+        if let Some(s) = t
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            tail.push(truncate_app_preview(s, 60));
+        }
+        if !tail.is_empty() {
+            html.push_str(&format!(
+                " <font color=\"{muted_hex}\">{}</font>",
+                htmlize::escape_text(&tail.join(" · ")),
+            ));
+        }
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => "Tools".to_string(),
+    };
+    let (badge, badge_kind) = if failed > 0 {
+        (format!("{failed} failed"), AppCardBadgeKind::Danger)
+    } else {
+        (tools.len().to_string(), AppCardBadgeKind::Success)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
 }
 
 fn truncate_app_preview(s: &str, max: usize) -> String {
@@ -13330,9 +13434,17 @@ fn render_plan_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender>
     let (mut total, mut done) = (0usize, 0usize);
     let mut html = String::new();
     for item in items {
+        // Accept `title` or (octos update_plan / Codex-shaped) `description`;
+        // skip empty strings so a bare item still falls back to "(step)".
         let title = item
             .get("title")
             .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                item.get("description")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+            })
             .or_else(|| item.as_str())
             .unwrap_or("(step)");
         total += 1;
@@ -13704,6 +13816,80 @@ fn render_swarm_event_card(envelope: &serde_json::Value) -> Option<OctosAppCardR
     })
 }
 
+/// The mxc image carried by a `visual`/`image`/`chart` app card, extracted
+/// separately from the text `OctosAppCardRender` (see the up-front probe).
+struct OctosCardImage {
+    mxc: String,
+}
+
+/// Pulls the embedded image out of an `org.octos.app` value, if it is an
+/// image-bearing card type with a valid `mxc://` reference.
+fn octos_app_card_image(app: &serde_json::Value) -> Option<OctosCardImage> {
+    let kind = app.get("type").and_then(|v| v.as_str())?;
+    if !matches!(kind, "image" | "visual" | "chart") {
+        return None;
+    }
+    let state = app.get("initial_state").filter(|s| s.is_object())?;
+    let mxc = state
+        .get("mxc")
+        .or_else(|| state.get("url"))
+        .and_then(|v| v.as_str())
+        .filter(|s| s.starts_with("mxc://"))?;
+    Some(OctosCardImage { mxc: mxc.to_string() })
+}
+
+/// `image` / `visual` / `chart` card (B11): the text frame (title + badge +
+/// optional caption) around an embedded image. The image itself is fetched by
+/// `populate_octos_app_card` from the [`OctosCardImage`] extracted in parallel.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "kind"?, "caption"?, "mxc" }   // mxc: an mxc:// URI
+/// ```
+fn render_image_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    // Require an mxc image — an empty framed card is worse than a body fallback.
+    let has_image = state
+        .get("mxc")
+        .or_else(|| state.get("url"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s.starts_with("mxc://"));
+    if !has_image {
+        return None;
+    }
+
+    let title_field = state.get("title").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let caption = state
+        .get("caption")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty());
+    let title = title_field
+        .or(caption)
+        .unwrap_or("Image")
+        .to_string();
+    let badge = state
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Image")
+        .to_string();
+
+    // Show the caption under the image only when it isn't already the title.
+    let mut body = String::new();
+    if title_field.is_some() {
+        if let Some(c) = caption {
+            let c = truncate_app_preview(c, 300);
+            body.push_str(&htmlize::escape_text(&c).replace('\n', "<br>"));
+        }
+    }
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind: AppCardBadgeKind::Accent,
+        body_html: body,
+    })
+}
+
 fn append_mission_section(html: &mut String, heading: &str, items: Option<&serde_json::Value>) {
     let Some(arr) = items.and_then(|v| v.as_array()).filter(|a| !a.is_empty()) else { return };
     if !html.is_empty() {
@@ -13744,7 +13930,17 @@ fn mission_item_status(item: &serde_json::Value) -> Option<String> {
 
 /// Populate the `octos_app_card` slot from a rendered app card, hiding the
 /// plain message body and the bot text card.
-fn populate_octos_app_card(cx: &mut Cx, item: &WidgetRef, render: &OctosAppCardRender) {
+/// Populates the `octos_app_card` slot. Returns `true` when fully drawn; a
+/// `visual`/`image` card returns `false` while its media is still loading so the
+/// caller re-renders on the next frame.
+fn populate_octos_app_card(
+    cx: &mut Cx,
+    item: &WidgetRef,
+    render: &OctosAppCardRender,
+    image: Option<&OctosCardImage>,
+    app_language: AppLanguage,
+    media_cache: &mut MediaCache,
+) -> bool {
     item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
     item.view(cx, ids!(content.octos_app_card)).set_visible(cx, true);
     item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_title))
@@ -13777,6 +13973,29 @@ fn populate_octos_app_card(cx: &mut Cx, item: &WidgetRef, render: &OctosAppCardR
     }
     item.html_or_plaintext(cx, ids!(content.octos_app_card.app_card_body))
         .show_html(cx, &render.body_html);
+
+    // Optional embedded image (visual card). Reuse the native image pipeline so
+    // fetch/cache/blurhash all behave like an m.image message.
+    let img_ref = item.text_or_image(cx, ids!(content.octos_app_card.app_card_image));
+    match image {
+        Some(img) => {
+            img_ref.set_visible(cx, true);
+            populate_image_message_content(
+                cx,
+                &img_ref,
+                None, // no animated-image widget in the card slot
+                app_language,
+                Some(Box::new(ImageInfo::new())),
+                MediaSource::Plain(matrix_sdk::ruma::OwnedMxcUri::from(img.mxc.as_str())),
+                "", // no alt body
+                media_cache,
+            )
+        }
+        None => {
+            img_ref.set_visible(cx, false);
+            true
+        }
+    }
 }
 
 fn populate_bot_text_message_content(

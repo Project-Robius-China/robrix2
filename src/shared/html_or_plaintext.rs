@@ -141,7 +141,10 @@ script_mod! {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
         }
-        text_style_fixed: theme.font_code {
+        // Use the CJK-capable code style (LiberationMono + LXGW fallback) so
+        // inline `<code>` with Chinese renders instead of tofu — the default
+        // `theme.font_code` is Latin-only.
+        text_style_fixed: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
             top_drop: 0.11
