@@ -27,7 +27,7 @@ use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, e
 
 use matrix_sdk_ui::sync_service::State;
 use crate::{
-    app::{AppState, AppStateAction, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{bot_binding_modal::BotBindingModalAction, create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, encryption_notice::{EncryptionNoticeWidgetRefExt, first_other_member_display_name}, invite_modal::InviteModalAction, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
+    app::{AppState, AppStateAction, BotSettingsState, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{bot_binding_modal::BotBindingModalAction, create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, encryption_notice::{EncryptionNoticeWidgetRefExt, first_other_member_display_name}, invite_modal::InviteModalAction, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
         user_profile::{ShowUserProfileAction, UserProfile, UserProfileAndRoomId, UserProfilePaneInfo, UserProfileSlidingPaneRef, UserProfileSlidingPaneWidgetExt},
         user_profile_cache,
     },
@@ -1562,7 +1562,9 @@ fn extract_bot_user_ids_from_listbots_reply(
 
         if token.starts_with('@') && token.contains(':') {
             if let Ok(bot_user_id) = UserId::parse(token).map(|user_id| user_id.to_owned()) {
-                push_bot(bot_user_id);
+                if BotSettingsState::is_valid_known_bot_user_id(bot_user_id.as_ref()) {
+                    push_bot(bot_user_id);
+                }
             }
             continue;
         }
@@ -1570,7 +1572,9 @@ fn extract_bot_user_ids_from_listbots_reply(
         if token.contains(':') && !token.starts_with('@') {
             let full_user_id = format!("@{token}");
             if let Ok(bot_user_id) = UserId::parse(&full_user_id).map(|user_id| user_id.to_owned()) {
-                push_bot(bot_user_id);
+                if BotSettingsState::is_valid_known_bot_user_id(bot_user_id.as_ref()) {
+                    push_bot(bot_user_id);
+                }
             }
             continue;
         }
@@ -14618,6 +14622,23 @@ mod tests {
         let is_bot_sender = is_known_or_likely_bot(sender_id.as_ref(), None, &known_bot_user_ids);
         let render_state = compute_bot_timeline_render_state("hello", is_bot_sender);
         assert!(!render_state.show_card);
+    }
+
+    #[test]
+    fn test_listbots_parser_ignores_octos_service_urls_and_ports() {
+        let parsed = extract_bot_user_ids_from_listbots_reply(
+            "Octos service: http://127.0.0.1:8787\nKnown bots: @octosbot:example.org",
+            None,
+        );
+
+        assert_eq!(
+            parsed,
+            vec!["@octosbot:example.org".parse::<OwnedUserId>().unwrap()],
+        );
+        assert!(
+            parsed.iter().all(|user_id| user_id.localpart() != ""),
+            "service URL port fragments must not become Matrix user IDs",
+        );
     }
 
     #[test]

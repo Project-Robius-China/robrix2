@@ -2997,6 +2997,7 @@ impl AppState {
     /// Existing registry entries are never overwritten, and the legacy
     /// `known_bot_user_ids` list is left intact (other flows still rely on it).
     pub fn seed_agent_registry_from_known_bots(&mut self) {
+        self.bot_settings.prune_malformed_known_bot_user_ids();
         if self.agent_registry.is_empty() {
             for bot_user_id in self.bot_settings.known_bot_user_ids() {
                 self.agent_registry.register(
@@ -3079,6 +3080,33 @@ impl Default for BotSettingsState {
 impl BotSettingsState {
     pub const DEFAULT_BOTFATHER_LOCALPART: &'static str = "bot";
     pub const DEFAULT_OCTOS_SERVICE_URL: &'static str = "http://127.0.0.1:8010";
+
+    fn is_numeric_host_fragment(value: &str) -> bool {
+        value.contains('.')
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch == '.')
+    }
+
+    fn is_port_only_server_name(value: &str) -> bool {
+        !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())
+    }
+
+    pub(crate) fn is_valid_known_bot_user_id(bot_user_id: &UserId) -> bool {
+        let localpart = bot_user_id.localpart();
+        if localpart.is_empty() || Self::is_numeric_host_fragment(localpart) {
+            return false;
+        }
+
+        !Self::is_port_only_server_name(bot_user_id.server_name().as_str())
+    }
+
+    fn prune_malformed_known_bot_user_ids(&mut self) -> bool {
+        let original_len = self.known_bot_user_ids.len();
+        self.known_bot_user_ids
+            .retain(|bot_user_id| Self::is_valid_known_bot_user_id(bot_user_id.as_ref()));
+        original_len != self.known_bot_user_ids.len()
+    }
 
     pub fn resolved_octos_service_url(&self) -> &str {
         let raw = self.octos_service_url.trim();
@@ -3209,8 +3237,11 @@ impl BotSettingsState {
         &mut self,
         discovered_bot_user_ids: impl IntoIterator<Item = OwnedUserId>,
     ) -> bool {
-        let mut changed = false;
+        let mut changed = self.prune_malformed_known_bot_user_ids();
         for bot_user_id in discovered_bot_user_ids {
+            if !Self::is_valid_known_bot_user_id(bot_user_id.as_ref()) {
+                continue;
+            }
             if !self
                 .known_bot_user_ids
                 .iter()
@@ -3686,6 +3717,27 @@ mod tests {
         let known = app_state.bot_settings.known_bot_user_ids();
         assert!(known.iter().any(|id| id.as_str() == "@botA:example.org"));
         assert!(!known.is_empty());
+    }
+
+    #[test]
+    fn test_seed_agent_registry_skips_malformed_known_bot_user_ids() {
+        let malformed: OwnedUserId = "@:8787".try_into().unwrap();
+        let valid: OwnedUserId = "@octosbot:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.bot_settings.known_bot_user_ids = vec![malformed.clone(), valid.clone()];
+
+        app_state.seed_agent_registry_from_known_bots();
+
+        assert!(!app_state.agent_registry.contains(malformed.as_ref()));
+        assert!(app_state.agent_registry.contains(valid.as_ref()));
+        assert!(
+            app_state
+                .bot_settings
+                .known_bot_user_ids()
+                .iter()
+                .all(|user_id| user_id.localpart() != ""),
+            "stale parser garbage should be pruned from known bots during load-time migration",
+        );
     }
 
     #[test]
