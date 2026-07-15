@@ -1,13 +1,13 @@
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 use std::cell::RefCell;
 
 use makepad_widgets::{text::selection::Cursor, *};
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 use rfd::FileDialog;
 use matrix_sdk::{encryption::VerificationState, ruma::OwnedUserId};
 
 use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, styles::*}, sliding_sync::{get_client, current_user_id, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, PasswordChangeFailure, submit_async_request}, utils, verification::VerificationStateAction};
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 use crate::{app::ConfirmDeleteAction, shared::confirmation_modal::ConfirmationModalContent};
 
 script_mod! {
@@ -960,7 +960,7 @@ impl MatchEvent for AccountSettings {
         let Some(own_profile) = &self.own_profile else { return };
 
         if upload_avatar_button.clicked(actions) {
-            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
             {
                 if let Some(avatar_path) = FileDialog::new()
                     .add_filter("Image", &["png", "jpg", "jpeg"])
@@ -975,7 +975,7 @@ impl MatchEvent for AccountSettings {
                     );
                 }
             }
-            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")))))]
             {
                 enqueue_popup_notification(
                     tr_key(self.app_language, "settings.account.popup.avatar_upload_not_implemented"),
@@ -986,7 +986,7 @@ impl MatchEvent for AccountSettings {
         }
 
         if delete_avatar_button.clicked(actions) {
-            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
             {
             // Don't immediately disable the buttons. Instead, we wait for the user
             // to confirm the action in the confirmation modal,
@@ -1009,7 +1009,7 @@ impl MatchEvent for AccountSettings {
             };
             cx.action(ConfirmDeleteAction::Show(RefCell::new(Some(content))));
             }
-            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")))))]
             {
                 enqueue_popup_notification(
                     tr_key(self.app_language, "settings.account.popup.avatar_delete_not_supported"),

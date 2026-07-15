@@ -7,7 +7,7 @@ use ruma::OwnedUserId;
 use crate::app::{AppState, RoomFilterRemoteSearchAction};
 use crate::avatar_cache::{self, AvatarCacheEntry};
 use crate::i18n::{AppLanguage, tr_fmt, tr_key};
-use crate::home::room_screen::InviteResultAction;
+use crate::home::room_screen::{InviteAction, InviteResultAction};
 use crate::profile::{user_profile::UserProfile, user_profile_cache};
 use crate::shared::avatar::AvatarWidgetRefExt;
 use crate::sliding_sync::{MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, submit_async_request};
@@ -624,6 +624,13 @@ impl InviteModal {
         status_label: &mut LabelRef,
     ) {
         if let Some(room_name_id) = &self.room_name_id {
+            // Let the room's screens record pending ownership so the accepted-
+            // join notification (pending_invited_users-based) keeps working for
+            // modal-initiated invites; the modal itself shows send feedback.
+            cx.action(InviteAction::InviteUserRequested {
+                room_id: room_name_id.room_id().clone(),
+                user_id: user_id.clone(),
+            });
             submit_async_request(MatrixRequest::InviteUser {
                 room_id: room_name_id.room_id().clone(),
                 user_id: user_id.clone(),

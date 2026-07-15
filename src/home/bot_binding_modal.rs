@@ -4,7 +4,7 @@ use makepad_widgets::*;
 use ruma::{OwnedUserId, UserId};
 
 use crate::{
-    app::{AgentFramework, AppState, RoomBotBindingState},
+    app::{AgentFramework, AppState, BotSettingsState, RoomBotBindingState},
     i18n::{AppLanguage, tr_fmt, tr_key},
     persistence,
     shared::popup_list::{PopupKind, enqueue_popup_notification},
@@ -21,8 +21,29 @@ fn push_unique_bot_user_id(bot_user_ids: &mut Vec<OwnedUserId>, bot_user_id: Own
     }
 }
 
+/// Returns the bot user ID explicitly configured in Settings, if any.
+///
+/// Deliberately returns `None` when the BotFather user ID field is empty,
+/// so that the `@bot:homeserver` placeholder fallback of
+/// [`BotSettingsState::resolved_bot_user_id`] never leaks into the picker.
+fn configured_bot_user_id(app_state: &AppState) -> Option<OwnedUserId> {
+    if !app_state.bot_settings.enabled
+        || app_state.bot_settings.botfather_user_id.trim().is_empty()
+    {
+        return None;
+    }
+    app_state
+        .bot_settings
+        .resolved_bot_user_id(current_user_id().as_deref())
+        .ok()
+        .filter(|bot_user_id| BotSettingsState::is_valid_known_bot_user_id(bot_user_id.as_ref()))
+}
+
 fn bot_binding_known_bot_user_ids(app_state: &AppState) -> Vec<OwnedUserId> {
     let mut known_bot_user_ids = app_state.bot_settings.known_bot_user_ids();
+    if let Some(configured_bot_user_id) = configured_bot_user_id(app_state) {
+        push_unique_bot_user_id(&mut known_bot_user_ids, configured_bot_user_id);
+    }
     for bound_bot_user_id in app_state.bot_settings.all_bound_bot_user_ids() {
         push_unique_bot_user_id(&mut known_bot_user_ids, bound_bot_user_id);
     }
@@ -40,17 +61,23 @@ fn bot_binding_known_bot_user_ids(app_state: &AppState) -> Vec<OwnedUserId> {
     known_bot_user_ids
 }
 
+/// Picks the dropdown item to preselect: the room's bound bot first,
+/// then the bot configured in Settings, then the first known bot.
+/// Item 0 is the "Custom bot user ID" entry, so known bots are offset by 1.
 fn default_known_bot_selection(
     room_bound_bots: &[RoomBotBindingState],
     known_bot_user_ids: &[OwnedUserId],
+    configured_bot_user_id: Option<&UserId>,
 ) -> usize {
+    let position_of = |target: &str| {
+        known_bot_user_ids
+            .iter()
+            .position(|known_bot_user_id| known_bot_user_id.as_str() == target)
+    };
     room_bound_bots
         .first()
-        .and_then(|binding|
-            known_bot_user_ids
-                .iter()
-                .position(|known_bot_user_id| known_bot_user_id.as_str() == binding.bot_user_id.as_str())
-        )
+        .and_then(|binding| position_of(binding.bot_user_id.as_str()))
+        .or_else(|| configured_bot_user_id.and_then(|bot_user_id| position_of(bot_user_id.as_str())))
         .map_or_else(
             || if known_bot_user_ids.is_empty() { 0 } else { 1 },
             |index| index + 1,
@@ -684,7 +711,11 @@ impl BotBindingModal {
         let known_bots_dropdown = self.view.drop_down(cx, ids!(form.known_bots_dropdown));
         let user_id_input = self.view.text_input(cx, ids!(form.user_id_input));
         let remark_input = self.view.text_input(cx, ids!(form.remark_input));
-        let selected_item = default_known_bot_selection(&self.room_bound_bots, &self.known_bot_user_ids);
+        let selected_item = default_known_bot_selection(
+            &self.room_bound_bots,
+            &self.known_bot_user_ids,
+            configured_bot_user_id(app_state).as_deref(),
+        );
         current_room_bots_dropdown.set_selected_item(
             cx,
             if self.room_bound_bots.is_empty() { 0 } else { 1 },
@@ -792,14 +823,89 @@ mod tests {
     }
 
     #[test]
+    fn room_bot_picker_includes_configured_botfather_user_id() {
+        let mut app_state = AppState::default();
+        let octos_id: OwnedUserId = "@octos_mac:matrix.palpo.im".try_into().unwrap();
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = octos_id.as_str().to_string();
+
+        let known_bots = bot_binding_known_bot_user_ids(&app_state);
+
+        assert!(
+            known_bots.iter().any(|user_id| user_id.as_str() == octos_id.as_str()),
+            "room bot picker should offer the configured BotFather user ID even before a room binding exists",
+        );
+    }
+
+    #[test]
+    fn room_bot_picker_ignores_malformed_configured_botfather_user_id() {
+        let mut app_state = AppState::default();
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = "localhost:8787".to_string();
+
+        let known_bots = bot_binding_known_bot_user_ids(&app_state);
+
+        assert!(
+            known_bots.is_empty(),
+            "service address fragments in Settings must not become Known Bot candidates",
+        );
+    }
+
+    #[test]
     fn room_bot_picker_defaults_to_first_registered_bot() {
         let octos_id: OwnedUserId = "@octos_mac:matrix.palpo.im".try_into().unwrap();
         let known_bots = vec![octos_id];
 
         assert_eq!(
-            default_known_bot_selection(&[], &known_bots),
+            default_known_bot_selection(&[], &known_bots, None),
             1,
             "when a room has no bot binding but registered bots exist, Manage Bot should preselect a bot instead of Custom bot user ID",
+        );
+    }
+
+    #[test]
+    fn room_bot_picker_skips_placeholder_bot_when_botfather_field_is_empty() {
+        let mut app_state = AppState::default();
+        app_state.bot_settings.enabled = true;
+        app_state.bot_settings.botfather_user_id = String::new();
+
+        let known_bots = bot_binding_known_bot_user_ids(&app_state);
+
+        assert!(
+            !known_bots.iter().any(|user_id| user_id.localpart() == "bot"),
+            "the @bot:homeserver placeholder fallback must not appear as a Known Bot when no BotFather ID is configured",
+        );
+    }
+
+    #[test]
+    fn room_bot_picker_prefers_configured_bot_over_alphabetical_order() {
+        let alphabetically_first: OwnedUserId = "@aardvark_bot:example.org".try_into().unwrap();
+        let configured: OwnedUserId = "@octos_mac:matrix.palpo.im".try_into().unwrap();
+        let known_bots = vec![alphabetically_first, configured.clone()];
+
+        assert_eq!(
+            default_known_bot_selection(&[], &known_bots, Some(configured.as_ref())),
+            2,
+            "when a room has no bot binding, the bot configured in Settings should be preselected over the alphabetically first bot",
+        );
+    }
+
+    #[test]
+    fn room_bot_picker_prefers_bound_bot_over_configured_bot() {
+        use crate::app::RoomBotBindingState;
+        let bound: OwnedUserId = "@aardvark_bot:example.org".try_into().unwrap();
+        let configured: OwnedUserId = "@octos_mac:matrix.palpo.im".try_into().unwrap();
+        let known_bots = vec![bound.clone(), configured.clone()];
+        let bindings = vec![RoomBotBindingState {
+            room_id: "!room:example.org".try_into().unwrap(),
+            bot_user_id: bound,
+            remark: String::new(),
+        }];
+
+        assert_eq!(
+            default_known_bot_selection(&bindings, &known_bots, Some(configured.as_ref())),
+            1,
+            "an existing room binding must win over the globally configured bot",
         );
     }
 }

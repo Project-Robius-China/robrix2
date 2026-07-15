@@ -16,6 +16,18 @@ For users who want to use Robrix as a standalone Matrix client, connecting to ma
 
 ---
 
+## Robrix + Octos (Direct Personal Agent)
+
+For users who want to run one personal Octos agent as a regular Matrix account, without homeserver-admin AppService registration or a public IP:
+
+| Guide | Goal |
+|-------|------|
+| [Connecting Your Own Octos (Direct Mode) to Robrix](robrix-with-octos-direct/01-connecting-your-own-octos-to-robrix.md) | **Run Octos on your own machine and add it in Robrix as a Matrix friend.** Includes the compatible Octos build requirement, an owner-locked runnable profile, Agent Lab setup, and troubleshooting. |
+
+> Chinese: [接入你自己的 Octos（Direct 模式）到 Robrix](robrix-with-octos-direct/01-connecting-your-own-octos-to-robrix-zh.md)
+
+---
+
 ## Robrix + Palpo + Octos (AI Bot System)
 
 For users who want to deploy a complete AI chat system — running your own Matrix homeserver with AI bot capabilities, then using Robrix to chat with AI bots.
