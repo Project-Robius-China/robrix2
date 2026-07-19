@@ -1,0 +1,48 @@
+name: agentchat-palpo
+
+services:
+  palpo-postgres:
+    profiles: ["palpo-local"]
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${PALPO_DB_NAME:-palpo}"
+      POSTGRES_USER: "${PALPO_DB_USER:-palpo}"
+      POSTGRES_PASSWORD: "${PALPO_DB_PASSWORD:?PALPO_DB_PASSWORD is required}"
+    volumes:
+      - "${PALPO_RUNTIME_DIR:-./.runtime}/state/postgres:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PALPO_DB_USER:-palpo} -d ${PALPO_DB_NAME:-palpo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [palpo-internal]
+
+  palpo:
+    profiles: ["palpo-local"]
+    build:
+      context: "${PALPO_BUILD_CONTEXT:-../../../palpo-and-octos-deploy}"
+      dockerfile: palpo.Dockerfile
+    restart: unless-stopped
+    environment:
+      PALPO_CONFIG: /var/palpo/palpo.toml
+    ports:
+      - "${PALPO_HOST_PORT:-8128}:8008"
+    volumes:
+      - "${PALPO_RUNTIME_DIR:-./.runtime}/config/palpo.toml:/var/palpo/palpo.toml:ro"
+      - "${PALPO_RUNTIME_DIR:-./.runtime}/config/appservice-agentchat.yaml:/var/palpo/appservices/appservice-agentchat.yaml:ro"
+      - "${PALPO_RUNTIME_DIR:-./.runtime}/state/media:/var/palpo/media"
+    depends_on:
+      palpo-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8008/_matrix/client/versions"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    networks: [palpo-internal]
+
+networks:
+  palpo-internal:
+    attachable: true
