@@ -969,17 +969,85 @@ const AGENT_CHAT_AGENT_LOCALPART_PREFIX: &str = "ac_";
 const AGENT_CHAT_BRIDGE_BOT_LOCALPART: &str = "agent-bridge";
 
 #[cfg(feature = "agent_chat")]
-fn agent_chat_bridge_bot_user_id_for_invited_user(user_id: &UserId) -> Option<OwnedUserId> {
+/// Role suffixes of agent-chat team agents. `_final_reviewer` MUST come before
+/// `_reviewer` — the latter is a suffix of the former.
+const AGENT_CHAT_ROLE_SUFFIXES: [&str; 4] =
+    ["_final_reviewer", "_coordinator", "_implementer", "_reviewer"];
+
+/// Companion bridge bots to auto-invite alongside an agent-chat agent.
+/// Multi-instance topology: each member's bridge bot is `agent-bridge-<team>`,
+/// derived from the invitee's `ac_<team>_<role>` localpart. The legacy shared
+/// `agent-bridge` name is kept as a best-effort fallback so single-instance
+/// deployments keep working; a failed invite to a nonexistent account is
+/// harmless (invites here are already best-effort).
+#[cfg(feature = "agent_chat")]
+fn agent_chat_bridge_bot_user_ids_for_invited_user(user_id: &UserId) -> Vec<OwnedUserId> {
     if !user_id.localpart().starts_with(AGENT_CHAT_AGENT_LOCALPART_PREFIX) {
-        return None;
+        return Vec::new();
     }
 
-    let bot_user_id = format!(
+    let mut plan = Vec::new();
+    let rest = &user_id.localpart()[AGENT_CHAT_AGENT_LOCALPART_PREFIX.len()..];
+    if let Some(team) = AGENT_CHAT_ROLE_SUFFIXES
+        .iter()
+        .find_map(|suffix| rest.strip_suffix(suffix))
+        .filter(|team| !team.is_empty())
+    {
+        let derived = format!(
+            "@{}-{}:{}",
+            AGENT_CHAT_BRIDGE_BOT_LOCALPART,
+            team,
+            user_id.server_name(),
+        );
+        if let Ok(user) = OwnedUserId::try_from(derived) {
+            plan.push(user);
+        }
+    }
+    let legacy = format!(
         "@{}:{}",
         AGENT_CHAT_BRIDGE_BOT_LOCALPART,
         user_id.server_name(),
     );
-    bot_user_id.try_into().ok()
+    if let Ok(user) = OwnedUserId::try_from(legacy) {
+        plan.push(user);
+    }
+    plan
+}
+
+#[cfg(feature = "agent_chat")]
+fn build_agent_chat_invite_plan<I>(invitees: I) -> Vec<OwnedUserId>
+where
+    I: IntoIterator<Item = OwnedUserId>,
+{
+    let mut seen = HashSet::new();
+    let mut plan = Vec::new();
+
+    for invitee in invitees {
+        if !seen.insert(invitee.clone()) {
+            continue;
+        }
+        plan.push(invitee.clone());
+
+        #[cfg(feature = "agent_chat")]
+        for bridge_bot_user_id in agent_chat_bridge_bot_user_ids_for_invited_user(&invitee) {
+            if seen.insert(bridge_bot_user_id.clone()) {
+                plan.push(bridge_bot_user_id);
+            }
+        }
+    }
+
+    plan
+}
+
+/// Without the `agent_chat` feature there are no companion bots to derive —
+/// the plan is just the deduplicated invitee list.
+#[cfg(not(feature = "agent_chat"))]
+fn build_agent_chat_invite_plan<I>(invitees: I) -> Vec<OwnedUserId>
+where
+    I: IntoIterator<Item = OwnedUserId>,
+{
+    let mut seen = std::collections::HashSet::new();
+    invitees.into_iter().filter(|invitee| seen.insert(invitee.clone())).collect()
 }
 
 /// How the worker should deliver the result of a [`MatrixRequest::GetRoomPreview`].
@@ -3036,19 +3104,17 @@ async fn matrix_worker_task(
                     // not just a joined room.
                     if let Some(room) = client.get_room(&room_id) {
                         log!("Sending request to invite user {user_id} to room {room_id}...");
-                        let invite_result = room.invite_user_by_id(&user_id).await;
-                        #[cfg(feature = "agent_chat")]
-                        if let Some(bridge_bot_user_id) =
-                            agent_chat_bridge_bot_user_id_for_invited_user(&user_id)
-                        {
-                            log!("Sending companion agent-chat bridge bot invite {bridge_bot_user_id} to room {room_id}...");
-                            if let Err(error) = room.invite_user_by_id(&bridge_bot_user_id).await {
+                        let invite_plan = build_agent_chat_invite_plan([user_id.clone()]);
+                        let requested_user_invite_result =
+                            room.invite_user_by_id(&user_id).await;
+                        for invitee in invite_plan.into_iter().skip(1) {
+                            if let Err(error) = room.invite_user_by_id(&invitee).await {
                                 warning!(
-                                    "Failed to invite companion agent-chat bridge bot {bridge_bot_user_id} to room {room_id}: {error}"
+                                    "Failed to invite companion agent-chat user {invitee} to room {room_id}: {error}"
                                 );
                             }
                         }
-                        match invite_result {
+                        match requested_user_invite_result {
                             Ok(_) => Cx::post_action(InviteResultAction::Sent {
                                 room_id,
                                 user_id,
@@ -8993,8 +9059,11 @@ mod tests {
         let agent = user_id!("@ac_wf_coordinator:127.0.0.1:8128");
 
         assert_eq!(
-            super::agent_chat_bridge_bot_user_id_for_invited_user(agent).as_deref(),
-            Some(user_id!("@agent-bridge:127.0.0.1:8128")),
+            super::agent_chat_bridge_bot_user_ids_for_invited_user(agent),
+            vec![
+                user_id!("@agent-bridge-wf:127.0.0.1:8128").to_owned(),
+                user_id!("@agent-bridge:127.0.0.1:8128").to_owned(),
+            ],
         );
     }
 
@@ -9002,23 +9071,138 @@ mod tests {
     #[test]
     fn non_agent_chat_invites_do_not_derive_bridge_bot() {
         assert!(
-            super::agent_chat_bridge_bot_user_id_for_invited_user(user_id!(
+            super::agent_chat_bridge_bot_user_ids_for_invited_user(user_id!(
                 "@alice:127.0.0.1:8128"
             ))
-            .is_none()
+            .is_empty()
         );
         assert!(
-            super::agent_chat_bridge_bot_user_id_for_invited_user(user_id!(
+            super::agent_chat_bridge_bot_user_ids_for_invited_user(user_id!(
                 "@agent-bridge:127.0.0.1:8128"
             ))
-            .is_none()
+            .is_empty()
         );
         assert!(
-            super::agent_chat_bridge_bot_user_id_for_invited_user(user_id!(
+            super::agent_chat_bridge_bot_user_ids_for_invited_user(user_id!(
                 "@octosbot:127.0.0.1:8128"
             ))
-            .is_none()
+            .is_empty()
         );
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_auto_invites_observer() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@ac_wf_reviewer:matrix.test").to_owned(),
+        ]);
+        assert_eq!(plan, vec![
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@agent-bridge-wf:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+            user_id!("@ac_wf_reviewer:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_derives_per_team_observer_bot() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_bob_final_reviewer:matrix.test").to_owned(),
+        ]);
+        assert_eq!(plan, vec![
+            user_id!("@ac_bob_final_reviewer:matrix.test").to_owned(),
+            user_id!("@agent-bridge-bob:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_bare_role_agent_gets_legacy_observer_only() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_implementer:matrix.test").to_owned(),
+        ]);
+        assert_eq!(plan, vec![
+            user_id!("@ac_implementer:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_does_not_derive_observer_for_humans() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@alice:matrix.test").to_owned(),
+            user_id!("@bob:matrix.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![
+            user_id!("@alice:matrix.test").to_owned(),
+            user_id!("@bob:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_does_not_derive_observer_for_octos() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@octosbot:matrix.test").to_owned(),
+            user_id!("@octosbot_weather:matrix.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![
+            user_id!("@octosbot:matrix.test").to_owned(),
+            user_id!("@octosbot_weather:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_does_not_derive_observer_for_observer() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![user_id!("@agent-bridge:matrix.test").to_owned()]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_stably_deduplicates_agents_and_observers() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+            user_id!("@ac_wf_reviewer:matrix.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@agent-bridge-wf:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+            user_id!("@ac_wf_reviewer:matrix.test").to_owned(),
+        ]);
+    }
+
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_keeps_observers_on_two_homeservers() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_wf_coordinator:one.test").to_owned(),
+            user_id!("@ac_wf_reviewer:two.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![
+            user_id!("@ac_wf_coordinator:one.test").to_owned(),
+            user_id!("@agent-bridge-wf:one.test").to_owned(),
+            user_id!("@agent-bridge:one.test").to_owned(),
+            user_id!("@ac_wf_reviewer:two.test").to_owned(),
+            user_id!("@agent-bridge-wf:two.test").to_owned(),
+            user_id!("@agent-bridge:two.test").to_owned(),
+        ]);
     }
 
     #[test]
