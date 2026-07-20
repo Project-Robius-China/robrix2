@@ -83,6 +83,18 @@ The artifacts were adversarially audited against the agent-chat code; fixes appl
 
 ## Quick start
 
+The FSF-0 deterministic Palpo substrate is maintained separately under
+[`palpo/`](palpo/README.md). Its contract suite is the default infrastructure
+preflight and starts no container or agent:
+
+```bash
+node --test roadmap/agentchat-demo/palpo/tests/*.test.mjs
+```
+
+Render and start the real `palpo-local` profile only through the operator
+commands in `palpo/README.md`; both local and team-server settings use the same
+Compose file.
+
 ```bash
 cd roadmap/agentchat-demo
 # 1. Fill agent-chat/.env from agent-chat.env.demo

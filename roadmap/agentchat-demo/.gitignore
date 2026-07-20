@@ -1,0 +1,8 @@
+palpo/.env
+palpo/.runtime/
+palpo/*.token
+palpo/*.log
+palpo/*.db
+palpo/*.sqlite*
+palpo/**/data/
+
