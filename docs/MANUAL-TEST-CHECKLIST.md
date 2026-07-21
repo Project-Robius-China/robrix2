@@ -1,7 +1,7 @@
 # 四项目手工测试单(大白话版,2026-07-20)
 
 > 每项 = 你做什么 → 应该看到什么。不符就把现象丢给 Claude。
-> 建议顺序:一(零依赖)→ 三A → 二 → A0+切换 → 三B → 四。
+> 建议顺序:一(零依赖)→ 三A → 二 → 完成 supervisor 切换 → 三B → 四。
 
 ## 一、agent-spec(纯命令行,零依赖,先测它)
 
@@ -40,14 +40,19 @@
 - [ ] 3.1 `node scripts/provision-team.mjs --team demo --project <随便一个git仓> --dry-run`
       → 只打印计划,什么都不创建;去掉 --dry-run 真跑 → worktree + 4 个 agent home
       + 打印 4 步后续清单(测完可删)
-- [ ] 3.2 配置工具:对一个临时 .env 跑 `configure-standalone-env --generate-bridge-secret`
-      → 键更新了、**值永不打印**、权限 0600
-- [ ] 3.3(在 robrix2 的 #259 分支)`node --test roadmap/agentchat-demo/palpo/tests/*.test.mjs`
-      → 28 过 0 挂,全程不起容器
+- [ ] 3.2 配置工具:在 agent-chat 仓库运行下面三行(只改临时文件):
+      `cp .env.example /tmp/agent-chat-manual-test.env`
+      `node services/configure-standalone-env.mjs --env /tmp/agent-chat-manual-test.env --generate-bridge-secret --agent-token-mode hard`
+      `stat -f '%Lp' /tmp/agent-chat-manual-test.env`
+      → 只打印 `MATRIX_BRIDGE_SECRET`、`AGENTCHAT_AGENT_TOKEN_MODE` 两个键名,
+      **不打印值**,最后权限是 600。测完删掉临时文件。
+- [ ] 3.3(在 robrix2 当前 main)`node --test roadmap/agentchat-demo/palpo/tests/*.test.mjs`
+      → 28 过 0 挂;5 个 Docker real-e2e 默认跳过,全程不起容器
 
-### B. 切换后才能测(先跑 A0 删除命令,Claude 接手切换)
+### B. 完成 standalone supervisor 切换后再测
 
-- [ ] 3.4 `standalone-doctor` 全绿;`ps` 里 **push-relay.js 真的在跑**(历史首次)
+- [ ] 3.4 在 agent-chat 仓库跑 `node services/standalone-doctor.mjs` → 全绿;
+      `ps` 里 **push-relay.js 真的在跑**(历史首次)
 - [ ] 3.5 老毛病三连验:
       · 重启全栈 → 房间零重复回复
       · inboxGate:filtered 读不清 gate、full 读清 gate、agent 能回话
@@ -60,18 +65,15 @@
 
 ## 四、robrix2
 
-前置:#258 / #259 合并(或本地检出对应分支)。
+前置:#258 / #259 已合入 main;先检出并更新当前 main。
 
 - [ ] 4.1 邀请 `wf_coordinator` 进房 → 桥 bot 自动跟进
       (#258 后的正确样子:先试邀 `agent-bridge-wf` 失败无害留日志,再邀 `agent-bridge` 成功)
 - [ ] 4.2 #253 那批(已在 main):`/invitebot` 斜杠命令、房间绑定 bot 是 UI 偏好不是隐式收件人
-- [ ] 4.3 cockpit(**要先 `git stash pop` 恢复 WIP**,这正是它等的手测):
-      · 建项目房间绑仓库 + 团队 → Room Info 显示项目绑定/agent 可达性
-      · 工作流按钮 → 把 /create-issue 草稿填进输入框**但不发送**
-      · 桌面 Room Info 浮层 + 窄屏 Info 页两种布局都看
-      · 不起 OpenFab → 只有 Certify 灰掉,其余按钮照常
-      · 测完告诉 Claude → 开第三个 PR(cockpit + README 验证段)
+
+> cockpit 当前没有可复现的公共分支或 PR,不放进这份通用清单,也不要在
+> 通用测试流程里执行 `git stash pop`。等它有独立 PR 后另加对应手测项。
 
 ## 收尾
 
-- [ ] 全部勾完后:cockpit PR(第三个)→ 按路线图 v2 §6 进入 C1(agent-spec runner 分发)
+- [ ] 全部勾完后记录失败现象、日志位置和实际版本;cockpit 等独立 PR 后单独验收。
