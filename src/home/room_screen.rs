@@ -487,11 +487,17 @@ fn parse_octos_action_payload_for_render(
 /// (trimmed) string when it does not look like an ISO timestamp.
 fn format_approval_expiry(expires_at: &str) -> String {
     let trimmed = expires_at.trim();
-    if trimmed.len() >= 16 && trimmed.as_bytes().get(10) == Some(&b'T') {
-        trimmed[..16].replace('T', " ")
-    } else {
-        trimmed.to_owned()
+    // `expires_at` is untrusted remote input, so slice on a char boundary only:
+    // a byte-range slice panics if byte 16 lands mid-multibyte-char. Expect an
+    // ISO-8601 timestamp (YYYY-MM-DDThh:mm...) → render "YYYY-MM-DD hh:mm".
+    // `get(..16)` yields None if the string is shorter than 16 bytes or byte 16
+    // is not a char boundary, falling back to the raw trimmed string.
+    if trimmed.as_bytes().get(10) == Some(&b'T') {
+        if let Some(head) = trimmed.get(..16) {
+            return head.replace('T', " ");
+        }
     }
+    trimmed.to_owned()
 }
 
 /// One-line ApprovalCard footer meta (§4.6): tool + expiry when the local user
@@ -2412,6 +2418,18 @@ script_mod! {
                                 text: ""
                             }
                         }
+
+                        // Expand/collapse toggle for collapsible cards
+                        // (`run_details`). Hidden for every other card type.
+                        app_card_expand_button := mod.widgets.SmallStateGroupToggleButton {
+                            visible: false
+                            padding: Inset{ left: 6.0, right: 2.0, top: 0.0, bottom: 0.0 }
+                            draw_text +: {
+                                text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                color: (mod.widgets.RBX_ACCENT)
+                            }
+                            text: "Details"
+                        }
                     }
 
                     // Optional embedded image for a `visual`/`image`/`chart` card.
@@ -2421,7 +2439,15 @@ script_mod! {
                         margin: Inset{ top: 2.0, bottom: 4.0 }
                     }
 
-                    app_card_body := HtmlOrPlaintext { }
+                    // The card body, wrapped in a plain View so it can be hidden
+                    // when a collapsible card is collapsed (a plain-View wrapper
+                    // toggles reliably, unlike set_visible on the custom widget).
+                    app_card_detail := View {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        app_card_body := HtmlOrPlaintext { }
+                    }
                 }
                 action_buttons := View {
                     visible: false
@@ -6477,6 +6503,17 @@ impl Widget for RoomScreen {
                     continue;
                 }
 
+                // Octos `run_details` card: expand/collapse its detail on click.
+                if wr
+                    .button(cx, ids!(content.octos_app_card.app_card_header_row.app_card_expand_button))
+                    .clicked(actions)
+                {
+                    if let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) {
+                        self.toggle_octos_card_expanded(cx, tl_idx);
+                    }
+                    continue;
+                }
+
                 // Handle the invite_user_button (in a SmallStateEvent) being clicked.
                 if wr.button(cx, ids!(event_row.invite_user_button)).clicked(actions) {
                     let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) else { continue };
@@ -7548,6 +7585,7 @@ impl Widget for RoomScreen {
                                                 &mut self.octos_action_button_contexts,
                                                 &self.disabled_octos_action_source_event_ids,
                                                 &self.selected_octos_action_by_source_event_id,
+                                                &tl_state.expanded_octos_card_event_ids,
                                             )
                                         },
                                         // TODO: properly implement `Poll` as a regular Message-like timeline item.
@@ -7760,6 +7798,34 @@ impl RoomScreen {
         tl_state.profile_drawn_since_last_update.remove(group.start .. group.end);
         self.redraw_timeline_list(cx);
         log!("[encryption-notice/toggle] state mutated, redraw_timeline_list called");
+    }
+
+    /// Toggle the expanded/collapsed state of a collapsible octos card
+    /// (`run_details`) at the given timeline index, persisting it by source
+    /// event id so it survives PortalList virtualization. Clears that item's
+    /// content-draw cache so the card re-populates at its new size.
+    fn toggle_octos_card_expanded(&mut self, cx: &mut Cx, tl_idx: usize) {
+        let Some(tl_state) = self.tl_state.as_mut() else {
+            return;
+        };
+        let Some(event_id) = tl_state
+            .items
+            .get(tl_idx)
+            .and_then(|item| item.as_event())
+            .and_then(|ev| ev.event_id())
+            .map(|id| id.to_owned())
+        else {
+            return;
+        };
+        if tl_state.expanded_octos_card_event_ids.contains(&event_id) {
+            tl_state.expanded_octos_card_event_ids.remove(&event_id);
+        } else {
+            tl_state.expanded_octos_card_event_ids.insert(event_id);
+        }
+        tl_state
+            .content_drawn_since_last_update
+            .remove(tl_idx .. tl_idx + 1);
+        self.redraw_timeline_list(cx);
     }
 
     fn sync_translation_lang_popup(&mut self, cx: &mut Cx) {
@@ -8269,6 +8335,12 @@ impl RoomScreen {
         let mut done_loading = false;
         let mut should_continue_backwards_pagination = false;
         let mut typing_users = None;
+        // Whether a new message row was appended this batch. Once a message
+        // bubble exists, the separate "is typing" line is redundant (the message
+        // itself, plus the streaming spinner, conveys activity), so we clear the
+        // typing notice locally instead of waiting for the server's typing=false
+        // EDU — which for an appservice bot can lag or rely on the ~30s timeout.
+        let mut appended_new_message = false;
         let mut num_updates = 0;
         while let Ok(update) = tl.update_receiver.try_recv() {
             num_updates += 1;
@@ -8321,6 +8393,12 @@ impl RoomScreen {
                     done_loading = true;
                 }
                 TimelineUpdate::NewItems { new_items, changed_indices, is_append, clear_cache } => {
+                    // A newly-appended row means a message bubble arrived (vs. a
+                    // streaming edit, which updates in place) — clear any stale
+                    // typing notice below (see `appended_new_message`).
+                    if is_append {
+                        appended_new_message = true;
+                    }
                     if let Some(app_state) = app_state {
                         let discovered_bot_user_ids =
                             Self::discover_known_bot_user_ids_from_timeline_items(
@@ -8922,6 +9000,12 @@ impl RoomScreen {
             top_space.set_visible(cx, false);
         }
 
+        // A message arrived this batch and no fresh typing EDU overrode it →
+        // clear the (now-stale) typing notice locally. A genuine concurrent
+        // typing update (`typing_users` already Some) still wins.
+        if appended_new_message && typing_users.is_none() {
+            typing_users = Some(Vec::new());
+        }
         if let Some(users) = typing_users {
             self.view
                 .typing_notice(cx, ids!(typing_notice))
@@ -10482,6 +10566,7 @@ impl RoomScreen {
                 backwards_pagination_in_flight: false,
                 items: Vector::new(),
                 expanded_small_state_group_event_ids: HashSet::new(),
+                expanded_octos_card_event_ids: HashSet::new(),
                 content_drawn_since_last_update: RangeSet::new(),
                 profile_drawn_since_last_update: RangeSet::new(),
                 update_receiver,
@@ -11125,6 +11210,11 @@ struct TimelineUiState {
     /// By default, groups are collapsed unless their first event ID appears in this set.
     expanded_small_state_group_event_ids: HashSet<OwnedEventId>,
 
+    /// Source event IDs of collapsible octos cards (`run_details`) the user has
+    /// expanded. Empty = all collapsed. Kept here (not on the recycled item
+    /// widget) so the expanded state survives PortalList virtualization.
+    expanded_octos_card_event_ids: HashSet<OwnedEventId>,
+
     /// The range of items (indices in the above `items` list) whose event **contents** have been drawn
     /// since the last update and thus do not need to be re-populated on future draw events.
     ///
@@ -11668,6 +11758,7 @@ fn populate_message_view(
     action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
     disabled_action_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
+    expanded_octos_card_event_ids: &HashSet<OwnedEventId>,
 ) -> (WidgetRef, ItemDrawnStatus) {
     let mut new_drawn_status = item_drawn_status;
     let ts_millis = event_tl_item.timestamp();
@@ -11708,26 +11799,44 @@ fn populate_message_view(
     // harness envelope (a separate wire key). A `visual`/`image` card also
     // carries an mxc image, extracted alongside so it flows to the renderer
     // without threading it through every text-card's return value.
-    let (octos_app_render, octos_app_image): (Option<OctosAppCardRender>, Option<OctosCardImage>) =
-        if sender_is_bot {
-            match latest_effective_event_content_json(event_tl_item) {
-                Some(content) => {
-                    if let Some(app) = content.get("org.octos.app").filter(|a| a.is_object()) {
-                        (render_octos_app_card(app), octos_app_card_image(app))
-                    } else if let Some(ev) =
-                        content.get("org.octos.swarm_event").filter(|a| a.is_object())
-                    {
-                        (render_swarm_event_card(ev), None)
-                    } else {
-                        (None, None)
-                    }
+    // `octos_run_render` is the per-turn run detail (tools + cost) EMBEDDED on a
+    // bot answer via the `org.octos.run` key — rendered as a collapsible strip
+    // *alongside* the answer text, not as a replacement card.
+    let (octos_app_render, octos_app_image, octos_run_render): (
+        Option<OctosAppCardRender>,
+        Option<OctosCardImage>,
+        Option<OctosAppCardRender>,
+    ) = if sender_is_bot {
+        match latest_effective_event_content_json(event_tl_item) {
+            Some(content) => {
+                if let Some(app) = content.get("org.octos.app").filter(|a| a.is_object()) {
+                    (render_octos_app_card(app), octos_app_card_image(app), None)
+                } else if let Some(ev) =
+                    content.get("org.octos.swarm_event").filter(|a| a.is_object())
+                {
+                    (render_swarm_event_card(ev), None, None)
+                } else {
+                    let run = content
+                        .get("org.octos.run")
+                        .filter(|r| r.is_object())
+                        .and_then(render_run_details_app_card);
+                    (None, None, run)
                 }
-                None => (None, None),
             }
-        } else {
-            (None, None)
-        };
-    let use_compact_view = use_compact_view && octos_app_render.is_none();
+            None => (None, None, None),
+        }
+    } else {
+        (None, None, None)
+    };
+    // A message that renders a card OR an inline run detail must not collapse to
+    // the card-less CondensedMessage template.
+    let use_compact_view =
+        use_compact_view && octos_app_render.is_none() && octos_run_render.is_none();
+    // Persisted per-event expand state for a collapsible run detail.
+    let octos_card_expanded = event_tl_item
+        .event_id()
+        .map(|eid| expanded_octos_card_event_ids.contains(eid))
+        .unwrap_or(false);
 
     let has_html_body: bool;
 
@@ -11809,7 +11918,9 @@ fn populate_message_view(
                             let app_render = octos_app_render;
 
                             if let Some(render) = app_render {
-                                // APP CARD MODE: render the native mini-app card.
+                                // APP CARD MODE: the message IS a mini-app card —
+                                // render it in place of the text body (not
+                                // collapsible; it replaces the bot card).
                                 item.view(cx, ids!(content.message)).set_visible(cx, false);
                                 // `content_drawn` follows the (async) image load so
                                 // a visual card re-renders once its media arrives.
@@ -11820,9 +11931,12 @@ fn populate_message_view(
                                     octos_app_image.as_ref(),
                                     app_language,
                                     media_cache,
+                                    false, // collapsible
+                                    false, // expanded
+                                    false, // keep_bot_card (card replaces the body)
                                 );
                             } else {
-                                // NORMAL MODE: existing logic
+                                // NORMAL MODE: render the bot answer text.
                                 let mut link_preview_ref =
                                     item.link_preview(cx, ids!(content.link_preview_view));
                                 let (bot_drawn, bot_meta) = populate_bot_text_message_content(
@@ -11839,6 +11953,24 @@ fn populate_message_view(
                                 );
                                 new_drawn_status.content_drawn = bot_drawn;
                                 band_metadata = bot_meta;
+                                // The answer may carry an embedded run detail
+                                // (`org.octos.run`): render it as a collapsible
+                                // strip BELOW the answer, keeping the bot card.
+                                if let Some(run_render) = octos_run_render {
+                                    let run_drawn = populate_octos_app_card(
+                                        cx,
+                                        &item,
+                                        &run_render,
+                                        None,
+                                        app_language,
+                                        media_cache,
+                                        true, // collapsible
+                                        octos_card_expanded,
+                                        true, // keep_bot_card (strip sits under the answer)
+                                    );
+                                    new_drawn_status.content_drawn =
+                                        new_drawn_status.content_drawn && run_drawn;
+                                }
                             }
                         }
                         (item, false)
@@ -12681,8 +12813,10 @@ fn render_mission_room_app_card(state: &serde_json::Value) -> Option<OctosAppCar
 }
 
 /// `tool_call` card (B1): a single agent tool invocation with a status badge.
-/// Octos emits this over Matrix by projecting a `tool/started|completed` event
-/// into an `org.octos.app` card; robrix renders tool name + args + result.
+///
+/// SUPERSEDED: octos no longer emits standalone `tool_call` cards — a turn's
+/// tools are merged into the `org.octos.run` run detail on the answer message.
+/// Kept only for backward-compat with already-sent messages / the test script.
 fn render_tool_call_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
     let tool = state.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
     let status = state.get("status").and_then(|v| v.as_str()).unwrap_or("running");
@@ -12744,10 +12878,11 @@ fn tool_call_args_text(state: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// `tool_activity` card: a per-turn LIST of tool invocations, so a research turn
-/// with many searches renders ONE card instead of one `tool_call` card per tool.
-/// Octos coalesces `ToolCompleted` events across a turn and emits this on turn
-/// end.
+/// `tool_activity` card: a per-turn LIST of tool invocations.
+///
+/// SUPERSEDED: octos folds the turn's tools into the `org.octos.run` run detail
+/// on the answer message instead of a standalone card. Kept only for
+/// backward-compat with already-sent messages / the test script.
 ///
 /// Contract:
 /// ```json
@@ -12816,6 +12951,129 @@ fn render_tool_activity_app_card(state: &serde_json::Value) -> Option<OctosAppCa
         (format!("{failed} failed"), AppCardBadgeKind::Danger)
     } else {
         (tools.len().to_string(), AppCardBadgeKind::Success)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+/// `run_details` card: the merged per-turn "run details" — every tool the turn
+/// ran (each failed tool with its truncated error) plus a token/cost footer.
+/// Robrix renders it collapsed (a one-line "N tools" summary, with an "M failed"
+/// badge) and expands on click. Supersedes the separate `tool_activity` +
+/// `run_summary` cards; only this card type is marked collapsible.
+fn render_run_details_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let tools = state.get("tools").and_then(|v| v.as_array())?;
+    if tools.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let fail_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let mut failed = 0usize;
+    let mut html = String::new();
+    for t in tools {
+        let name = t.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
+        let is_err = matches!(
+            t.get("status").and_then(|v| v.as_str()),
+            Some("error") | Some("failed")
+        );
+        if is_err {
+            failed += 1;
+        }
+        let (mark, mark_hex) = if is_err {
+            ("✗", &fail_hex)
+        } else {
+            ("✓", &add_hex)
+        };
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "{} <b>{}</b> <font color=\"{mark_hex}\">{mark}</font>",
+            tool_call_glyph(name),
+            htmlize::escape_text(name),
+        ));
+        if let Some(ms) = t.get("duration_ms").and_then(|v| v.as_f64()) {
+            html.push_str(&format!(
+                " <font color=\"{muted_hex}\">{}</font>",
+                htmlize::escape_text(&format_duration_ms(ms)),
+            ));
+        }
+        // A failed tool surfaces its (truncated) error on its own indented line.
+        if is_err {
+            if let Some(err) = t
+                .get("error")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
+                html.push_str(&format!(
+                    "<br>\u{00A0}\u{00A0}<font color=\"{muted_hex}\"><i>{}</i></font>",
+                    htmlize::escape_text(&truncate_app_preview(err, 200)),
+                ));
+            }
+        }
+    }
+
+    // Token / cost footer, folded in from the old run_summary card. Costs may
+    // arrive as decimal strings (Matrix canonical JSON forbids floats).
+    let u64f = |k: &str| state.get(k).and_then(|v| v.as_u64());
+    let money = |k: &str| -> Option<f64> {
+        state.get(k).and_then(|v| {
+            v.as_f64().or_else(|| {
+                v.as_str()
+                    .and_then(|s| s.trim().trim_start_matches('$').parse::<f64>().ok())
+            })
+        })
+    };
+    let mut meta_parts: Vec<String> = Vec::new();
+    if let Some(m) = state
+        .get("model")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        meta_parts.push(m.to_string());
+    }
+    let total = u64f("total_tokens").or(match (u64f("input_tokens"), u64f("output_tokens")) {
+        (Some(i), Some(o)) => Some(i.saturating_add(o)),
+        _ => None,
+    });
+    if let Some(t) = total {
+        meta_parts.push(format!("{t} tok"));
+    }
+    if let Some(c) = money("response_cost") {
+        meta_parts.push(format!("${c:.4}"));
+    }
+    // Session-cumulative cost + turn duration are both on the wire — surface
+    // them in the expanded footer too (they don't appear in the collapsed row).
+    if let Some(c) = money("session_cost") {
+        meta_parts.push(format!("session ${c:.4}"));
+    }
+    if let Some(ms) = state.get("duration_ms").and_then(|v| v.as_f64()) {
+        meta_parts.push(format_duration_ms(ms));
+    }
+    if !meta_parts.is_empty() {
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "<font color=\"{muted_hex}\">{}</font>",
+            htmlize::escape_text(&meta_parts.join(" · ")),
+        ));
+    }
+
+    let n = tools.len();
+    let title = format!("{n} tool{}", if n == 1 { "" } else { "s" });
+    let (badge, badge_kind) = if failed > 0 {
+        (format!("{failed} failed"), AppCardBadgeKind::Danger)
+    } else {
+        (String::new(), AppCardBadgeKind::Neutral)
     };
 
     Some(OctosAppCardRender {
@@ -12951,12 +13209,15 @@ fn render_diff_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender>
         }
     }
 
+    // Independent notices: a diff can be truncated on both file count and line
+    // budget at once, so report each fact separately rather than either/or.
     if files.len() > MAX_FILES {
         html.push_str(&format!(
             "<br><font color=\"{muted_hex}\"><i>… and {} more file(s)</i></font>",
             files.len() - MAX_FILES,
         ));
-    } else if truncated_lines {
+    }
+    if truncated_lines {
         html.push_str(&format!(
             "<br><font color=\"{muted_hex}\"><i>… diff truncated</i></font>"
         ));
@@ -13023,6 +13284,7 @@ const MAX_TASK_DEPTH: usize = 3;
 /// Recursively tallies task states (including nested `children`) for the badge.
 fn count_task_states(
     tasks: &[serde_json::Value],
+    depth: usize,
     total: &mut usize,
     done: &mut usize,
     running: &mut usize,
@@ -13036,8 +13298,13 @@ fn count_task_states(
             TaskStateKind::Failed => *failed += 1,
             _ => {}
         }
-        if let Some(children) = task.get("children").and_then(|v| v.as_array()) {
-            count_task_states(children, total, done, running, failed);
+        // Mirror `append_task_nodes`' depth cap so the badge tally counts only
+        // the nodes the body actually renders (depth <= MAX_TASK_DEPTH); without
+        // this the "{done}/{total}" badge could exceed the visible task count.
+        if depth < MAX_TASK_DEPTH {
+            if let Some(children) = task.get("children").and_then(|v| v.as_array()) {
+                count_task_states(children, depth + 1, total, done, running, failed);
+            }
         }
     }
 }
@@ -13111,7 +13378,7 @@ fn render_task_tree_app_card(state: &serde_json::Value) -> Option<OctosAppCardRe
     }
 
     let (mut total, mut done, mut running, mut failed) = (0, 0, 0, 0);
-    count_task_states(tasks, &mut total, &mut done, &mut running, &mut failed);
+    count_task_states(tasks, 0, &mut total, &mut done, &mut running, &mut failed);
 
     let mut html = String::new();
     append_task_nodes(&mut html, tasks, 0);
@@ -13224,9 +13491,11 @@ fn render_pipeline_app_card(state: &serde_json::Value) -> Option<OctosAppCardRen
     })
 }
 
-/// `run_summary` card (B5): a compact per-turn cost / reasoning footer. Octos
-/// emits this on `turn/completed`, coalescing mid-turn `token_cost_update`
-/// (`UiTokenCostUpdate`) events into the final figures.
+/// `run_summary` card (B5): a compact per-turn cost / reasoning footer.
+///
+/// SUPERSEDED: octos folds token/cost into the `org.octos.run` run detail on the
+/// answer message instead of a standalone card. Kept only for backward-compat
+/// with already-sent messages / the test script.
 ///
 /// Contract:
 /// ```json
@@ -13254,7 +13523,8 @@ fn render_run_summary_app_card(state: &serde_json::Value) -> Option<OctosAppCard
     let output = u64f("output_tokens");
     let reasoning_tok = u64f("reasoning_tokens");
     let total = u64f("total_tokens").or(match (input, output) {
-        (Some(i), Some(o)) => Some(i + o),
+        // `input`/`output` are attacker-supplied; avoid a panic/wrap on overflow.
+        (Some(i), Some(o)) => Some(i.saturating_add(o)),
         _ => None,
     });
 
@@ -13940,8 +14210,15 @@ fn populate_octos_app_card(
     image: Option<&OctosCardImage>,
     app_language: AppLanguage,
     media_cache: &mut MediaCache,
+    collapsible: bool,
+    expanded: bool,
+    keep_bot_card: bool,
 ) -> bool {
-    item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
+    // A regular card replaces the message body; an inline run-detail strip
+    // (`keep_bot_card`) sits BELOW the already-rendered bot answer.
+    if !keep_bot_card {
+        item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
+    }
     item.view(cx, ids!(content.octos_app_card)).set_visible(cx, true);
     item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_title))
         .set_text(cx, &render.title);
@@ -13971,7 +14248,21 @@ fn populate_octos_app_card(
             }
         }
     }
-    item.html_or_plaintext(cx, ids!(content.octos_app_card.app_card_body))
+    // Expand/collapse toggle: only collapsible cards (`run_details`) show the
+    // button and hide their body when collapsed; every other card renders its
+    // body inline. The detail is a plain-View wrapper so set_visible is reliable.
+    let expand_btn = item.button(
+        cx,
+        ids!(content.octos_app_card.app_card_header_row.app_card_expand_button),
+    );
+    expand_btn.set_visible(cx, collapsible);
+    if collapsible {
+        expand_btn.set_text(cx, if expanded { "Hide" } else { "Details" });
+    }
+    let show_detail = !collapsible || expanded;
+    item.view(cx, ids!(content.octos_app_card.app_card_detail))
+        .set_visible(cx, show_detail);
+    item.html_or_plaintext(cx, ids!(content.octos_app_card.app_card_detail.app_card_body))
         .show_html(cx, &render.body_html);
 
     // Optional embedded image (visual card). Reuse the native image pipeline so
