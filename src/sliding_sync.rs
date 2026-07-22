@@ -36,7 +36,7 @@ use matrix_sdk_ui::{
     RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails}
 };
 use robius_open::Uri;
-use ruma::{OwnedRoomOrAliasId, RoomId, events::tag::Tags};
+use ruma::{OwnedRoomAliasId, OwnedRoomOrAliasId, RoomId, events::tag::Tags};
 use tokio::{
     runtime::Handle,
     sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
@@ -1604,6 +1604,25 @@ pub enum MatrixRequest {
     /// Response arrives as a [`RoomSettingsFetchedAction`].
     FetchRoomSettings {
         room_id: OwnedRoomId,
+    },
+    /// Publish a new alias into the room directory, mapping it to this room
+    /// (`PUT /directory/room/{alias}`). Requires directory permission on the
+    /// alias's homeserver.
+    PublishRoomAlias {
+        room_id: OwnedRoomId,
+        alias: OwnedRoomAliasId,
+    },
+    /// Remove an alias from the room directory (`DELETE /directory/room/{alias}`).
+    RemoveRoomAlias {
+        alias: OwnedRoomAliasId,
+    },
+    /// Set the room's canonical alias and alt aliases via the
+    /// `m.room.canonical_alias` state event. Requires the corresponding power
+    /// level (see [`UserPowerLevels::can_set_canonical_alias`]).
+    SetRoomCanonicalAlias {
+        room_id: OwnedRoomId,
+        alias: Option<OwnedRoomAliasId>,
+        alt_aliases: Vec<OwnedRoomAliasId>,
     },
     /// Set the display name (title) of a room.
     SetRoomName {
@@ -4293,6 +4312,69 @@ async fn matrix_worker_task(
                         let topic = room.topic();
                         let is_public = room.is_public().unwrap_or(false);
                         Cx::post_action(RoomSettingsFetchedAction { room_id, topic, is_public });
+                    }
+                });
+            }
+
+            MatrixRequest::PublishRoomAlias { room_id, alias } => {
+                let Some(client) = get_client() else { continue };
+                let _publish_alias_task = Handle::current().spawn(async move {
+                    let request = matrix_sdk::ruma::api::client::alias::create_alias::v3::Request::new(
+                        alias.clone(),
+                        room_id,
+                    );
+                    match client.send(request).await {
+                        Ok(_) => log!("Published room alias {alias}."),
+                        Err(e) => {
+                            error!("Failed to publish room alias {alias}: {e:?}");
+                            enqueue_popup_notification(
+                                format!("Couldn't publish alias {alias}"),
+                                crate::shared::popup_list::PopupKind::Error,
+                                Some(5.0),
+                            );
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::RemoveRoomAlias { alias } => {
+                let Some(client) = get_client() else { continue };
+                let _remove_alias_task = Handle::current().spawn(async move {
+                    let request = matrix_sdk::ruma::api::client::alias::delete_alias::v3::Request::new(
+                        alias.clone(),
+                    );
+                    match client.send(request).await {
+                        Ok(_) => log!("Removed room alias {alias}."),
+                        Err(e) => {
+                            error!("Failed to remove room alias {alias}: {e:?}");
+                            enqueue_popup_notification(
+                                format!("Couldn't remove alias {alias}"),
+                                crate::shared::popup_list::PopupKind::Error,
+                                Some(5.0),
+                            );
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::SetRoomCanonicalAlias { room_id, alias, alt_aliases } => {
+                let Some(client) = get_client() else { continue };
+                let _set_canonical_alias_task = Handle::current().spawn(async move {
+                    if let Some(room) = client.get_room(&room_id) {
+                        let mut content = matrix_sdk::ruma::events::room::canonical_alias::RoomCanonicalAliasEventContent::new();
+                        content.alias = alias;
+                        content.alt_aliases = alt_aliases;
+                        match room.send_state_event(content).await {
+                            Ok(_) => log!("Set canonical alias for room {room_id}."),
+                            Err(e) => {
+                                error!("Failed to set canonical alias for room {room_id}: {e:?}");
+                                enqueue_popup_notification(
+                                    "Couldn't update the room's canonical alias",
+                                    crate::shared::popup_list::PopupKind::Error,
+                                    Some(5.0),
+                                );
+                            }
+                        }
                     }
                 });
             }
@@ -8739,7 +8821,7 @@ bitflags! {
         // const PolicyRuleUser = 1 << 37;
         // const RoomAliases = 1 << 38;
         // const RoomAvatar = 1 << 39;
-        // const RoomCanonicalAlias = 1 << 40;
+        const RoomCanonicalAlias = 1 << 40;
         // const RoomCreate = 1 << 41;
         // const RoomEncryption = 1 << 42;
         // const RoomGuestAccess = 1 << 43;
@@ -8777,6 +8859,7 @@ impl UserPowerLevels {
         retval.set(UserPowerLevels::Sticker, user_power >= power_levels.for_message(MessageLikeEventType::Sticker));
         retval.set(UserPowerLevels::RoomPinnedEvents, user_power >= power_levels.for_state(StateEventType::RoomPinnedEvents));
         retval.set(UserPowerLevels::RoomPowerLevels, power_levels.user_can_send_state(user_id, StateEventType::RoomPowerLevels));
+        retval.set(UserPowerLevels::RoomCanonicalAlias, power_levels.user_can_send_state(user_id, StateEventType::RoomCanonicalAlias));
         retval
     }
 
@@ -8841,6 +8924,12 @@ impl UserPowerLevels {
 
     pub fn can_change_room_power_levels(self) -> bool {
         self.contains(UserPowerLevels::RoomPowerLevels)
+    }
+
+    /// Whether the user may set the room's canonical alias / alt aliases
+    /// (i.e. send the `m.room.canonical_alias` state event).
+    pub fn can_set_canonical_alias(self) -> bool {
+        self.contains(UserPowerLevels::RoomCanonicalAlias)
     }
 }
 
