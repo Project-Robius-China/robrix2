@@ -24,7 +24,7 @@ use matrix_sdk::{
             direct::DirectUserIdentifier,
             relation::RelationType,
             room::{
-                encryption::RoomEncryptionEventContent, member::MembershipState, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
+                encryption::RoomEncryptionEventContent, member::{MembershipState, StrippedRoomMemberEvent}, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
             },
             space::{child::SpaceChildEventContent, parent::SpaceParentEventContent},
             AnyMessageLikeEventContent, AnyTimelineEvent, sticker::StickerEventContent,
@@ -1867,6 +1867,33 @@ mod matrix_request_tests {
             forward_failure_feedback_text("network error"),
             "Failed to forward message: network error",
         );
+    }
+
+    #[test]
+    fn stripped_invite_matches_only_the_current_user() {
+        let current_user = UserId::parse("@alice:example.org").unwrap();
+        let other_user = UserId::parse("@bob:example.org").unwrap();
+
+        assert!(is_invite_for_current_user(
+            current_user.as_ref(),
+            &MembershipState::Invite,
+            Some(current_user.as_ref()),
+        ));
+        assert!(!is_invite_for_current_user(
+            other_user.as_ref(),
+            &MembershipState::Invite,
+            Some(current_user.as_ref()),
+        ));
+        assert!(!is_invite_for_current_user(
+            current_user.as_ref(),
+            &MembershipState::Join,
+            Some(current_user.as_ref()),
+        ));
+        assert!(!is_invite_for_current_user(
+            current_user.as_ref(),
+            &MembershipState::Invite,
+            None,
+        ));
     }
 
     #[test]
@@ -6346,6 +6373,64 @@ impl RoomListServiceRoomInfo {
     }
 }
 
+fn is_invite_for_current_user(
+    state_key: &UserId,
+    membership: &MembershipState,
+    current_user_id: Option<&UserId>,
+) -> bool {
+    current_user_id.is_some_and(|user_id| user_id == state_key)
+        && membership == &MembershipState::Invite
+}
+
+static ENQUEUED_INVITE_FALLBACK_ROOMS: LazyLock<Mutex<HashSet<OwnedRoomId>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Adds a direct Matrix invite-event listener as a reliability fallback for the
+/// sorted RoomListService diff stream. Some homeserver/session combinations can
+/// deliver the stripped invite state without promptly producing the room-list
+/// insertion that normally drives the sidebar.
+///
+/// The regular room-list path remains authoritative. The UI-side invited-room
+/// insertion is idempotent so both paths may safely observe the same invite.
+fn add_room_invite_event_handler(client: Client) {
+    ENQUEUED_INVITE_FALLBACK_ROOMS.lock().unwrap().clear();
+    client.add_event_handler(
+        |event: StrippedRoomMemberEvent, client: Client, room: Room| async move {
+            if !is_invite_for_current_user(
+                event.state_key.as_ref(),
+                &event.content.membership,
+                client.user_id(),
+            ) {
+                return;
+            }
+
+            if room.state() != RoomState::Invited {
+                log!(
+                    "Ignoring stripped invite event for room {} because its current state is {:?}.",
+                    room.room_id(),
+                    room.state(),
+                );
+                return;
+            }
+
+            if !ENQUEUED_INVITE_FALLBACK_ROOMS
+                .lock()
+                .unwrap()
+                .insert(room.room_id().to_owned())
+            {
+                return;
+            }
+
+            log!(
+                "Received stripped invite event for room {}; enqueueing invited room fallback.",
+                room.room_id(),
+            );
+            let room_info = RoomListServiceRoomInfo::from_room(room, &None).await;
+            enqueue_invited_room(&room_info).await;
+        },
+    );
+}
+
 /// Performs the Matrix client login or session restore, and starts the main sync service.
 ///
 /// After starting the sync service, this also starts the main room list service loop
@@ -6582,6 +6667,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
         handle_sync_service_state_subscriber(sync_service.state());
 
         let room_list_service = sync_service.room_list_service();
+        add_room_invite_event_handler(client.clone());
         let sync_service = Arc::new(sync_service);
 
         if let Some(_existing) = SYNC_SERVICE.lock().unwrap().replace(sync_service) {
@@ -6732,6 +6818,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                     handle_sync_indicator_subscriber(&sync_service);
                     handle_sync_service_state_subscriber(sync_service.state());
                     let room_list_service = sync_service.room_list_service();
+                    add_room_invite_event_handler(client.clone());
                     let sync_service = Arc::new(sync_service);
 
                     SYNC_SERVICE.lock().unwrap().replace(sync_service);
@@ -7317,6 +7404,7 @@ async fn update_room(
 
 /// Invoked when the room list service has received an update to remove an existing room.
 fn remove_room(room: &RoomListServiceRoomInfo) {
+    ENQUEUED_INVITE_FALLBACK_ROOMS.lock().unwrap().remove(&room.room_id);
     ALL_JOINED_ROOMS.lock().unwrap().remove(&room.room_id);
     enqueue_rooms_list_update(
         RoomsListUpdate::RemoveRoom {
@@ -7324,6 +7412,49 @@ fn remove_room(room: &RoomListServiceRoomInfo) {
             new_state: room.state,
         }
     );
+}
+
+async fn enqueue_invited_room(new_room: &RoomListServiceRoomInfo) {
+    let invite_details = new_room.room.invite_details().await.ok();
+    let room_name_id = RoomNameId::from((new_room.display_name.clone(), new_room.room_id.clone()));
+    // Start with a basic text avatar; the avatar image will be fetched asynchronously below.
+    let room_avatar = avatar_from_room_name(room_name_id.name_for_avatar());
+    let inviter_info = if let Some(inviter) = invite_details.and_then(|d| d.inviter) {
+        Some(InviterInfo {
+            user_id: inviter.user_id().to_owned(),
+            display_name: inviter.display_name().map(|n| n.to_string()),
+            avatar: inviter
+                .avatar(AVATAR_THUMBNAIL_FORMAT.into())
+                .await
+                .ok()
+                .flatten()
+                .map(Into::into),
+        })
+    } else {
+        None
+    };
+    rooms_list::enqueue_rooms_list_update(RoomsListUpdate::AddInvitedRoom(InvitedRoomInfo {
+        room_name_id: room_name_id.clone(),
+        search_text: build_room_search_text(
+            &room_name_id,
+            &new_room.room.canonical_alias(),
+            &new_room.room.alt_aliases(),
+        ),
+        inviter_info,
+        room_avatar,
+        canonical_alias: new_room.room.canonical_alias(),
+        alt_aliases: new_room.room.alt_aliases(),
+        // we don't actually display the latest event for Invited rooms, so don't bother.
+        latest: None,
+        invite_state: Default::default(),
+        is_selected: false,
+        is_direct: new_room.is_direct,
+    }));
+    Cx::post_action(AppStateAction::RoomLoadedSuccessfully {
+        room_name_id,
+        is_invite: true,
+    });
+    spawn_fetch_room_avatar(new_room);
 }
 
 
@@ -7353,46 +7484,7 @@ async fn add_new_room(
             return Ok(());
         }
         RoomState::Invited => {
-            let invite_details = new_room.room.invite_details().await.ok();
-            let room_name_id = RoomNameId::from((new_room.display_name.clone(), new_room.room_id.clone()));
-            // Start with a basic text avatar; the avatar image will be fetched asynchronously below.
-            let room_avatar = avatar_from_room_name(room_name_id.name_for_avatar());
-            let inviter_info = if let Some(inviter) = invite_details.and_then(|d| d.inviter) {
-                Some(InviterInfo {
-                    user_id: inviter.user_id().to_owned(),
-                    display_name: inviter.display_name().map(|n| n.to_string()),
-                    avatar: inviter
-                        .avatar(AVATAR_THUMBNAIL_FORMAT.into())
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(Into::into),
-                })
-            } else {
-                None
-            };
-            rooms_list::enqueue_rooms_list_update(RoomsListUpdate::AddInvitedRoom(InvitedRoomInfo {
-                room_name_id: room_name_id.clone(),
-                search_text: build_room_search_text(
-                    &room_name_id,
-                    &new_room.room.canonical_alias(),
-                    &new_room.room.alt_aliases(),
-                ),
-                inviter_info,
-                room_avatar,
-                canonical_alias: new_room.room.canonical_alias(),
-                alt_aliases: new_room.room.alt_aliases(),
-                // we don't actually display the latest event for Invited rooms, so don't bother.
-                latest: None,
-                invite_state: Default::default(),
-                is_selected: false,
-                is_direct: new_room.is_direct,
-            }));
-            Cx::post_action(AppStateAction::RoomLoadedSuccessfully {
-                room_name_id,
-                is_invite: true,
-            });
-            spawn_fetch_room_avatar(new_room);
+            enqueue_invited_room(new_room).await;
             return Ok(());
         }
         RoomState::Joined => { } // Fall through to adding the joined room below.
