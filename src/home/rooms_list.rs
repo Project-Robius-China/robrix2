@@ -255,6 +255,20 @@ pub fn enqueue_rooms_list_update(update: RoomsListUpdate) {
     SignalToUI::set_ui_signal();
 }
 
+fn set_room_id_displayed(
+    displayed_room_ids: &mut Vec<OwnedRoomId>,
+    room_id: &OwnedRoomId,
+    should_display: bool,
+) {
+    if should_display {
+        if !displayed_room_ids.contains(room_id) {
+            displayed_room_ids.push(room_id.clone());
+        }
+    } else {
+        displayed_room_ids.retain(|displayed_room_id| displayed_room_id != room_id);
+    }
+}
+
 /// Actions related to a single room in the RoomsList widget.
 #[derive(Debug, Clone, Default)]
 pub enum RoomsListAction {
@@ -746,9 +760,11 @@ impl RoomsList {
                     let room_id = invited_room.room_name_id.room_id().clone();
                     let should_display = should_display_room!(self, &room_id, &invited_room);
                     let _replaced = self.invited_rooms.borrow_mut().insert(room_id.clone(), invited_room);
-                    if should_display {
-                        self.displayed_invited_rooms.push(room_id);
-                    }
+                    set_room_id_displayed(
+                        &mut self.displayed_invited_rooms,
+                        &room_id,
+                        should_display,
+                    );
                     self.update_status();
                     SignalToUI::set_ui_signal(); // signal the InviteScreen to update itself
                 }
@@ -2321,6 +2337,27 @@ mod tests {
             iterated_room_ids,
             vec![first_room_id, second_room_id],
         );
+    }
+
+    #[test]
+    fn invited_room_display_insertion_is_idempotent() {
+        let room_id = owned_room_id!("!invite:example.com");
+        let mut displayed_room_ids = Vec::new();
+
+        set_room_id_displayed(&mut displayed_room_ids, &room_id, true);
+        set_room_id_displayed(&mut displayed_room_ids, &room_id, true);
+
+        assert_eq!(displayed_room_ids, vec![room_id]);
+    }
+
+    #[test]
+    fn invited_room_display_update_removes_filtered_room() {
+        let room_id = owned_room_id!("!invite:example.com");
+        let mut displayed_room_ids = vec![room_id.clone(), room_id.clone()];
+
+        set_room_id_displayed(&mut displayed_room_ids, &room_id, false);
+
+        assert!(displayed_room_ids.is_empty());
     }
 
     #[test]
