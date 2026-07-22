@@ -3,10 +3,227 @@
 use std::path::PathBuf;
 
 use makepad_widgets::*;
-use ruma::OwnedRoomId;
+use ruma::{OwnedRoomAliasId, OwnedRoomId, RoomAliasId, ServerName};
 
 use crate::shared::avatar::AvatarWidgetExt;
 use crate::utils::load_png_or_jpg;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Room-alias management: pure logic (no UI / no network), unit-tested below.
+//
+// These functions back the "Room Aliases" section of the room settings modal.
+// They are deliberately pure so their behaviour can be verified without a
+// Makepad context or a live Matrix connection (see `specs/task-room-aliases.spec.md`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Why a user-entered alias string was rejected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AliasInputError {
+    /// Input was empty (after trimming).
+    Empty,
+    /// Input contained whitespace, which is never valid in a room alias.
+    ContainsWhitespace,
+    /// Input did not parse as a valid `#localpart:server` room alias.
+    InvalidFormat,
+}
+
+/// Normalize and validate a user-entered room alias.
+///
+/// - `#localpart:server` (or any string containing `#`/`:`) is parsed as an
+///   explicit alias and must be well-formed.
+/// - A bare `localpart` (no `#` and no `:`) is completed to
+///   `#{localpart}:{homeserver}`, matching how [`parse_address`](super) treats
+///   bare room addresses against the current homeserver.
+///
+/// Returns [`AliasInputError`] instead of panicking on any malformed input.
+pub fn normalize_and_validate_alias(
+    input: &str,
+    homeserver: &ServerName,
+) -> Result<OwnedRoomAliasId, AliasInputError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(AliasInputError::Empty);
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(AliasInputError::ContainsWhitespace);
+    }
+    // A bare localpart (no sigil, no server delimiter) is resolved against the
+    // current homeserver; anything else is treated as an explicit alias.
+    let candidate = if trimmed.starts_with('#') || trimmed.contains(':') {
+        trimmed.to_string()
+    } else {
+        format!("#{trimmed}:{homeserver}")
+    };
+    let parsed = OwnedRoomAliasId::try_from(candidate.as_str())
+        .map_err(|_| AliasInputError::InvalidFormat)?;
+    // ruma leniently accepts an empty localpart (e.g. "#:server"); a usable room
+    // alias must have a non-empty localpart, so reject it explicitly.
+    if parsed.alias().is_empty() {
+        return Err(AliasInputError::InvalidFormat);
+    }
+    Ok(parsed)
+}
+
+/// A single alias-management operation requested from the UI.
+#[derive(Debug, Clone)]
+pub enum AliasOp {
+    /// Promote an already-published alias to be the room's canonical alias.
+    SetCanonical(OwnedRoomAliasId),
+    /// Remove an alias from the room (from canonical and/or the alt list).
+    Remove(OwnedRoomAliasId),
+}
+
+/// The `(canonical, alt_aliases)` pair to write into the `m.room.canonical_alias`
+/// state event after applying an [`AliasOp`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalAliasState {
+    pub canonical: Option<OwnedRoomAliasId>,
+    pub alt_aliases: Vec<OwnedRoomAliasId>,
+}
+
+/// Why an [`AliasOp`] could not be reconciled into a new canonical-alias state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanonicalReconcileError {
+    /// Tried to set an alias canonical that is neither the current canonical nor
+    /// a published alt alias — it must be published to the directory first.
+    NotPublished,
+}
+
+/// Compute the new `(canonical, alt_aliases)` after applying `op`, enforcing the
+/// invariants of `m.room.canonical_alias`:
+///
+/// - Setting an alias canonical requires it to already be published (canonical ∪ alts).
+/// - The previous canonical (if different) is demoted into `alt_aliases`.
+/// - The canonical alias never also appears in `alt_aliases` (deduped).
+/// - Removing the current canonical clears it; removing an alt just drops it.
+pub fn reconcile_canonical_alias(
+    current_canonical: Option<&RoomAliasId>,
+    current_alts: &[OwnedRoomAliasId],
+    op: AliasOp,
+) -> Result<CanonicalAliasState, CanonicalReconcileError> {
+    // Compare via canonical string form to avoid borrowed/owned PartialEq ambiguity.
+    let target = match &op {
+        AliasOp::SetCanonical(a) | AliasOp::Remove(a) => a.clone(),
+    };
+    let target_str = target.as_str();
+    match op {
+        AliasOp::SetCanonical(_) => {
+            let is_published = current_canonical.is_some_and(|c| c.as_str() == target_str)
+                || current_alts.iter().any(|a| a.as_str() == target_str);
+            if !is_published {
+                return Err(CanonicalReconcileError::NotPublished);
+            }
+            let mut alts: Vec<OwnedRoomAliasId> = Vec::new();
+            // Demote the old canonical (when it differs from the new one).
+            if let Some(old) = current_canonical {
+                if old.as_str() != target_str {
+                    alts.push(old.to_owned());
+                }
+            }
+            // Keep the remaining alts, minus the new canonical, without duplicates.
+            for a in current_alts {
+                if a.as_str() != target_str && !alts.iter().any(|x| x.as_str() == a.as_str()) {
+                    alts.push(a.clone());
+                }
+            }
+            Ok(CanonicalAliasState { canonical: Some(target), alt_aliases: alts })
+        }
+        AliasOp::Remove(_) => {
+            let canonical = match current_canonical {
+                Some(c) if c.as_str() == target_str => None,
+                other => other.map(RoomAliasId::to_owned),
+            };
+            let alt_aliases = current_alts
+                .iter()
+                .filter(|a| a.as_str() != target_str)
+                .cloned()
+                .collect();
+            Ok(CanonicalAliasState { canonical, alt_aliases })
+        }
+    }
+}
+
+#[cfg(test)]
+mod alias_logic_tests {
+    use super::*;
+
+    fn server() -> ruma::OwnedServerName {
+        ruma::OwnedServerName::try_from("example.org").expect("valid server name")
+    }
+
+    fn alias(s: &str) -> OwnedRoomAliasId {
+        OwnedRoomAliasId::try_from(s).expect("valid alias in test")
+    }
+
+    #[test]
+    fn test_normalize_alias_accepts_full_alias() {
+        let got = normalize_and_validate_alias("#general:example.org", &server()).unwrap();
+        assert_eq!(got, alias("#general:example.org"));
+    }
+
+    #[test]
+    fn test_normalize_alias_completes_bare_localpart() {
+        let got = normalize_and_validate_alias("general", &server()).unwrap();
+        assert_eq!(got, alias("#general:example.org"));
+    }
+
+    #[test]
+    fn test_normalize_alias_rejects_invalid() {
+        for bad in ["", "#:example.org", "#has space:example.org", "#general"] {
+            assert!(
+                normalize_and_validate_alias(bad, &server()).is_err(),
+                "expected {bad:?} to be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn test_reconcile_promote_alias_to_canonical() {
+        let out = reconcile_canonical_alias(
+            Some(&alias("#old:example.org")),
+            &[alias("#new:example.org")],
+            AliasOp::SetCanonical(alias("#new:example.org")),
+        )
+        .unwrap();
+        assert_eq!(out.canonical, Some(alias("#new:example.org")));
+        assert!(out.alt_aliases.contains(&alias("#old:example.org")));
+        assert!(!out.alt_aliases.contains(&alias("#new:example.org")));
+    }
+
+    #[test]
+    fn test_reconcile_rejects_unpublished_canonical() {
+        let err = reconcile_canonical_alias(
+            Some(&alias("#old:example.org")),
+            &[],
+            AliasOp::SetCanonical(alias("#ghost:example.org")),
+        )
+        .unwrap_err();
+        assert_eq!(err, CanonicalReconcileError::NotPublished);
+    }
+
+    #[test]
+    fn test_reconcile_remove_canonical_clears_it() {
+        let out = reconcile_canonical_alias(
+            Some(&alias("#main:example.org")),
+            &[alias("#alt:example.org")],
+            AliasOp::Remove(alias("#main:example.org")),
+        )
+        .unwrap();
+        assert_eq!(out.canonical, None);
+        assert!(out.alt_aliases.contains(&alias("#alt:example.org")));
+    }
+
+    #[test]
+    fn test_reconcile_dedups_canonical_from_alts() {
+        let out = reconcile_canonical_alias(
+            Some(&alias("#old:example.org")),
+            &[alias("#dup:example.org")],
+            AliasOp::SetCanonical(alias("#dup:example.org")),
+        )
+        .unwrap();
+        assert!(!out.alt_aliases.contains(&alias("#dup:example.org")));
+    }
+}
 
 script_mod! {
     use mod.prelude.widgets.*
