@@ -881,7 +881,9 @@ impl WidgetMatchEvent for RoomSettingsModal {
         // Add address button
         if self.view.button(cx, ids!(add_address_button)).clicked(actions) {
             let alias = self.view.text_input(cx, ids!(add_address_input)).text();
-            let alias = alias.trim().trim_start_matches('#').to_string();
+            // Pass the raw (trimmed) text through; validation/normalization happens
+            // in the AddLocalAddress handler via `normalize_and_validate_alias`.
+            let alias = alias.trim().to_string();
             if !alias.is_empty() {
                 if let Some(room_id) = self.room_id.clone() {
                     cx.action(RoomSettingsAction::AddLocalAddress { room_id, alias });

@@ -1966,8 +1966,28 @@ impl MatchEvent for App {
                     self.ui.modal(cx, ids!(room_settings_modal)).close(cx);
                     continue;
                 }
-                Some(RoomSettingsAction::AddLocalAddress { .. }) => {
-                    enqueue_popup_notification("Address management coming soon", PopupKind::Info, Some(3.0));
+                Some(RoomSettingsAction::AddLocalAddress { room_id, alias }) => {
+                    // Resolve a bare localpart against the user's own homeserver.
+                    let Some(server_name) = current_user_id().map(|u| u.server_name().to_owned()) else {
+                        enqueue_popup_notification("You must be signed in to add an alias", PopupKind::Error, Some(4.0));
+                        continue;
+                    };
+                    match crate::home::room_settings_modal::normalize_and_validate_alias(alias, &server_name) {
+                        Ok(valid_alias) => {
+                            submit_async_request(MatrixRequest::PublishRoomAlias {
+                                room_id: room_id.clone(),
+                                alias: valid_alias,
+                            });
+                            enqueue_popup_notification("Publishing room alias…", PopupKind::Info, Some(3.0));
+                        }
+                        Err(_) => {
+                            enqueue_popup_notification(
+                                "Invalid alias — use #name:server or a plain name",
+                                PopupKind::Error,
+                                Some(4.0),
+                            );
+                        }
+                    }
                     continue;
                 }
                 Some(RoomSettingsAction::SetDirectoryPublish { .. }) => {
