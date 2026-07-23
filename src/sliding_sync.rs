@@ -27,13 +27,13 @@ use matrix_sdk::{
                 encryption::RoomEncryptionEventContent, member::{MembershipState, StrippedRoomMemberEvent}, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
             },
             space::{child::SpaceChildEventContent, parent::SpaceParentEventContent},
-            AnyMessageLikeEventContent, AnyTimelineEvent, sticker::StickerEventContent,
+            AnyMessageLikeEventContent, AnySyncTimelineEvent, AnyTimelineEvent, sticker::StickerEventContent,
             room::ImageInfo, InitialStateEvent, MessageLikeEventType, StateEventType
         }, EventId, MatrixToUri, MatrixUri, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomOrAliasId, UserId, int, uint
     }, reqwest::{Client as ReqwestClient, Response as ReqwestResponse, StatusCode as ReqwestStatusCode, header::HeaderValue}, sliding_sync::VersionBuilder, Client, Error, OwnedServerName, Room, RoomDisplayName, RoomMemberships, RoomState, SessionChange, SuccessorRoom
 };
 use matrix_sdk_ui::{
-    RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails}
+    RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails, default_event_filter}
 };
 use robius_open::Uri;
 use ruma::{OwnedRoomOrAliasId, RoomId, events::tag::Tags};
@@ -963,6 +963,35 @@ impl std::fmt::Display for TimelineKind {
     }
 }
 
+const AGENT_CHAT_APPROVAL_REQUEST_MSGTYPE: &str = "com.agentchat.approval.request.v1";
+const AGENT_CHAT_APPROVAL_STATUS_MSGTYPE: &str = "com.agentchat.approval.status.v1";
+const AGENT_CHAT_APPROVAL_VERDICT_MSGTYPE: &str = "com.agentchat.approval.verdict.v1";
+
+fn is_agent_chat_approval_timeline_event(event: &AnySyncTimelineEvent) -> bool {
+    let AnySyncTimelineEvent::MessageLike(message) = event else {
+        return false;
+    };
+    message.original_content().is_some_and(|content| {
+        matches!(
+            content,
+            AnyMessageLikeEventContent::RoomMessage(message)
+                if matches!(
+                    message.msgtype.msgtype(),
+                    AGENT_CHAT_APPROVAL_REQUEST_MSGTYPE
+                        | AGENT_CHAT_APPROVAL_STATUS_MSGTYPE
+                        | AGENT_CHAT_APPROVAL_VERDICT_MSGTYPE
+                )
+        )
+    })
+}
+
+fn robrix_timeline_event_filter(
+    event: &AnySyncTimelineEvent,
+    rules: &matrix_sdk::ruma::room_version_rules::RoomVersionRules,
+) -> bool {
+    default_event_filter(event, rules) || is_agent_chat_approval_timeline_event(event)
+}
+
 #[cfg(feature = "agent_chat")]
 const AGENT_CHAT_AGENT_LOCALPART_PREFIX: &str = "ac_";
 #[cfg(feature = "agent_chat")]
@@ -1695,6 +1724,34 @@ fn add_octos_routing_metadata(
         content
     };
     add_octos_broadcast_targets(content, broadcast_target_user_ids)
+}
+
+const AGENTCHAT_APPROVAL_VERDICT_MSGTYPE: &str = "com.agentchat.approval.verdict.v1";
+
+fn should_rotate_room_key_before_action_response(content: &serde_json::Value) -> bool {
+    content.get("msgtype").and_then(serde_json::Value::as_str)
+        == Some(AGENTCHAT_APPROVAL_VERDICT_MSGTYPE)
+}
+
+fn should_ensure_action_response_target_joined(content: &serde_json::Value) -> bool {
+    !should_rotate_room_key_before_action_response(content)
+}
+
+fn prepare_action_response_content(
+    content: serde_json::Value,
+    target_user_id: &UserId,
+    explicit_room: bool,
+) -> serde_json::Value {
+    if should_rotate_room_key_before_action_response(&content) {
+        content
+    } else {
+        add_octos_routing_metadata(
+            content,
+            Some(target_user_id),
+            explicit_room,
+            None,
+        )
+    }
 }
 
 async fn ensure_target_user_joined_room(
@@ -3039,6 +3096,7 @@ async fn matrix_worker_task(
                         .with_focus(TimelineFocus::Thread {
                             root_event_id: thread_root_event_id.clone(),
                         })
+                        .event_filter(robrix_timeline_event_filter)
                         .track_read_marker_and_receipts(TimelineReadReceiptTracking::AllEvents)
                         .build()
                         .await;
@@ -5244,26 +5302,59 @@ async fn matrix_worker_task(
                 let room_id = timeline_kind.room_id().to_owned();
 
                 let _send_action_response_task = Handle::current().spawn(async move {
-                    if let Err(error) = ensure_target_user_joined_room(
-                        timeline.room(),
-                        target_user_id.as_ref(),
-                    )
-                    .await
-                    {
-                        error!("Failed to ensure targeted bot {target_user_id} joined {timeline_kind}: {error:?}");
-                        Cx::post_action(ActionResponseResultAction::Failed {
-                            room_id,
-                            source_event_id,
-                            error: error.to_string(),
-                        });
-                        return;
+                    if should_ensure_action_response_target_joined(&content) {
+                        if let Err(error) = ensure_target_user_joined_room(
+                            timeline.room(),
+                            target_user_id.as_ref(),
+                        )
+                        .await
+                        {
+                            error!("Failed to ensure targeted bot {target_user_id} joined {timeline_kind}: {error:?}");
+                            Cx::post_action(ActionResponseResultAction::Failed {
+                                room_id,
+                                source_event_id,
+                                error: error.to_string(),
+                            });
+                            return;
+                        }
                     }
 
-                    let raw_content = add_octos_routing_metadata(
+                    if should_rotate_room_key_before_action_response(&content) {
+                        if let Err(error) = timeline
+                            .room()
+                            .client()
+                            .encryption()
+                            .request_user_identity(target_user_id.as_ref())
+                            .await
+                        {
+                            error!(
+                                "Failed to refresh the targeted bot's Matrix device keys before sending an agent-chat approval verdict to {timeline_kind}: {error:?}"
+                            );
+                            Cx::post_action(ActionResponseResultAction::Failed {
+                                room_id,
+                                source_event_id,
+                                error: error.to_string(),
+                            });
+                            return;
+                        }
+
+                        if let Err(error) = timeline.room().discard_room_key().await {
+                            error!(
+                                "Failed to rotate the encrypted room key before sending an agent-chat approval verdict to {timeline_kind}: {error:?}"
+                            );
+                            Cx::post_action(ActionResponseResultAction::Failed {
+                                room_id,
+                                source_event_id,
+                                error: error.to_string(),
+                            });
+                            return;
+                        }
+                    }
+
+                    let raw_content = prepare_action_response_content(
                         content,
-                        Some(target_user_id.as_ref()),
+                        target_user_id.as_ref(),
                         explicit_room,
-                        None,
                     );
                     match timeline.room().send_raw("m.room.message", raw_content).await {
                         Ok(_response) => {
@@ -7569,6 +7660,7 @@ async fn add_new_room(
                 // we show threads as separate timelines in their own RoomScreen
                 hide_threaded_events: true,
             })
+            .event_filter(robrix_timeline_event_filter)
             .track_read_marker_and_receipts(TimelineReadReceiptTracking::AllEvents)
             .build()
             .await
@@ -9187,7 +9279,7 @@ async fn discover_homeserver_capabilities(
 
 #[cfg(test)]
 mod tests {
-    use matrix_sdk::ruma::user_id;
+    use matrix_sdk::ruma::{events::AnySyncTimelineEvent, user_id};
 
     use super::{
         OidcFlowSlot, RestoreSessionFailureAction, build_discovery_http_client,
@@ -9196,6 +9288,39 @@ mod tests {
         worker_shutdown_is_unexpected,
     };
     use crate::persistence::RestoreSessionError;
+
+    fn message_event_with_msgtype(msgtype: &str) -> AnySyncTimelineEvent {
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": msgtype,
+                "body": "test",
+            },
+            "event_id": "$agent-chat-approval:matrix.test",
+            "sender": "@agent-bridge:matrix.test",
+            "origin_server_ts": 1,
+        })).unwrap()
+    }
+
+    #[test]
+    fn agent_chat_approval_message_types_bypass_the_default_timeline_filter() {
+        for msgtype in [
+            super::AGENT_CHAT_APPROVAL_REQUEST_MSGTYPE,
+            super::AGENT_CHAT_APPROVAL_STATUS_MSGTYPE,
+            super::AGENT_CHAT_APPROVAL_VERDICT_MSGTYPE,
+        ] {
+            assert!(super::is_agent_chat_approval_timeline_event(
+                &message_event_with_msgtype(msgtype),
+            ));
+        }
+
+        assert!(!super::is_agent_chat_approval_timeline_event(
+            &message_event_with_msgtype("com.agentchat.unrelated.v1"),
+        ));
+        assert!(!super::is_agent_chat_approval_timeline_event(
+            &message_event_with_msgtype("m.text"),
+        ));
+    }
 
     #[test]
     fn worker_shutdown_is_not_unexpected_during_logout() {
@@ -9362,6 +9487,64 @@ mod tests {
             user_id!("@agent-bridge-wf:two.test").to_owned(),
             user_id!("@agent-bridge:two.test").to_owned(),
         ]);
+    }
+
+    #[test]
+    fn agent_chat_approval_verdict_rotates_the_outbound_room_key() {
+        let verdict = serde_json::json!({
+            "msgtype": "com.agentchat.approval.verdict.v1",
+            "body": "Approve once",
+            "com.agentchat.approval": {
+                "request_id": "approval_0123456789abcdef0123456789abcdef",
+            },
+        });
+        assert!(super::should_rotate_room_key_before_action_response(&verdict));
+        assert!(!super::should_ensure_action_response_target_joined(&verdict));
+
+        let prepared = super::prepare_action_response_content(
+            verdict.clone(),
+            user_id!("@agent-bridge:matrix.test"),
+            true,
+        );
+        assert_eq!(prepared, verdict);
+        assert!(prepared.get("org.octos.target_user_id").is_none());
+        assert!(prepared.get("org.octos.explicit_room").is_none());
+
+        assert!(!super::should_rotate_room_key_before_action_response(
+            &serde_json::json!({
+                "msgtype": "m.text",
+                "body": "ordinary room message",
+            }),
+        ));
+        assert!(!super::should_rotate_room_key_before_action_response(
+            &serde_json::json!({
+                "msgtype": "com.agentchat.approval.status.v1",
+                "body": "waiting for owner approval",
+            }),
+        ));
+    }
+
+    #[test]
+    fn octos_action_response_keeps_target_routing_and_membership_guard() {
+        let content = serde_json::json!({
+            "msgtype": "m.text",
+            "body": "Approve",
+        });
+        assert!(super::should_ensure_action_response_target_joined(&content));
+
+        let prepared = super::prepare_action_response_content(
+            content,
+            user_id!("@octosbot:matrix.test"),
+            true,
+        );
+        assert_eq!(
+            prepared.get("org.octos.target_user_id").and_then(serde_json::Value::as_str),
+            Some("@octosbot:matrix.test"),
+        );
+        assert_eq!(
+            prepared.get("org.octos.explicit_room").and_then(serde_json::Value::as_bool),
+            Some(true),
+        );
     }
 
     #[test]
