@@ -6,7 +6,7 @@ use makepad_widgets::{text::selection::Cursor, *};
 use rfd::FileDialog;
 use matrix_sdk::{encryption::VerificationState, ruma::OwnedUserId};
 
-use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, styles::*}, sliding_sync::{get_client, current_user_id, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, PasswordChangeFailure, submit_async_request}, utils, verification::VerificationStateAction};
+use crate::{account_manager, app::AppState, avatar_cache::{self}, home::navigation_tab_bar::get_own_profile, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction}, profile::{user_profile::UserProfile, user_profile_cache}, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, styles::*}, sliding_sync::{get_client, current_user_id, request_switch_account, AccessTokenCopyAction, AccessTokenCopyError, AccountDataAction, AccountSwitchAction, MatrixRequest, OwnDeviceInfo, PasswordChangeFailure, submit_async_request}, utils, verification::VerificationStateAction};
 #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 use crate::{app::ConfirmDeleteAction, shared::confirmation_modal::ConfirmationModalContent};
 
@@ -14,6 +14,48 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
+
+    // One "other account" row: the account's user ID on the left and a "Switch" button
+    // on the right. Instantiated as a fixed pool below (shown/hidden dynamically) so the
+    // full list of logged-in accounts is switchable, not just the first one.
+    mod.widgets.OtherAccountEntry = RoundedView {
+        width: Fill, height: Fit
+        flow: Right,
+        align: Align{y: 0.5}
+        padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
+        spacing: (SPACE_SM)
+        visible: false
+        show_bg: true
+        draw_bg +: {
+            color: (RBX_BG_SURFACE_SUBTLE)
+            border_radius: (RBX_RADIUS_SM)
+            border_size: 1.0
+            border_color: (RBX_STROKE_SOFT)
+        }
+
+        View {
+            width: Fill, height: Fit
+            flow: Down,
+            spacing: 2
+
+            other_account_label := Label {
+                width: Fill, height: Fit
+                draw_text +: {
+                    color: (COLOR_TEXT),
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                }
+                text: "@other:server"
+            }
+        }
+
+        switch_account_button := SettingsPrimaryButton {
+            width: Fit, height: Fit
+            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM), right: (SPACE_SM)}
+            draw_icon.svg: (ICON_JUMP)
+            icon_walk: Walk{width: 14, height: 14}
+            text: "Switch"
+        }
+    }
 
     // The view containing all user account-related settings.
     mod.widgets.AccountSettings = #(AccountSettings::register_widget(vm)) {
@@ -409,45 +451,17 @@ script_mod! {
                 text: "Other accounts:"
             }
 
-            // Container for other account entries (simplified: show one other account)
-            other_account_entry := RoundedView {
-                width: Fill, height: Fit
-                flow: Right,
-                align: Align{y: 0.5}
-                padding: Inset{left: (SPACE_MD), right: (SPACE_MD), top: (SPACE_SM), bottom: (SPACE_SM)}
-                spacing: (SPACE_SM)
-                visible: false
-                show_bg: true
-                draw_bg +: {
-                    color: (RBX_BG_SURFACE_SUBTLE)
-                    border_radius: (RBX_RADIUS_SM)
-                    border_size: 1.0
-                    border_color: (RBX_STROKE_SOFT)
-                }
-
-                View {
-                    width: Fill, height: Fit
-                    flow: Down,
-                    spacing: 2
-
-                    other_account_label := Label {
-                        width: Fill, height: Fit
-                        draw_text +: {
-                            color: (COLOR_TEXT),
-                            text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
-                        }
-                        text: "@other:server"
-                    }
-                }
-
-                switch_account_button := SettingsPrimaryButton {
-                    width: Fit, height: Fit
-                    padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_SM), right: (SPACE_SM)}
-                    draw_icon.svg: (ICON_JUMP)
-                    icon_walk: Walk{width: 14, height: 14}
-                    text: "Switch"
-                }
-            }
+            // Fixed pool of other-account rows (populated dynamically). Every logged-in
+            // account other than the active one gets its own switchable row, capped at
+            // the pool size (see MAX_OTHER_ACCOUNT_ROWS in Rust).
+            other_account_entry_0 := mod.widgets.OtherAccountEntry {}
+            other_account_entry_1 := mod.widgets.OtherAccountEntry {}
+            other_account_entry_2 := mod.widgets.OtherAccountEntry {}
+            other_account_entry_3 := mod.widgets.OtherAccountEntry {}
+            other_account_entry_4 := mod.widgets.OtherAccountEntry {}
+            other_account_entry_5 := mod.widgets.OtherAccountEntry {}
+            other_account_entry_6 := mod.widgets.OtherAccountEntry {}
+            other_account_entry_7 := mod.widgets.OtherAccountEntry {}
 
             account_count_label := Label {
                 width: Fill, height: Fit
@@ -1066,12 +1080,15 @@ impl MatchEvent for AccountSettings {
             cx.action(LogoutConfirmModalAction::Open);
         }
 
-        // Handle "Switch Account" button click
-        if self.view.button(cx, ids!(switch_account_button)).clicked(actions) {
-            // Switch to the first other account
-            if let Some(other_id) = self.other_accounts.first().cloned() {
-                log!("Switching to account: {}", other_id);
-                submit_async_request(MatrixRequest::SwitchAccount { user_id: other_id });
+        // Handle a "Switch" button click on any of the pooled other-account rows:
+        // switch to the account that row represents (index-aligned with `other_accounts`).
+        for (i, btn_id) in switch_account_button_ids().into_iter().enumerate() {
+            if self.view.button(cx, btn_id).clicked(actions) {
+                if let Some(other_id) = self.other_accounts.get(i).cloned() {
+                    log!("Switching to account: {}", other_id);
+                    request_switch_account(other_id);
+                }
+                break;
             }
         }
 
@@ -1187,9 +1204,11 @@ impl AccountSettings {
         self.view
             .label(cx, ids!(other_accounts_label))
             .set_text(cx, tr_key(self.app_language, "settings.account.other_accounts"));
-        self.view
-            .button(cx, ids!(switch_account_button))
-            .set_text(cx, tr_key(self.app_language, "settings.account.button.switch"));
+        for btn_id in switch_account_button_ids() {
+            self.view
+                .button(cx, btn_id)
+                .set_text(cx, tr_key(self.app_language, "settings.account.button.switch"));
+        }
         self.view
             .button(cx, ids!(add_account_button))
             .set_text(cx, tr_key(self.app_language, "settings.account.button.add_another_account"));
@@ -1490,16 +1509,35 @@ impl AccountSettings {
             .into_iter()
             .filter(|id| Some(id) != active_user_id.as_ref())
             .collect();
+        // Sorted: the AccountManager stores accounts in a HashMap, so without this the
+        // rows would be ordered differently on every launch.
+        self.other_accounts.sort();
 
-        // Show "Other accounts" label and entry only if there are other accounts
+        // Show "Other accounts" label only if there are other accounts.
         let has_other_accounts = !self.other_accounts.is_empty();
         self.view.label(cx, ids!(other_accounts_label)).set_visible(cx, has_other_accounts);
-        self.view.view(cx, ids!(other_account_entry)).set_visible(cx, has_other_accounts);
 
-        // If there's at least one other account, show it
-        if let Some(other_id) = self.other_accounts.first() {
-            self.view.label(cx, ids!(other_account_label))
-                .set_text(cx, other_id.as_str());
+        // Populate / toggle every row in the fixed pool: one switchable row per other
+        // account, capped at the pool size.
+        let entry_ids = other_account_entry_ids();
+        let label_ids = other_account_label_ids();
+        let shown = self.other_accounts.len().min(MAX_OTHER_ACCOUNT_ROWS);
+        if self.other_accounts.len() > MAX_OTHER_ACCOUNT_ROWS {
+            log!(
+                "Account settings: {} other accounts exceed the {} switchable rows; \
+                 extras are hidden.",
+                self.other_accounts.len(),
+                MAX_OTHER_ACCOUNT_ROWS,
+            );
+        }
+        for i in 0..MAX_OTHER_ACCOUNT_ROWS {
+            if i < shown {
+                let text = self.other_accounts[i].to_string();
+                self.view.label(cx, label_ids[i]).set_text(cx, &text);
+                self.view.widget(cx, entry_ids[i]).set_visible(cx, true);
+            } else {
+                self.view.widget(cx, entry_ids[i]).set_visible(cx, false);
+            }
         }
     }
 
@@ -1707,6 +1745,52 @@ impl AccountSettings {
             }
         }
     }
+}
+
+/// The maximum number of *other* accounts shown as switchable rows in Settings.
+/// Matches the fixed pool of `other_account_entry_*` rows declared in the DSL.
+const MAX_OTHER_ACCOUNT_ROWS: usize = 8;
+
+/// The ids of the fixed pool of other-account row containers.
+fn other_account_entry_ids() -> [&'static [LiveId]; MAX_OTHER_ACCOUNT_ROWS] {
+    [
+        ids!(other_account_entry_0),
+        ids!(other_account_entry_1),
+        ids!(other_account_entry_2),
+        ids!(other_account_entry_3),
+        ids!(other_account_entry_4),
+        ids!(other_account_entry_5),
+        ids!(other_account_entry_6),
+        ids!(other_account_entry_7),
+    ]
+}
+
+/// The ids of the user-id labels inside each pooled other-account row.
+fn other_account_label_ids() -> [&'static [LiveId]; MAX_OTHER_ACCOUNT_ROWS] {
+    [
+        ids!(other_account_entry_0.other_account_label),
+        ids!(other_account_entry_1.other_account_label),
+        ids!(other_account_entry_2.other_account_label),
+        ids!(other_account_entry_3.other_account_label),
+        ids!(other_account_entry_4.other_account_label),
+        ids!(other_account_entry_5.other_account_label),
+        ids!(other_account_entry_6.other_account_label),
+        ids!(other_account_entry_7.other_account_label),
+    ]
+}
+
+/// The ids of the "Switch" buttons inside each pooled other-account row.
+fn switch_account_button_ids() -> [&'static [LiveId]; MAX_OTHER_ACCOUNT_ROWS] {
+    [
+        ids!(other_account_entry_0.switch_account_button),
+        ids!(other_account_entry_1.switch_account_button),
+        ids!(other_account_entry_2.switch_account_button),
+        ids!(other_account_entry_3.switch_account_button),
+        ids!(other_account_entry_4.switch_account_button),
+        ids!(other_account_entry_5.switch_account_button),
+        ids!(other_account_entry_6.switch_account_button),
+        ids!(other_account_entry_7.switch_account_button),
+    ]
 }
 
 fn effective_active_account_user_id(
