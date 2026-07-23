@@ -33,7 +33,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -252,6 +252,10 @@ struct ApprovalCardRenderState {
     title: String,
     summary: String,
     buttons_enabled: bool,
+    /// `risk_level == Critical` — drives the red "Critical" badge (§4.6).
+    risk_critical: bool,
+    /// One-line footer meta (tool + expiry, or who may approve).
+    meta: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -479,16 +483,58 @@ fn parse_octos_action_payload_for_render(
     }
 }
 
+/// Compact "YYYY-MM-DD HH:MM" from an ISO-8601 expiry; falls back to the raw
+/// (trimmed) string when it does not look like an ISO timestamp.
+fn format_approval_expiry(expires_at: &str) -> String {
+    let trimmed = expires_at.trim();
+    // `expires_at` is untrusted remote input, so slice on a char boundary only:
+    // a byte-range slice panics if byte 16 lands mid-multibyte-char. Expect an
+    // ISO-8601 timestamp (YYYY-MM-DDThh:mm...) → render "YYYY-MM-DD hh:mm".
+    // `get(..16)` yields None if the string is shorter than 16 bytes or byte 16
+    // is not a char boundary, falling back to the raw trimmed string.
+    if trimmed.as_bytes().get(10) == Some(&b'T') {
+        if let Some(head) = trimmed.get(..16) {
+            return head.replace('T', " ");
+        }
+    }
+    trimmed.to_owned()
+}
+
+/// One-line ApprovalCard footer meta (§4.6): tool + expiry when the local user
+/// can approve, otherwise who is allowed to approve.
+fn approval_card_meta_text(request: &OctosApprovalRequest, buttons_enabled: bool) -> String {
+    if buttons_enabled {
+        let expiry = format_approval_expiry(&request.expires_at);
+        if expiry.is_empty() {
+            format!("Tool: {}", request.tool_name)
+        } else {
+            format!("Tool: {} · Expires {}", request.tool_name, expiry)
+        }
+    } else {
+        let approvers = request.authorized_approvers.join(", ");
+        if approvers.is_empty() {
+            format!("Tool: {} · approval required", request.tool_name)
+        } else {
+            format!("Only {} can approve", approvers)
+        }
+    }
+}
+
 fn compute_action_button_render_state(
     actions: &[OctosActionButton],
     approval_request: Option<&OctosApprovalRequest>,
     current_user_id: Option<&UserId>,
 ) -> ActionButtonRenderState {
     let approval_card = approval_request
-        .and_then(|approval_request| (!actions.is_empty()).then(|| ApprovalCardRenderState {
-            title: approval_request.title.clone(),
-            summary: approval_request.summary.clone(),
-            buttons_enabled: local_user_can_approve(approval_request, current_user_id),
+        .and_then(|approval_request| (!actions.is_empty()).then(|| {
+            let buttons_enabled = local_user_can_approve(approval_request, current_user_id);
+            ApprovalCardRenderState {
+                title: approval_request.title.clone(),
+                summary: approval_request.summary.clone(),
+                buttons_enabled,
+                risk_critical: approval_request.risk_level == OctosApprovalRiskLevel::Critical,
+                meta: approval_card_meta_text(approval_request, buttons_enabled),
+            }
         }));
     let visible_slots = actions
         .iter()
@@ -898,6 +944,51 @@ fn compute_bot_timeline_render_state(raw_body: &str, is_bot_sender: bool) -> Bot
     }
 }
 
+/// Which timeline card a bot/agent message should render as.
+///
+/// Coordinator scaffold for the agent-message-response-cards work (design:
+/// `docs/superpowers/specs/2026-07-10-agent-message-response-cards.md`, §5.4).
+/// Introduced with the CodeOutputCard (④) increment. Behaviour-preserving for
+/// now — bot senders keep the existing 3-layer `BotTextCard`; the `AgentCard`
+/// branch is wired up in the AgentMessageCard (②) increment once a structured
+/// agent signal (e.g. `org.octos.steps`) is available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+enum AgentCardKind {
+    /// Ordinary user message — no bot/agent surface.
+    PlainMessage,
+    /// Existing Octos 3-layer bot text card (status strip / body / footer).
+    BotTextCard,
+    /// Rich `AgentMessageCard` (§4.5): step chips + analysis card. Requires a
+    /// structured agent signal that Octos does not emit yet.
+    AgentCard,
+}
+
+/// Inputs the coordinator uses to pick a card kind. Extend as new agent signals
+/// (steps, framework identity, tool phases) come online.
+#[allow(dead_code)]
+struct AgentRenderInputs {
+    /// Whether the message sender is classified as a bot/agent.
+    is_bot_sender: bool,
+    /// Whether the message carries a structured agent-progress signal
+    /// (reserved for a future `org.octos.steps`-style field).
+    has_structured_agent_signal: bool,
+}
+
+/// Decide which card a message renders as. Behaviour-preserving today: any bot
+/// sender → `BotTextCard`; the `AgentCard` upgrade is gated on a structured
+/// agent signal that Octos does not emit yet (§4.5).
+#[allow(dead_code)]
+fn compute_agent_render_state(inputs: &AgentRenderInputs) -> AgentCardKind {
+    if !inputs.is_bot_sender {
+        return AgentCardKind::PlainMessage;
+    }
+    if inputs.has_structured_agent_signal {
+        return AgentCardKind::AgentCard;
+    }
+    AgentCardKind::BotTextCard
+}
+
 /// The text that should land on the clipboard when copying a message body.
 ///
 /// Bot-sent messages embed status / provider / `_metadata_` scaffolding lines
@@ -1064,9 +1155,9 @@ fn is_room_info_action_modal_open() -> bool {
 
 
 /// #FFF4E5
-const COLOR_THREAD_SUMMARY_BG: Vec4 = vec4(1.0, 0.957, 0.898, 1.0);
+const COLOR_THREAD_SUMMARY_BG: Vec4 = vec4(0.984, 0.945, 0.867, 1.0); // == RBX_WARNING_BG
 /// #FFEACC
-const COLOR_THREAD_SUMMARY_BG_HOVER: Vec4 = vec4(1.0, 0.918, 0.8, 1.0);
+const COLOR_THREAD_SUMMARY_BG_HOVER: Vec4 = vec4(0.96, 0.90, 0.79, 1.0); // warning hover
 
 fn item_event_id(item: &Arc<TimelineItem>) -> Option<&EventId> {
     let TimelineItemKind::Event(event) = item.kind() else {
@@ -1612,14 +1703,14 @@ script_mod! {
 
     mod.widgets.COLOR_BG = #xfff8ee
     mod.widgets.COLOR_OVERLAY_BG = #x000000d8
-    mod.widgets.COLOR_READ_MARKER = #xeb2733
+    mod.widgets.COLOR_READ_MARKER = #x119FB3  // unified to RBX_ACCENT (new-messages boundary = brand, not alarm)
 
     mod.widgets.REACTION_TEXT_COLOR = #4c00b0
 
-    mod.widgets.COLOR_THREAD_SUMMARY_BG = #FFF4E5
-    mod.widgets.COLOR_THREAD_SUMMARY_BG_HOVER = #FFEACC
-    mod.widgets.COLOR_THREAD_SUMMARY_BORDER = #E8C99A
-    mod.widgets.COLOR_THREAD_SUMMARY_REPLY_COUNT = #A35A00
+    mod.widgets.COLOR_THREAD_SUMMARY_BG = #xFBF1DD          // == RBX_WARNING_BG
+    mod.widgets.COLOR_THREAD_SUMMARY_BG_HOVER = #xF5E6C8
+    mod.widgets.COLOR_THREAD_SUMMARY_BORDER = #xEAD9B5
+    mod.widgets.COLOR_THREAD_SUMMARY_REPLY_COUNT = #xC6790B // == RBX_WARNING_FG
     mod.widgets.COLOR_BOT_CARD_BG = #xF7FAFE
     mod.widgets.COLOR_BOT_CARD_BORDER = #xD8E3F0
     mod.widgets.COLOR_BOT_STATUS_BG = #xEEF4FB
@@ -1628,23 +1719,43 @@ script_mod! {
     mod.widgets.COLOR_BOT_CODE_BG = #xECF2F8
     mod.widgets.COLOR_BOT_CODE_BORDER = #xD5E0ED
 
-    mod.widgets.MessageActionPrimaryButton = RobrixPositiveIconButton {
+    // Primary action = teal RBX_ACCENT (was legacy green RobrixPositiveIconButton).
+    mod.widgets.MessageActionPrimaryButton = RobrixIconButton {
         width: Fit
         height: Fit
         spacing: 6.0
         padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        draw_bg +: {
+            color: (mod.widgets.RBX_ACCENT)
+            color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+            color_down: (mod.widgets.RBX_ACCENT_PRESSED)
+        }
         draw_text +: {
-            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+            text_style: mod.widgets.RBX_TEXT_BODY_STRONG {}
         }
     }
 
-    mod.widgets.MessageActionSecondaryButton = Button {
+    // Secondary action = ghost (surface + soft stroke + primary text).
+    mod.widgets.MessageActionSecondaryButton = RobrixIconButton {
         width: Fit
         height: Fit
         spacing: 6.0
         padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
+        icon_walk: Walk{ width: 0, height: 0 }
+        draw_bg +: {
+            border_size: 1.0
+            color: (mod.widgets.RBX_BG_SURFACE)
+            color_hover: (mod.widgets.RBX_BG_HOVER)
+            color_down: (mod.widgets.RBX_BG_PRESSED)
+            border_color: (mod.widgets.RBX_STROKE_SOFT)
+            border_color_hover: (mod.widgets.RBX_STROKE_SOFT)
+            border_color_down: (mod.widgets.RBX_STROKE_SOFT)
+        }
         draw_text +: {
-            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+            color: (mod.widgets.RBX_FG_PRIMARY)
+            color_hover: (mod.widgets.RBX_FG_PRIMARY)
+            color_down: (mod.widgets.RBX_FG_PRIMARY)
+            text_style: mod.widgets.RBX_TEXT_BODY_STRONG {}
         }
         text: ""
     }
@@ -1655,7 +1766,7 @@ script_mod! {
         spacing: 6.0
         padding: Inset{ left: 10.0, right: 10.0, top: 7.0, bottom: 7.0 }
         draw_text +: {
-            text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
+            text_style: mod.widgets.RBX_TEXT_BODY_STRONG {}
         }
     }
 
@@ -1738,10 +1849,10 @@ script_mod! {
         }
         draw_block +: {
             line_color: (MESSAGE_TEXT_COLOR)
-            sep_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
-            quote_bg_color: #xEFF5FB
-            quote_fg_color: #x7892AC
-            code_color: (mod.widgets.COLOR_BOT_CODE_BG)
+            sep_color: (mod.widgets.RBX_STROKE_STRONG)
+            quote_bg_color: (mod.widgets.RBX_BG_SURFACE_SUBTLE)
+            quote_fg_color: (mod.widgets.RBX_FG_SECONDARY)
+            code_color: (mod.widgets.RBX_BG_SUNKEN)
         }
         code_layout: Layout{
             flow: Flow.Right{wrap: true}
@@ -1766,10 +1877,10 @@ script_mod! {
             padding: 0.0
             show_bg: true
             draw_bg +: {
-                color: (mod.widgets.COLOR_BOT_CODE_BG)
-                border_radius: 10.0
+                color: (mod.widgets.RBX_CODE_BG)
+                border_radius: (mod.widgets.RBX_RADIUS_SM)
                 border_size: 1.0
-                border_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
+                border_color: (mod.widgets.RBX_CODE_BORDER)
             }
 
             code_view := mod.widgets.CodeView {
@@ -1780,29 +1891,32 @@ script_mod! {
                     margin: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
                     draw_bg +: { color: #0000 }
                     draw_text +: {
+                        color: (mod.widgets.RBX_CODE_FG)
                         text_style: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
                             font_size: (MESSAGE_FONT_SIZE - 0.5)
                             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
                         }
                     }
+                    // Dark syntax map (was GitHub-light) so tokens stay readable
+                    // on the RBX_CODE_BG panel. See CodeOutputCard §4.7.
                     token_colors +: {
-                        whitespace: #x6a737d
-                        delimiter: #x24292e
-                        delimiter_highlight: #x005cc5
-                        error_decoration: #xcb2431
-                        warning_decoration: #xb08800
-                        unknown: #x24292e
-                        branch_keyword: #xd73a49
-                        constant: #x005cc5
-                        identifier: #x24292e
-                        loop_keyword: #xd73a49
-                        number: #x005cc5
-                        other_keyword: #xd73a49
-                        punctuator: #x24292e
-                        string: #x22863a
-                        function: #x6f42c1
-                        typename: #xe36209
-                        comment: #x6a737d
+                        whitespace: (mod.widgets.RBX_CODE_COMMENT)
+                        delimiter: (mod.widgets.RBX_CODE_PUNCT)
+                        delimiter_highlight: (mod.widgets.RBX_CODE_KEYWORD)
+                        error_decoration: (mod.widgets.RBX_CODE_ERROR)
+                        warning_decoration: (mod.widgets.RBX_CODE_WARNING)
+                        unknown: (mod.widgets.RBX_CODE_FG)
+                        branch_keyword: (mod.widgets.RBX_CODE_KEYWORD)
+                        constant: (mod.widgets.RBX_CODE_NUMBER)
+                        identifier: (mod.widgets.RBX_CODE_FG)
+                        loop_keyword: (mod.widgets.RBX_CODE_KEYWORD)
+                        number: (mod.widgets.RBX_CODE_NUMBER)
+                        other_keyword: (mod.widgets.RBX_CODE_KEYWORD)
+                        punctuator: (mod.widgets.RBX_CODE_PUNCT)
+                        string: (mod.widgets.RBX_CODE_STRING)
+                        function: (mod.widgets.RBX_CODE_FUNCTION)
+                        typename: (mod.widgets.RBX_CODE_TYPE)
+                        comment: (mod.widgets.RBX_CODE_COMMENT)
                     }
                 }
             }
@@ -1822,6 +1936,12 @@ script_mod! {
             height: mod.widgets.SETTINGS_BUTTON_HEIGHT,
             padding: Inset{left: 12, right: 12}
             margin: 0
+            // Unify to the teal accent (was legacy blue via RobrixIconButton).
+            draw_bg +: {
+                color: (mod.widgets.RBX_ACCENT)
+                color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+                color_down: (mod.widgets.RBX_ACCENT_PRESSED)
+            }
             draw_icon.svg: (ICON_DOWNLOAD)
             icon_walk: Walk{width: 16, height: 16}
             text: "Download"
@@ -1837,7 +1957,7 @@ script_mod! {
 
             spinner := LoadingSpinner {
                 width: 16, height: 16
-                draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                draw_bg.color: (mod.widgets.RBX_ACCENT)
             }
             status_label := Label {
                 width: Fit, height: Fit
@@ -1845,7 +1965,7 @@ script_mod! {
                 margin: 0
                 draw_text +: {
                     text_style: REGULAR_TEXT { font_size: 11 },
-                    color: (COLOR_ACTIVE_PRIMARY)
+                    color: (mod.widgets.RBX_ACCENT)
                 }
                 text: "Downloading…"
             }
@@ -1989,21 +2109,24 @@ script_mod! {
         draw_bg +: {
             highlight: instance(0.0)
             hover: instance(0.0)
-            color: instance((COLOR_PRIMARY)) // default color)
+            color: instance((mod.widgets.RBX_BG_SURFACE)) // default row fill
 
-            mentions_bar_color: instance((COLOR_PRIMARY))
+            hover_color: instance((mod.widgets.RBX_BG_HOVER))
+            highlight_color: instance((mod.widgets.RBX_ACCENT_SOFT))
+
+            mentions_bar_color: instance((mod.widgets.RBX_BG_SURFACE))
             mentions_bar_width: instance(4.0)
 
             pixel: fn() {
                 let base_color = mix(
                     self.color,
-                    #fafafa,
+                    self.hover_color,
                     self.hover
                 );
 
                 let with_highlight = mix(
                     base_color,
-                    #c5d6fa,
+                    self.highlight_color,
                     self.highlight
                 );
 
@@ -2074,9 +2197,28 @@ script_mod! {
                 height: Fit,
                 margin: Inset{top: #(MESSAGE_PROFILE_TOP_MARGIN), right: 10}
                 flow: Down,
-                avatar := Avatar {
-                    width: #(MESSAGE_PROFILE_AVATAR_SIZE),
-                    height: #(MESSAGE_PROFILE_AVATAR_SIZE),
+                avatar_wrap := View {
+                    width: Fit
+                    height: Fit
+                    flow: Overlay
+                    avatar := Avatar {
+                        width: #(MESSAGE_PROFILE_AVATAR_SIZE),
+                        height: #(MESSAGE_PROFILE_AVATAR_SIZE),
+                    }
+                    // §4.5 agent online dot, pinned to the avatar's bottom-right.
+                    agent_online_dot := RoundedView {
+                        visible: false
+                        width: 12.0
+                        height: 12.0
+                        margin: Inset{ left: 36.0, top: 36.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.RBX_SUCCESS_FG)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                            border_size: 2.0
+                            border_color: (mod.widgets.RBX_BG_SURFACE)
+                        }
+                    }
                 }
                 edited_indicator := EditedIndicator { }
                 tsp_sign_indicator := TspSignIndicator { }
@@ -2132,7 +2274,7 @@ script_mod! {
                                 }
                                 color: (RBX_ACCENT)
                             }
-                            text: "bot"
+                            text: "Bot"
                         }
                     }
                     timestamp := Timestamp {
@@ -2148,28 +2290,51 @@ script_mod! {
                     spacing: 6.0
                     margin: Inset{ top: 1.0, bottom: 3.0 }
 
+                    bot_streaming_indicator := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: Fit
+                        align: Align{ x: 0.5, y: 0.5 }
+                        padding: Inset{ left: 8.0, right: 8.0, top: 5.0, bottom: 5.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.RBX_ACCENT_SOFT)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                        }
+                        bot_streaming_spinner := LoadingSpinner {
+                            width: 16.0
+                            height: 16.0
+                            draw_bg.color: (mod.widgets.RBX_ACCENT)
+                            draw_bg.stroke_width: 2.0
+                        }
+                    }
+
+                    // §4.5 StepChip (active): the parsed agent status renders as a
+                    // teal step pill. A multi-step chain needs backend org.octos.steps.
                     bot_status_strip := RoundedView {
                         visible: false
                         width: Fit
                         height: Fit
-                        padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
+                        align: Align{ y: 0.5 }
+                        padding: Inset{ left: 10.0, right: 10.0, top: 4.0, bottom: 4.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 10.0
+                            color: (mod.widgets.RBX_ACCENT_SOFT)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
                         }
 
                         bot_status_label := Label {
                             width: Fit
                             height: Fit
                             draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                                text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                color: (mod.widgets.RBX_ACCENT)
                             }
                             text: ""
                         }
                     }
 
+                    // Bot answer card: white RBX surface, tight corners.
                     bot_body_card := RoundedView {
                         width: Fill
                         height: Fit
@@ -2177,10 +2342,10 @@ script_mod! {
                         padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_CARD_BG)
-                            border_radius: 6.0
+                            color: (mod.widgets.RBX_BG_SURFACE)
+                            border_radius: (mod.widgets.RBX_RADIUS_XS)
                             border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                            border_color: (mod.widgets.RBX_STROKE_SOFT)
                         }
 
                         bot_card_body := HtmlOrPlaintext { }
@@ -2197,6 +2362,93 @@ script_mod! {
 
                 message := HtmlOrPlaintext { }
                 splash_card := Splash { }
+
+                // org.octos.app mini-app card (A1: agent-to-app registry).
+                octos_app_card := RoundedView {
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 8.0
+                    padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
+                    margin: Inset{ top: 1.0, bottom: 3.0 }
+                    show_bg: true
+                    draw_bg +: {
+                        color: (mod.widgets.RBX_BG_SURFACE)
+                        border_radius: (mod.widgets.RBX_RADIUS_XS)
+                        border_size: 1.0
+                        border_color: (mod.widgets.RBX_STROKE_SOFT)
+                    }
+
+                    app_card_header_row := View {
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        align: Align{ y: 0.5 }
+                        spacing: 8.0
+
+                        app_card_title := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.RBX_TEXT_CARD_TITLE {}
+                                color: (mod.widgets.RBX_FG_PRIMARY)
+                            }
+                            text: ""
+                        }
+
+                        app_card_badge := RoundedView {
+                            visible: false
+                            width: Fit
+                            height: Fit
+                            align: Align{ x: 0.5, y: 0.5 }
+                            padding: Inset{ left: 9.0, right: 9.0, top: 3.0, bottom: 3.0 }
+                            show_bg: true
+                            draw_bg +: {
+                                color: (mod.widgets.RBX_ACCENT_SOFT)
+                                border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                            }
+                            app_card_badge_label := Label {
+                                width: Fit
+                                height: Fit
+                                draw_text +: {
+                                    text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                    color: (mod.widgets.RBX_ACCENT)
+                                }
+                                text: ""
+                            }
+                        }
+
+                        // Expand/collapse toggle for collapsible cards
+                        // (`run_details`). Hidden for every other card type.
+                        app_card_expand_button := mod.widgets.SmallStateGroupToggleButton {
+                            visible: false
+                            padding: Inset{ left: 6.0, right: 2.0, top: 0.0, bottom: 0.0 }
+                            draw_text +: {
+                                text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                color: (mod.widgets.RBX_ACCENT)
+                            }
+                            text: "Details"
+                        }
+                    }
+
+                    // Optional embedded image for a `visual`/`image`/`chart` card.
+                    app_card_image := TextOrImage {
+                        visible: false
+                        width: Fill, height: Fit,
+                        margin: Inset{ top: 2.0, bottom: 4.0 }
+                    }
+
+                    // The card body, wrapped in a plain View so it can be hidden
+                    // when a collapsible card is collapsed (a plain-View wrapper
+                    // toggles reliably, unlike set_visible on the custom widget).
+                    app_card_detail := View {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        app_card_body := HtmlOrPlaintext { }
+                    }
+                }
                 action_buttons := View {
                     visible: false
                     width: Fill
@@ -2210,32 +2462,95 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Down
-                        spacing: 4.0
-                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                        spacing: 6.0
+                        padding: Inset{ left: 16.0, right: 16.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 12.0
+                            color: (mod.widgets.RBX_WARNING_BG)
+                            border_radius: (mod.widgets.RBX_RADIUS_XS)
                             border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                            border_color: (mod.widgets.RBX_WARNING_FG)
                         }
 
-                        approval_title_label := Label {
+                        approval_header_row := View {
                             width: Fill
                             height: Fit
-                            draw_text +: {
-                                text_style: theme.font_bold { font_size: 10.5 }
-                                color: (mod.widgets.COLOR_TEXT)
+                            flow: Right
+                            align: Align{ y: 0.5 }
+                            spacing: 6.0
+
+                            approval_title_label := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: mod.widgets.RBX_TEXT_CARD_TITLE {}
+                                    color: (mod.widgets.RBX_WARNING_FG)
+                                }
+                                text: ""
                             }
-                            text: ""
+
+                            approval_critical_badge := RoundedView {
+                                visible: false
+                                width: Fit
+                                height: Fit
+                                align: Align{ x: 0.5, y: 0.5 }
+                                padding: Inset{ left: 8.0, right: 8.0, top: 2.0, bottom: 2.0 }
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (mod.widgets.RBX_DANGER_BG)
+                                    border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                                }
+                                approval_critical_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                        color: (mod.widgets.RBX_DANGER_FG)
+                                    }
+                                    text: "Critical"
+                                }
+                            }
+
+                            approval_pending_badge := RoundedView {
+                                width: Fit
+                                height: Fit
+                                align: Align{ x: 0.5, y: 0.5 }
+                                padding: Inset{ left: 8.0, right: 8.0, top: 2.0, bottom: 2.0 }
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (mod.widgets.RBX_BG_SURFACE)
+                                    border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                                    border_size: 1.0
+                                    border_color: (mod.widgets.RBX_WARNING_FG)
+                                }
+                                approval_pending_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                        color: (mod.widgets.RBX_WARNING_FG)
+                                    }
+                                    text: "Pending"
+                                }
+                            }
                         }
 
                         approval_summary_label := Label {
                             width: Fill
                             height: Fit
                             draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                                text_style: mod.widgets.RBX_TEXT_BODY {}
+                                color: (mod.widgets.RBX_FG_PRIMARY)
+                            }
+                            text: ""
+                        }
+
+                        approval_meta_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.RBX_TEXT_META {}
+                                color: (mod.widgets.RBX_FG_SECONDARY)
                             }
                             text: ""
                         }
@@ -2309,28 +2624,51 @@ script_mod! {
                     spacing: 6.0
                     margin: Inset{ top: 1.0, bottom: 3.0 }
 
+                    bot_streaming_indicator := RoundedView {
+                        visible: false
+                        width: Fit
+                        height: Fit
+                        align: Align{ x: 0.5, y: 0.5 }
+                        padding: Inset{ left: 8.0, right: 8.0, top: 5.0, bottom: 5.0 }
+                        show_bg: true
+                        draw_bg +: {
+                            color: (mod.widgets.RBX_ACCENT_SOFT)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                        }
+                        bot_streaming_spinner := LoadingSpinner {
+                            width: 16.0
+                            height: 16.0
+                            draw_bg.color: (mod.widgets.RBX_ACCENT)
+                            draw_bg.stroke_width: 2.0
+                        }
+                    }
+
+                    // §4.5 StepChip (active): the parsed agent status renders as a
+                    // teal step pill. A multi-step chain needs backend org.octos.steps.
                     bot_status_strip := RoundedView {
                         visible: false
                         width: Fit
                         height: Fit
-                        padding: Inset{ left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 }
+                        align: Align{ y: 0.5 }
+                        padding: Inset{ left: 10.0, right: 10.0, top: 4.0, bottom: 4.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 10.0
+                            color: (mod.widgets.RBX_ACCENT_SOFT)
+                            border_radius: (mod.widgets.RBX_RADIUS_PILL)
                         }
 
                         bot_status_label := Label {
                             width: Fit
                             height: Fit
                             draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                                text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                color: (mod.widgets.RBX_ACCENT)
                             }
                             text: ""
                         }
                     }
 
+                    // Bot answer card: white RBX surface, tight corners.
                     bot_body_card := RoundedView {
                         width: Fill
                         height: Fit
@@ -2338,10 +2676,10 @@ script_mod! {
                         padding: Inset{ left: 14.0, right: 14.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_CARD_BG)
-                            border_radius: 6.0
+                            color: (mod.widgets.RBX_BG_SURFACE)
+                            border_radius: (mod.widgets.RBX_RADIUS_XS)
                             border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                            border_color: (mod.widgets.RBX_STROKE_SOFT)
                         }
 
                         bot_card_body := HtmlOrPlaintext { }
@@ -2370,32 +2708,95 @@ script_mod! {
                         width: Fill
                         height: Fit
                         flow: Down
-                        spacing: 4.0
-                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
+                        spacing: 6.0
+                        padding: Inset{ left: 16.0, right: 16.0, top: 12.0, bottom: 12.0 }
                         show_bg: true
                         draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 12.0
+                            color: (mod.widgets.RBX_WARNING_BG)
+                            border_radius: (mod.widgets.RBX_RADIUS_XS)
                             border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
+                            border_color: (mod.widgets.RBX_WARNING_FG)
                         }
 
-                        approval_title_label := Label {
+                        approval_header_row := View {
                             width: Fill
                             height: Fit
-                            draw_text +: {
-                                text_style: theme.font_bold { font_size: 10.5 }
-                                color: (mod.widgets.COLOR_TEXT)
+                            flow: Right
+                            align: Align{ y: 0.5 }
+                            spacing: 6.0
+
+                            approval_title_label := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: mod.widgets.RBX_TEXT_CARD_TITLE {}
+                                    color: (mod.widgets.RBX_WARNING_FG)
+                                }
+                                text: ""
                             }
-                            text: ""
+
+                            approval_critical_badge := RoundedView {
+                                visible: false
+                                width: Fit
+                                height: Fit
+                                align: Align{ x: 0.5, y: 0.5 }
+                                padding: Inset{ left: 8.0, right: 8.0, top: 2.0, bottom: 2.0 }
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (mod.widgets.RBX_DANGER_BG)
+                                    border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                                }
+                                approval_critical_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                        color: (mod.widgets.RBX_DANGER_FG)
+                                    }
+                                    text: "Critical"
+                                }
+                            }
+
+                            approval_pending_badge := RoundedView {
+                                width: Fit
+                                height: Fit
+                                align: Align{ x: 0.5, y: 0.5 }
+                                padding: Inset{ left: 8.0, right: 8.0, top: 2.0, bottom: 2.0 }
+                                show_bg: true
+                                draw_bg +: {
+                                    color: (mod.widgets.RBX_BG_SURFACE)
+                                    border_radius: (mod.widgets.RBX_RADIUS_PILL)
+                                    border_size: 1.0
+                                    border_color: (mod.widgets.RBX_WARNING_FG)
+                                }
+                                approval_pending_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: mod.widgets.RBX_TEXT_BADGE {}
+                                        color: (mod.widgets.RBX_WARNING_FG)
+                                    }
+                                    text: "Pending"
+                                }
+                            }
                         }
 
                         approval_summary_label := Label {
                             width: Fill
                             height: Fit
                             draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
+                                text_style: mod.widgets.RBX_TEXT_BODY {}
+                                color: (mod.widgets.RBX_FG_PRIMARY)
+                            }
+                            text: ""
+                        }
+
+                        approval_meta_label := Label {
+                            width: Fill
+                            height: Fit
+                            draw_text +: {
+                                text_style: mod.widgets.RBX_TEXT_META {}
+                                color: (mod.widgets.RBX_FG_SECONDARY)
                             }
                             text: ""
                         }
@@ -2735,7 +3136,7 @@ script_mod! {
             padding: Inset{left: 7.0, right: 7.0}
             draw_text +: {
                 text_style: TEXT_SUB {},
-                color: (COLOR_DIVIDER_DARK)
+                color: (mod.widgets.RBX_FG_TERTIARY)
             }
             text: ""
         }
@@ -2769,7 +3170,7 @@ script_mod! {
         align: Align{x: 0.5, y: 0}
         flow: Right,
         show_bg: true,
-        draw_bg.color: #xDAF5E5F0, // mostly opaque light green
+        draw_bg.color: (mod.widgets.RBX_BG_SURFACE_SUBTLE), // loading-earlier banner
 
         label := Label {
             width: Fill,
@@ -2942,7 +3343,7 @@ script_mod! {
             height: Fill
             visible: false,
             show_bg: true
-            draw_bg.color: #000000BB
+            draw_bg.color: (mod.widgets.RBX_SCRIM)
         }
 
         main_content := SolidView {
@@ -3169,7 +3570,7 @@ script_mod! {
             height: Fill
             visible: false,
             show_bg: true
-            draw_bg.color: #000000BB
+            draw_bg.color: (mod.widgets.RBX_SCRIM)
         }
 
         main_content := SolidView {
@@ -5913,6 +6314,14 @@ impl Widget for RoomScreen {
                         needs_another_frame |= state.needs_frame();
                     }
 
+                    // Keep re-drawing (not re-populating) a live stream every frame so
+                    // the "generating" spinner keeps spinning even in full-snapshot
+                    // markdown mode, where the typewriter is not ticking. ①
+                    if state.is_live {
+                        needs_another_frame = true;
+                        redraw_candidate_indices.push(state.timeline_index);
+                    }
+
                     if state.is_complete() || state.is_timed_out() {
                         completed_ids.push(event_id.clone());
                         redraw_candidate_indices.push(state.timeline_index);
@@ -6091,6 +6500,17 @@ impl Widget for RoomScreen {
                     };
                     log!("[encryption-notice/toggle] calling toggle_small_state_event_group(tl_idx={tl_idx})");
                     self.toggle_small_state_event_group(cx, tl_idx);
+                    continue;
+                }
+
+                // Octos `run_details` card: expand/collapse its detail on click.
+                if wr
+                    .button(cx, ids!(content.octos_app_card.app_card_header_row.app_card_expand_button))
+                    .clicked(actions)
+                {
+                    if let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) {
+                        self.toggle_octos_card_expanded(cx, tl_idx);
+                    }
                     continue;
                 }
 
@@ -7165,6 +7585,7 @@ impl Widget for RoomScreen {
                                                 &mut self.octos_action_button_contexts,
                                                 &self.disabled_octos_action_source_event_ids,
                                                 &self.selected_octos_action_by_source_event_id,
+                                                &tl_state.expanded_octos_card_event_ids,
                                             )
                                         },
                                         // TODO: properly implement `Poll` as a regular Message-like timeline item.
@@ -7377,6 +7798,34 @@ impl RoomScreen {
         tl_state.profile_drawn_since_last_update.remove(group.start .. group.end);
         self.redraw_timeline_list(cx);
         log!("[encryption-notice/toggle] state mutated, redraw_timeline_list called");
+    }
+
+    /// Toggle the expanded/collapsed state of a collapsible octos card
+    /// (`run_details`) at the given timeline index, persisting it by source
+    /// event id so it survives PortalList virtualization. Clears that item's
+    /// content-draw cache so the card re-populates at its new size.
+    fn toggle_octos_card_expanded(&mut self, cx: &mut Cx, tl_idx: usize) {
+        let Some(tl_state) = self.tl_state.as_mut() else {
+            return;
+        };
+        let Some(event_id) = tl_state
+            .items
+            .get(tl_idx)
+            .and_then(|item| item.as_event())
+            .and_then(|ev| ev.event_id())
+            .map(|id| id.to_owned())
+        else {
+            return;
+        };
+        if tl_state.expanded_octos_card_event_ids.contains(&event_id) {
+            tl_state.expanded_octos_card_event_ids.remove(&event_id);
+        } else {
+            tl_state.expanded_octos_card_event_ids.insert(event_id);
+        }
+        tl_state
+            .content_drawn_since_last_update
+            .remove(tl_idx .. tl_idx + 1);
+        self.redraw_timeline_list(cx);
     }
 
     fn sync_translation_lang_popup(&mut self, cx: &mut Cx) {
@@ -7886,6 +8335,12 @@ impl RoomScreen {
         let mut done_loading = false;
         let mut should_continue_backwards_pagination = false;
         let mut typing_users = None;
+        // Whether a new message row was appended this batch. Once a message
+        // bubble exists, the separate "is typing" line is redundant (the message
+        // itself, plus the streaming spinner, conveys activity), so we clear the
+        // typing notice locally instead of waiting for the server's typing=false
+        // EDU — which for an appservice bot can lag or rely on the ~30s timeout.
+        let mut appended_new_message = false;
         let mut num_updates = 0;
         while let Ok(update) = tl.update_receiver.try_recv() {
             num_updates += 1;
@@ -7938,6 +8393,12 @@ impl RoomScreen {
                     done_loading = true;
                 }
                 TimelineUpdate::NewItems { new_items, changed_indices, is_append, clear_cache } => {
+                    // A newly-appended row means a message bubble arrived (vs. a
+                    // streaming edit, which updates in place) — clear any stale
+                    // typing notice below (see `appended_new_message`).
+                    if is_append {
+                        appended_new_message = true;
+                    }
                     if let Some(app_state) = app_state {
                         let discovered_bot_user_ids =
                             Self::discover_known_bot_user_ids_from_timeline_items(
@@ -8539,6 +9000,12 @@ impl RoomScreen {
             top_space.set_visible(cx, false);
         }
 
+        // A message arrived this batch and no fresh typing EDU overrode it →
+        // clear the (now-stale) typing notice locally. A genuine concurrent
+        // typing update (`typing_users` already Some) still wins.
+        if appended_new_message && typing_users.is_none() {
+            typing_users = Some(Vec::new());
+        }
         if let Some(users) = typing_users {
             self.view
                 .typing_notice(cx, ids!(typing_notice))
@@ -9213,18 +9680,27 @@ impl RoomScreen {
                 // }
 
                 MessageAction::DownloadAttachment(info) => {
+                    let app_language = self.app_language;
                     let Some(tl) = self.tl_state.as_mut() else { continue };
                     let mxc_uri = media_source_mxc(&info.media_source).clone();
                     if tl.pending_downloads.iter().any(|pending| pending.mxc == mxc_uri) {
                         continue;
                     }
                     tl.pending_downloads.push(PendingDownload {
-                        mxc: mxc_uri,
+                        mxc: mxc_uri.clone(),
                         state: PendingDownloadState::InProgress,
                     });
                     portal_list.redraw(cx);
                     let update_sender = tl.media_cache.timeline_update_sender().cloned();
-                    start_attachment_download(info.clone(), update_sender);
+                    // Route the download button through the same direct request as the
+                    // working inline mxc link: DownloadAndSaveFile bypasses MediaCache
+                    // and the non-ASCII Content-Disposition header parse that makes the
+                    // DownloadMediaToFile (get_media_content) path fail on some files.
+                    submit_async_request(MatrixRequest::DownloadAndSaveFile {
+                        mxc_uri,
+                        app_language,
+                        update_sender,
+                    });
                 }
                 MessageAction::CancelDownload(mxc) => {
                     if let Some(tl) = self.tl_state.as_mut()
@@ -10090,6 +10566,7 @@ impl RoomScreen {
                 backwards_pagination_in_flight: false,
                 items: Vector::new(),
                 expanded_small_state_group_event_ids: HashSet::new(),
+                expanded_octos_card_event_ids: HashSet::new(),
                 content_drawn_since_last_update: RangeSet::new(),
                 profile_drawn_since_last_update: RangeSet::new(),
                 update_receiver,
@@ -10315,7 +10792,7 @@ impl RoomScreen {
 
         // 3. If there are active streaming animations that can still reveal text,
         //    re-request the NextFrame event so the animation loop resumes.
-        if tl_state.streaming_messages.values().any(|state| state.needs_frame()) {
+        if tl_state.streaming_messages.values().any(|state| state.needs_frame() || state.is_live) {
             self.streaming_next_frame = cx.new_next_frame();
         }
     }
@@ -10732,6 +11209,11 @@ struct TimelineUiState {
     ///
     /// By default, groups are collapsed unless their first event ID appears in this set.
     expanded_small_state_group_event_ids: HashSet<OwnedEventId>,
+
+    /// Source event IDs of collapsible octos cards (`run_details`) the user has
+    /// expanded. Empty = all collapsed. Kept here (not on the recycled item
+    /// widget) so the expanded state survives PortalList virtualization.
+    expanded_octos_card_event_ids: HashSet<OwnedEventId>,
 
     /// The range of items (indices in the above `items` list) whose event **contents** have been drawn
     /// since the last update and thus do not need to be re-populated on future draw events.
@@ -11276,6 +11758,7 @@ fn populate_message_view(
     action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
     disabled_action_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
+    expanded_octos_card_event_ids: &HashSet<OwnedEventId>,
 ) -> (WidgetRef, ItemDrawnStatus) {
     let mut new_drawn_status = item_drawn_status;
     let ts_millis = event_tl_item.timestamp();
@@ -11304,6 +11787,56 @@ fn populate_message_view(
         },
         _ => false,
     };
+
+    // An org.octos.app mini-app card must ALWAYS render as a full card: the
+    // CondensedMessage template has no card slot, so a condensed row silently
+    // falls back to plain body text. Detect the card up-front — bot senders only,
+    // so ordinary user text never pays the content deserialize — and force the
+    // non-condensed path. Overriding `use_compact_view` here (before the msgtype
+    // match) makes it flow to BOTH the template choice and the profile-draw
+    // logic below, so the forced-full card also draws its avatar/username.
+    // An `org.octos.app` mini-app card, or octos's own `org.octos.swarm_event`
+    // harness envelope (a separate wire key). A `visual`/`image` card also
+    // carries an mxc image, extracted alongside so it flows to the renderer
+    // without threading it through every text-card's return value.
+    // `octos_run_render` is the per-turn run detail (tools + cost) EMBEDDED on a
+    // bot answer via the `org.octos.run` key — rendered as a collapsible strip
+    // *alongside* the answer text, not as a replacement card.
+    let (octos_app_render, octos_app_image, octos_run_render): (
+        Option<OctosAppCardRender>,
+        Option<OctosCardImage>,
+        Option<OctosAppCardRender>,
+    ) = if sender_is_bot {
+        match latest_effective_event_content_json(event_tl_item) {
+            Some(content) => {
+                if let Some(app) = content.get("org.octos.app").filter(|a| a.is_object()) {
+                    (render_octos_app_card(app), octos_app_card_image(app), None)
+                } else if let Some(ev) =
+                    content.get("org.octos.swarm_event").filter(|a| a.is_object())
+                {
+                    (render_swarm_event_card(ev), None, None)
+                } else {
+                    let run = content
+                        .get("org.octos.run")
+                        .filter(|r| r.is_object())
+                        .and_then(render_run_details_app_card);
+                    (None, None, run)
+                }
+            }
+            None => (None, None, None),
+        }
+    } else {
+        (None, None, None)
+    };
+    // A message that renders a card OR an inline run detail must not collapse to
+    // the card-less CondensedMessage template.
+    let use_compact_view =
+        use_compact_view && octos_app_render.is_none() && octos_run_render.is_none();
+    // Persisted per-event expand state for a collapsible run detail.
+    let octos_card_expanded = event_tl_item
+        .event_id()
+        .map(|eid| expanded_octos_card_event_ids.contains(eid))
+        .unwrap_or(false);
 
     let has_html_body: bool;
 
@@ -11372,26 +11905,38 @@ fn populate_message_view(
                                 Some(link_preview_cache),
                                 sender_is_bot,
                             );
+                            // Show the animated "generating" indicator while the
+                            // stream is live (both typewriter and full-snapshot modes). ①
+                            item.view(cx, ids!(content.bot_message_card.bot_streaming_indicator))
+                                .set_visible(cx, state.is_live);
                             band_metadata = stream_meta;
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
-                            // Check for Splash card in custom event field
-                            let splash_code = latest_effective_event_content_json(event_tl_item)
-                                .and_then(|content|
-                                    content
-                                        .get("org.octos.splash_card")
-                                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                                );
+                            // Reuse the up-front org.octos.app detection (see the
+                            // top of populate_message_view); when a card is present
+                            // it already forced the full Message template + profile.
+                            let app_render = octos_app_render;
 
-                            if let Some(ref splash) = splash_code {
-                                // SPLASH CARD MODE: render native Makepad card
+                            if let Some(render) = app_render {
+                                // APP CARD MODE: the message IS a mini-app card —
+                                // render it in place of the text body (not
+                                // collapsible; it replaces the bot card).
                                 item.view(cx, ids!(content.message)).set_visible(cx, false);
-                                let splash_widget = item.splash(cx, ids!(content.splash_card));
-                                splash_widget.set_visible(cx, true);
-                                splash_widget.set_text(cx, splash);
-                                new_drawn_status.content_drawn = true;
+                                // `content_drawn` follows the (async) image load so
+                                // a visual card re-renders once its media arrives.
+                                new_drawn_status.content_drawn = populate_octos_app_card(
+                                    cx,
+                                    &item,
+                                    &render,
+                                    octos_app_image.as_ref(),
+                                    app_language,
+                                    media_cache,
+                                    false, // collapsible
+                                    false, // expanded
+                                    false, // keep_bot_card (card replaces the body)
+                                );
                             } else {
-                                // NORMAL MODE: existing logic
+                                // NORMAL MODE: render the bot answer text.
                                 let mut link_preview_ref =
                                     item.link_preview(cx, ids!(content.link_preview_view));
                                 let (bot_drawn, bot_meta) = populate_bot_text_message_content(
@@ -11408,6 +11953,24 @@ fn populate_message_view(
                                 );
                                 new_drawn_status.content_drawn = bot_drawn;
                                 band_metadata = bot_meta;
+                                // The answer may carry an embedded run detail
+                                // (`org.octos.run`): render it as a collapsible
+                                // strip BELOW the answer, keeping the bot card.
+                                if let Some(run_render) = octos_run_render {
+                                    let run_drawn = populate_octos_app_card(
+                                        cx,
+                                        &item,
+                                        &run_render,
+                                        None,
+                                        app_language,
+                                        media_cache,
+                                        true, // collapsible
+                                        octos_card_expanded,
+                                        true, // keep_bot_card (strip sits under the answer)
+                                    );
+                                    new_drawn_status.content_drawn =
+                                        new_drawn_status.content_drawn && run_drawn;
+                                }
                             }
                         }
                         (item, false)
@@ -11530,7 +12093,7 @@ fn populate_message_view(
                         (item, true)
                     } else {
                         // Draw the profile up front here because we need the username for the emote body.
-                        let (username, profile_drawn) = item.avatar(cx, ids!(profile.avatar)).set_avatar_and_get_username(
+                        let (username, profile_drawn) = item.avatar(cx, ids!(profile.avatar_wrap.avatar)).set_avatar_and_get_username(
                             cx,
                             timeline_kind,
                             event_tl_item.sender(),
@@ -11954,7 +12517,7 @@ fn populate_message_view(
 
         if !is_server_notice { // the normal case
             let (username, profile_drawn) = set_username_and_get_avatar_retval.unwrap_or_else(||
-                item.avatar(cx, ids!(profile.avatar)).set_avatar_and_get_username(
+                item.avatar(cx, ids!(profile.avatar_wrap.avatar)).set_avatar_and_get_username(
                     cx,
                     timeline_kind,
                     event_tl_item.sender(),
@@ -11975,10 +12538,11 @@ fn populate_message_view(
 
             // Show/hide the bot badge based on sender's user ID
             item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, sender_is_bot);
+            item.view(cx, ids!(profile.avatar_wrap.agent_online_dot)).set_visible(cx, sender_is_bot);
         }
         else {
             // Server notices are drawn with a red color avatar background and username.
-            let avatar = item.avatar(cx, ids!(profile.avatar));
+            let avatar = item.avatar(cx, ids!(profile.avatar_wrap.avatar));
             avatar.show_text(cx, Some(COLOR_FG_DANGER_RED), None, "⚠");
             username_label.set_text(cx, tr_key(app_language, "room_screen.server_notice.username"));
             script_apply_eval!(cx, username_label, {
@@ -11987,6 +12551,7 @@ fn populate_message_view(
                 }
             });
             item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, false);
+            item.view(cx, ids!(profile.avatar_wrap.agent_online_dot)).set_visible(cx, false);
             new_drawn_status.profile_drawn = true;
         }
     }
@@ -12142,6 +12707,1588 @@ fn populate_text_message_content(
     }
 }
 
+/// Rendered content for an `org.octos.app` mini-app card (A1: agent-to-app
+/// card registry). Octos emits `content["org.octos.app"] = {type, version,
+/// initial_state}`; robrix renders known types natively and falls back to the
+/// plain message `body` for unknown/invalid types.
+/// Semantic color for an app-card status badge.
+#[derive(Clone, Copy)]
+#[allow(dead_code)] // Neutral reserved for future idle/pending statuses.
+enum AppCardBadgeKind {
+    Accent,
+    Success,
+    Danger,
+    Neutral,
+}
+
+struct OctosAppCardRender {
+    title: String,
+    badge: String,
+    badge_kind: AppCardBadgeKind,
+    body_html: String,
+}
+
+/// Dispatch an `org.octos.app` value to a type-specific renderer. Returns
+/// `None` for unknown/invalid types so the caller falls back to body text.
+fn render_octos_app_card(app: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let kind = app.get("type").and_then(|v| v.as_str())?;
+    let state = app.get("initial_state").filter(|s| s.is_object());
+    match (kind, state) {
+        ("weather", Some(state)) => render_weather_app_card(state),
+        ("mission_room", Some(state)) => render_mission_room_app_card(state),
+        ("tool_call", Some(state)) => render_tool_call_app_card(state),
+        ("tool_activity" | "tools", Some(state)) => render_tool_activity_app_card(state),
+        ("diff_view" | "diff", Some(state)) => render_diff_app_card(state),
+        ("task_tree" | "tasks", Some(state)) => render_task_tree_app_card(state),
+        ("pipeline" | "pipeline_dag" | "dag", Some(state)) => render_pipeline_app_card(state),
+        ("run_summary" | "cost" | "usage", Some(state)) => render_run_summary_app_card(state),
+        ("user_question" | "ask_user", Some(state)) => render_user_question_app_card(state),
+        ("plan", Some(state)) => render_plan_app_card(state),
+        ("goal", Some(state)) => render_goal_app_card(state),
+        ("artifact" | "artifacts", Some(state)) => render_artifact_app_card(state),
+        ("image" | "visual" | "chart", Some(state)) => render_image_app_card(state),
+        (other, _) => {
+            warning!("org.octos.app: unsupported type '{other}', falling back to body text");
+            None
+        }
+    }
+}
+
+/// `weather` card: location + temperature + condition glyph.
+fn render_weather_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let location = state.get("location").and_then(|v| v.as_str()).unwrap_or("Weather");
+    let condition = state.get("condition").and_then(|v| v.as_str()).unwrap_or("");
+    let glyph = weather_condition_glyph(condition);
+    let body_html = match state.get("temp_c").and_then(|v| v.as_f64()) {
+        Some(t) => format!("<b>{glyph} {t:.0}°C</b>"),
+        None => format!("<b>{glyph}</b>"),
+    };
+    Some(OctosAppCardRender {
+        title: location.to_string(),
+        badge: condition.to_string(),
+        badge_kind: AppCardBadgeKind::Accent,
+        body_html,
+    })
+}
+
+fn weather_condition_glyph(condition: &str) -> &'static str {
+    match condition {
+        "sunny" => "☀",
+        "cloudy" => "☁",
+        "rainy" => "🌧",
+        "snowy" => "❄",
+        "stormy" => "⛈",
+        "foggy" => "🌫",
+        _ => "🌡",
+    }
+}
+
+/// `mission_room` board: goal + phase + task/agent/pending/decision/blocker lists.
+fn render_mission_room_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let goal = state.get("goal");
+    let title = goal
+        .and_then(|g| g.get("title"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Mission");
+    let badge = state.get("phase").and_then(|v| v.as_str())
+        .or_else(|| goal.and_then(|g| g.get("status")).and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_string();
+
+    let mut html = String::new();
+    append_mission_section(&mut html, "Tasks", state.get("tasks"));
+    append_mission_section(&mut html, "Agents", state.get("agents"));
+    append_mission_section(&mut html, "Waiting on you", state.get("pending_human_actions"));
+    append_mission_section(&mut html, "Decisions", state.get("decisions"));
+    append_mission_section(&mut html, "Blockers", state.get("blockers"));
+    if html.is_empty() {
+        html.push_str("<i>No details yet.</i>");
+    }
+    Some(OctosAppCardRender {
+        title: title.to_string(),
+        badge,
+        badge_kind: AppCardBadgeKind::Accent,
+        body_html: html,
+    })
+}
+
+/// `tool_call` card (B1): a single agent tool invocation with a status badge.
+///
+/// SUPERSEDED: octos no longer emits standalone `tool_call` cards — a turn's
+/// tools are merged into the `org.octos.run` run detail on the answer message.
+/// Kept only for backward-compat with already-sent messages / the test script.
+fn render_tool_call_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let tool = state.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
+    let status = state.get("status").and_then(|v| v.as_str()).unwrap_or("running");
+    let (badge_text, badge_kind) = match status {
+        "completed" | "success" | "done" => ("Done", AppCardBadgeKind::Success),
+        "error" | "failed" => ("Error", AppCardBadgeKind::Danger),
+        _ => ("Running", AppCardBadgeKind::Accent),
+    };
+    let glyph = tool_call_glyph(tool);
+
+    let mut body = String::new();
+    if let Some(args) = tool_call_args_text(state) {
+        let a = truncate_app_preview(&args, 200);
+        body.push_str(&format!("<code>{}</code>", htmlize::escape_text(&a)));
+    }
+    if matches!(badge_kind, AppCardBadgeKind::Danger) {
+        if let Some(err) = state.get("error").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            if !body.is_empty() { body.push_str("<br>"); }
+            let e = truncate_app_preview(err, 300);
+            body.push_str(&format!("<i>{}</i>", htmlize::escape_text(&e)));
+        }
+    } else if let Some(out) = state.get("output_preview").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        if !body.is_empty() { body.push_str("<br>"); }
+        let o = truncate_app_preview(out, 300);
+        body.push_str(&htmlize::escape_text(&o).replace('\n', "<br>"));
+    }
+    if let Some(ms) = state.get("duration_ms").and_then(|v| v.as_f64()) {
+        if !body.is_empty() { body.push_str("<br>"); }
+        body.push_str(&format!("<i>took {}</i>", format_duration_ms(ms)));
+    }
+
+    Some(OctosAppCardRender {
+        title: format!("{glyph} {tool}"),
+        badge: badge_text.to_string(),
+        badge_kind,
+        body_html: body,
+    })
+}
+
+fn tool_call_glyph(tool: &str) -> &'static str {
+    match tool {
+        "shell" | "bash" | "exec_command" => "▶",
+        "web_search" | "search" | "deep_search" => "🔍",
+        "web_fetch" | "http" | "browser" | "deep_crawl" => "🌐",
+        "read_file" | "list_dir" | "glob" | "grep" | "code_structure" => "🔎",
+        "write_file" | "edit_file" | "diff_edit" | "apply_patch" => "📝",
+        "spawn" | "delegate" | "run_pipeline" => "🧩",
+        "send_file" | "send_app_card" | "message" => "📤",
+        "save_memory" | "recall_memory" => "🧠",
+        _ => "⚙",
+    }
+}
+
+fn tool_call_args_text(state: &serde_json::Value) -> Option<String> {
+    match state.get("arguments") {
+        Some(v) if v.is_string() => v.as_str().map(str::to_string),
+        Some(v) if v.is_object() || v.is_array() => Some(v.to_string()),
+        _ => None,
+    }
+}
+
+/// `tool_activity` card: a per-turn LIST of tool invocations.
+///
+/// SUPERSEDED: octos folds the turn's tools into the `org.octos.run` run detail
+/// on the answer message instead of a standalone card. Kept only for
+/// backward-compat with already-sent messages / the test script.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "tools": [ { "tool_name", "status": "completed"|"error",
+///     "duration_ms"?, "summary"? } ] }
+/// ```
+fn render_tool_activity_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let tools = state.get("tools").and_then(|v| v.as_array())?;
+    if tools.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let fail_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let mut failed = 0usize;
+    let mut html = String::new();
+    for t in tools {
+        let name = t.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
+        let is_err = matches!(
+            t.get("status").and_then(|v| v.as_str()),
+            Some("error") | Some("failed")
+        );
+        if is_err {
+            failed += 1;
+        }
+        let (mark, mark_hex) = if is_err {
+            ("✗", &fail_hex)
+        } else {
+            ("✓", &add_hex)
+        };
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "{} <b>{}</b> <font color=\"{mark_hex}\">{mark}</font>",
+            tool_call_glyph(name),
+            htmlize::escape_text(name),
+        ));
+        // Duration + a short "what it did" summary, muted and inline.
+        let mut tail: Vec<String> = Vec::new();
+        if let Some(ms) = t.get("duration_ms").and_then(|v| v.as_f64()) {
+            tail.push(format_duration_ms(ms));
+        }
+        if let Some(s) = t
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            tail.push(truncate_app_preview(s, 60));
+        }
+        if !tail.is_empty() {
+            html.push_str(&format!(
+                " <font color=\"{muted_hex}\">{}</font>",
+                htmlize::escape_text(&tail.join(" · ")),
+            ));
+        }
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => "Tools".to_string(),
+    };
+    let (badge, badge_kind) = if failed > 0 {
+        (format!("{failed} failed"), AppCardBadgeKind::Danger)
+    } else {
+        (tools.len().to_string(), AppCardBadgeKind::Success)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+/// `run_details` card: the merged per-turn "run details" — every tool the turn
+/// ran (each failed tool with its truncated error) plus a token/cost footer.
+/// Robrix renders it collapsed (a one-line "N tools" summary, with an "M failed"
+/// badge) and expands on click. Supersedes the separate `tool_activity` +
+/// `run_summary` cards; only this card type is marked collapsible.
+fn render_run_details_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let tools = state.get("tools").and_then(|v| v.as_array())?;
+    if tools.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let fail_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let mut failed = 0usize;
+    let mut html = String::new();
+    for t in tools {
+        let name = t.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
+        let is_err = matches!(
+            t.get("status").and_then(|v| v.as_str()),
+            Some("error") | Some("failed")
+        );
+        if is_err {
+            failed += 1;
+        }
+        let (mark, mark_hex) = if is_err {
+            ("✗", &fail_hex)
+        } else {
+            ("✓", &add_hex)
+        };
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "{} <b>{}</b> <font color=\"{mark_hex}\">{mark}</font>",
+            tool_call_glyph(name),
+            htmlize::escape_text(name),
+        ));
+        if let Some(ms) = t.get("duration_ms").and_then(|v| v.as_f64()) {
+            html.push_str(&format!(
+                " <font color=\"{muted_hex}\">{}</font>",
+                htmlize::escape_text(&format_duration_ms(ms)),
+            ));
+        }
+        // A failed tool surfaces its (truncated) error on its own indented line.
+        if is_err {
+            if let Some(err) = t
+                .get("error")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
+                html.push_str(&format!(
+                    "<br>\u{00A0}\u{00A0}<font color=\"{muted_hex}\"><i>{}</i></font>",
+                    htmlize::escape_text(&truncate_app_preview(err, 200)),
+                ));
+            }
+        }
+    }
+
+    // Token / cost footer, folded in from the old run_summary card. Costs may
+    // arrive as decimal strings (Matrix canonical JSON forbids floats).
+    let u64f = |k: &str| state.get(k).and_then(|v| v.as_u64());
+    let money = |k: &str| -> Option<f64> {
+        state.get(k).and_then(|v| {
+            v.as_f64().or_else(|| {
+                v.as_str()
+                    .and_then(|s| s.trim().trim_start_matches('$').parse::<f64>().ok())
+            })
+        })
+    };
+    let mut meta_parts: Vec<String> = Vec::new();
+    if let Some(m) = state
+        .get("model")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        meta_parts.push(m.to_string());
+    }
+    let total = u64f("total_tokens").or(match (u64f("input_tokens"), u64f("output_tokens")) {
+        (Some(i), Some(o)) => Some(i.saturating_add(o)),
+        _ => None,
+    });
+    if let Some(t) = total {
+        meta_parts.push(format!("{t} tok"));
+    }
+    if let Some(c) = money("response_cost") {
+        meta_parts.push(format!("${c:.4}"));
+    }
+    // Session-cumulative cost + turn duration are both on the wire — surface
+    // them in the expanded footer too (they don't appear in the collapsed row).
+    if let Some(c) = money("session_cost") {
+        meta_parts.push(format!("session ${c:.4}"));
+    }
+    if let Some(ms) = state.get("duration_ms").and_then(|v| v.as_f64()) {
+        meta_parts.push(format_duration_ms(ms));
+    }
+    if !meta_parts.is_empty() {
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "<font color=\"{muted_hex}\">{}</font>",
+            htmlize::escape_text(&meta_parts.join(" · ")),
+        ));
+    }
+
+    let n = tools.len();
+    let title = format!("{n} tool{}", if n == 1 { "" } else { "s" });
+    let (badge, badge_kind) = if failed > 0 {
+        (format!("{failed} failed"), AppCardBadgeKind::Danger)
+    } else {
+        (String::new(), AppCardBadgeKind::Neutral)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+fn truncate_app_preview(s: &str, max: usize) -> String {
+    let t = s.trim();
+    if t.chars().count() <= max {
+        t.to_string()
+    } else {
+        format!("{}…", t.chars().take(max).collect::<String>())
+    }
+}
+
+fn format_duration_ms(ms: f64) -> String {
+    if ms >= 1000.0 {
+        format!("{:.1}s", ms / 1000.0)
+    } else {
+        format!("{:.0}ms", ms)
+    }
+}
+
+/// `diff_view` card (B2): a unified-diff preview. Octos emits this by projecting
+/// a `diff/preview` (`DiffPreview`) into an `org.octos.app` card; robrix renders
+/// per-file hunks with green additions / red deletions, colored via the
+/// `RBX_*` semantic tokens (`<font color>` in the shared card body).
+///
+/// Contract mirrors octos `DiffPreview`:
+/// ```json
+/// { "title"?, "files": [ { "path", "old_path"?, "status", "hunks": [
+///     { "header", "lines": [ { "kind": "context"|"added"|"removed", "content" } ] } ] } ] }
+/// ```
+fn render_diff_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let files = state.get("files").and_then(|v| v.as_array())?;
+    if files.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let del_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    // Budget so a huge diff stays a compact preview, not a wall of text.
+    const MAX_FILES: usize = 4;
+    const MAX_LINES_TOTAL: usize = 40;
+    const MAX_LINE_LEN: usize = 120;
+
+    // Pass 1: diff stat (added/removed) across ALL files, for the header badge.
+    let mut total_added = 0usize;
+    let mut total_removed = 0usize;
+    for file in files {
+        for hunk in file.get("hunks").and_then(|v| v.as_array()).into_iter().flatten() {
+            for line in hunk.get("lines").and_then(|v| v.as_array()).into_iter().flatten() {
+                match line.get("kind").and_then(|v| v.as_str()) {
+                    Some("added") => total_added += 1,
+                    Some("removed") => total_removed += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Pass 2: emit budgeted per-file hunk bodies.
+    let mut html = String::new();
+    let mut lines_emitted = 0usize;
+    let mut truncated_lines = false;
+    'files: for (fi, file) in files.iter().enumerate() {
+        if fi >= MAX_FILES {
+            break;
+        }
+        if lines_emitted >= MAX_LINES_TOTAL {
+            truncated_lines = true;
+            break;
+        }
+        let path = file.get("path").and_then(|v| v.as_str()).unwrap_or("(file)");
+        let status = file.get("status").and_then(|v| v.as_str()).unwrap_or("modified");
+        let (status_word, status_hex) = match status {
+            "added" => ("added", &add_hex),
+            "deleted" => ("deleted", &del_hex),
+            "renamed" => ("renamed", &muted_hex),
+            _ => ("modified", &muted_hex),
+        };
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        let path_disp = match file.get("old_path").and_then(|v| v.as_str()) {
+            Some(old) if !old.is_empty() && old != path => format!("{old} → {path}"),
+            _ => path.to_string(),
+        };
+        html.push_str(&format!(
+            "<font color=\"{status_hex}\"><b>{}</b></font> <font color=\"{muted_hex}\">{}</font><br>",
+            htmlize::escape_text(status_word),
+            htmlize::escape_text(&path_disp),
+        ));
+
+        for hunk in file.get("hunks").and_then(|v| v.as_array()).into_iter().flatten() {
+            if lines_emitted >= MAX_LINES_TOTAL {
+                truncated_lines = true;
+                break 'files;
+            }
+            if let Some(header) = hunk.get("header").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                html.push_str(&format!(
+                    "<font color=\"{muted_hex}\">{}</font><br>",
+                    htmlize::escape_text(&truncate_app_preview(header, MAX_LINE_LEN)),
+                ));
+            }
+            for line in hunk.get("lines").and_then(|v| v.as_array()).into_iter().flatten() {
+                if lines_emitted >= MAX_LINES_TOTAL {
+                    truncated_lines = true;
+                    break 'files;
+                }
+                let kind = line.get("kind").and_then(|v| v.as_str()).unwrap_or("context");
+                let content = truncate_app_preview(
+                    line.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+                    MAX_LINE_LEN,
+                );
+                let escaped = htmlize::escape_text(&content);
+                let (prefix, color) = match kind {
+                    "added" => ("+", &add_hex),
+                    "removed" => ("-", &del_hex),
+                    // Non-breaking space keeps context lines from collapsing their
+                    // leading indent, and colors them muted so +/- lines pop.
+                    _ => ("\u{00A0}", &muted_hex),
+                };
+                html.push_str(&format!("<font color=\"{color}\">{prefix} {escaped}</font><br>"));
+                lines_emitted += 1;
+            }
+        }
+    }
+
+    // Independent notices: a diff can be truncated on both file count and line
+    // budget at once, so report each fact separately rather than either/or.
+    if files.len() > MAX_FILES {
+        html.push_str(&format!(
+            "<br><font color=\"{muted_hex}\"><i>… and {} more file(s)</i></font>",
+            files.len() - MAX_FILES,
+        ));
+    }
+    if truncated_lines {
+        html.push_str(&format!(
+            "<br><font color=\"{muted_hex}\"><i>… diff truncated</i></font>"
+        ));
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ if files.len() == 1 => files[0]
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Diff")
+            .to_string(),
+        _ => format!("{} files changed", files.len()),
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge: format!("+{total_added} -{total_removed}"),
+        badge_kind: AppCardBadgeKind::Accent,
+        body_html: html,
+    })
+}
+
+/// Normalized lifecycle state for a swarm task (B3).
+#[derive(Clone, Copy)]
+enum TaskStateKind {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Reads a task's lifecycle from either `state` (octos `TaskRuntimeState`) or a
+/// free-form `status`, mapping synonyms onto [`TaskStateKind`].
+fn task_state_norm(task: &serde_json::Value) -> TaskStateKind {
+    let s = task
+        .get("state")
+        .and_then(|v| v.as_str())
+        .or_else(|| task.get("status").and_then(|v| v.as_str()))
+        .unwrap_or("pending")
+        .to_ascii_lowercase();
+    match s.as_str() {
+        "completed" | "done" | "success" | "succeeded" => TaskStateKind::Completed,
+        "running" | "active" | "in_progress" => TaskStateKind::Running,
+        "failed" | "error" => TaskStateKind::Failed,
+        "cancelled" | "canceled" | "skipped" | "skip" => TaskStateKind::Cancelled,
+        _ => TaskStateKind::Pending,
+    }
+}
+
+/// Best label for a task: prefer a title, then role, then tool/id.
+fn task_display_name(task: &serde_json::Value) -> String {
+    for key in ["title", "role", "tool_name", "name", "id"] {
+        if let Some(s) = task.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            return s.to_string();
+        }
+    }
+    "task".to_string()
+}
+
+const MAX_TASK_DEPTH: usize = 3;
+
+/// Recursively tallies task states (including nested `children`) for the badge.
+fn count_task_states(
+    tasks: &[serde_json::Value],
+    depth: usize,
+    total: &mut usize,
+    done: &mut usize,
+    running: &mut usize,
+    failed: &mut usize,
+) {
+    for task in tasks {
+        *total += 1;
+        match task_state_norm(task) {
+            TaskStateKind::Completed => *done += 1,
+            TaskStateKind::Running => *running += 1,
+            TaskStateKind::Failed => *failed += 1,
+            _ => {}
+        }
+        // Mirror `append_task_nodes`' depth cap so the badge tally counts only
+        // the nodes the body actually renders (depth <= MAX_TASK_DEPTH); without
+        // this the "{done}/{total}" badge could exceed the visible task count.
+        if depth < MAX_TASK_DEPTH {
+            if let Some(children) = task.get("children").and_then(|v| v.as_array()) {
+                count_task_states(children, depth + 1, total, done, running, failed);
+            }
+        }
+    }
+}
+
+/// Recursively renders task nodes as glyph + name + colored state, nesting
+/// children under their parent with a non-breaking-space indent.
+fn append_task_nodes(html: &mut String, tasks: &[serde_json::Value], depth: usize) {
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let run_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_ACCENT);
+    let fail_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    for task in tasks {
+        let kind = task_state_norm(task);
+        let (glyph, state_label, color) = match kind {
+            TaskStateKind::Completed => ("✓", "done", &add_hex),
+            TaskStateKind::Running => ("●", "running", &run_hex),
+            TaskStateKind::Failed => ("✗", "failed", &fail_hex),
+            TaskStateKind::Cancelled => ("⊘", "cancelled", &muted_hex),
+            TaskStateKind::Pending => ("○", "queued", &muted_hex),
+        };
+        let indent = "\u{00A0}\u{00A0}".repeat(depth.min(MAX_TASK_DEPTH));
+        let name = task_display_name(task);
+        html.push_str(&format!(
+            "{indent}<font color=\"{color}\">{glyph}</font> <b>{}</b> <font color=\"{color}\">{}</font>",
+            htmlize::escape_text(&name),
+            htmlize::escape_text(state_label),
+        ));
+        // A failed task surfaces its error; otherwise its summary (if any).
+        let detail = match kind {
+            TaskStateKind::Failed => task.get("error").and_then(|v| v.as_str()),
+            _ => None,
+        }
+        .or_else(|| task.get("summary").and_then(|v| v.as_str()))
+        .filter(|s| !s.trim().is_empty());
+        if let Some(d) = detail {
+            let d = truncate_app_preview(d, 160);
+            html.push_str(&format!(
+                "<br>{indent}\u{00A0}\u{00A0}<font color=\"{muted_hex}\"><i>{}</i></font>",
+                htmlize::escape_text(&d),
+            ));
+        }
+        html.push_str("<br>");
+
+        if depth < MAX_TASK_DEPTH {
+            if let Some(children) = task
+                .get("children")
+                .and_then(|v| v.as_array())
+                .filter(|c| !c.is_empty())
+            {
+                append_task_nodes(html, children, depth + 1);
+            }
+        }
+    }
+}
+
+/// `task_tree` card (B3): a swarm / sub-agent task list. Octos emits this by
+/// projecting `task/list` + `task/updated` (`TaskListEntry` / `TaskUpdatedEvent`)
+/// into an `org.octos.app` card; robrix renders each task with a state glyph and
+/// a colored state label, nesting children under their parent.
+///
+/// Contract (a tree built from octos's flat task list via parent/child keys):
+/// ```json
+/// { "title"?, "tasks": [ { "id"?, "title"?, "role"?, "state", "summary"?,
+///     "error"?, "children"?: [ ...task ] } ] }
+/// ```
+fn render_task_tree_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let tasks = state.get("tasks").and_then(|v| v.as_array())?;
+    if tasks.is_empty() {
+        return None;
+    }
+
+    let (mut total, mut done, mut running, mut failed) = (0, 0, 0, 0);
+    count_task_states(tasks, 0, &mut total, &mut done, &mut running, &mut failed);
+
+    let mut html = String::new();
+    append_task_nodes(&mut html, tasks, 0);
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => "Sub-agents".to_string(),
+    };
+    let (badge, badge_kind) = if failed > 0 {
+        (format!("{failed} failed"), AppCardBadgeKind::Danger)
+    } else if running > 0 {
+        (format!("{running} running"), AppCardBadgeKind::Accent)
+    } else {
+        (format!("{done}/{total} done"), AppCardBadgeKind::Success)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+/// `pipeline` card (B4): a staged workflow. Octos has no arbitrary DAG on the
+/// wire — workflows are tasks tagged `workflow_kind` with a `current_phase` — so
+/// this renders a linearized stage flow (plan → implement → review → …), each
+/// stage colored by status with the current phase emphasized.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "workflow_kind"?, "current_phase"?,
+///   "stages": [ { "name", "status" } ] }  // status: pending|running|completed|failed|skipped
+/// ```
+fn render_pipeline_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let stages = state.get("stages").and_then(|v| v.as_array())?;
+    if stages.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let run_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_ACCENT);
+    let fail_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_DANGER_FG);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let current_phase = state.get("current_phase").and_then(|v| v.as_str());
+
+    let (mut total, mut done, mut running, mut failed) = (0usize, 0usize, 0usize, 0usize);
+    let mut html = String::new();
+    for (i, stage) in stages.iter().enumerate() {
+        // A stage may be a bare name string or a { name, status } object.
+        let name = stage
+            .get("name")
+            .and_then(|v| v.as_str())
+            .or_else(|| stage.as_str())
+            .unwrap_or("stage");
+        let kind = task_state_norm(stage);
+        total += 1;
+        let (glyph, hex) = match kind {
+            TaskStateKind::Completed => {
+                done += 1;
+                ("✓", &add_hex)
+            }
+            TaskStateKind::Running => {
+                running += 1;
+                ("●", &run_hex)
+            }
+            TaskStateKind::Failed => {
+                failed += 1;
+                ("✗", &fail_hex)
+            }
+            TaskStateKind::Cancelled => ("⊘", &muted_hex),
+            TaskStateKind::Pending => ("○", &muted_hex),
+        };
+        if i > 0 {
+            html.push_str(&format!(" <font color=\"{muted_hex}\">→</font> "));
+        }
+        let escaped = htmlize::escape_text(name);
+        if current_phase == Some(name) {
+            html.push_str(&format!("<font color=\"{hex}\">{glyph} <b>{escaped}</b></font>"));
+        } else {
+            html.push_str(&format!("<font color=\"{hex}\">{glyph} {escaped}</font>"));
+        }
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => state
+            .get("workflow_kind")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|w| format!("{w} pipeline"))
+            .unwrap_or_else(|| "Pipeline".to_string()),
+    };
+    let (badge, badge_kind) = if failed > 0 {
+        (format!("{failed} failed"), AppCardBadgeKind::Danger)
+    } else if let Some(cp) = current_phase.filter(|s| !s.is_empty()) {
+        (cp.to_string(), AppCardBadgeKind::Accent)
+    } else if running > 0 {
+        (format!("{running} running"), AppCardBadgeKind::Accent)
+    } else {
+        (format!("{done}/{total}"), AppCardBadgeKind::Success)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+/// `run_summary` card (B5): a compact per-turn cost / reasoning footer.
+///
+/// SUPERSEDED: octos folds token/cost into the `org.octos.run` run detail on the
+/// answer message instead of a standalone card. Kept only for backward-compat
+/// with already-sent messages / the test script.
+///
+/// Contract:
+/// ```json
+/// { "model"?, "input_tokens"?, "output_tokens"?, "reasoning_tokens"?,
+///   "total_tokens"?, "response_cost"?, "session_cost"?, "duration_ms"?, "reasoning"? }
+/// ```
+fn render_run_summary_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let u64f = |k: &str| state.get(k).and_then(|v| v.as_u64());
+    let f64f = |k: &str| state.get(k).and_then(|v| v.as_f64());
+    // Matrix canonical JSON forbids floats, so the octos emitter must send
+    // monetary values as an integer or a decimal string ("0.0021"); accept a
+    // raw float too for local/test payloads.
+    let money = |k: &str| -> Option<f64> {
+        state.get(k).and_then(|v| {
+            v.as_f64().or_else(|| {
+                v.as_str()
+                    .and_then(|s| s.trim().trim_start_matches('$').parse::<f64>().ok())
+            })
+        })
+    };
+
+    let input = u64f("input_tokens");
+    let output = u64f("output_tokens");
+    let reasoning_tok = u64f("reasoning_tokens");
+    let total = u64f("total_tokens").or(match (input, output) {
+        // `input`/`output` are attacker-supplied; avoid a panic/wrap on overflow.
+        (Some(i), Some(o)) => Some(i.saturating_add(o)),
+        _ => None,
+    });
+
+    // Token line: "1234 in · 567 out · 89 reasoning · 1890 total"
+    let mut token_parts: Vec<String> = Vec::new();
+    if let Some(i) = input {
+        token_parts.push(format!("{i} in"));
+    }
+    if let Some(o) = output {
+        token_parts.push(format!("{o} out"));
+    }
+    if let Some(r) = reasoning_tok.filter(|&r| r > 0) {
+        token_parts.push(format!("{r} reasoning"));
+    }
+    if let Some(t) = total {
+        token_parts.push(format!("{t} total"));
+    }
+
+    let mut body = String::new();
+    if !token_parts.is_empty() {
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\">{}</font>",
+            htmlize::escape_text(&token_parts.join(" · ")),
+        ));
+    }
+
+    // Cost + duration line.
+    let mut cost_parts: Vec<String> = Vec::new();
+    if let Some(c) = money("response_cost") {
+        cost_parts.push(format!("turn ${c:.4}"));
+    }
+    if let Some(c) = money("session_cost") {
+        cost_parts.push(format!("session ${c:.4}"));
+    }
+    if let Some(ms) = f64f("duration_ms") {
+        cost_parts.push(format_duration_ms(ms));
+    }
+    if !cost_parts.is_empty() {
+        if !body.is_empty() {
+            body.push_str("<br>");
+        }
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\">{}</font>",
+            htmlize::escape_text(&cost_parts.join(" · ")),
+        ));
+    }
+
+    // Optional short reasoning / thinking summary.
+    if let Some(r) = state
+        .get("reasoning")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+    {
+        let r = truncate_app_preview(r, 240);
+        if !body.is_empty() {
+            body.push_str("<br>");
+        }
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\"><i>{}</i></font>",
+            htmlize::escape_text(&r),
+        ));
+    }
+
+    if body.is_empty() {
+        return None;
+    }
+
+    let title = state
+        .get("model")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "Turn summary".to_string());
+    let badge = match money("response_cost") {
+        Some(c) => format!("${c:.4}"),
+        None => total.map(|t| format!("{t} tok")).unwrap_or_default(),
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind: AppCardBadgeKind::Neutral,
+        body_html: body,
+    })
+}
+
+/// `user_question` card (B6): the agent is asking the user to choose. Mirrors
+/// octos `UserQuestionRequestedEvent` (`user_question/requested`, UPCR-2026-023).
+/// The clickable options ride as a co-sent `org.octos.actions` payload (reusing
+/// the existing button + `org.octos.action_response` loop); this card styles the
+/// prompt and the per-option descriptions the plain buttons can't show.
+///
+/// Contract:
+/// ```json
+/// { "question_id"?, "title"?, "body"?,
+///   "questions": [ { "header"?, "question", "options": [ { "label", "description"? } ],
+///                    "multi_select"?, "allow_free_text"? } ] }
+/// ```
+fn render_user_question_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+    let questions = state.get("questions").and_then(|v| v.as_array());
+
+    let mut html = String::new();
+    let mut multi = false;
+    if let Some(questions) = questions.filter(|q| !q.is_empty()) {
+        for q in questions {
+            if q.get("multi_select").and_then(|v| v.as_bool()) == Some(true) {
+                multi = true;
+            }
+            if !html.is_empty() {
+                html.push_str("<br>");
+            }
+            if let Some(header) = q.get("header").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                html.push_str(&format!("<b>{}</b><br>", htmlize::escape_text(header)));
+            }
+            if let Some(question) = q.get("question").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                html.push_str(&htmlize::escape_text(question));
+            }
+            for opt in q.get("options").and_then(|v| v.as_array()).into_iter().flatten() {
+                let label = opt.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                let desc = opt.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                html.push_str("<br>");
+                if desc.is_empty() {
+                    html.push_str(&format!("• {}", htmlize::escape_text(label)));
+                } else {
+                    html.push_str(&format!(
+                        "• <b>{}</b> <font color=\"{muted_hex}\">— {}</font>",
+                        htmlize::escape_text(label),
+                        htmlize::escape_text(&truncate_app_preview(desc, 160)),
+                    ));
+                }
+            }
+        }
+    } else {
+        // No structured questions: fall back to the generic title/body text.
+        let body = state.get("body").and_then(|v| v.as_str()).unwrap_or("");
+        if body.is_empty() {
+            return None;
+        }
+        html.push_str(&htmlize::escape_text(body).replace('\n', "<br>"));
+    }
+
+    let title = state
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "Question".to_string());
+
+    Some(OctosAppCardRender {
+        title,
+        badge: if multi { "Select any".to_string() } else { "Question".to_string() },
+        badge_kind: AppCardBadgeKind::Accent,
+        body_html: html,
+    })
+}
+
+/// `plan` card (B7): the agent's working plan. Mirrors octos `UiPlanRecord`
+/// (`plan/updated` / `PlanUpdatedEvent`); renders a checklist with per-item
+/// status and an optional priority tag.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "items": [ { "id"?, "title", "status", "priority"? } ] }
+///   // status: pending | in_progress | completed
+/// ```
+fn render_plan_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let items = state.get("items").and_then(|v| v.as_array())?;
+    if items.is_empty() {
+        return None;
+    }
+
+    let add_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_SUCCESS_FG);
+    let run_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_ACCENT);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    let (mut total, mut done) = (0usize, 0usize);
+    let mut html = String::new();
+    for item in items {
+        // Accept `title` or (octos update_plan / Codex-shaped) `description`;
+        // skip empty strings so a bare item still falls back to "(step)".
+        let title = item
+            .get("title")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                item.get("description")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+            })
+            .or_else(|| item.as_str())
+            .unwrap_or("(step)");
+        total += 1;
+        // Plan items use octos PlanItemStatus (pending/in_progress/completed),
+        // which task_state_norm already maps. Glyphs are restricted to the ones
+        // the message font stack (IBMPlexSans + LXGWWenKai) actually covers —
+        // ballot boxes (☑ ◧ ☐) render as tofu, so use check / half / open circle.
+        let (glyph, hex) = match task_state_norm(item) {
+            TaskStateKind::Completed => {
+                done += 1;
+                ("✓", &add_hex)
+            }
+            TaskStateKind::Running => ("◐", &run_hex),
+            _ => ("○", &muted_hex),
+        };
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "<font color=\"{hex}\">{glyph}</font> {}",
+            htmlize::escape_text(title),
+        ));
+        if let Some(pri) = item
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            html.push_str(&format!(
+                " <font color=\"{muted_hex}\">({})</font>",
+                htmlize::escape_text(pri),
+            ));
+        }
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => "Plan".to_string(),
+    };
+    let (badge, badge_kind) = if done == total {
+        (format!("{done}/{total} done"), AppCardBadgeKind::Success)
+    } else {
+        (format!("{done}/{total}"), AppCardBadgeKind::Accent)
+    };
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: html,
+    })
+}
+
+/// Formats an elapsed-seconds count as a compact "…used" label.
+fn format_duration_secs(secs: u64) -> String {
+    if secs >= 3600 {
+        format!("{}h {}m used", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{}m {}s used", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s used")
+    }
+}
+
+/// `goal` card (B8): the session objective + budget. Mirrors octos
+/// `UiGoalRecord` (`session/goal/updated` / `SessionGoalUpdatedEvent`); renders
+/// the objective, a status badge, a token-budget bar, and elapsed time.
+///
+/// Contract:
+/// ```json
+/// { "objective", "status"?, "token_budget"?, "tokens_used"?, "time_used_seconds"? }
+/// ```
+fn render_goal_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let objective = state
+        .get("objective")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
+
+    let accent_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_ACCENT);
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+    // Track color for the unfilled part of the bar. Uses a full block (█) in a
+    // light stroke color rather than the shade char (░), which is tofu in the
+    // message font stack (IBMPlexSans + LXGWWenKai).
+    let track_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_STROKE_STRONG);
+
+    let mut body = String::new();
+
+    // Token-budget bar (10 segments): filled = accent block, empty = track block.
+    let used = state.get("tokens_used").and_then(|v| v.as_u64());
+    let budget = state.get("token_budget").and_then(|v| v.as_u64()).filter(|&b| b > 0);
+    if let (Some(used), Some(budget)) = (used, budget) {
+        let pct = ((used as f64 / budget as f64) * 100.0).clamp(0.0, 100.0);
+        let filled = ((pct / 10.0).round() as usize).min(10);
+        let bar_full = "█".repeat(filled);
+        let bar_empty = "█".repeat(10 - filled);
+        body.push_str(&format!(
+            "<font color=\"{accent_hex}\">{bar_full}</font><font color=\"{track_hex}\">{bar_empty}</font> <font color=\"{muted_hex}\">{used} / {budget} tokens ({pct:.0}%)</font>",
+        ));
+    } else if let Some(used) = used {
+        body.push_str(&format!("<font color=\"{muted_hex}\">{used} tokens used</font>"));
+    }
+
+    if let Some(secs) = state
+        .get("time_used_seconds")
+        .and_then(|v| v.as_u64())
+        .filter(|&s| s > 0)
+    {
+        if !body.is_empty() {
+            body.push_str("<br>");
+        }
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\">{}</font>",
+            htmlize::escape_text(&format_duration_secs(secs)),
+        ));
+    }
+
+    if body.is_empty() {
+        body.push_str(&format!("<font color=\"{muted_hex}\"><i>In progress</i></font>"));
+    }
+
+    let badge = state
+        .get("status")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("goal")
+        .to_string();
+    let badge_kind = match badge.to_ascii_lowercase().as_str() {
+        "completed" | "done" | "achieved" => AppCardBadgeKind::Success,
+        "failed" | "abandoned" => AppCardBadgeKind::Danger,
+        _ => AppCardBadgeKind::Accent,
+    };
+
+    Some(OctosAppCardRender {
+        title: objective.to_string(),
+        badge,
+        badge_kind,
+        body_html: body,
+    })
+}
+
+/// Emoji glyph for an artifact by its `kind` (rendered via NotoColorEmoji).
+fn artifact_kind_glyph(kind: &str) -> &'static str {
+    match kind {
+        "code" | "source" | "patch" | "diff" => "📝",
+        "image" | "screenshot" | "png" | "jpg" => "🖼",
+        "report" | "doc" | "document" | "markdown" | "md" => "📄",
+        "data" | "csv" | "json" | "table" => "📊",
+        "log" | "output" => "📃",
+        "archive" | "zip" => "🗜",
+        _ => "📎",
+    }
+}
+
+/// `artifact` card (B9): files/outputs the agent produced. Mirrors octos
+/// `UiAgentArtifact` / `TaskArtifactRecord` (`agent/artifact/list`); renders a
+/// list of artifacts with a kind glyph + kind/status tail + optional path.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "artifacts": [ { "id"?, "title", "kind"?, "status"?, "path"? } ] }
+/// ```
+/// A single bare artifact object (no `artifacts` wrapper) is also accepted.
+fn render_artifact_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    let list: Vec<&serde_json::Value> = match state.get("artifacts").and_then(|v| v.as_array()) {
+        Some(arr) if !arr.is_empty() => arr.iter().collect(),
+        _ if state.get("title").is_some() || state.get("path").is_some() => vec![state],
+        _ => return None,
+    };
+
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+
+    const MAX: usize = 12;
+    let mut html = String::new();
+    for a in list.iter().copied().take(MAX) {
+        let title = a
+            .get("title")
+            .and_then(|v| v.as_str())
+            .or_else(|| a.as_str())
+            .unwrap_or("(artifact)");
+        let kind = a.get("kind").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        let status = a.get("status").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        let path = a.get("path").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+
+        if !html.is_empty() {
+            html.push_str("<br>");
+        }
+        html.push_str(&format!(
+            "{} <b>{}</b>",
+            artifact_kind_glyph(kind.unwrap_or("")),
+            htmlize::escape_text(title),
+        ));
+        let mut tail: Vec<&str> = Vec::new();
+        if let Some(k) = kind {
+            tail.push(k);
+        }
+        if let Some(s) = status {
+            tail.push(s);
+        }
+        if !tail.is_empty() {
+            html.push_str(&format!(
+                " <font color=\"{muted_hex}\">· {}</font>",
+                htmlize::escape_text(&tail.join(" · ")),
+            ));
+        }
+        if let Some(p) = path {
+            html.push_str(&format!(
+                "<br><font color=\"{muted_hex}\">{}</font>",
+                htmlize::escape_text(&truncate_app_preview(p, 120)),
+            ));
+        }
+    }
+    if list.len() > MAX {
+        html.push_str(&format!(
+            "<br><font color=\"{muted_hex}\"><i>… and {} more</i></font>",
+            list.len() - MAX,
+        ));
+    }
+
+    let title = match state.get("title").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ if list.len() == 1 => "Artifact".to_string(),
+        _ => format!("{} artifacts", list.len()),
+    };
+    Some(OctosAppCardRender {
+        title,
+        badge: if list.len() > 1 {
+            list.len().to_string()
+        } else {
+            String::new()
+        },
+        badge_kind: AppCardBadgeKind::Neutral,
+        body_html: html,
+    })
+}
+
+/// `org.octos.swarm_event` card (B10): a swarm-supervisor harness event. Unlike
+/// the app cards this is octos's OWN wire key (envelope schema
+/// `octos.harness.event.v1`), NOT an `org.octos.app` type — and octos ALREADY
+/// emits it into swarm-supervisor rooms. Renders one event, styled by `kind`.
+///
+/// Envelope:
+/// ```json
+/// { "schema", "kind", "agent_label"?, "session_id",
+///   "event": { "kind", "task_id", "phase"?, "message"?, "name"?, "path"?,
+///              "validator"?, "passed"?, "attempt"?, "retryable"?, "progress"? } }
+/// ```
+fn render_swarm_event_card(envelope: &serde_json::Value) -> Option<OctosAppCardRender> {
+    // Variant fields live under `event`; fall back to the envelope itself.
+    let event = envelope
+        .get("event")
+        .filter(|e| e.is_object())
+        .unwrap_or(envelope);
+    let kind = envelope
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .or_else(|| event.get("kind").and_then(|v| v.as_str()))?;
+    let agent = envelope
+        .get("agent_label")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let message = event
+        .get("message")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|m| truncate_app_preview(m, 300));
+    let muted_hex = utils::vec4_to_hex(crate::shared::design_tokens::RBX_FG_SECONDARY);
+    let str_field = |k: &str| event.get(k).and_then(|v| v.as_str());
+
+    // Per-kind: (subject, badge, badge kind, body).
+    let (subject, badge, badge_kind, mut body): (&str, String, AppCardBadgeKind, String) = match kind
+    {
+        "progress" => {
+            let phase = str_field("phase").unwrap_or("progress").to_string();
+            let mut b = String::new();
+            if let Some(m) = &message {
+                b.push_str(&htmlize::escape_text(m));
+            }
+            if let Some(p) = event.get("progress").and_then(|v| v.as_f64()) {
+                // `progress` may be a 0..1 fraction or an already-scaled percent.
+                let pct = (if p <= 1.0 { p * 100.0 } else { p }).clamp(0.0, 100.0);
+                if !b.is_empty() {
+                    b.push(' ');
+                }
+                b.push_str(&format!("<font color=\"{muted_hex}\">({pct:.0}%)</font>"));
+            }
+            ("Progress", phase, AppCardBadgeKind::Accent, b)
+        }
+        "phase" => {
+            let phase = str_field("phase").unwrap_or("phase").to_string();
+            let mut b = String::new();
+            if let Some(m) = &message {
+                b.push_str(&htmlize::escape_text(m));
+            }
+            ("Phase", phase, AppCardBadgeKind::Accent, b)
+        }
+        "artifact" => {
+            let name = str_field("name").unwrap_or("artifact");
+            let mut b = format!("📎 <b>{}</b>", htmlize::escape_text(name));
+            if let Some(p) = str_field("path").filter(|s| !s.is_empty()) {
+                b.push_str(&format!(
+                    "<br><font color=\"{muted_hex}\">{}</font>",
+                    htmlize::escape_text(&truncate_app_preview(p, 120)),
+                ));
+            }
+            if let Some(m) = &message {
+                b.push_str(&format!("<br>{}", htmlize::escape_text(m)));
+            }
+            ("Artifact", "Artifact".to_string(), AppCardBadgeKind::Neutral, b)
+        }
+        "validator_result" => {
+            let validator = str_field("validator").unwrap_or("validator");
+            let passed = event.get("passed").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut b = format!("<b>{}</b>", htmlize::escape_text(validator));
+            if let Some(m) = &message {
+                b.push_str(&format!("<br>{}", htmlize::escape_text(m)));
+            }
+            let (badge, kind) = if passed {
+                ("Passed", AppCardBadgeKind::Success)
+            } else {
+                ("Failed", AppCardBadgeKind::Danger)
+            };
+            ("Validator", badge.to_string(), kind, b)
+        }
+        "retry" => {
+            let mut b = String::new();
+            if let Some(n) = event.get("attempt").and_then(|v| v.as_u64()) {
+                b.push_str(&format!("<font color=\"{muted_hex}\">attempt {n}</font>"));
+            }
+            if let Some(m) = &message {
+                if !b.is_empty() {
+                    b.push_str("<br>");
+                }
+                b.push_str(&htmlize::escape_text(m));
+            }
+            ("Retry", "Retry".to_string(), AppCardBadgeKind::Accent, b)
+        }
+        "failure" => {
+            let mut b = String::new();
+            if let Some(m) = &message {
+                b.push_str(&htmlize::escape_text(m));
+            }
+            if event.get("retryable").and_then(|v| v.as_bool()) == Some(true) {
+                if !b.is_empty() {
+                    b.push(' ');
+                }
+                b.push_str(&format!("<font color=\"{muted_hex}\">(retryable)</font>"));
+            }
+            ("Failure", "Failed".to_string(), AppCardBadgeKind::Danger, b)
+        }
+        other => {
+            warning!("org.octos.swarm_event: unsupported kind '{other}', falling back to body text");
+            return None;
+        }
+    };
+
+    if body.is_empty() {
+        body.push_str(&format!(
+            "<font color=\"{muted_hex}\"><i>{}</i></font>",
+            htmlize::escape_text(subject),
+        ));
+    }
+
+    // Title: prefer the agent label ("Reviewer"), else the event subject.
+    let title = agent.map(str::to_string).unwrap_or_else(|| subject.to_string());
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind,
+        body_html: body,
+    })
+}
+
+/// The mxc image carried by a `visual`/`image`/`chart` app card, extracted
+/// separately from the text `OctosAppCardRender` (see the up-front probe).
+struct OctosCardImage {
+    mxc: String,
+}
+
+/// Pulls the embedded image out of an `org.octos.app` value, if it is an
+/// image-bearing card type with a valid `mxc://` reference.
+fn octos_app_card_image(app: &serde_json::Value) -> Option<OctosCardImage> {
+    let kind = app.get("type").and_then(|v| v.as_str())?;
+    if !matches!(kind, "image" | "visual" | "chart") {
+        return None;
+    }
+    let state = app.get("initial_state").filter(|s| s.is_object())?;
+    let mxc = state
+        .get("mxc")
+        .or_else(|| state.get("url"))
+        .and_then(|v| v.as_str())
+        .filter(|s| s.starts_with("mxc://"))?;
+    Some(OctosCardImage { mxc: mxc.to_string() })
+}
+
+/// `image` / `visual` / `chart` card (B11): the text frame (title + badge +
+/// optional caption) around an embedded image. The image itself is fetched by
+/// `populate_octos_app_card` from the [`OctosCardImage`] extracted in parallel.
+///
+/// Contract:
+/// ```json
+/// { "title"?, "kind"?, "caption"?, "mxc" }   // mxc: an mxc:// URI
+/// ```
+fn render_image_app_card(state: &serde_json::Value) -> Option<OctosAppCardRender> {
+    // Require an mxc image — an empty framed card is worse than a body fallback.
+    let has_image = state
+        .get("mxc")
+        .or_else(|| state.get("url"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s.starts_with("mxc://"));
+    if !has_image {
+        return None;
+    }
+
+    let title_field = state.get("title").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let caption = state
+        .get("caption")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty());
+    let title = title_field
+        .or(caption)
+        .unwrap_or("Image")
+        .to_string();
+    let badge = state
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Image")
+        .to_string();
+
+    // Show the caption under the image only when it isn't already the title.
+    let mut body = String::new();
+    if title_field.is_some() {
+        if let Some(c) = caption {
+            let c = truncate_app_preview(c, 300);
+            body.push_str(&htmlize::escape_text(&c).replace('\n', "<br>"));
+        }
+    }
+
+    Some(OctosAppCardRender {
+        title,
+        badge,
+        badge_kind: AppCardBadgeKind::Accent,
+        body_html: body,
+    })
+}
+
+fn append_mission_section(html: &mut String, heading: &str, items: Option<&serde_json::Value>) {
+    let Some(arr) = items.and_then(|v| v.as_array()).filter(|a| !a.is_empty()) else { return };
+    if !html.is_empty() {
+        html.push_str("<br>");
+    }
+    html.push_str(&format!("<b>{heading}</b><br>"));
+    for entry in arr {
+        let primary_raw = mission_item_primary(entry);
+        let primary = htmlize::escape_text(&primary_raw);
+        match mission_item_status(entry) {
+            Some(status) => html.push_str(&format!("• {} — <i>{}</i><br>", primary, htmlize::escape_text(&status))),
+            None => html.push_str(&format!("• {primary}<br>")),
+        }
+    }
+}
+
+/// Best-effort primary label from a free-form mission item (string or object).
+fn mission_item_primary(item: &serde_json::Value) -> String {
+    if let Some(s) = item.as_str() {
+        return s.to_string();
+    }
+    for key in ["title", "label", "name", "nickname", "text", "summary", "id"] {
+        if let Some(s) = item.get(key).and_then(|v| v.as_str()) {
+            return s.to_string();
+        }
+    }
+    item.to_string()
+}
+
+fn mission_item_status(item: &serde_json::Value) -> Option<String> {
+    for key in ["status", "state", "role"] {
+        if let Some(s) = item.get(key).and_then(|v| v.as_str()) {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
+/// Populate the `octos_app_card` slot from a rendered app card, hiding the
+/// plain message body and the bot text card.
+/// Populates the `octos_app_card` slot. Returns `true` when fully drawn; a
+/// `visual`/`image` card returns `false` while its media is still loading so the
+/// caller re-renders on the next frame.
+fn populate_octos_app_card(
+    cx: &mut Cx,
+    item: &WidgetRef,
+    render: &OctosAppCardRender,
+    image: Option<&OctosCardImage>,
+    app_language: AppLanguage,
+    media_cache: &mut MediaCache,
+    collapsible: bool,
+    expanded: bool,
+    keep_bot_card: bool,
+) -> bool {
+    // A regular card replaces the message body; an inline run-detail strip
+    // (`keep_bot_card`) sits BELOW the already-rendered bot answer.
+    if !keep_bot_card {
+        item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
+    }
+    item.view(cx, ids!(content.octos_app_card)).set_visible(cx, true);
+    item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_title))
+        .set_text(cx, &render.title);
+    let mut badge = item.view(cx, ids!(content.octos_app_card.app_card_header_row.app_card_badge));
+    let show_badge = !render.badge.is_empty();
+    badge.set_visible(cx, show_badge);
+    if show_badge {
+        let mut badge_label = item.label(cx, ids!(content.octos_app_card.app_card_header_row.app_card_badge.app_card_badge_label));
+        badge_label.set_text(cx, &render.badge);
+        // Recolor the badge per status kind (accent / success / danger / neutral).
+        match render.badge_kind {
+            AppCardBadgeKind::Accent => {
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_ACCENT_SOFT } });
+                script_apply_eval!(cx, badge_label, { draw_text +: { color: mod.widgets.RBX_ACCENT } });
+            }
+            AppCardBadgeKind::Success => {
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_SUCCESS_BG } });
+                script_apply_eval!(cx, badge_label, { draw_text +: { color: mod.widgets.RBX_SUCCESS_FG } });
+            }
+            AppCardBadgeKind::Danger => {
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_DANGER_BG } });
+                script_apply_eval!(cx, badge_label, { draw_text +: { color: mod.widgets.RBX_DANGER_FG } });
+            }
+            AppCardBadgeKind::Neutral => {
+                script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
+                script_apply_eval!(cx, badge_label, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
+            }
+        }
+    }
+    // Expand/collapse toggle: only collapsible cards (`run_details`) show the
+    // button and hide their body when collapsed; every other card renders its
+    // body inline. The detail is a plain-View wrapper so set_visible is reliable.
+    let expand_btn = item.button(
+        cx,
+        ids!(content.octos_app_card.app_card_header_row.app_card_expand_button),
+    );
+    expand_btn.set_visible(cx, collapsible);
+    if collapsible {
+        expand_btn.set_text(cx, if expanded { "Hide" } else { "Details" });
+    }
+    let show_detail = !collapsible || expanded;
+    item.view(cx, ids!(content.octos_app_card.app_card_detail))
+        .set_visible(cx, show_detail);
+    item.html_or_plaintext(cx, ids!(content.octos_app_card.app_card_detail.app_card_body))
+        .show_html(cx, &render.body_html);
+
+    // Optional embedded image (visual card). Reuse the native image pipeline so
+    // fetch/cache/blurhash all behave like an m.image message.
+    let img_ref = item.text_or_image(cx, ids!(content.octos_app_card.app_card_image));
+    match image {
+        Some(img) => {
+            img_ref.set_visible(cx, true);
+            populate_image_message_content(
+                cx,
+                &img_ref,
+                None, // no animated-image widget in the card slot
+                app_language,
+                Some(Box::new(ImageInfo::new())),
+                MediaSource::Plain(matrix_sdk::ruma::OwnedMxcUri::from(img.mxc.as_str())),
+                "", // no alt body
+                media_cache,
+            )
+        }
+        None => {
+            img_ref.set_visible(cx, false);
+            true
+        }
+    }
+}
+
 fn populate_bot_text_message_content(
     cx: &mut Cx,
     item: &WidgetRef,
@@ -12160,6 +14307,8 @@ fn populate_bot_text_message_content(
 
     bot_card_view.set_visible(cx, render_state.show_card);
     message_view.set_visible(cx, !render_state.show_card);
+    // Not an org.octos.app card in this path — keep the app-card slot hidden.
+    item.view(cx, ids!(content.octos_app_card)).set_visible(cx, false);
 
     if !render_state.show_card {
         let drawn = populate_text_message_content(
@@ -12175,6 +14324,11 @@ fn populate_bot_text_message_content(
         );
         return (drawn, None);
     }
+
+    // Streaming "generating" indicator: hidden by default here; the streaming
+    // render path re-enables it while the message is live (①).
+    item.view(cx, ids!(content.bot_message_card.bot_streaming_indicator))
+        .set_visible(cx, false);
 
     let status_strip = item.view(cx, ids!(content.bot_message_card.bot_status_strip));
     status_strip.set_visible(cx, render_state.show_status_strip);
@@ -12301,10 +14455,14 @@ fn populate_octos_action_buttons(
     button_row.set_visible(cx, render_state.show_button_row && !visible_slots.is_empty());
     approval_request_view.set_visible(cx, render_state.approval_card.is_some());
     if let Some(approval_card) = render_state.approval_card.as_ref() {
-        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_title_label))
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_header_row.approval_title_label))
             .set_text(cx, &approval_card.title);
         item.label(cx, ids!(content.action_buttons.approval_request_view.approval_summary_label))
             .set_text(cx, &approval_card.summary);
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_meta_label))
+            .set_text(cx, &approval_card.meta);
+        item.view(cx, ids!(content.action_buttons.approval_request_view.approval_header_row.approval_critical_badge))
+            .set_visible(cx, approval_card.risk_critical);
     }
 
     for index in 0..MAX_OCTOS_ACTION_BUTTONS {
@@ -12553,16 +14711,11 @@ fn populate_file_message_content(
         .or_else(|| file_content.caption().map(|c| format!("<br><i>{}</i>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
-    // Build a clickable mxc:// link so the user can explicitly trigger download.
-    // The link is handled by `RobrixHtmlLinkAction` / `robius_open` in the room screen.
+    // Download is handled by the MessageDownloadSection button below, so plain
+    // files no longer render a redundant inline mxc link (unified download UI).
+    // Encrypted files keep the notice since the button can't download them.
     let download_link = match &file_content.source {
-        MediaSource::Plain(mxc_uri) => {
-            format!(
-                "<br>→ <a href=\"{}\">{}</a>",
-                htmlize::escape_text(mxc_uri.as_str()),
-                tr_key(app_language, "room_screen.file.download"),
-            )
-        }
+        MediaSource::Plain(_) => String::new(),
         MediaSource::Encrypted(_) => {
             format!("<br>→ <i>{}</i>", tr_key(app_language, "room_screen.file.encrypted_not_supported"))
         }
@@ -13904,8 +16057,8 @@ impl Widget for Message {
         if self.details.as_ref().is_some_and(|d| d.should_be_highlighted) {
             script_apply_eval!(cx, self, {
                 draw_bg +: {
-                    color: #ffffd1,
-                    mentions_bar_color: #ffd54f
+                    color: mod.widgets.RBX_ACCENT_SOFT,
+                    mentions_bar_color: mod.widgets.RBX_ACCENT
                 }
             });
         }
@@ -14018,6 +16171,31 @@ mod tests {
 
     fn make_state(text: &str) -> StreamingAnimState {
         StreamingAnimState::new(text, true)
+    }
+
+    #[test]
+    fn test_compute_agent_render_state_maps_senders() {
+        assert_eq!(
+            compute_agent_render_state(&AgentRenderInputs {
+                is_bot_sender: false,
+                has_structured_agent_signal: false,
+            }),
+            AgentCardKind::PlainMessage,
+        );
+        assert_eq!(
+            compute_agent_render_state(&AgentRenderInputs {
+                is_bot_sender: true,
+                has_structured_agent_signal: false,
+            }),
+            AgentCardKind::BotTextCard,
+        );
+        assert_eq!(
+            compute_agent_render_state(&AgentRenderInputs {
+                is_bot_sender: true,
+                has_structured_agent_signal: true,
+            }),
+            AgentCardKind::AgentCard,
+        );
     }
 
     #[test]
@@ -14887,6 +17065,34 @@ mod tests {
             state.approval_card.as_ref().map(|card| card.summary.as_str()),
             Some("rm -rf ~/tmp/cache"),
         );
+    }
+
+    #[test]
+    fn test_approval_card_meta_text_and_expiry() {
+        assert_eq!(format_approval_expiry("2026-04-14T14:30:00Z"), "2026-04-14 14:30");
+        assert_eq!(format_approval_expiry("soon"), "soon");
+
+        let mut request = OctosApprovalRequest {
+            request_id: "req_1".into(),
+            tool_name: "shell".into(),
+            tool_args_digest: "sha256:1".into(),
+            title: "Execute shell command".into(),
+            summary: "rm -rf ~/tmp/cache".into(),
+            risk_level: OctosApprovalRiskLevel::Critical,
+            authorized_approvers: vec!["@alice:example.org".into()],
+            expires_at: "2026-04-14T14:30:00Z".into(),
+            on_timeout: OctosApprovalTimeoutBehavior::Notify,
+        };
+        assert_eq!(
+            approval_card_meta_text(&request, true),
+            "Tool: shell · Expires 2026-04-14 14:30",
+        );
+        assert_eq!(
+            approval_card_meta_text(&request, false),
+            "Only @alice:example.org can approve",
+        );
+        request.expires_at = "".into();
+        assert_eq!(approval_card_meta_text(&request, true), "Tool: shell");
     }
 
     #[test]

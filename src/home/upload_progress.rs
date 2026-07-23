@@ -22,7 +22,7 @@ script_mod! {
         show_bg: true,
         draw_bg +: {
             color: (COLOR_BG_PREVIEW)
-            border_radius: 4.0
+            border_radius: (mod.widgets.RBX_RADIUS_SM)
         }
 
         // Header with file name and cancel button
@@ -37,7 +37,7 @@ script_mod! {
                 width: Fit,
                 draw_text +: {
                     text_style: REGULAR_TEXT { font_size: 10 },
-                    color: (COLOR_TEXT)
+                    color: (mod.widgets.RBX_FG_PRIMARY)
                 }
                 text: "Uploading: "
             }
@@ -46,7 +46,7 @@ script_mod! {
                 width: Fill,
                 draw_text +: {
                     text_style: REGULAR_TEXT { font_size: 10 },
-                    color: (COLOR_TEXT)
+                    color: (mod.widgets.RBX_FG_PRIMARY)
                 }
                 text: ""
             }

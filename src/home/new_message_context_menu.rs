@@ -26,10 +26,10 @@ script_mod! {
         width: Fill,
         margin: 0,
         icon_walk: Walk{width: 16, height: 16, margin: Inset{right: 3}}
-        // Override the blue default back to neutral for context menu items
-        draw_bg +: { color: (COLOR_PRIMARY), color_hover: #EBEBEB, color_down: #DCDCDC }
-        draw_icon.color: #000
-        draw_text +: { color: #000, color_hover: #000, color_down: #000 }
+        // Neutral RBX surface washes for context-menu items.
+        draw_bg +: { color: (mod.widgets.RBX_BG_SURFACE), color_hover: (mod.widgets.RBX_BG_HOVER), color_down: (mod.widgets.RBX_BG_PRESSED) }
+        draw_icon.color: (mod.widgets.RBX_FG_PRIMARY)
+        draw_text +: { color: (mod.widgets.RBX_FG_PRIMARY), color_hover: (mod.widgets.RBX_FG_PRIMARY), color_down: (mod.widgets.RBX_FG_PRIMARY) }
     }
 
     mod.widgets.NewMessageContextMenu = set_type_default() do #(NewMessageContextMenu::register_widget(vm)) {
@@ -47,7 +47,7 @@ script_mod! {
         // Show a slightly darkened translucent background to make the menu stand out.
         show_bg: true
         draw_bg +: {
-            color: #0000004D
+            color: (mod.widgets.RBX_SCRIM)
         }
 
         main_content := RoundedView {
@@ -60,10 +60,10 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: (COLOR_PRIMARY)
-                border_radius: 5.0
+                color: (mod.widgets.RBX_BG_SURFACE)
+                border_radius: (mod.widgets.RBX_RADIUS_SM)
                 border_size: 0.5
-                border_color: #888
+                border_color: (mod.widgets.RBX_STROKE_STRONG)
             }
 
             // Shows either the "Add Reaction" button or a reaction text input.
@@ -200,13 +200,13 @@ script_mod! {
             delete_button := mod.widgets.NewMessageContextMenuButton {
                 draw_icon +: {
                     svg: (ICON_TRASH)
-                    color: (COLOR_FG_DANGER_RED),
+                    color: (mod.widgets.RBX_DANGER_FG),
                 }
                 draw_bg +: {
-                    border_color: (COLOR_FG_DANGER_RED),
-                    color: (COLOR_BG_DANGER_RED)
+                    border_color: (mod.widgets.RBX_DANGER_FG),
+                    color: (mod.widgets.RBX_DANGER_BG)
                 }
-                draw_text.color: (COLOR_FG_DANGER_RED),
+                draw_text.color: (mod.widgets.RBX_DANGER_FG),
                 text: "Delete"
             }
         }

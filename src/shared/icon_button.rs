@@ -5,7 +5,7 @@ script_mod! {
     use mod.widgets.*
 
     // The base Robrix button widget.
-    // Uses COLOR_ACTIVE_PRIMARY (blue) background with white text by default.
+    // Uses the teal RBX_ACCENT background with white text by default.
     // See also the preset variants below:
     //   RobrixPositiveIconButton, RobrixNegativeIconButton, RobrixNeutralIconButton.
     mod.widgets.RobrixIconButton = Button {
@@ -41,11 +41,11 @@ script_mod! {
 
         draw_bg +: {
             border_size: 0.0
-            border_radius: 4.0
+            border_radius: (mod.widgets.RBX_RADIUS_SM)
 
-            color: (COLOR_ACTIVE_PRIMARY)
-            color_hover: (COLOR_ACTIVE_PRIMARY_DARKER)
-            color_down: #0C5DAA
+            color: (mod.widgets.RBX_ACCENT)
+            color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+            color_down: (mod.widgets.RBX_ACCENT_PRESSED)
             color_disabled: (COLOR_BG_DISABLED)
 
             border_color: #0000
@@ -59,13 +59,13 @@ script_mod! {
             border_color_2: vec4(-1.0, -1.0, -1.0, -1.0)
         }
 
-        draw_icon.color: (COLOR_PRIMARY)
+        draw_icon.color: (mod.widgets.RBX_FG_ON_ACCENT)
         icon_walk: Walk{width: 16, height: 16}
 
         draw_text +: {
-            color: (COLOR_PRIMARY)
-            color_hover: (COLOR_PRIMARY)
-            color_down: (COLOR_PRIMARY)
+            color: (mod.widgets.RBX_FG_ON_ACCENT)
+            color_hover: (mod.widgets.RBX_FG_ON_ACCENT)
+            color_down: (mod.widgets.RBX_FG_ON_ACCENT)
             color_disabled: (COLOR_FG_DISABLED)
             text_style: mod.widgets.REGULAR_TEXT {font_size: 10},
         }

@@ -27,7 +27,7 @@ script_mod! {
                 margin: Inset{bottom: 8},
                 draw_icon +: {
                     svg: (mod.widgets.ICO_JUMP_TO_BOTTOM),
-                    color: #888,
+                    color: (mod.widgets.RBX_FG_ON_ACCENT),
                     // TODO: once Makepad button support draw_icon hover/down animated states, reenable this.
                     // color: #BBB,
                     // color_hover: #000,
@@ -39,8 +39,8 @@ script_mod! {
                 icon_walk: Walk{width: 20, height: 20}
                 // draw a circular background for the button
                 draw_bg +: {
-                    background_color: #edededce,
-                    background_color_hover: #d0d0d0ce,
+                    background_color: (mod.widgets.RBX_ACCENT),
+                    background_color_hover: (mod.widgets.RBX_ACCENT_HOVER),
                     pixel: fn() {
                         let sdf = Sdf2d.viewport(self.pos * self.rect_size);
                         let c = self.rect_size * 0.5;

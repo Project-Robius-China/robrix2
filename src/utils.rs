@@ -201,6 +201,18 @@ pub fn vec4_from_hex_str(s: &str) -> Option<makepad_widgets::Vec4> {
     ))
 }
 
+/// Formats a [`Vec4`] color as a `#RRGGBB` hex string (alpha dropped).
+///
+/// This is the inverse of [`vec4_from_hex_str`]. It's used when a color that
+/// lives in the `RBX_*` design-token layer needs to be embedded into
+/// runtime-generated HTML — e.g. a `<font color="#...">` tag in an agent
+/// app-card body — so the token stays the single source of truth instead of a
+/// hardcoded hex literal.
+pub fn vec4_to_hex(color: makepad_widgets::Vec4) -> String {
+    let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", to_u8(color.x), to_u8(color.y), to_u8(color.z))
+}
+
 /// A simplified version of `eyeball_im::VectorDiff` that uses `Vec` instead of `imbl::Vector`.
 ///
 /// This is used to communicate room order changes from the room list service to the RoomsList widget.

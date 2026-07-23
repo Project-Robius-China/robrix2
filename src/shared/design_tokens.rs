@@ -184,6 +184,14 @@ script_mod! {
     mod.widgets.RBX_CODE_KEYWORD = #x7CC4FF   // keyword / function
     mod.widgets.RBX_CODE_STRING  = #x8FD19A   // string / value
     mod.widgets.RBX_CODE_COMMENT = #x7F8B9B   // comment / muted
+    // Extended dark syntax palette for the CodeOutputCard token_colors map.
+    mod.widgets.RBX_CODE_BORDER  = #x2C3A4E   // panel hairline on the dark bg
+    mod.widgets.RBX_CODE_NUMBER  = #xE5C07B   // number / constant
+    mod.widgets.RBX_CODE_FUNCTION= #x61AFEF   // function / method
+    mod.widgets.RBX_CODE_TYPE    = #x56B6C2   // typename
+    mod.widgets.RBX_CODE_ERROR   = #xE06C75   // error decoration
+    mod.widgets.RBX_CODE_WARNING = #xE5C07B   // warning decoration
+    mod.widgets.RBX_CODE_PUNCT   = #xABB2BF   // delimiter / punctuator
 
     // =========================================================================
     // 9. ELEVATION — modal scrim + drop-shadow colors. Cards lean on radius +

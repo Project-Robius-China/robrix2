@@ -36,7 +36,7 @@ script_mod! {
 
             show_bg: true,
             draw_bg +: {
-                color: #000
+                color: (mod.widgets.RBX_FG_PRIMARY)
                 border_radius: 6.0
             }
 
@@ -141,7 +141,10 @@ script_mod! {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
         }
-        text_style_fixed: theme.font_code {
+        // Use the CJK-capable code style (LiberationMono + LXGW fallback) so
+        // inline `<code>` with Chinese renders instead of tofu — the default
+        // `theme.font_code` is Latin-only.
+        text_style_fixed: mod.widgets.MESSAGE_CODE_TEXT_STYLE {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
             top_drop: 0.11
@@ -149,8 +152,8 @@ script_mod! {
         draw_block +: {
             line_color: (MESSAGE_TEXT_COLOR)
             sep_color: (MESSAGE_TEXT_COLOR)
-            code_color: (#EDEDED)
-            quote_bg_color: (#EDEDED)
+            code_color: (mod.widgets.RBX_BG_SUNKEN)
+            quote_bg_color: (mod.widgets.RBX_BG_SUNKEN)
             quote_fg_color: (MESSAGE_TEXT_COLOR)
         }
 
@@ -418,9 +421,9 @@ impl MatrixLinkPill {
         {
             let mut pill_bg = self.view(cx, ids!(pill_bg));
             if is_room_mention || is_self_mention {
-                script_apply_eval!(cx, pill_bg, { draw_bg +: { color: #d91b38 } });
+                script_apply_eval!(cx, pill_bg, { draw_bg +: { color: mod.widgets.RBX_DANGER_FG } });
             } else {
-                script_apply_eval!(cx, pill_bg, { draw_bg +: { color: #000 } });
+                script_apply_eval!(cx, pill_bg, { draw_bg +: { color: mod.widgets.RBX_FG_PRIMARY } });
             }
         }
 

@@ -87,7 +87,7 @@ script_mod! {
 
     mod.widgets.USERNAME_FONT_SIZE = 11
 
-    mod.widgets.USERNAME_TEXT_COLOR = #x2
+    mod.widgets.USERNAME_TEXT_COLOR = #x16233B  // unified to RBX_FG_PRIMARY
     mod.widgets.USERNAME_TEXT_STYLE = theme.font_bold {
         font_size: (mod.widgets.USERNAME_FONT_SIZE),
     }
@@ -102,9 +102,9 @@ script_mod! {
     mod.widgets.MESSAGE_FONT_SIZE = 11
     mod.widgets.REDACTED_MESSAGE_FONT_SIZE = 10
 
-    mod.widgets.MESSAGE_TEXT_COLOR = #x333
+    mod.widgets.MESSAGE_TEXT_COLOR = #x16233B  // unified to RBX_FG_PRIMARY
     // notices (automated messages from bots) use a lighter color
-    mod.widgets.COLOR_MESSAGE_NOTICE_TEXT = #x888
+    mod.widgets.COLOR_MESSAGE_NOTICE_TEXT = #x5A6B86  // unified to RBX_FG_SECONDARY
     mod.widgets.MESSAGE_TEXT_LINE_SPACING = 1.3
     // This font should only be used for plaintext labels. Don't use this for Html content,
     // as the Html widget sets different fonts for different text styles (e.g., bold, italic).
@@ -170,14 +170,14 @@ script_mod! {
     mod.widgets.SMALL_STATE_FONT_SIZE = 9.0
 
 
-    mod.widgets.SMALL_STATE_TEXT_COLOR = #x888
+    mod.widgets.SMALL_STATE_TEXT_COLOR = #x8A98AE  // unified to RBX_FG_TERTIARY
     mod.widgets.SMALL_STATE_TEXT_STYLE = theme.font_regular {
         font_size: (mod.widgets.SMALL_STATE_FONT_SIZE),
     }
 
     mod.widgets.TIMESTAMP_FONT_SIZE = 8.5
 
-    mod.widgets.TIMESTAMP_TEXT_COLOR = #x999
+    mod.widgets.TIMESTAMP_TEXT_COLOR = #x8A98AE  // unified to RBX_FG_TERTIARY
     mod.widgets.TIMESTAMP_TEXT_STYLE = theme.font_regular {
         font_size: (mod.widgets.TIMESTAMP_FONT_SIZE),
     }
@@ -219,9 +219,9 @@ script_mod! {
 
     mod.widgets.COLOR_ACTIVE_PRIMARY_DARKER = #106fcc
 
-    mod.widgets.COLOR_BG_PREVIEW = #F0F5FF
+    mod.widgets.COLOR_BG_PREVIEW = #xF4F7FB  // unified to RBX_BG_SURFACE_SUBTLE
 
-    mod.widgets.COLOR_BG_PREVIEW_HOVER = #CDEDDF
+    mod.widgets.COLOR_BG_PREVIEW_HOVER = #xEFF4FB  // unified to RBX_BG_HOVER
 
     mod.widgets.COLOR_AVATAR_BG = #52b2ac
 
@@ -232,7 +232,7 @@ script_mod! {
 
 
     mod.widgets.COLOR_UNREAD_BADGE_MARKED = (mod.widgets.COLOR_ROBRIX_CYAN);
-    mod.widgets.COLOR_UNREAD_BADGE_MESSAGES = #AAAAAA
+    mod.widgets.COLOR_UNREAD_BADGE_MESSAGES = #x119FB3  // unified to RBX_ACCENT (mentions badge stays danger red)
 
 
     mod.widgets.COLOR_TEXT_IDLE = #d8d8d8
@@ -245,7 +245,7 @@ script_mod! {
 
     mod.widgets.COLOR_WARNING = #fcdb03
 
-    mod.widgets.COLOR_LINK_HOVER = #21B070
+    mod.widgets.COLOR_LINK_HOVER = #x119FB3  // unified to RBX_ACCENT
 
 
     // This is chosen to nicely fit the 3 window chrome buttons on macOS

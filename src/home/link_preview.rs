@@ -80,16 +80,16 @@ script_mod! {
                 padding: Inset{top: 4, bottom: 4, left: 8, right: 8},
                 draw_icon +: {
                     svg: (ICON_TRIANGLE_DOWN)
-                    color: #666666
+                    color: (mod.widgets.RBX_FG_SECONDARY)
                 }
                 icon_walk: Walk{width: 10, height: 10}
                 draw_text +: {
                     text_style: mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE {
                         font_size: 10.0,
                     },
-                    color: #666666,
-                    color_hover: #666666,
-                    color_down: #666666,
+                    color: (mod.widgets.RBX_FG_SECONDARY),
+                    color_hover: (mod.widgets.RBX_FG_SECONDARY),
+                    color_down: (mod.widgets.RBX_FG_SECONDARY),
                 }
                 draw_bg +: {
                     color: (COLOR_BG_PREVIEW)
@@ -99,7 +99,7 @@ script_mod! {
                     border_color: #CCCCCC
                     border_color_hover: #CCCCCC
                     border_color_down: #CCCCCC
-                    border_radius: 4.0
+                    border_radius: (mod.widgets.RBX_RADIUS_SM)
                 }
                 text: "Show more links"
             }
@@ -111,16 +111,16 @@ script_mod! {
                 padding: Inset{top: 4, bottom: 4, left: 8, right: 8},
                 draw_icon +: {
                     svg: (ICON_TRIANGLE_UP)
-                    color: #666666
+                    color: (mod.widgets.RBX_FG_SECONDARY)
                 }
                 icon_walk: Walk{width: 10, height: 10}
                 draw_text +: {
                     text_style: mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE {
                         font_size: 10.0,
                     },
-                    color: #666666,
-                    color_hover: #666666,
-                    color_down: #666666,
+                    color: (mod.widgets.RBX_FG_SECONDARY),
+                    color_hover: (mod.widgets.RBX_FG_SECONDARY),
+                    color_down: (mod.widgets.RBX_FG_SECONDARY),
                 }
                 draw_bg +: {
                     color: (COLOR_BG_PREVIEW)
@@ -130,7 +130,7 @@ script_mod! {
                     border_color: #CCCCCC
                     border_color_hover: #CCCCCC
                     border_color_down: #CCCCCC
-                    border_radius: 4.0
+                    border_radius: (mod.widgets.RBX_RADIUS_SM)
                 }
                 text: "Show fewer links"
             }
@@ -147,7 +147,7 @@ script_mod! {
             show_bg: true,
             draw_bg +: {
                 color: (COLOR_BG_PREVIEW)
-                border_radius: 4.0
+                border_radius: (mod.widgets.RBX_RADIUS_SM)
             }
             align: Align{ y: 0.5 }
 
@@ -176,7 +176,7 @@ script_mod! {
                             text_style: mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE {
                                 font_size: 12.0,
                             },
-                            color: #x0000EE,
+                            color: (mod.widgets.RBX_LINK),
                             color_hover: (COLOR_LINK_HOVER),
                         }
                     }
@@ -188,7 +188,7 @@ script_mod! {
                             text_style: mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE {
                                 font_size: 12.0,
                             },
-                            color: #666666,
+                            color: (mod.widgets.RBX_FG_SECONDARY),
                         }
                     }
                 }
@@ -206,7 +206,7 @@ script_mod! {
                             text_style: mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE {
                                 font_size: 11.0,
                             },
-                            color: #666666,
+                            color: (mod.widgets.RBX_FG_SECONDARY),
                         }
                     }
                 }
