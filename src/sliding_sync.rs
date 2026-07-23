@@ -2714,6 +2714,12 @@ async fn matrix_worker_task(
             }
 
             MatrixRequest::SwitchAccount { user_id } => {
+                // Switching to the account that is already active is a no-op: don't tear
+                // down and rebuild the client/sync service for nothing.
+                if account_manager::get_active_user_id().as_ref() == Some(&user_id) {
+                    log!("Ignoring SwitchAccount request: {} is already the active account", user_id);
+                    continue;
+                }
                 // Check if the account exists in AccountManager
                 if account_manager::get_client_for_user(&user_id).is_some() {
                     // Set the target account for switch
@@ -6159,6 +6165,46 @@ fn clear_account_switch_target() {
     }
 }
 
+/// UI-thread guard preventing more than one account switch from being submitted at a
+/// time. Set synchronously in [`request_switch_account`] (so a second click in the same
+/// input frame is ignored) and cleared in [`end_account_switch_guard`] once the switch
+/// resolves. This is deliberately separate from [`ACCOUNT_SWITCH_TARGET`], whose
+/// "pending" state the async monitoring loop reads to classify worker shutdowns — we
+/// must not flip that early from the UI thread.
+static ACCOUNT_SWITCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Requests a switch to `user_id` from the UI thread, guarded so that a second request
+/// submitted while a switch is already in flight is ignored. Without this, a fast
+/// double-click on two different accounts (now possible from the Settings multi-account
+/// list) would enqueue two `SwitchAccount` requests: the worker handles the first, then
+/// `return`s and drops its request receiver, silently discarding the second (stranding
+/// the user on the wrong account) — or, in a tight window, panicking on the send to a
+/// dropped receiver. Returns `true` if the request was submitted.
+pub fn request_switch_account(user_id: OwnedUserId) -> bool {
+    // Already the active account → nothing to do. (Returning here also avoids stranding
+    // the in-flight guard, since a no-op switch posts neither Switched nor Failed.)
+    if account_manager::get_active_user_id().as_ref() == Some(&user_id) {
+        log!("Ignoring account switch to {user_id}: already the active account");
+        return false;
+    }
+    // Reserve the in-flight slot synchronously; if one is already in flight, ignore.
+    if ACCOUNT_SWITCH_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        log!("Ignoring account switch to {user_id}: a switch is already in flight");
+        return false;
+    }
+    submit_async_request(MatrixRequest::SwitchAccount { user_id });
+    true
+}
+
+/// Clears the guard set by [`request_switch_account`]. Called when a switch resolves
+/// (either `AccountSwitchAction::Switched` or `Failed`) so the next switch can proceed.
+pub fn end_account_switch_guard() {
+    ACCOUNT_SWITCH_IN_FLIGHT.store(false, Ordering::Release);
+}
+
 /// Set to `true` when the access token has been rejected by the homeserver,
 /// signaling the main task to tear down the current session and wait for re-login.
 static TOKEN_EXPIRED: AtomicBool = AtomicBool::new(false);
@@ -6781,7 +6827,16 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             enqueue_rooms_list_update(RoomsListUpdate::ClearRooms);
             enqueue_rooms_list_update(RoomsListUpdate::RoomOrderUpdate(VecDiff::Clear));
 
-            // Post action to clear UI state
+            // Post Starting a second time. This is NOT redundant with the one the
+            // MatrixRequest::SwitchAccount handler posts: that one fires *before*
+            // `sync_service.stop()`, while the old client and its subscribers are still
+            // live, whereas this one fires after CLIENT/SYNC_SERVICE have been dropped.
+            // The App's Starting handler is the only caller of `clear_all_app_state()`
+            // (which clears TIMELINE_STATES), and MainDesktopUi resets the dock on the
+            // same action — closing the room tabs drops each RoomScreen, whose Drop impl
+            // saves its TimelineUiState back into TIMELINE_STATES. Without this second
+            // post, the old account's timeline state is re-inserted *after* the clear and
+            // the next account sees a stale, frozen timeline for that room.
             Cx::post_action(AccountSwitchAction::Starting(switch_user_id.clone()));
 
             // Update active account
@@ -6808,6 +6863,13 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                         Ok(ss) => ss,
                         Err(e) => {
                             error!("Failed to create SyncService: {e:?}");
+                            // We installed a fresh REQUEST_SENDER above, but bail out here
+                            // before `matrix_worker_task` is spawned, so its receiver is
+                            // dropped. Drop the now-orphaned sender too: `submit_async_request`
+                            // no-ops on a `None` sender but panics on a send to a dead
+                            // receiver, which would take down the app on the user's next
+                            // action (including retrying the switch).
+                            REQUEST_SENDER.lock().unwrap().take();
                             Cx::post_action(AccountSwitchAction::Failed(format!("Failed to create sync service: {e}")));
                             return;
                         }
@@ -6901,6 +6963,11 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                 }
                 Err(e) => {
                     error!("Failed to restore session for account switch: {e:?}");
+                    // Same as the sync-service failure above: the freshly installed
+                    // REQUEST_SENDER's receiver is dropped without a worker ever being
+                    // spawned, so drop the sender rather than leaving a live handle to a
+                    // dead receiver for `submit_async_request` to panic on.
+                    REQUEST_SENDER.lock().unwrap().take();
                     apply_restore_session_failure_policy(&e).await;
                     Cx::post_action(AccountSwitchAction::Failed(format!("Failed to restore session: {e}")));
                     enqueue_popup_notification(

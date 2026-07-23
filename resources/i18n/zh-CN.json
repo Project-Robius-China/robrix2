@@ -203,6 +203,12 @@
   "bot_binding_modal.popup.inviting": "正在将机器人 {bot_user_id} 添加到该房间...",
   "bot_binding_modal.popup.removing": "正在将机器人 {bot_user_id} 从该房间移除...",
 
+  "account_menu.badge.active": "当前",
+  "account_menu.item.add_account": "登录更多账号",
+  "account_menu.item.settings": "账号设置",
+  "account_menu.item.logout": "退出登录",
+  "account_menu.switching": "正在切换账号…",
+  "account_menu.switched": "已切换到 {user}",
   "add_menu.item.new_room": "新建房间",
   "add_menu.item.new_dm": "新建私信",
   "add_menu.item.join": "通过链接加入",

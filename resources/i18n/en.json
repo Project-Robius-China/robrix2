@@ -203,6 +203,12 @@
   "bot_binding_modal.popup.inviting": "Adding bot {bot_user_id} to this room...",
   "bot_binding_modal.popup.removing": "Removing bot {bot_user_id} from this room...",
 
+  "account_menu.badge.active": "Active",
+  "account_menu.item.add_account": "Log Into More Accounts",
+  "account_menu.item.settings": "Account Settings",
+  "account_menu.item.logout": "Log Out",
+  "account_menu.switching": "Switching account…",
+  "account_menu.switched": "Switched to {user}",
   "add_menu.item.new_room": "New room",
   "add_menu.item.new_dm": "New direct message",
   "add_menu.item.join": "Join with a link",

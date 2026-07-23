@@ -16,13 +16,14 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
+        account_menu::{AccountMenuAction, AccountMenuWidgetRefExt},
         add_menu::{AddMenuAction, AddMenuWidgetRefExt},
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, JoinRoomModalAction, JoinRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, set_room_info_action_modal_open}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender, end_account_switch_guard}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
@@ -134,6 +135,10 @@ script_mod! {
                         // anchored next to the "+" button. Like the context menus,
                         // it is a self-positioning overlay in front of the content.
                         add_menu := AddMenu { }
+
+                        // The account switcher popup, anchored at the desktop rail's
+                        // bottom-left avatar. Same self-positioning overlay pattern.
+                        account_menu := AccountMenu { }
 
                         // A modal to confirm sending out an invite to a room.
                         invite_confirmation_modal := Modal {
@@ -1168,6 +1173,16 @@ impl MatchEvent for App {
             match action.downcast_ref() {
                 Some(AccountSwitchAction::Starting(user_id)) => {
                     log!("Account switch starting to: {}", user_id);
+                    // Show a loading toast so the heavy client teardown + rebuild + resync
+                    // doesn't look frozen. The popup list is append-only (no dismiss-by-key),
+                    // so this Info toast just auto-dismisses on its own timer; the Switched
+                    // success toast then confirms completion. A short duration keeps the two
+                    // from overlapping for long on a fast switch.
+                    enqueue_popup_notification(
+                        tr_key(self.app_state.app_language, "account_menu.switching"),
+                        PopupKind::Info,
+                        Some(4.0),
+                    );
                     // Clear UI state during account switch
                     clear_all_app_state(cx);
                     self.app_state.selected_room = None;
@@ -1181,8 +1196,14 @@ impl MatchEvent for App {
                 }
                 Some(AccountSwitchAction::Switched(user_id)) => {
                     log!("Account switch completed to: {}", user_id);
+                    // Release the UI-thread switch guard so the next switch can proceed.
+                    end_account_switch_guard();
                     enqueue_popup_notification(
-                        format!("Switched to account {}", user_id),
+                        tr_fmt(
+                            self.app_state.app_language,
+                            "account_menu.switched",
+                            &[("user", user_id.as_str())],
+                        ),
                         PopupKind::Success,
                         Some(3.0),
                     );
@@ -1191,6 +1212,8 @@ impl MatchEvent for App {
                 }
                 Some(AccountSwitchAction::Failed(error)) => {
                     log!("Account switch failed: {}", error);
+                    // Release the UI-thread switch guard so the user can retry.
+                    end_account_switch_guard();
                     let error_text = error.to_string();
                     let error_for_copy = error_text.clone();
                     enqueue_notification(NotificationItem {
@@ -1498,6 +1521,27 @@ impl MatchEvent for App {
                 let pos_y = (pos.y - rect.pos.y).min(rect.size.y - expected_dimensions.y).max(0.0);
                 let margin = Inset { left: pos_x, top: pos_y, right: 0.0, bottom: 0.0 };
                 let mut main_content_view = add_menu.view(cx, ids!(main_content));
+                script_apply_eval!(cx, main_content_view, {
+                    margin: #(margin)
+                });
+                self.ui.redraw(cx);
+                continue;
+            }
+
+            // Handle an action requesting to open the account switcher menu. Unlike the
+            // add menu, `pos` is the desired BOTTOM-left corner of the card (the avatar
+            // sits low in the rail), so we subtract the card height to grow it upward.
+            if let Some(AccountMenuAction::Open { pos }) = action.downcast_ref::<AccountMenuAction>() {
+                self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
+                let account_menu = self.ui.account_menu(cx, ids!(account_menu));
+                let expected_dimensions = account_menu.show(cx, self.app_state.app_language);
+                let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);
+                let pos_x = (pos.x - rect.pos.x).min(rect.size.x - expected_dimensions.x).max(0.0);
+                let pos_y = (pos.y - expected_dimensions.y - rect.pos.y)
+                    .min(rect.size.y - expected_dimensions.y)
+                    .max(0.0);
+                let margin = Inset { left: pos_x, top: pos_y, right: 0.0, bottom: 0.0 };
+                let mut main_content_view = account_menu.view(cx, ids!(main_content));
                 script_apply_eval!(cx, main_content_view, {
                     margin: #(margin)
                 });
