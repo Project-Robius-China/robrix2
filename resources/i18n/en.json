@@ -811,5 +811,15 @@
   "space_lobby.item.member_one": "1 member",
   "space_lobby.item.member_n": "{count} members",
   "space_lobby.item.child_room_one": "~{count} room",
-  "space_lobby.item.child_room_n": "~{count} rooms"
+  "space_lobby.item.child_room_n": "~{count} rooms",
+  "room_settings.aliases.section_title": "Room Aliases",
+  "room_settings.aliases.canonical_label": "Main address",
+  "room_settings.aliases.alt_label": "Other published addresses",
+  "room_settings.aliases.add_placeholder": "# e.g. my-room",
+  "room_settings.aliases.add_button": "Add",
+  "room_settings.aliases.remove_button": "Remove",
+  "room_settings.aliases.set_canonical_button": "Set as main",
+  "room_settings.aliases.invalid_format": "Invalid address format",
+  "room_settings.aliases.publish_failed": "Failed to publish address",
+  "room_settings.aliases.readonly_hint": "You don't have permission to manage this room's addresses"
 }

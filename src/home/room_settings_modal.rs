@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use makepad_widgets::*;
 use ruma::{OwnedRoomAliasId, OwnedRoomId, RoomAliasId, ServerName};
 
+use crate::i18n::{AppLanguage, tr_key};
 use crate::shared::avatar::AvatarWidgetExt;
 use crate::utils::load_png_or_jpg;
 
@@ -1006,6 +1007,62 @@ impl RoomSettingsModal {
         let _ = is_public; // reflected by the toggle's current state
         self.view.redraw(cx);
     }
+
+    /// Apply the room's alias data (canonical + alt aliases) and permission
+    /// gating to the "Room Aliases" section. Labels use the localized strings
+    /// from `resources/i18n/**` so the section follows the app language.
+    ///
+    /// When `can_manage` is false the user lacks the power level to send the
+    /// `m.room.canonical_alias` state event, so the add-address control is
+    /// hidden and a read-only hint is shown instead.
+    pub fn apply_alias_settings(
+        &mut self,
+        cx: &mut Cx,
+        language: AppLanguage,
+        canonical_alias: Option<String>,
+        alt_aliases: Vec<String>,
+        can_manage: bool,
+    ) {
+        // Localized section labels.
+        self.view.label(cx, ids!(addresses_heading))
+            .set_text(cx, tr_key(language, "room_settings.aliases.section_title"));
+        self.view.label(cx, ids!(published_addresses_label))
+            .set_text(cx, tr_key(language, "room_settings.aliases.canonical_label"));
+
+        // Canonical (main) alias, or the existing "no main address" fallback.
+        let main_text = canonical_alias
+            .unwrap_or_else(|| String::from("No main address set"));
+        self.view.label(cx, ids!(main_alias_label)).set_text(cx, &main_text);
+
+        // Alternate published aliases, one per line. Falls back to a hint when
+        // there are none.
+        if alt_aliases.is_empty() {
+            self.view.label(cx, ids!(no_published_label))
+                .set_text(cx, "No other published addresses yet, add one below");
+        } else {
+            self.view.label(cx, ids!(no_published_label))
+                .set_text(cx, &alt_aliases.join("\n"));
+        }
+
+        // Localized add control.
+        self.view.text_input(cx, ids!(add_address_input))
+            .set_empty_text(cx, tr_key(language, "room_settings.aliases.add_placeholder").to_string());
+        self.view.button(cx, ids!(add_address_button))
+            .set_text(cx, tr_key(language, "room_settings.aliases.add_button"));
+
+        // Permission gating: only users who can send `m.room.canonical_alias`
+        // see the edit control; everyone else gets a read-only hint.
+        self.view.view(cx, ids!(add_address_row)).set_visible(cx, can_manage);
+        if can_manage {
+            self.view.label(cx, ids!(local_desc))
+                .set_text(cx, tr_key(language, "room_settings.aliases.alt_label"));
+        } else {
+            self.view.label(cx, ids!(local_desc))
+                .set_text(cx, tr_key(language, "room_settings.aliases.readonly_hint"));
+        }
+
+        self.view.redraw(cx);
+    }
 }
 
 impl RoomSettingsModalRef {
@@ -1026,6 +1083,19 @@ impl RoomSettingsModalRef {
     pub fn apply_fetched_settings(&self, cx: &mut Cx, topic: Option<String>, is_public: bool) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.apply_fetched_settings(cx, topic, is_public);
+    }
+
+    /// Apply fetched alias data (canonical + alt aliases) and permission gating.
+    pub fn apply_alias_settings(
+        &self,
+        cx: &mut Cx,
+        language: AppLanguage,
+        canonical_alias: Option<String>,
+        alt_aliases: Vec<String>,
+        can_manage: bool,
+    ) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.apply_alias_settings(cx, language, canonical_alias, alt_aliases, can_manage);
     }
 
     /// Update the avatar widget after a successful upload.

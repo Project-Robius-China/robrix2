@@ -2010,8 +2010,18 @@ impl MatchEvent for App {
 
             // Handle RoomSettingsFetchedAction.
             if let Some(fetched) = action.downcast_ref::<RoomSettingsFetchedAction>() {
+                let canonical = fetched.canonical_alias.as_ref().map(|a| a.as_str().to_string());
+                let alts: Vec<String> = fetched.alt_aliases.iter().map(|a| a.as_str().to_string()).collect();
                 self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
                     .apply_fetched_settings(cx, fetched.topic.clone(), fetched.is_public);
+                self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
+                    .apply_alias_settings(
+                        cx,
+                        self.app_state.app_language,
+                        canonical,
+                        alts,
+                        fetched.can_manage_aliases,
+                    );
                 continue;
             }
 

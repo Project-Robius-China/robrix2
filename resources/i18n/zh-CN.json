@@ -809,5 +809,15 @@
   "space_lobby.item.member_one": "1 位成员",
   "space_lobby.item.member_n": "{count} 位成员",
   "space_lobby.item.child_room_one": "~{count} 个房间",
-  "space_lobby.item.child_room_n": "~{count} 个房间"
+  "space_lobby.item.child_room_n": "~{count} 个房间",
+  "room_settings.aliases.section_title": "房间别名",
+  "room_settings.aliases.canonical_label": "主地址",
+  "room_settings.aliases.alt_label": "其他已发布地址",
+  "room_settings.aliases.add_placeholder": "# 例如 my-room",
+  "room_settings.aliases.add_button": "添加",
+  "room_settings.aliases.remove_button": "移除",
+  "room_settings.aliases.set_canonical_button": "设为主地址",
+  "room_settings.aliases.invalid_format": "地址格式无效",
+  "room_settings.aliases.publish_failed": "发布地址失败",
+  "room_settings.aliases.readonly_hint": "你没有管理该房间地址的权限"
 }

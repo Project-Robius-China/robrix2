@@ -703,6 +703,13 @@ pub struct RoomSettingsFetchedAction {
     pub room_id: OwnedRoomId,
     pub topic: Option<String>,
     pub is_public: bool,
+    /// The room's canonical (main) alias, if any.
+    pub canonical_alias: Option<OwnedRoomAliasId>,
+    /// The room's published alternate aliases.
+    pub alt_aliases: Vec<OwnedRoomAliasId>,
+    /// Whether the current user may send the `m.room.canonical_alias` state
+    /// event — gates the alias edit controls in the Room Settings modal.
+    pub can_manage_aliases: bool,
 }
 
 /// Posted after a room avatar is successfully uploaded and set.
@@ -4311,7 +4318,24 @@ async fn matrix_worker_task(
                     if let Some(room) = client.get_room(&room_id) {
                         let topic = room.topic();
                         let is_public = room.is_public().unwrap_or(false);
-                        Cx::post_action(RoomSettingsFetchedAction { room_id, topic, is_public });
+                        let canonical_alias = room.canonical_alias();
+                        let alt_aliases = room.alt_aliases();
+                        // Alias edit controls are gated on the power level to send
+                        // `m.room.canonical_alias` (see `UserPowerLevels`).
+                        let can_manage_aliases = match client.user_id() {
+                            Some(user_id) => UserPowerLevels::from_room(&room, user_id)
+                                .await
+                                .is_some_and(|pl| pl.can_set_canonical_alias()),
+                            None => false,
+                        };
+                        Cx::post_action(RoomSettingsFetchedAction {
+                            room_id,
+                            topic,
+                            is_public,
+                            canonical_alias,
+                            alt_aliases,
+                            can_manage_aliases,
+                        });
                     }
                 });
             }

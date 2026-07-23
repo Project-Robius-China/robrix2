@@ -152,6 +152,37 @@ mod tests {
     }
 
     #[test]
+    fn test_room_aliases_i18n_keys_exist_in_all_locales() {
+        // Spec `specs/task-room-aliases.spec.md` Completion Criteria — the Room
+        // Aliases section keys must resolve to a real translation (not the key
+        // itself) in every locale.
+        for key in [
+            "room_settings.aliases.section_title",
+            "room_settings.aliases.canonical_label",
+            "room_settings.aliases.alt_label",
+            "room_settings.aliases.add_placeholder",
+            "room_settings.aliases.add_button",
+            "room_settings.aliases.remove_button",
+            "room_settings.aliases.set_canonical_button",
+            "room_settings.aliases.invalid_format",
+            "room_settings.aliases.publish_failed",
+            "room_settings.aliases.readonly_hint",
+        ] {
+            for language in AppLanguage::ALL {
+                assert!(
+                    dictionary(language).contains_key(key),
+                    "missing i18n key {key:?} for language {language:?}",
+                );
+                assert_ne!(
+                    tr_key(language, key),
+                    key,
+                    "i18n key {key:?} resolves to itself (no translation) for {language:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn translation_i18n_keys_exist_for_settings_and_room_input() {
         assert_eq!(
             tr_key(AppLanguage::English, "settings.labs.translation.title"),
