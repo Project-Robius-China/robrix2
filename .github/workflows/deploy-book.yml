@@ -1,0 +1,48 @@
+name: Deploy HAgency Book to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["book/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mdbook and mdbook-mermaid
+        run: |
+          mkdir -p ~/bin
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.43/mdbook-v0.4.43-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C ~/bin
+          curl -sSL https://github.com/badboy/mdbook-mermaid/releases/download/v0.14.0/mdbook-mermaid-v0.14.0-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C ~/bin
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Build bilingual site
+        run: bash book/build.sh
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: book/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

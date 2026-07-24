@@ -1,2 +1,7 @@
 [default.extend-words]
 PN = "PN"
+
+[files]
+# Minified vendor JS (mdbook-mermaid assets) is full of short mangled
+# identifiers that the checker misreads as typos.
+extend-exclude = ["book/*/mermaid.min.js", "book/*/mermaid-init.js"]

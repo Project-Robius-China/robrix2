@@ -1,0 +1,18 @@
+[book]
+title = "HAgency: A Collaboration Space for Humans and Agents"
+description = "HAgency = Human + Agency. Built on Robrix2 + agent-chat + Matrix: a collaboration space where humans remain the agentic subject, working alongside AI agent teams."
+authors = ["Alex Zhang"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/Project-Robius-China/robrix2"
+additional-js = ["mermaid.min.js", "mermaid-init.js", "lang-switch.js"]
