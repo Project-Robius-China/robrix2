@@ -1,6 +1,6 @@
 # Owner 审批：高危操作由人拍板
 
-> **定位**：本章讲 HAgency 安全模型的核心闸门 —— 加密审批房里的一次性授权卡片：长什么样、协议如何绑定、失败时如何收敛。前置依赖：第 5.2 章；机制全景见第 6 章。
+> **定位**：本章讲 HAgency 安全模型的核心闸门 —— 加密审批房里的一次性授权卡片：长什么样、协议如何绑定、失败时如何收敛。前置依赖：第 5.2 章；机制全景见第 8 章。
 
 在 agent-chat **受管启动**的运行时里，沙箱外操作和被策略标记为 ask 的命令会进入 owner approval。当前明确覆盖的典型路径包括 Claude 的 `Bash(gh *)` / `Bash(git push *)` Ask 规则，以及 Codex `workspace-write` 沙箱下触发的 `PermissionRequest`。不要把“任何网络访问都会审批”理解为跨所有 runtime/version 的无条件事实。
 
@@ -40,7 +40,7 @@ bridge 按 **`(agent, owner MXID)`** 创建或复用一个 `Approval: <agent>` �
 
 协议层要点（对应截图中可见的原始事件）：
 
-- 请求事件 `com.agentchat.approval.request.v1` 携带 agent、runtime、project、project room、owner、approval room、request_id、upstream request、工具名、描述、最多 8KB 的输入预览等规范字段；`input_digest` 对这组规范化字段做 SHA-256。它绑定的是服务端保存的规范记录，不是无限长度原始 stdin 的承诺；
+- 请求事件 `com.agentchat.approval.request.v1` 携带 agent、runtime、project、project room、owner、approval room、request_id、upstream request、工具名、描述、最多 8KB 的输入预览等规范字段；`input_digest` 对其中除 `request_id` 外的规范化字段做 SHA-256（`request_id` 由 verdict 校验单独绑定）。它绑定的是服务端保存的规范记录，不是无限长度原始 stdin 的承诺；
 - 点击按钮后，Robrix2 发出 `com.agentchat.approval.verdict.v1` 并保留全部绑定字段；发送前刷新 bridge 设备列表并轮换出站 Megolm session，以降低 bridge 设备轮换导致的 unable-to-decrypt。设备查询、Olm/OTK 或 room key 传递仍可能失败，此时不发送或等待密钥，最终保持 fail-closed；
 - **文字回复不是审批**。卡片上明确写着 "Text replies are not approval" —— 只有结构化 verdict 有效，杜绝「在聊天里说句好的就放行」的社会工程路径。
 

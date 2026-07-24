@@ -1,31 +1,31 @@
 # Philosophy and Overall Architecture
 
-> **Scope**: This chapter lays out HAgency's four design principles and its three-layer architecture — every mechanism in the chapters that follow has a place on this map. Prerequisites: the Preface. If you are evaluating whether this system deserves your trust, start reading here.
+> **Scope**: This chapter lays out HAgency's four design principles and its three-layer architecture — every mechanism in the chapters that follow has a place on this map. Prerequisite: the Preface. Readers evaluating whether this system deserves trust should start here.
 
-## Humans Are Participants, Not Spectators
+## The Human Is a Subject, Not a Spectator
 
-A typical "multi-agent development system" works like this: you submit a requirement, a swarm of agents churns away inside a black box, and eventually a result gets tossed back at you. The human is shut out of the process — you can't see what happened between the agents, you can't course-correct midway, and you certainly can't gate dangerous operations.
+A typical "multi-agent development system" usually looks like this: you submit a requirement, a swarm of agents runs it inside a black box, and finally a result is thrown back at you. The human is excluded from the process — you cannot see what happened between the agents, you cannot correct course midway, and you certainly cannot gate high-risk operations.
 
 HAgency's design principles are the exact opposite:
 
-1. **Shared space**: Humans and agents can talk in the same Matrix room. Only dispatches, reports, and conclusions explicitly posted to the group become room records; backend DMs, private task state, and approval details are not automatically public.
-2. **Humans decide**: Directional decisions ("commit a checkpoint first, or keep writing?" "send a draft PR directly?") are escalated by the agents and made by you.
-3. **Humans authorize**: An agent's dangerous operations (`gh` write operations, sandbox-escaping commands) trigger **Owner approval** — a card delivered to an encrypted DM that lets the agent proceed only after you click "Approve once". Approvals are single-use, time-limited, and fail-closed.
-4. **Humans can intervene**: You can `@` any agent at any moment to interject, change the plan, or even take over the task — because everything happens in a chat room right in front of you.
+1. **Same space**: humans and agents can talk in the same Matrix room. Only dispatches, reports, and conclusions explicitly published to the group become part of the room record; backend-internal DMs, unpublished task state, and approval details are not automatically made public.
+2. **Humans decide**: directional decisions ("commit a checkpoint first, or keep writing?" "send a draft PR right away?") are proactively escalated by the agent and decided by the human.
+3. **Humans authorize**: an agent's high-risk operations (`gh` write operations, sandbox-escaping commands) trigger **Owner approval** — a card delivered to an encrypted DM that only proceeds when you click "Approve once". Approvals are single-use, time-limited, and fail-closed.
+4. **Intervenable**: you can `@` an agent at any time to interject, change the plan, or even take over the task — because everything happens in a chat room right in front of you.
 
-Of these four, authorization is **enforced** when the runtime is managed and the owner binding is valid. Shared space and intervention use Matrix transport and membership. Directional escalation and proactive reporting are currently workflow conventions. These are different assurance levels.
+Of these four, "humans authorize" is **enforced** by the approval protocol, given a managed runtime and a valid owner binding (Chapters 5.4 and 8); "same space" and "intervenable" are provided by Matrix transport and room membership; "humans decide" and proactive reporting are currently mostly workflow conventions. The strength of these guarantees differs and must not be conflated.
 
 ## Three-Layer Architecture
 
 ```mermaid
 flowchart TB
-    subgraph human["Human workbench"]
+    subgraph human["The human's workbench"]
         R["Robrix2<br/>Matrix client (macOS / Windows / Linux)"]
     end
 
     subgraph matrix["Communication substrate (Matrix)"]
         P["Palpo homeserver<br/>or any Matrix server"]
-        room["Project board room<br/>(humans + agent puppets, currently unencrypted only)"]
+        room["Project board room<br/>(humans + agent puppets, currently unencrypted rooms only)"]
         appr["Approval DM Approval: agent<br/>(E2EE, human ↔ bridge)"]
         P --- room
         P --- appr
@@ -33,10 +33,10 @@ flowchart TB
 
     subgraph ac["Agent hub (agent-chat, local-first)"]
         BR["bridge-matrix.js<br/>Matrix ↔ backend bidirectional bridge"]
-        BE["backend-v2.js :8090<br/>Authoritative store for messages / tasks / approvals"]
-        MCP["mcp-server.js<br/>Messaging tools for each agent"]
+        BE["backend-v2.js :8090<br/>authoritative store for messages / tasks / approvals"]
+        MCP["mcp-server.js<br/>each agent's messaging tools"]
         TMUX["tmux runtime<br/>Claude Code / Codex"]
-        DASH["server.js :8084<br/>Local monitoring dashboard"]
+        DASH["server.js :8084<br/>local monitoring dashboard"]
         BR <--> BE
         BE <--> MCP
         MCP <--> TMUX
@@ -44,27 +44,27 @@ flowchart TB
     end
 
     R <-->|Client-Server API| P
-    BR <-->|"Puppet accounts @ac_&lt;agent&gt;<br/>Bridge bot @agent-bridge-&lt;user&gt;"| P
+    BR <-->|"Puppet accounts @ac_&lt;agent&gt;<br/>bridge bot (default agent-bridge,<br/>-&lt;user&gt; suffix is a deployment convention)"| P
 ```
 
-A few key design choices, each with its own "why":
+A few key design choices, and the "why" behind each:
 
-**Agents appear on Matrix as puppet accounts.** Each agent maps to an `@ac_<name>:<server>` account with a display name; an avatar is guaranteed only when automatic avatars are enabled or one is configured. This reuses Matrix mentions, threads, and room permissions rather than inventing a second chat protocol.
+**Agents appear on Matrix as "puppet accounts."** Each agent maps to an `@ac_<name>:<server>` account with a display name set; an avatar is only guaranteed if auto-avatars are explicitly enabled or configured manually. To a human, it is still an ordinary room member. The payoff is reusing Matrix's @mentions, Threads, and room permissions rather than inventing a second chat protocol for agents.
 
-**robrix→agent delivery is pure Matrix.** You mention `@wf_coordinator` in the room → Palpo → the bridge receives the event → converts it into an agent-chat notification → nudges Claude Code / Codex in tmux; the agent's reply travels back along the same path under its puppet identity. There is no private side channel anywhere in between, which means **any Matrix client can join the collaboration** — Robrix2 is simply the one with the best experience.
+**robrix→agent delivery is pure Matrix.** You say `@wf_coordinator` in a room → Palpo → the bridge receives the event → converts it into an agent-chat notification → nudges the Claude Code / Codex session in tmux; the agent's reply travels back along the same path under its puppet identity. There is no private side channel anywhere in between, which means **any Matrix client can participate in the collaboration** — Robrix2 is simply the one with the best experience.
 
-**Authoritative state lives at explicit server-side boundaries, not in Robrix2.** Several bindings that look similar are distinct:
+**Authoritative state is distributed across explicit server-side boundaries, never in Robrix2.** Several easily confused "bindings" are in fact distinct things:
 
-| Relationship | Authority | Purpose |
+| Relationship | Authoritative source | Purpose |
 |------|---------|------|
-| operator/admin ACL | agent-chat environment | who may run management commands |
-| `room → group` | Matrix bridge state | which backend group receives a project room |
-| `(room, agent) → owner MXID` | bridge provenance from the Agent invite | who may approve that Agent in that room |
-| approval request/consume | backend approval store | TTL, digest, one-shot verdict |
-| `group → project/workflow` | Project Board binding data | read-only projection; no supported write UI/API yet |
+| operator / admin ACL | agent-chat environment variables | Who may run admin commands such as `!bindroom` |
+| `room → group` | Matrix bridge persistent state | Which backend group a project room is wired to |
+| `(room, agent) → owner MXID` | Established by the bridge from the agent's invite event | Who may approve this agent's requests in that room |
+| approval request / consume | backend approval store | TTL, digest, single-use consumption, and the final verdict |
+| `group → project/workflow` | Project Board binding data | Read-only project projection; currently no formal write UI/API |
 
-Robrix2 displays and initiates events, but never grants approval authority or infers owners from display names.
+**Robrix2 is only a client for display and initiating actions — never a source of authorization.** It does not determine owners from display names, and it holds no approval permissions that could override server-side judgment.
 
-**Approvals go through a dedicated encrypted DM.** The bridge creates or reuses an `Approval: <agent>` room per `(agent, owner MXID)`, usually after owner provenance exists, and it is not ready until the owner joins. Only a redacted waiting status appears in the project room.
+**Approvals travel through a separate encrypted DM.** The bridge creates or reuses an `Approval: <agent>` E2EE room keyed by `(agent, owner MXID)`, whose members are the owner, the bridge bot, and that agent. It is usually created on demand after the owner binding is established, and is not ready until the owner accepts the invite. Approval details appear only there; other people in the project room see only a redacted waiting status.
 
-**Project rooms and approval rooms have different encryption boundaries.** Agent group outbound messages currently bypass the E2EE crypto client, so thread continuity supports **unencrypted project rooms only**. Approval rooms use a separate E2EE path. Do not enable encryption on the board room in the current version.
+**The project room and the approval room currently sit on different encryption boundaries.** An agent's outbound path into group rooms does not currently go through the E2EE crypto client, so Thread continuity is supported only in **unencrypted project rooms**. The approval room uses a separate E2EE path. Do not enable room encryption when creating a board room; if your project content cannot live in a plaintext / federatable room, the current version is not suitable for pasting full code and commands into the board room.
