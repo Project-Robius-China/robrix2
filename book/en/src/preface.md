@@ -40,12 +40,23 @@ The three speak the **Matrix protocol** as their common language. Choosing Matri
 
 > Preface → Chapter 3 Concept and Architecture → Chapter 5.4 Owner Approval → Chapter 6 Security Model → then back to deployment
 
-### Version Baseline
+### Version and Evidence Baseline
 
-This book is written against the mainline versions of the three repositories as of July 2026: Robrix2 1.1.x, agent-chat current mainline, Palpo current mainline. The system is under active development — commands and interfaces may evolve, but the architecture in Chapter 3 and the security model in Chapter 6 are long-term commitments and change the slowest. Every screenshot in this book comes from a real running system; none are staged.
+This book was verified on **2026-07-24** against Robrix2 documentation commit `d4f5c4c8` and agent-chat mainline `ad45f67`. Project Board screenshots come from the not-yet-merged `feat/project-board` commit `3102a5f`, so Chapter 5.6 labels it as a preview rather than a shipped mainline feature. Palpo behavior is based on this repository's `palpo-and-octos-deploy/` artifact and the tested node; the published book should pin the exact Palpo commit or release.
+
+The book uses four evidence labels:
+
+| Label | Meaning |
+|------|------|
+| **Protocol-enforced** | backend/bridge validates and fails closed; Agent self-discipline cannot bypass it |
+| **Current implementation** | present in the pinned commits, with stated preconditions |
+| **Workflow convention** | required by a skill/prompt and may fail if the Agent, relay, or session stops |
+| **Planned** | a design direction or partial foundation, not an end-to-end Robrix2 product path yet |
+
+Every screenshot is from a real run. A screenshot proves what happened in that run; it does not by itself prove a universal, automatic product guarantee.
 
 ## How This Book Is Organized
 
 **Part I** (Chapters 1–2) briefly introduces Robrix2 as a Matrix IM client in its own right — even without any agents attached, it is a complete, usable instant messenger.
 
-**Part II** (Chapters 3–6) is the heart of the book: the concept and architecture, two deployment routes, five screenshot-driven collaboration scenarios (inviting agents, the board room, threads, approvals, the four-role workflow), and the security model that underpins them all.
+**Part II** (Chapters 3–6) is the heart of the book: architecture, two deployment routes, six screenshot-driven scenarios, Agent pools and multi-user boundaries, troubleshooting, and the security model.

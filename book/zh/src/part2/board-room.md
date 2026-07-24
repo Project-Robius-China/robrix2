@@ -2,7 +2,7 @@
 
 > **定位**：本章介绍作战室（board room）—— HAgency 的主协作现场：谁在房间里、怎么对话、workflow 命令从哪来。前置依赖：第 5.1 章。
 
-**作战室**是一个绑定了 agent-chat group 的普通 Matrix 房间（先 `agentchat cli create-group` 创建 group，再由 operator 在房间里发送 `!bindroom <group>` 完成绑定，见第 4.1 章第 4 步；operator 即 `.env` 中 `MATRIX_OPERATOR_MXIDS` 列出的人类账号）。绑定之后，房间消息路由给 Agent，Agent 的发言以木偶身份回到房间。
+**作战室**是一个绑定了 agent-chat group 的**非加密** Matrix 房间。`!bindroom` 建立 room→group；人类再亲自邀请每个 Agent 建立 room+agent→owner。两种绑定都完成后，显式路由给 Agent 的消息进入 backend，Agent 的公开回复以木偶身份回到房间。
 
 ## 一个房间里有谁？
 
@@ -17,9 +17,22 @@
 - **alex 的 Agent 团队**：`wf_coordinator`、`wf_codex`；
 - **Tyrese 的 Agent 团队**：`tyrese_coordinator`、`tyrese_implementer`、`tyrese_reviewer`、`tyrese_final_reviewer`。
 
-两套 agent-chat 实例分属两个人、跑在两台机器上，它们的 Agent 却在同一个房间里协作 —— 人对人、人对 Agent、Agent 对 Agent，全部通过 `@提及` 直接对话。这靠的是 Matrix 的开放协议：任何实例都能以标准客户端身份接入同一空间，不需要中心化的撮合服务（若两支团队分属不同 homeserver，还可进一步走 Matrix 联邦互通）。
+两套 agent-chat 实例分属两个人、跑在两台机器上，它们的 Agent 可以在同一个房间里公开发言。**人→Agent** 用 `@具体 Agent` 路由；同一 backend 内的 Agent→Agent 派单使用 MCP/backend 消息。当前 bridge 会忽略 `@ac_*` 发送者以防循环，所以不能把跨实例 Agent 在 Matrix 里互相 @ 描述成可靠的执行通道；跨团队消息目前应由人转交，或只作为公开状态阅读。
 
-**权限边界**：每个 Agent 只听自己 owner 的调遣做高危操作。你可以 @ 别人的 Agent 提问、讨论，但它的越权操作审批只会发给它自己的 owner —— 授权关系不因同房而混淆（机制见第 6 章）。
+**权限边界**：你可以 @ 别人的 Agent 讨论，但该 Agent 是否接受任务由对方实例策略决定；受保护操作只发给它自己的 owner。每个 backend 只能调度自己的 Agent、项目路径、token 与模型池，不能借共享房间取得队友机器的权限。
+
+## @ 是执行路由，不只是提醒
+
+默认 `MATRIX_DEFAULT_WAKE=off`。共享房间中的顶层消息如果没有显式 @，bridge 可以记录它，但不会唤醒任何 Agent。rich reply 目前可能依据被回复的木偶推断目标；如果团队要求“每次都必须显式 @”，不要把这种推断当作安全边界，应在验收时单独验证运行版本的行为。
+
+为了避免抢答和请求放大，作战室按以下规则使用：
+
+| 输入 | 预期 |
+|------|------|
+| 顶层消息，无 @ | 不唤醒 Agent |
+| `@wf_coordinator ...` | 只唤醒对应 Agent |
+| 同时 @ 两个 Agent | 两个目标各自收到任务 |
+| Agent 在房间公开发言 | 供人阅读；不会自动成为另一实例 Agent 的任务 |
 
 ## Workflow 斜杠命令
 
@@ -32,7 +45,7 @@
 - `/review` —— 对某个 issue 重跑评审 + Codex 终审；
 - `/status` —— 查询某个 issue / 工作流的当前状态。
 
-**这些命令本质上是发给 coordinator 的普通文本** —— Robrix2 只提供补全便利，解释权在 Agent。这个设计是有意的：Robrix2 永远不是执行入口，就算把命令原文发到一个没有 coordinator 的房间，也什么都不会发生（安全含义见第 6 章）。用法示例：
+**这些命令本质上是发给 coordinator 的普通文本**。Robrix2 只提供补全；只有安装了兼容 workflow skill 的 coordinator 才会解释它们。没有 skill、Agent 离线或未 @ 时，命令不会自动创建 backend workflow run。
 
 ```text
 @wf_coordinator /create-issue 房间设置里增加别名管理

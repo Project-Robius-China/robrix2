@@ -20,8 +20,11 @@
   - [Owner Approval: Humans Make the Call on High-Risk Operations](part2/approvals.md)
   - [issue-workflow: A Four-Role Development Workflow](part2/issue-workflow.md)
   - [Project Board: A Global View of Tasks and Artifacts](part2/project-board.md)
+- [Agent Pools, Models, and Multi-User Boundaries](part2/agent-pool.md)
+- [Operations Acceptance and Troubleshooting](part2/operations.md)
 - [Security Model](part2/security-model.md)
 
 ---
 
 [Appendix: Projects and Resources](appendix/links.md)
+[Appendix: Glossary and Capability Status](appendix/glossary.md)

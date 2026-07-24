@@ -8,13 +8,13 @@ HAgency gives Agents a great deal of freedom to act; that freedom must be matche
 
 **1. Robrix2 is never a source of authorization.** Robrix2 does exactly two things: display (approval cards, workflow status) and initiate (turn your click into a structured Matrix event). All authorization decisions happen on the agent-chat server: the verdict's actual sender (`event.sender`) must equal the bound owner account — no trusting display names, no trusting whatever identity the payload claims; room, agent, project, request_id, and input_digest must match item by item; approval binding fields are read only from the **original event**, so an `m.replace` edit cannot tamper with a card already sent. Even if the client is replaced or forged, server-side verification still holds.
 
-**2. Approvals are one-shot, time-bounded, and replay-proof.** `Approve once` means what it says — each card allows exactly one execution; the server "consumes" the approval before notifying the runtime, so an allow can never be replayed. Approvals expire after 5 minutes by default, and an expired click is rejected on both client and server. The `input_digest` (a SHA-256 over the canonicalized request content — including the tool name and command input preview) pins the authorization to **this one request**: change a single character within the preview and nothing matches (the preview is truncated at 8KB, covering the vast majority of real commands).
+**2. Approvals are one-shot, time-bounded, and replay-resistant.** The server consumes before notifying the runtime. The default TTL is five minutes. `input_digest` hashes canonical fields including agent/runtime/project/project-room/owner/approval-room/request IDs, tool description, and up to 8KB of input preview, binding the verdict to the stored request record.
 
-**3. Fail-closed: every anomaly equals denial.** From Codex's approval hook to Claude's permission channel, any failure anywhere in the chain — timeout, parse failure, channel unavailable, integrity check failing — leaves the runtime with an explicit **deny**, never a silent allow or an indefinite wait. The Codex approval hook is bound to the script's SHA-256 and self-verifies its integrity; enabling the hook for the first time requires explicitly typing `TRUST` in a local terminal.
+**3. Fail-closed: every anomaly equals denial.** Codex uses a SHA-256-bound hook that requires local `TRUST` on first use or hash change, with hook timeout derived from approval TTL plus buffer. Claude relies on managed auto mode and Ask rules. Failures do not become allow.
 
-**4. Encrypted channels and key hygiene.** Approval rooms enforce end-to-end encryption (Megolm), so approval details are invisible to the homeserver. Before sending a verdict, Robrix2 explicitly refreshes the bridge's device keys and rotates the outbound room key, guaranteeing the bridge's current device can decrypt; a verdict the bridge cannot yet decrypt is persisted and queued while waiting for the room key, rather than dropped or misjudged.
+**4. Encrypted channels and key hygiene.** Approval bodies use Megolm E2EE, though membership, timing, and traffic metadata remain visible. Robrix2 refreshes bridge devices and rotates outbound sessions to reduce device-rotation UTD; the bridge queues temporarily undecryptable verdicts within bounded storage. Any failure remains fail-closed.
 
-**5. Managed runtimes.** Agent coding runtimes are launched in managed mode: Claude Code uses `--permission-mode auto` plus the approval channel, with sensitive commands (`gh *`, `git push *`) configured to always ask; Codex uses the `workspace-write` sandbox plus `on-request` approvals. tmux sessions are started by a managed script and tagged — a "wild" instance manually restarted without the approval parameters is rejected by the launcher.
+**5. Managed runtimes and least project scope.** Claude uses auto + channel; Codex uses `workspace-write` + `on-request`. The launcher rejects same-name tmux sessions without its marker and filters policy-overriding arguments, but cannot stop a user from launching an unrelated wild CLI elsewhere. All guarantees assume an agent-chat-launched runtime. `agentchat project add` should expose only required repositories/worktrees, with an explicit copy-vs-symlink choice.
 
 ## Threat → Defense Matrix
 
@@ -24,12 +24,21 @@ HAgency gives Agents a great deal of freedom to act; that freedom must be matche
 | Replaying an old approval | Single consume + TTL + request_id binding | Principle 2 |
 | Approve command A, actually execute command B | Content-level binding via `input_digest` | Principle 2 |
 | An approval-chain failure turning into "allow by default" | Fail-closed end to end; every anomaly is a deny | Principle 3 |
-| Homeserver or network snooping on approval content | Approval room is E2EE; the server sees only ciphertext | Principle 4 |
+| Homeserver or network snooping on approval bodies | Bodies are E2EE; membership/timing metadata remains visible | Principle 4 |
 | Tampering with the approval hook / bypassing the managed launcher | Hook SHA-256 self-verification + TRUST confirmation + managed PID tagging | Principles 3 / 5 |
 | Editing (m.replace) an approval card already sent | Binding fields read only from the original event | Principle 1 |
+| Using `!ctl` / `!agentctl` in a project or approval room | Control commands are explicitly rejected in those rooms | Principle 1 |
+| Falling back to admins when no owner exists | missing/ambiguous owner binding denies | Principles 1 / 3 |
+| Waking every Agent with ordinary room text | `MATRIX_DEFAULT_WAKE=off` and explicit target mentions | Principle 5 |
 
-**Scope of the model**: this model defends against "Agents executing beyond their authority" and "the authorization channel being forged / replayed / bypassed". It does not defend against the owner approving the wrong thing (which is why the card must show you the command preview clearly), nor against a root-level attacker on your machine (that is already beyond the assumptions of any application-layer security).
+## Boundaries and Residual Risks
 
----
+- A compromised owner device can emit a verdict from the real MXID.
+- A compromised backend/bridge host or root attacker is outside this application-layer model.
+- Input after the 8KB preview is not fully displayed; reject opaque or dynamically assembled commands.
+- Project rooms are currently unencrypted; do not post secrets.
+- E2EE hides bodies, not membership/timing/size metadata.
+- Approval protects operations captured by managed launcher/Ask/hook paths, not arbitrary third-party tools.
+- Workflow roles, proactive reports, and review order are conventions, not approval-protocol guarantees.
 
-**An Agent's capabilities can be outsourced; a human's authorization cannot.** HAgency uses protocol design and cryptography to make that sentence a property of the system, not a nice sentiment.
+Release acceptance should cover unique owner, empty-owner denial, sender/room/digest mismatch, expiry/replay denial, both runtime adapters, redacted public notice, blocked control-command bypass, and fail-closed behavior during temporary E2EE failure.

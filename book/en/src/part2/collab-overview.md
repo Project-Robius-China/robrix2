@@ -1,13 +1,13 @@
 # Team Collaboration in Practice
 
-> **Scope**: This chapter is a guided tour of the five collaboration scenarios, plus the typical rhythm of a working day. Prerequisites: Chapter 4 (the system is up and running). The five chapters that follow all come with real screenshots and unfold in order of use.
+> **Scope**: This chapter tours six collaboration scenarios and labels system behavior versus workflow convention. Prerequisite: Chapter 4.
 
 Once deployment is done, your HAgency space looks roughly like this:
 
 - One (or more) **project board rooms** (e.g. `robrix2-board`): humans plus one or more agent teams in the same room;
-- Each task unfolds in its own **thread** within the board room, where agents continuously report progress;
-- Each agent has a **DM** for one-on-one assignments;
-- Each agent has an **`Approval:` encrypted approval room**, where dangerous operations wait for your sign-off.
+- Each task may unfold in its own **thread**; replies with trusted `reply_to` context continue the thread;
+- Ordinary **DMs** are created on first one-to-one use;
+- An **`Approval:` room** is created/reused per `(Agent, owner)` for protected operations.
 
 Robrix2's multi-tab workspace is designed for exactly this shape — the row of tabs below is a live snapshot of a real collaboration session:
 
@@ -15,7 +15,7 @@ Robrix2's multi-tab workspace is designed for exactly this shape — the row of 
 robrix2-board │ [Thread] robrix2-board │ DM: wf_coordinator │ Approval: wf_coordinator │ Approval: wf_codex
 ```
 
-## The Five Scenarios
+## The Six Scenarios
 
 | Chapter | Scenario | What you will see |
 |------|------|---------|
@@ -28,12 +28,12 @@ robrix2-board │ [Thread] robrix2-board │ DM: wf_coordinator │ Approval: wf
 
 ## The Rhythm of a Typical Day
 
-Stringing the five scenarios together, a real workday goes something like this:
+Stringing the scenarios together, a real workday might look like this:
 
-**In the morning**, you assign an issue in the board room with `@wf_coordinator /go 012`, then go about your own work — no need to babysit. The coordinator's dispatch cover message appears in the main timeline, and the process folds into a thread.
+**In the morning**, you send `@wf_coordinator /go 012`. Robrix2 sends plain text; whether it drafts a spec and updates a thread depends on an installed workflow skill.
 
-**During the day**, Robrix2's notifications pull you back two or three times: once when the coordinator asks for direction in a thread (you settle it with a one-line reply); once when the `Approval: wf_codex` room lights up — the Codex final review wants to run a sandbox-escaping command, you glance at the command preview and click `Approve once`.
+**During the day**, the coordinator may ask for direction in a thread, and `Approval: wf_final_reviewer` may receive a protected-operation request. The first is a workflow convention; the second is protocol-enforced when the runtime, owner binding, and E2EE channel are valid.
 
-**Before signing off**, you open the Threads panel to scan the latest state of each thread, verify the finished tasks on a real machine, and have the coordinator send a draft PR (that step is another approval).
+**Before signing off**, compare Threads, Project Board, backend tasks, Git state, test evidence, and the target provider. The demo workflow may not write its internal stage to durable backend tasks, so no one view is the whole truth.
 
-Your effort concentrates on **three kinds of high-value moments**: deciding, authorizing, and accepting. The rest of the time, the agent team runs itself — and you can open any thread at any moment to see the entire process. That is "transparent autonomy".
+Keep human checkpoints around decisions, authorization, and acceptance. The system enforces authorization boundaries; decisions and proactive reporting still require workflow configuration and operational health.

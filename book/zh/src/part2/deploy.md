@@ -7,7 +7,7 @@
 | 组件 | 必需 | 部署位置 |
 |------|------|---------|
 | Matrix homeserver（Palpo） | ✅ | 本地 Docker，**或**云端（Meldry / matrix.org） |
-| agent-chat | ✅ | 跑 Agent 的那台机器（本地优先设计） |
+| agent-chat | ✅ | 跑 Agent 的那台机器（backend、dashboard、push relay、Matrix bridge、受管运行时） |
 | Robrix2 | ✅ | 你的桌面 |
 
 ## 两条路线
@@ -22,13 +22,13 @@
 | 准备项 | 用途 | 备注 |
 |--------|------|------|
 | Docker（仅本地路线） | 跑 Palpo + PostgreSQL | 云端路线不需要 |
-| Node.js 22+ 与 tmux | 跑 agent-chat 及其管理的运行时 | `node -v` 确认版本 |
+| Node.js 22+ 与 tmux | 跑 agent-chat 及其管理的运行时 | `node -v` 确认版本；Linux 有正式安装器，macOS 目前按开发方式运行 |
 | Rust 工具链 | 构建 Robrix2 | `rustup` 安装即可 |
 | Claude Code 或 Codex CLI | 至少一个编码运行时 | 两个都装可体验第 5.5 章的异构终审 |
 | 一个要协作的代码仓库 | Agent 的工作对象 | 任意本地 Git 仓库 |
 
 ## 部署完成后你会得到什么
 
-按下一章（或再下一章）走完后，你将拥有：一个可登录的 Matrix 服务器；一个在 tmux 里运行、拥有 Matrix 木偶身份的编码 Agent；一个绑定了 Agent group 的项目作战室；以及每个 Agent 专属的加密审批房。第 5 章的所有截图场景，都可以在这套环境里逐一复现。
+按下一章（或再下一章）走完后，你将拥有：一个可登录的 Matrix 服务器；一个在 tmux 里运行、拥有 Matrix 木偶身份的编码 Agent；一个绑定了 Agent group 的**非加密**项目作战室；以及 owner 接受邀请后可用的加密审批房。四角色 workflow 和 Project Board 还需要各自章节列出的额外准备，基础部署不会自动生成它们。
 
-如果中途卡住，两章各自末尾都有「常见问题定位」表 —— 大多数失败集中在三处：homeserver 地址写错、桥的 trust 门禁没配自己的账号、`!bindroom` 之前忘了建 group。
+如果中途卡住，先看[运行验收与故障排查](operations.md)。最常见的断点是：必填 secret 缺失、桥的 trust 门禁没配自己的完整 MXID、没有由 owner 亲自邀请实际 Agent、运行时不是受管启动，或审批房邀请尚未接受。

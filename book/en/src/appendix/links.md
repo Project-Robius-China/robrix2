@@ -23,15 +23,17 @@
 - Robius (Rust cross-platform app ecosystem): <https://github.com/project-robius>
 - Claude Code: <https://claude.com/claude-code>
 - Codex CLI: <https://developers.openai.com/codex>
+- AtomGit OpenAPI: <https://docs.openatom.tech/en/category/api/>
 
 ## Building This Book
 
 This book is written with [mdBook](https://rust-lang.github.io/mdBook/); the bilingual sources live in the `book/` directory of the robrix2 repository:
 
 ```bash
-cd book/zh && mdbook serve   # preview the Chinese edition at http://localhost:3000
-cd book/en && mdbook serve   # preview the English edition
-mdbook build                 # build static sites into each edition's book/ subdirectory
+mdbook serve book/zh -p 8300   # Chinese edition at http://localhost:8300
+mdbook serve book/en -p 8301   # English edition at http://localhost:8301
+mdbook build book/zh
+mdbook build book/en
 ```
 
 Flow diagrams are rendered by [mdbook-mermaid](https://github.com/badboy/mdbook-mermaid) (`cargo install mdbook-mermaid`).

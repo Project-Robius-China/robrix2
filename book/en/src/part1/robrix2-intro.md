@@ -4,9 +4,11 @@
 
 [Robrix2](https://github.com/Project-Robius-China/robrix2) is a native Matrix client written in **Rust**, with a UI layer built on [Makepad 2.0](https://github.com/makepad/makepad) — a GPU-rendered Rust UI framework. It is one of the flagship projects of the Robius cross-platform application ecosystem.
 
+“Native” describes the implementation and rendering path, not an unbenchmarked performance claim. The practical focus is bringing Matrix rooms, threads, device encryption, and a multi-tab workspace together while layering Agent-specific views over standard events.
+
 ## Technical Profile
 
-- **Rust all the way down**: client logic is built on [matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-sdk) (the official SDK, shared with Element X), and the UI is rendered by Makepad shaders. No Electron, no WebView — lower memory usage and genuinely native startup speed.
+- **Rust all the way down**: client logic uses [matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-sdk), and Makepad shaders render the UI. There is no Electron or WebView; memory and startup performance should be measured on each target platform.
 - **Cross-platform**: a single codebase runs on macOS, Windows, and Linux, and can be packaged for mobile.
 - **Sliding Sync**: uses Matrix's next-generation sync protocol; the room list and timelines load on demand, so even an account with hundreds of rooms cold-starts quickly.
 - **Multi-tab workspace**: rooms, threads, and DMs open side by side as tabs (Tab/Dock). This is its biggest interaction departure from traditional single-pane IMs, designed for keeping an eye on multiple collaboration sites at once — Part II will show what this design is really for.
@@ -24,4 +26,6 @@ After first launch, sign in with any Matrix account: one on your self-hosted hom
 
 ## Relationship to Other Matrix Clients
 
-Robrix2 is a standard Matrix client — it depends on no proprietary server-side extensions. You can log into the same account with Element to verify that messages interoperate; conversely, most of HAgency's collaboration (rooms, threads, @mentions) is visible in any Matrix client. What Robrix2 adds is a **native agent experience**: approval cards, agent badges, workflow command completion — all of which degrade to plain text in a generic client.
+Robrix2 is a standard Matrix client. Rooms, threads, and mentions remain visible in compatible clients. Robrix2 adds native approval cards, Agent badges, and workflow text completion. A generic client may show only fallback/raw custom events and **cannot approve by sending ordinary text**; owner approval requires Robrix2 or another UI that emits the structured verdict.
+
+This defines the interoperability boundary: public collaboration should use standard messages and relations where possible; security-sensitive extensions must be verified server-side rather than trusted because one client drew a button.

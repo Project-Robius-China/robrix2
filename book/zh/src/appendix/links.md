@@ -23,15 +23,17 @@
 - Robius（Rust 跨平台应用生态）：<https://github.com/project-robius>
 - Claude Code：<https://claude.com/claude-code>
 - Codex CLI：<https://developers.openai.com/codex>
+- AtomGit OpenAPI：<https://docs.openatom.tech/en/category/api/>
 
 ## 本书构建
 
 本书使用 [mdBook](https://rust-lang.github.io/mdBook/) 编写，双语源文件位于 robrix2 仓库的 `book/` 目录：
 
 ```bash
-cd book/zh && mdbook serve   # 中文版预览 http://localhost:3000
-cd book/en && mdbook serve   # 英文版预览
-mdbook build                 # 构建静态站点到各自的 book/ 子目录
+mdbook serve book/zh -p 8300   # 中文版 http://localhost:8300
+mdbook serve book/en -p 8301   # 英文版 http://localhost:8301
+mdbook build book/zh
+mdbook build book/en
 ```
 
 流程图由 [mdbook-mermaid](https://github.com/badboy/mdbook-mermaid) 渲染（`cargo install mdbook-mermaid`）。

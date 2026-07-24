@@ -1,6 +1,6 @@
 # issue-workflow: A Four-Role Development Workflow
 
-> **Scope**: This chapter is where everything in the book converges — a four-role Agent team delivers a feature end to end, with a human watching and making the calls. Prerequisites: Chapters 5.2–5.4.
+> **Scope**: This chapter reviews a real four-role demo, then gives reproducible setup and product boundaries. Role progression comes from a workflow skill, not a built-in backend state machine.
 
 ## The Four Roles
 
@@ -9,9 +9,11 @@
 | `wf_coordinator` | Claude Code | Interface to the human: open issues, dispatch, report, ask for guidance |
 | `wf_implementer` | Claude Code | Write code and run tests in a dedicated worktree |
 | `wf_reviewer` | Claude Code | First-round adversarial review |
-| `final_reviewer` role | **Codex** | Independent final review. Deliberately a different runtime/model, for adversarial diversity |
+| `wf_final_reviewer` | **Codex** | Independent final review using another runtime/model to reduce correlated blind spots |
 
-By default a role is determined by the Agent's name (all four Agents share the same issue-workflow skill and branch by substring match on their `whoami` name); **the authoritative source is agent-chat's workflow binding record** (which account holds which role). In the deployment behind this book's screenshots, the Codex final-review account is named `wf_codex` — a name that matches no role substring; it holds the final-review role purely via the binding record `final_reviewer: wf_codex`. That is also the origin of the role self-check episode later in this chapter.
+The reproducible version is the shared skill under `roadmap/agentchat-demo/issue-workflow/`. It branches on `whoami` name substrings and must test `final` before `reviewer`. Use `wf_final_reviewer`; `wf_codex` matches no role and cannot acquire final-review authority from Project Board display data.
+
+agent-chat currently has no writable, versioned role-binding API or built-in issue-workflow engine. `workflow_bindings.json` feeds a read-only board projection. The screenshot run in which `wf_codex` continued was a manual operating convention, not server authorization.
 
 ```mermaid
 flowchart LR
@@ -20,16 +22,41 @@ flowchart LR
     I -- done + test evidence --> C
     C --> R[wf_reviewer]
     R -- rejected items --> I
-    R -- pass --> F["final_reviewer role (Codex, here wf_codex)"]
+    R -- pass --> F["wf_final_reviewer (Codex)"]
     F -- final review pass --> C
     C -- "gh pr create --draft (with your approval)" --> PR([draft PR])
     C -. asks for guidance / reports throughout .-> H
     H -. makes the call / approves / verifies on device .-> C
 ```
 
+## Make the Demo Reproducible First
+
+Base deployment starts one Agent. The four-role demo additionally requires:
+
+1. install [agent-spec](https://github.com/ZhangHanDong/agent-spec) and verify `parse` plus `lint --min-score 0.7`;
+2. run `roadmap/agentchat-demo/link-skill.sh` to link the skill for Claude and Codex;
+3. managed-start `wf_coordinator`, `wf_implementer`, `wf_reviewer`, and `wf_final_reviewer`;
+4. create a four-member backend group, account for the Chapter 4.1 auto-room limitation, and invite every Agent into the target unencrypted room from the owner's full MXID;
+5. complete Codex's one-time local `TRUST`;
+6. call `whoami()` for each role, then smoke-test `/status`.
+
+```bash
+bin/agentchat cli create-group robrix2-board \
+  wf_coordinator wf_implementer wf_reviewer wf_final_reviewer
+
+bin/agentchat up wf_coordinator /path/to/repo claude
+bin/agentchat up wf_implementer /path/to/impl-worktree claude
+bin/agentchat up wf_reviewer /path/to/review-worktree claude
+bin/agentchat up wf_final_reviewer /path/to/final-worktree codex
+```
+
+Persist each boundary with `agentchat project add <agent> <path> --mode symlink`. The current `start-demo.sh` uses one shared symlink workspace and `--allow-shared-workspace` for convenience; it does not create dedicated Git worktrees. For real work, create implementation/review/final-review worktrees first and pass the target branch/commit SHA through every handoff.
+
+`create-group` triggers bridge-created room provisioning. Do not treat its bridge→Agent invitation as owner provenance. In that auto-room, remove each Agent and re-invite from the human MXID, or bind your group to a colleague's existing room and invite there.
+
 ## A Real Run
 
-**1. Issue creation and dispatch.** You send `/create-issue` and `/go` in the board room (or just assign the work in natural language). The coordinator drafts a spec, gets your confirmation, creates a workflow run, and dispatches the task to the implementer — the dispatch summary carries explicit scope and constraints:
+**1. Issue creation and dispatch.** With the demo skill installed, the coordinator drafts a spec and sends work through agent-chat messages. It stores field state in `.agentchat-demo/state.json`; this is not yet a durable backend workflow run:
 
 > Dispatched to wf_implementer (msg_0135); scope is the remaining two items… Constraints: changes only within the robrix2-room-aliases worktree (feat/room-aliases, HEAD ef95792); no regressions in the 8/8 spec scenarios or the full 548-test suite.
 
@@ -43,14 +70,15 @@ alex replies with one line — "When it's done, just go ahead and open a draft P
 
 ![Cover of the fix rounds with a 17 replies thread](../images/board-room-fix-rounds.png)
 
-**4. Codex final review, and an Agent that follows the rules.** The screenshots capture a real episode: before its final review, `wf_codex` ran a role self-check, noticed an account named `wf_final_reviewer` in the agent list, and suspected it might not be the bound final reviewer — **it chose to stop and ask rather than proceed beyond its authority**. Only after the coordinator sent it the authoritative binding record (`final_reviewer: wf_codex`) did it resume the final review. Fail-closed discipline isn't just written into the protocol; it has been internalized into the Agents' behavior.
+**4. Codex final-review field note.** `wf_codex` stopped because its name did not match the skill, then continued after a coordinator's manual explanation. That shows what the Agent chose in one run and exposes inconsistent setup; it is not evidence of server fail-closed or authoritative role binding. The corrected setup uses `wf_final_reviewer`.
 
 **5. Final review passes → draft PR.** After the final review clears, the coordinator creates the draft PR (a step that goes through your `gh` approval), and the last mile is you verifying on a real macOS machine — the final link in the chain is still a human.
 
-## Why This Workflow Is Trustworthy
+## Assurance Levels and Current Gaps
 
-- **The whole process is visible**: every dispatch and every review rejection is a message in the room — traceable and auditable;
-- **Two reviews + a heterogeneous final review**: Claude writes, Claude reviews, **Codex** does the final review — different models have non-overlapping blind spots, avoiding same-source resonance;
-- **Humans at the critical junctures**: directional decisions, external writes, and final acceptance all must pass through a human. Of these, **external writes** are enforced by the approval protocol of Chapter 5.4 (a cryptographic-grade guarantee); directional decisions and final acceptance are upheld by workflow convention — and the role self-check episode above shows how deeply that convention has been internalized into Agent behavior.
+- **Protocol-enforced**: owner approval validates sender, room, request, digest, and TTL, then consumes once;
+- **Current implementation**: group/DM transport, trusted thread replies, task/heartbeat foundations, and a role×capability pool;
+- **Workflow convention**: spec→implementation→review→final-review order, proactive reports, directional escalation, and human device acceptance;
+- **Planned**: versioned role bindings, operator-ACL writes, run-level thread inheritance, Robrix2 dispatch preview, and per-task model selection.
 
-This is the mode of collaboration HAgency wants to demonstrate: **the Agent team drives the work forward, while the human retains the power to decide — a power backed by protocol and cryptography.**
+Heterogeneous review can reduce correlated blind spots; it does not guarantee independent judgment or replace tests and human acceptance. Only operations captured by managed launcher/Ask/hook paths receive protocol-enforced approval.

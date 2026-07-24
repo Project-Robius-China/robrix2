@@ -2,7 +2,7 @@
 
 > **Scope**: This chapter introduces the board room — HAgency's primary collaboration venue: who is in the room, how conversations work, and where the workflow commands come from. Prerequisite: Chapter 5.1.
 
-The **board room** is an ordinary Matrix room bound to an agent-chat group (first create the group with `agentchat cli create-group`, then have an operator send `!bindroom <group>` in the room to complete the binding — see Chapter 4.1, step 4; an operator is a human account listed in `MATRIX_OPERATOR_MXIDS` in `.env`). Once bound, room messages are routed to the Agents, and Agent replies come back into the room under puppet identities.
+The **board room** is an **unencrypted** Matrix room bound to an agent-chat group. `!bindroom` establishes room→group; human invitations establish room+agent→owner. Once both are correct, explicitly routed messages enter the backend and public Agent replies return under puppet identities.
 
 ## Who Is in the Room?
 
@@ -17,9 +17,20 @@ The `robrix2-board` room in this screenshot is home to:
 - **alex's Agent team**: `wf_coordinator`, `wf_codex`;
 - **Tyrese's Agent team**: `tyrese_coordinator`, `tyrese_implementer`, `tyrese_reviewer`, `tyrese_final_reviewer`.
 
-The two agent-chat instances belong to two different people and run on two different machines, yet their Agents collaborate in the same room — human to human, human to Agent, Agent to Agent, all talking directly via `@mentions`. This works because of Matrix's open protocol: any instance can join the same space as a standard client, with no centralized matchmaking service required (and if the two teams lived on different homeservers, Matrix federation would connect them just the same).
+The two instances belong to different people and can publish into the same room. Human→Agent routing uses explicit mentions. Agent→Agent dispatch inside one backend uses MCP/backend messaging. The bridge drops senders whose MXID starts with `@ac_` to prevent loops, so cross-instance Agent mentions are not a reliable execution channel; use a human handoff or treat them as public status only.
 
-**Permission boundary**: each Agent takes orders for high-risk operations only from its own owner. You can @ someone else's Agent to ask questions or discuss, but its sandbox-escaping operations will only ever request approval from its own owner — sharing a room never blurs the authorization relationship (see Chapter 6 for the mechanism).
+**Permission boundary**: another user's Agent may answer discussion according to their instance policy, but protected operations go only to its owner. Each backend controls only its own Agents, local paths, tokens, models, and dispatch leases.
+
+## @ Is Execution Routing, Not Just a Notification
+
+With `MATRIX_DEFAULT_WAKE=off`, an unmentioned top-level message may be stored but wakes no Agent. A rich reply may currently infer the replied-to puppet; teams that require an explicit @ every time should verify that behavior separately rather than treat reply inference as an authorization boundary.
+
+| Input | Expected behavior |
+|------|------|
+| Top-level message, no @ | no Agent wake |
+| `@wf_coordinator ...` | wake that Agent |
+| Mention two Agents | both targets receive work |
+| Agent posts publicly | humans can read it; another instance does not automatically treat it as a task |
 
 ## Workflow Slash Commands
 
@@ -32,7 +43,7 @@ When a `*_coordinator` Agent is present in the room, Robrix2's `/` command palet
 - `/review` — rerun review + Codex final review for a given issue;
 - `/status` — query the current state of an issue / workflow.
 
-**These commands are fundamentally just plain text sent to the coordinator** — Robrix2 only provides completion convenience; interpretation is entirely up to the Agent. This design is deliberate: Robrix2 is never an execution entry point. Send the same command text into a room with no coordinator and nothing happens at all (see Chapter 6 for the security implications). Usage examples:
+**These commands are plain text sent to the coordinator.** Robrix2 only completes them; only a coordinator with a compatible workflow skill interprets them. No skill, offline Agent, or missing mention means no automatic backend workflow run.
 
 ```text
 @wf_coordinator /create-issue Add alias management to room settings

@@ -20,8 +20,11 @@
   - [Owner 审批：高危操作由人拍板](part2/approvals.md)
   - [issue-workflow：四角色开发工作流](part2/issue-workflow.md)
   - [项目看板：任务与工件的全局视图](part2/project-board.md)
+- [Agent 池、模型与多用户边界](part2/agent-pool.md)
+- [运行验收与故障排查](part2/operations.md)
 - [安全模型](part2/security-model.md)
 
 ---
 
 [附录：项目与资源](appendix/links.md)
+[附录：术语与能力状态](appendix/glossary.md)
