@@ -167,6 +167,12 @@ mod tests {
             "room_settings.aliases.invalid_format",
             "room_settings.aliases.publish_failed",
             "room_settings.aliases.readonly_hint",
+            "room_settings.aliases.no_main_address",
+            "room_settings.aliases.none_published",
+            "room_settings.aliases.publishing",
+            "room_settings.aliases.updating_main",
+            "room_settings.aliases.removing",
+            "room_settings.aliases.sign_in_required",
         ] {
             for language in AppLanguage::ALL {
                 assert!(

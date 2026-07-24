@@ -36,7 +36,7 @@ use matrix_sdk_ui::{
     RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails}
 };
 use robius_open::Uri;
-use ruma::{OwnedRoomAliasId, OwnedRoomOrAliasId, RoomId, events::tag::Tags};
+use ruma::{OwnedRoomAliasId, OwnedRoomOrAliasId, RoomAliasId, RoomId, events::tag::Tags};
 use tokio::{
     runtime::Handle,
     sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
@@ -712,12 +712,91 @@ pub struct RoomSettingsFetchedAction {
     pub can_manage_aliases: bool,
 }
 
+/// Posted when a [`MatrixRequest::FetchRoomSettings`] could not produce data
+/// (no client, or the room isn't currently available). It carries no settings —
+/// its sole job is to let a waiting alias write release its in-flight gate /
+/// pending registry instead of stranding the edit controls disabled.
+#[derive(Clone, Debug)]
+pub struct RoomSettingsFetchUnavailableAction {
+    pub room_id: OwnedRoomId,
+}
+
 /// Posted after a room avatar is successfully uploaded and set.
 #[derive(Clone, Debug)]
 pub struct RoomAvatarUploadedAction {
     pub room_id: OwnedRoomId,
     /// Raw image bytes of the newly uploaded avatar.
     pub image_data: Arc<[u8]>,
+}
+
+/// Which alias write a [`RoomAliasWriteResultAction`] reports the outcome of.
+#[derive(Clone, Debug)]
+pub enum AliasWriteKind {
+    /// `MatrixRequest::PublishRoomAlias` (directory registration).
+    Publish,
+    /// `MatrixRequest::RemoveRoomAlias` (directory unbind).
+    Remove,
+    /// `MatrixRequest::SetRoomCanonicalAlias` (`m.room.canonical_alias`).
+    SetCanonical,
+}
+
+/// Server outcome of an alias write, used by the Room Settings modal to commit
+/// or roll back its optimistic UI and to surface server errors as a toast.
+#[derive(Clone, Debug)]
+pub struct RoomAliasWriteResultAction {
+    pub room_id: OwnedRoomId,
+    pub kind: AliasWriteKind,
+    /// The alias involved, when the write targets a specific one.
+    pub alias: Option<OwnedRoomAliasId>,
+    /// `None` on success; a human-readable server error message on failure.
+    pub error: Option<String>,
+    /// Whether the server was actually contacted. `false` only for preflight
+    /// failures (e.g. no client) where nothing was sent and state is unchanged;
+    /// app.rs skips the reconcile fetch for these, and the modal/registry
+    /// release their in-flight gate immediately instead of awaiting a refresh.
+    pub attempted: bool,
+}
+
+/// HTTP status code of a failed matrix request, if it carries a client-API error.
+fn alias_error_status(e: &matrix_sdk::HttpError) -> Option<u16> {
+    e.as_client_api_error().map(|api| api.status_code.as_u16())
+}
+
+/// Whether `alias` currently resolves to `room_id` in the room directory. Used
+/// on the publish-conflict path to decide idempotent success (the mapping we
+/// wanted already exists). Any resolution failure counts as "not this room".
+async fn alias_maps_to_room(client: &Client, alias: &RoomAliasId, room_id: &RoomId) -> bool {
+    let request = matrix_sdk::ruma::api::client::alias::get_alias::v3::Request::new(alias.to_owned());
+    matches!(client.send(request).await, Ok(resp) if resp.room_id.as_str() == room_id.as_str())
+}
+
+/// Send the room's `m.room.canonical_alias` state event (`alias` + `alt_aliases`).
+///
+/// Shared by the sequenced publish/remove flows (as their second, gated step)
+/// and by the standalone Set-as-main request. Returns a human-readable error
+/// string on failure so callers can surface it in a toast.
+async fn set_room_canonical_alias(
+    client: &Client,
+    room_id: &RoomId,
+    alias: Option<OwnedRoomAliasId>,
+    alt_aliases: Vec<OwnedRoomAliasId>,
+) -> Result<(), String> {
+    let Some(room) = client.get_room(room_id) else {
+        return Err(format!("room {room_id} not found"));
+    };
+    let mut content = matrix_sdk::ruma::events::room::canonical_alias::RoomCanonicalAliasEventContent::new();
+    content.alias = alias;
+    content.alt_aliases = alt_aliases;
+    match room.send_state_event(content).await {
+        Ok(_) => {
+            log!("Set canonical alias for room {room_id}.");
+            Ok(())
+        }
+        Err(e) => {
+            error!("Failed to set canonical alias for room {room_id}: {e:?}");
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Actions emitted in response to a [`MatrixRequest::GenerateMatrixLink`].
@@ -1613,15 +1692,29 @@ pub enum MatrixRequest {
         room_id: OwnedRoomId,
     },
     /// Publish a new alias into the room directory, mapping it to this room
-    /// (`PUT /directory/room/{alias}`). Requires directory permission on the
-    /// alias's homeserver.
+    /// (`PUT /directory/room/{alias}`), then — only on success — advertise it
+    /// into `m.room.canonical_alias` using `canonical`/`alt_aliases`. The two
+    /// writes are sequenced (not parallel) so a directory failure never leaves
+    /// an advertised-but-unregistered alias. Requires directory permission on
+    /// the alias's homeserver.
     PublishRoomAlias {
         room_id: OwnedRoomId,
         alias: OwnedRoomAliasId,
+        /// Reconciled canonical alias to write once the directory step succeeds.
+        canonical: Option<OwnedRoomAliasId>,
+        /// Reconciled alt_aliases (already including `alias`) to advertise.
+        alt_aliases: Vec<OwnedRoomAliasId>,
     },
-    /// Remove an alias from the room directory (`DELETE /directory/room/{alias}`).
+    /// Remove an alias from the room directory (`DELETE /directory/room/{alias}`),
+    /// then — only on success — de-advertise it from `m.room.canonical_alias`
+    /// using `canonical`/`alt_aliases`. Sequenced like [`Self::PublishRoomAlias`].
     RemoveRoomAlias {
+        room_id: OwnedRoomId,
         alias: OwnedRoomAliasId,
+        /// Reconciled canonical alias to write once the directory step succeeds.
+        canonical: Option<OwnedRoomAliasId>,
+        /// Reconciled alt_aliases (already excluding `alias`) to write.
+        alt_aliases: Vec<OwnedRoomAliasId>,
     },
     /// Set the room's canonical alias and alt aliases via the
     /// `m.room.canonical_alias` state event. Requires the corresponding power
@@ -4313,7 +4406,13 @@ async fn matrix_worker_task(
             }
 
             MatrixRequest::FetchRoomSettings { room_id } => {
-                let Some(client) = get_client() else { continue };
+                // No client → still signal "unavailable" so a waiting alias write
+                // releases its gate/registry instead of stranding (never silently
+                // drop this fetch — the alias reconcile depends on a reply).
+                let Some(client) = get_client() else {
+                    Cx::post_action(RoomSettingsFetchUnavailableAction { room_id });
+                    continue;
+                };
                 let _fetch_room_settings_task = Handle::current().spawn(async move {
                     if let Some(room) = client.get_room(&room_id) {
                         let topic = room.topic();
@@ -4336,70 +4435,160 @@ async fn matrix_worker_task(
                             alt_aliases,
                             can_manage_aliases,
                         });
+                    } else {
+                        // Room not currently available — release any waiting gate.
+                        Cx::post_action(RoomSettingsFetchUnavailableAction { room_id });
                     }
                 });
             }
 
-            MatrixRequest::PublishRoomAlias { room_id, alias } => {
-                let Some(client) = get_client() else { continue };
+            MatrixRequest::PublishRoomAlias { room_id, alias, canonical, alt_aliases } => {
+                // P2 preflight: if the client is gone nothing is sent (attempted:
+                // false), so the modal/registry release immediately with no fetch.
+                let Some(client) = get_client() else {
+                    let _ = (canonical, alt_aliases);
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::Publish,
+                        alias: Some(alias),
+                        error: Some("Not signed in — couldn't publish the address".to_string()),
+                        attempted: false,
+                    });
+                    continue;
+                };
                 let _publish_alias_task = Handle::current().spawn(async move {
+                    use crate::home::room_settings_modal::{
+                        next_step_after_directory_write, publish_alias_treat_as_success, SequencedAliasStep,
+                    };
+                    // Step 1 — register the alias in the room directory. Idempotent
+                    // repair (P1-3): a 409 conflict is success iff the alias already
+                    // maps to THIS room, so a retry after a prior partial publish
+                    // (registered-but-unadvertised) proceeds to re-advertise instead
+                    // of dying on "already in use".
                     let request = matrix_sdk::ruma::api::client::alias::create_alias::v3::Request::new(
                         alias.clone(),
-                        room_id,
+                        room_id.clone(),
                     );
-                    match client.send(request).await {
-                        Ok(_) => log!("Published room alias {alias}."),
+                    let dir_outcome: Result<(), String> = match client.send(request).await {
+                        Ok(_) => Ok(()),
                         Err(e) => {
-                            error!("Failed to publish room alias {alias}: {e:?}");
-                            enqueue_popup_notification(
-                                format!("Couldn't publish alias {alias}"),
-                                crate::shared::popup_list::PopupKind::Error,
-                                Some(5.0),
-                            );
+                            let conflict = alias_error_status(&e) == Some(409);
+                            let maps_here = conflict && alias_maps_to_room(&client, &alias, &room_id).await;
+                            if publish_alias_treat_as_success(conflict, maps_here) {
+                                log!("Alias {alias} already maps to this room; treating publish as success.");
+                                Ok(())
+                            } else {
+                                error!("Failed to publish room alias {alias}: {e:?}");
+                                Err(format!("Couldn't publish address {alias}: {e}"))
+                            }
                         }
-                    }
+                    };
+                    let error = match next_step_after_directory_write(dir_outcome.is_ok()) {
+                        SequencedAliasStep::Abort => Some(dir_outcome.unwrap_err()),
+                        // Step 2 — only after a successful (or repaired) directory
+                        // write, advertise the alias into `m.room.canonical_alias`.
+                        SequencedAliasStep::WriteCanonical => {
+                            log!("Published room alias {alias}.");
+                            set_room_canonical_alias(&client, &room_id, canonical, alt_aliases)
+                                .await
+                                .err()
+                                .map(|e| format!("Couldn't advertise address {alias}: {e}"))
+                        }
+                    };
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::Publish,
+                        alias: Some(alias),
+                        error,
+                        attempted: true,
+                    });
                 });
             }
 
-            MatrixRequest::RemoveRoomAlias { alias } => {
-                let Some(client) = get_client() else { continue };
+            MatrixRequest::RemoveRoomAlias { room_id, alias, canonical, alt_aliases } => {
+                // P2 preflight: nothing sent → attempted: false.
+                let Some(client) = get_client() else {
+                    let _ = (canonical, alt_aliases);
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::Remove,
+                        alias: Some(alias),
+                        error: Some("Not signed in — couldn't remove the address".to_string()),
+                        attempted: false,
+                    });
+                    continue;
+                };
                 let _remove_alias_task = Handle::current().spawn(async move {
+                    use crate::home::room_settings_modal::{
+                        next_step_after_directory_write, remove_alias_treat_as_success, SequencedAliasStep,
+                    };
+                    // Step 1 — unbind the alias from the room directory. Idempotent
+                    // repair (P1-3): a 404 "not found" is success (already unbound),
+                    // so a retry after a prior partial remove
+                    // (unbound-but-still-advertised) proceeds to de-advertise.
                     let request = matrix_sdk::ruma::api::client::alias::delete_alias::v3::Request::new(
                         alias.clone(),
                     );
-                    match client.send(request).await {
-                        Ok(_) => log!("Removed room alias {alias}."),
+                    let dir_outcome: Result<(), String> = match client.send(request).await {
+                        Ok(_) => Ok(()),
                         Err(e) => {
-                            error!("Failed to remove room alias {alias}: {e:?}");
-                            enqueue_popup_notification(
-                                format!("Couldn't remove alias {alias}"),
-                                crate::shared::popup_list::PopupKind::Error,
-                                Some(5.0),
-                            );
+                            let not_found = alias_error_status(&e) == Some(404);
+                            if remove_alias_treat_as_success(not_found) {
+                                log!("Alias {alias} already unbound; treating remove as success.");
+                                Ok(())
+                            } else {
+                                error!("Failed to remove room alias {alias}: {e:?}");
+                                Err(format!("Couldn't remove address {alias}: {e}"))
+                            }
                         }
-                    }
+                    };
+                    let error = match next_step_after_directory_write(dir_outcome.is_ok()) {
+                        SequencedAliasStep::Abort => Some(dir_outcome.unwrap_err()),
+                        // Step 2 — only after a successful (or repaired) unbind, drop
+                        // the alias from `m.room.canonical_alias`.
+                        SequencedAliasStep::WriteCanonical => {
+                            log!("Removed room alias {alias}.");
+                            set_room_canonical_alias(&client, &room_id, canonical, alt_aliases)
+                                .await
+                                .err()
+                                .map(|e| format!("Couldn't update the room's addresses: {e}"))
+                        }
+                    };
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::Remove,
+                        alias: Some(alias),
+                        error,
+                        attempted: true,
+                    });
                 });
             }
 
             MatrixRequest::SetRoomCanonicalAlias { room_id, alias, alt_aliases } => {
-                let Some(client) = get_client() else { continue };
+                // P2 preflight: nothing sent → attempted: false.
+                let Some(client) = get_client() else {
+                    let _ = (alias, alt_aliases);
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::SetCanonical,
+                        alias: None,
+                        error: Some("Not signed in — couldn't update the room's main address".to_string()),
+                        attempted: false,
+                    });
+                    continue;
+                };
                 let _set_canonical_alias_task = Handle::current().spawn(async move {
-                    if let Some(room) = client.get_room(&room_id) {
-                        let mut content = matrix_sdk::ruma::events::room::canonical_alias::RoomCanonicalAliasEventContent::new();
-                        content.alias = alias;
-                        content.alt_aliases = alt_aliases;
-                        match room.send_state_event(content).await {
-                            Ok(_) => log!("Set canonical alias for room {room_id}."),
-                            Err(e) => {
-                                error!("Failed to set canonical alias for room {room_id}: {e:?}");
-                                enqueue_popup_notification(
-                                    "Couldn't update the room's canonical alias",
-                                    crate::shared::popup_list::PopupKind::Error,
-                                    Some(5.0),
-                                );
-                            }
-                        }
-                    }
+                    let error = set_room_canonical_alias(&client, &room_id, alias, alt_aliases)
+                        .await
+                        .err()
+                        .map(|e| format!("Couldn't update the room's main address: {e}"));
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::SetCanonical,
+                        alias: None,
+                        error,
+                        attempted: true,
+                    });
                 });
             }
 

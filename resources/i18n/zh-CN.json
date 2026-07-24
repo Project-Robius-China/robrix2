@@ -819,5 +819,11 @@
   "room_settings.aliases.set_canonical_button": "设为主地址",
   "room_settings.aliases.invalid_format": "地址格式无效",
   "room_settings.aliases.publish_failed": "发布地址失败",
-  "room_settings.aliases.readonly_hint": "你没有管理该房间地址的权限"
+  "room_settings.aliases.readonly_hint": "你没有管理该房间地址的权限",
+  "room_settings.aliases.no_main_address": "未设置主地址",
+  "room_settings.aliases.none_published": "暂无其他已发布地址，请在下方添加",
+  "room_settings.aliases.publishing": "正在发布地址…",
+  "room_settings.aliases.updating_main": "正在更新主地址…",
+  "room_settings.aliases.removing": "正在移除地址…",
+  "room_settings.aliases.sign_in_required": "登录后才能添加地址"
 }

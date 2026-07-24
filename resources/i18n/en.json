@@ -821,5 +821,11 @@
   "room_settings.aliases.set_canonical_button": "Set as main",
   "room_settings.aliases.invalid_format": "Invalid address format",
   "room_settings.aliases.publish_failed": "Failed to publish address",
-  "room_settings.aliases.readonly_hint": "You don't have permission to manage this room's addresses"
+  "room_settings.aliases.readonly_hint": "You don't have permission to manage this room's addresses",
+  "room_settings.aliases.no_main_address": "No main address set",
+  "room_settings.aliases.none_published": "No other published addresses yet, add one below",
+  "room_settings.aliases.publishing": "Publishing address…",
+  "room_settings.aliases.updating_main": "Updating main address…",
+  "room_settings.aliases.removing": "Removing address…",
+  "room_settings.aliases.sign_in_required": "You must be signed in to add an address"
 }
