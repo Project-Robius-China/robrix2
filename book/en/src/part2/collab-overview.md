@@ -24,6 +24,7 @@ robrix2-board │ [Thread] robrix2-board │ DM: wf_coordinator │ Approval: wf
 | [5.3 Thread Collaboration](threads.md) | Task tracking | Dispatching into threads, progress follow-ups, the Threads panel |
 | [5.4 Owner Approval](approvals.md) | Authorization | Encrypted approval cards, Approve once / Deny, fail-closed |
 | [5.5 issue-workflow](issue-workflow.md) | Full workflow | A four-role team delivering a feature end to end |
+| [5.6 Project Board](project-board.md) | Global audit | Team status, specs, and issues on the dashboard |
 
 ## The Rhythm of a Typical Day
 

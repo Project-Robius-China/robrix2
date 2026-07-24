@@ -31,9 +31,10 @@ repositories; screenshots are real captures, not mockups.
 - Mermaid via `mdbook-mermaid`: at least one diagram in concept (architecture),
   deploy-local (component/port topology), threads (message flow),
   approvals (approval sequence), issue-workflow (role state flow).
-- Screenshots: the 11 real captures under `src/images/` are shared by copy into
-  both language trees; every screenshot is referenced by at least one chapter
-  and captioned with what it evidences.
+- Screenshots: the 14 real captures under `src/images/` (11 Robrix2 client
+  captures + 3 agent-chat Project Board dashboard captures) are shared by copy
+  into both language trees; every screenshot is referenced by at least one
+  chapter and captioned with what it evidences.
 - Version baseline note lives once in the preface (system under active
   development), not per-chapter.
 - Deployment instructions must match the real artifacts: robrix2
@@ -94,9 +95,9 @@ Scenario: Mermaid coverage
 
 Scenario: Screenshot coverage
   Test: cross-check images referenced from chapters
-  Given the 11 screenshots in src/images
+  Given the 14 screenshots in src/images
   When chapter image references are collected
-  Then all 11 are referenced at least once in each language tree
+  Then all 14 are referenced at least once in each language tree
 
 Scenario: Deployment facts match reality
   Test: manual review against repositories

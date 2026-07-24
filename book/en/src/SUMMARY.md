@@ -19,6 +19,7 @@
   - [Thread Collaboration: Every Task Gets Its Own Thread](part2/threads.md)
   - [Owner Approval: Humans Make the Call on High-Risk Operations](part2/approvals.md)
   - [issue-workflow: A Four-Role Development Workflow](part2/issue-workflow.md)
+  - [Project Board: A Global View of Tasks and Artifacts](part2/project-board.md)
 - [Security Model](part2/security-model.md)
 
 ---

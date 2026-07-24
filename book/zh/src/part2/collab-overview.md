@@ -24,6 +24,7 @@ robrix2-board │ [Thread] robrix2-board │ DM: wf_coordinator │ Approval: wf
 | [5.3 Thread 协作](threads.md) | 任务跟进 | 派单入线索、进度跟帖、Threads 面板 |
 | [5.4 Owner 审批](approvals.md) | 授权 | 加密审批卡片、Approve once / Deny、fail-closed |
 | [5.5 issue-workflow](issue-workflow.md) | 完整工作流 | 四角色团队端到端交付一个功能 |
+| [5.6 项目看板](project-board.md) | 全局审计 | dashboard 上的团队状态、spec 与 issue 总览 |
 
 ## 一天的典型节奏
 

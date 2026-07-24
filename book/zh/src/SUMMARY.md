@@ -19,6 +19,7 @@
   - [Thread 协作：每件事有自己的线索](part2/threads.md)
   - [Owner 审批：高危操作由人拍板](part2/approvals.md)
   - [issue-workflow：四角色开发工作流](part2/issue-workflow.md)
+  - [项目看板：任务与工件的全局视图](part2/project-board.md)
 - [安全模型](part2/security-model.md)
 
 ---
