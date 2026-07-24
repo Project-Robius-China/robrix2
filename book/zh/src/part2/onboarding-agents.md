@@ -1,10 +1,10 @@
 # 把 Agent 请进你的空间
 
-> **定位**：本章完成「空间里出现第一个 Agent」：Robrix2 侧的 Agent 识别设置，与 agent-chat 侧的房间邀请。前置依赖：第 4 章。
+> **定位**：本章区分 Robrix2 的通用 Agent Access 与 agent-chat 的木偶/owner 接入流程。前置依赖：第 4 章。
 
 ## Agent Access：Robrix2 的智能体接入面板
 
-打开 **Settings → Labs → Agent Access**。这里是 Robrix2 管理智能体的入口：绑定一个 Matrix 账号、标记它属于哪个 Agent 框架，之后 Robrix2 就能在所有房间里识别它 —— 加机器人徽标、启用对应的斜杠命令。
+打开 **Settings → Labs → Agent Access**。这里是 Robrix2 的**通用 Agent Registry**：绑定一个 Matrix 账号并标记其框架，供徽标、状态和框架能力使用。它不是 agent-chat 的 owner 数据库，也不会给该账号审批权。
 
 ![Agent Access 设置页](../images/agent-access-settings.png)
 
@@ -25,12 +25,31 @@
 
 区分这两类的意义在于能力边界：AppService 由服务器托管、可以管理自己名下的一批账号；Direct Agent 就是一个普通 Matrix 账号背后的机器人。Robrix2 对两类都只做**识别与展示**，不参与它们的执行。
 
-> agent-chat 的 Agent 不需要在这里手工添加 —— 它们的木偶账号（`@ac_…`）由桥自动注册并拉进房间，Robrix2 会按名字模式自动识别。
+agent-chat 与这个面板目前是两条路径：
 
-## 接受桥的邀请
+- agent-chat 会注册已知 Agent 的 `@ac_<name>` 木偶账号，但**不会自动把它拉进任意项目房间**；
+- Robrix2 不会仅凭 `@ac_` 名字把账号写入通用 Agent Registry；
+- 名字模式目前主要用于发现 `*_coordinator` 并显示 workflow 文本补全，不是身份认证；
+- owner 必须由人类邀请实际木偶账号时的完整 `event.sender` MXID 建立。
 
-agent-chat 桥会以桥机器人身份（`@agent-bridge-<你的名字>`）把你邀请进它管理的房间：项目房间、审批私聊等。邀请出现在 Robrix2 左侧的 **Invites** 区，点 **Join Room** 即可：
+因此截图中的 Octos / Hermes / OpenClaw 设置只能说明 Robrix2 的通用接入能力，不能当作 agent-chat 已绑定成功的证据。
+
+## 正确邀请顺序
+
+在非加密项目房间里，建议按以下顺序操作：
+
+1. 由 trusted inviter 邀请自己的 companion bridge bot；
+2. operator 发送 `!bindroom <existing-group>`；
+3. **你本人逐个邀请自己的 `@ac_<agent>` 木偶账号**；
+4. 等 Agent invite poll（默认可能约 60 秒），确认 Agent 与 companion bridge 都已加入；
+5. 接受 bridge 发来的 `Approval: <agent>` 加密房邀请。
+
+第 3 步同时建立 `(room, agent) → owner`。让 bridge 代替人类创建/邀请项目成员，不能证明“谁邀请 Agent，谁是 owner”。
+
+## 接受审批房邀请
+
+bridge 会按需邀请你进入它为 `(agent, owner)` 创建的审批房。邀请出现在 Robrix2 左侧 **Invites**，点 **Join Room**：
 
 ![来自桥机器人的房间邀请](../images/bridge-invite.png)
 
-> 截图左栏能看到多个不同的桥（`agent-bridge-alexlocal`、`agent-bridge-alan`、`agent-bridge-tyrese`）发来的邀请 —— 每个人类用户跑自己的 agent-chat 实例、管自己的 Agent 团队，但都汇入同一个 Matrix 空间。这正是开放协议下多实例协作的样子，下一章会看到它们同房工作的场面。
+> 截图左栏有多个 bridge 邀请。邀请名称本身不证明 owner 关系；应检查是谁邀请了哪一个实际 Agent，以及审批房是否对应正确的 `(agent, owner)`。普通 DM 与 `Approval:` 房也不是同一种通道：普通 DM 用于交办，审批房只接受结构化 verdict。

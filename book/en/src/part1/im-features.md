@@ -23,4 +23,6 @@
 - **Multi-tab dock**: rooms, threads, and approval DMs each get their own tab, spreading multiple collaboration sites across one screen;
 - **Global search**, **unread badges**, **desktop notifications**.
 
-That concludes Part I. Starting with the next chapter, we turn this IM into HAgency's human workbench.
+These IM features are not the agent-chat authorization layer: search, badges, tabs, and notifications help humans observe. Matrix provides membership and event senders; the agent-chat server decides whether an approval is valid.
+
+That concludes Part I. Starting with the next chapter, we use this IM as HAgency's human workbench.

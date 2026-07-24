@@ -1,5 +1,5 @@
 // Language switcher: jumps to the same page in the other language tree.
-// Works both for local `mdbook serve` (port 3000 <-> 3001) and for a
+// Works both for local `mdbook serve` (port 8300 <-> 8301) and for a
 // deployed site where the two books live under /zh/ and /en/.
 (function () {
   var THIS_LANG = "zh";

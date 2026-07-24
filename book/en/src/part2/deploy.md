@@ -7,7 +7,7 @@ A complete HAgency setup consists of three components, of which the **Matrix ser
 | Component | Required | Where it runs |
 |------|------|---------|
 | Matrix homeserver (Palpo) | ✅ | Local Docker, **or** cloud (Meldry / matrix.org) |
-| agent-chat | ✅ | The machine that runs your agents (local-first by design) |
+| agent-chat | ✅ | The Agent machine: backend, dashboard, push relay, Matrix bridge, managed runtimes |
 | Robrix2 | ✅ | Your desktop |
 
 ## Two Routes
@@ -22,13 +22,13 @@ A complete HAgency setup consists of three components, of which the **Matrix ser
 | Item | Purpose | Notes |
 |--------|------|------|
 | Docker (local route only) | Runs Palpo + PostgreSQL | Not needed on the cloud route |
-| Node.js 22+ and tmux | Runs agent-chat and the runtimes it manages | Check with `node -v` |
+| Node.js 22+ and tmux | Runs agent-chat and managed runtimes | Linux has the supported installer; macOS currently uses a development run path |
 | Rust toolchain | Builds Robrix2 | Install via `rustup` |
 | Claude Code or Codex CLI | At least one coding runtime | Install both to try the heterogeneous final review in Chapter 5.5 |
 | A code repository to collaborate on | What the agents work on | Any local Git repository |
 
 ## What You Get After Deployment
 
-After following the next chapter (or the one after), you will have: a Matrix server you can log in to; a coding agent running in tmux with a Matrix puppet identity; a project board room bound to an agent group; and a dedicated encrypted approval room for each agent. Every screenshot scenario in Chapter 5 can be reproduced step by step in this environment.
+After the next chapter you will have a Matrix server, one managed Agent, an **unencrypted** project room bound to a group, and an approval room once its owner accepts the invitation. The four-role workflow and Project Board require the additional preparation described in their own chapters.
 
-If you get stuck along the way, each of the two chapters ends with a "Troubleshooting" table — most failures cluster in three places: a wrong homeserver address, the bridge's trust gate not configured with your own account, and forgetting to create the group before `!bindroom`.
+For failures, use [Operations Acceptance and Troubleshooting](operations.md). Common causes are missing required secrets, the wrong full MXID in the trust gate, no owner-originated Agent invite, an unmanaged runtime, or an approval invitation that has not been accepted.

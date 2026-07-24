@@ -1,8 +1,10 @@
 # 项目看板：任务与工件的全局视图
 
-> **定位**：本章介绍 agent-chat 自带的 Project Board —— 聊天之外的第二块屏幕：团队状态、spec 与 issue 的全局仪表盘。前置依赖：第 5.5 章（看板展示的正是 issue-workflow 的运行状态）。
+> **定位**：本章介绍 agent-chat Project Board 的预览实现：backend 状态与项目工件的只读投影。基线是 `feat/project-board` 提交 `3102a5f`，尚不是本书核验时的 agent-chat 主线功能。
 
-聊天房间是协作**发生**的地方，但它是时间线视角 —— 想回答「现在整个项目是什么状态？」，翻聊天记录不如看一眼仪表盘。agent-chat 的本地 dashboard（`http://127.0.0.1:8084`）为此提供了 **Project Board**（`/projects` 页面，顶部导航还有 Monitor / Tasks / Pool / Alerts / Config 等运维页面）。
+聊天房间是公开协作**发生**的地方，但它是时间线视角。Project Board (`/projects`) 汇总 backend durable tasks / task graphs / heartbeat 和受绑定项目的本地工件扫描。顶部导航与 Monitor / Tasks / Pool / Alerts / Config 保持一致；Agent 卡片可跳到对应 Monitor 视图。
+
+它不会读取 demo workflow 的 `.agentchat-demo/state.json`。如果 workflow 没创建 backend task/task graph，`/go` 的内部阶段不会自动出现在看板。发布本章前应先把 Project Board 分支合入目标 release，并提供受支持的 group→project binding 写入流程；当前绑定数据需要预先准备。
 
 ## 团队总览
 
@@ -12,26 +14,32 @@
 
 - **Members / Online**：项目组成员数与在线数；
 - **Working / Blocked / Open Tasks**：几个在干活、几个被卡住（`waiting` / `stale` 状态单独提示，如截图中 coordinator 已等待 wf_codex 终审 7 小时 —— 这类「静默停滞」正是看板要暴露的）；
-- **Worktrees**：Agent 工作区数量与脏状态（`0 dirty` 意味着没有未收尾的改动）；
+- **Worktrees**：Agent managed project/worktree 数量与 Git dirty 状态。`0 dirty` 只表示 `git status --porcelain` 没有未提交改动，不表示任务已完成、提交、推送或合并；
 - **Specs / Changes**：spec 与本地/远端 issue 的数量（下一节展开）。
 
-成员卡片逐个展示每个 Agent 的运行时（claude / codex）、当前任务、心跳时间。注意那些 **UNREGISTERED** 卡片：它们是经 Matrix 房间看到、但不属于本 backend 的成员 —— 比如队友 Tyrese 的 Agent 木偶和人类账号。看板如实呈现「房间里有谁」与「我管着谁」的差别，这正是第 5.2 章多实例同房协作在运维视角下的样子。
+成员卡片展示 runtime、backend 已知任务和心跳。**UNREGISTERED** 表示 Matrix 房间成员不属于当前 backend，例如队友的 Agent 木偶或人类账号；它是只读观察，不授予调度或审批权。一个 Agent 同属多个 group 时，v1 task 没有 project ID，任务可能投影到多个项目，这是当前限制。
 
-## Specs & Issues：spec 驱动的工件面板
+## Specs & Changes：spec 驱动的工件面板
 
 ![Specs 与 Issues 双栏](../images/board-specs-issues.png)
 
 看板下半部分把项目的两类核心工件放在一起：
 
-**左栏 Specifications** —— 项目里所有 [agent-spec](https://github.com/ZhangHanDong/agent-spec) 合约文件（`specs/*.spec.md`），每条显示场景数 / 测试数与负责的 Agent。本书自己的 spec（`task-hagency-book.spec.md · 6 scenarios · 6 tests`）就在列表第一行 —— 整个 HAgency 的工作方式是自举的：**给 Agent 的每个任务先立 spec，验收对着 spec 跑**，看板让这些合约的覆盖状态一目了然。
+**左栏 Specifications** —— 扫描项目里的 [agent-spec](https://github.com/ZhangHanDong/agent-spec) 合约文件（`specs/*.spec.md`），显示声明的 Scenario / `Test:` 映射数量和提供这份 worktree 检查结果的 Agent。它不运行测试，也不表示 coverage/pass；“Agent”也不是正式 spec owner。
 
-**右栏 Issues** —— 两个来源聚合：
+**右栏 Changes** —— provider-neutral 聚合：
 
 ![本地 issue 与 GitHub issue 聚合](../images/board-specs-github.png)
 
-- **LOCAL**：`issues/` 目录下的本地 issue 文档，标注了发布目标（`publish target: github · Project-Robius-China/robrix2`）—— Agent 在本地先立案，经你审批后才推到 GitHub（`gh` 写操作走第 5.4 章的审批）；
-- **GITHUB**：远端仓库的真实 issue，带 open / closed 状态 —— 第 5.5 章截图里 coordinator 关联的 issue #266 也在其中。
+- **LOCAL**：`issues/` 目录的本地 issue 文档及 `publish target` 元数据。Board 只展示目标，不执行发布；
+- **GitHub**：远端 issues 与 pull requests；
+- **AtomGit**：远端 issues 与 merge/pull requests，通过 [AtomGit OpenAPI](https://docs.openatom.tech/en/category/api/) 读取；私有仓库 token 只留在 backend 的 `ATOMGIT_TOKEN`；
+- 不支持或暂时不可用的 provider 仍保留为 unsynced，不把 token、绝对路径、上游错误正文送到浏览器。
+
+统一使用 **change request** 指 GitHub PR / AtomGit MR。创建远端 issue、发布本地 issue、创建 change request 都不属于 Board v1；这些写操作仍由 Agent 工具与 owner approval 完成。
 
 ## 看板在 HAgency 里的位置
 
-Project Board 是**只读的运维视角**：它不发消息、不派任务、不审批 —— 那些都发生在 Matrix 房间里（以及审批房里）。它回答的是另一类问题：谁在线、谁停滞、哪个 spec 没测试、哪个 issue 还没发布。聊天负责协作，看板负责**审计** —— 两块屏幕合起来，人才能既「在场」又「掌局」。
+Project Board 是**只读投影**：它不发消息、不派任务、不审批，也不是授权来源。它展示的项目必须来自明确的 group→project binding，并只包含该 group 的成员、tasks/graphs 与项目工件；DM、审批详情、完整消息正文、API key 和绝对路径不得进入响应。
+
+它回答的是“backend 记录了什么、工作树里声明了什么、远端 provider 当前可观察到什么”，而不是“workflow 一定执行到了哪一步”。要判断交付是否完成，仍需结合 Thread、backend task、Git commit、测试执行结果和 PR/MR 状态。
