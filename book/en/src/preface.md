@@ -1,14 +1,14 @@
 # Preface: What Is HAgency
 
-> **Scope**: This chapter answers what HAgency is and why it exists, and lays out how to read the book. No prerequisites — every reader starts here.
+> **Scope**: This chapter answers "what HAgency is and why it exists," and lays out how to read this book. It has no prerequisites — every reader starts here.
 
 **HAgency = Human + Agency.**
 
-AI coding agents (Claude Code, Codex, ...) can already carry out a great deal of engineering work on their own. But most "multi-agent" products push the human to the margins: you become a button that fires off a prompt, and the rest of the process is neither visible nor open to intervention.
+AI coding agents (Claude Code, Codex, ...) can already carry out a large share of engineering work on their own. But most "multi-agent" products push the human to the margins: you become a button that fires off a prompt, and the rest of the process is neither visible nor open to intervention.
 
-HAgency is after a different shape: **in a world of humans and agents, humans remain the agentic subject**. Humans and agents converse, divide up work, argue, and report in the same space; key decisions are made by humans, and high-risk operations require human authorization. Agent teams run autonomously — yet always transparently to humans, and open to intervention at any moment.
+HAgency aims for a different shape: **in a world where humans and agents coexist, the human remains a subject with agency**. Humans and agents converse, divide work, argue, and report in the same space; key decisions are made by the human, and high-risk operations are authorized by the human; the agent team runs autonomously, yet stays transparent to the human and open to intervention at any moment.
 
-This is not a single product, but a collaboration system composed from three open-source projects:
+This is not a standalone product, but a collaboration system assembled from three open-source projects:
 
 | Project | Role |
 |------|------|
@@ -18,9 +18,9 @@ This is not a single product, but a collaboration system composed from three ope
 
 The three speak the **Matrix protocol** as their common language. Choosing Matrix is no accident:
 
-- **Open protocol**: anyone's agent-chat instance and any Matrix client can join the same space — the screenshots in this book include a real case of two people's agent teams collaborating in one room; the space runs on your own server and can further federate with the entire Matrix network;
-- **End-to-end encryption**: the channel through which humans authorize agents (the approval DM) is protected by E2EE — not even the server can read the approval contents;
-- **Neutral substrate**: humans participate through Robrix2 (or any Matrix client), agents participate through bridged puppet accounts — at the protocol level, the two sides are fully equal.
+- **Open protocol**: anyone's agent-chat instance and any Matrix client can join the same space — the screenshots in this book include a live example of two people's agent teams collaborating in the same room; the space runs on your own server and can further interoperate with the entire Matrix federation;
+- **End-to-end encryption**: the human-to-agent authorization channel (the approval DM) is protected by E2EE — even the server cannot read approval contents;
+- **Neutral substrate**: humans participate via Robrix2 (or any Matrix client), agents participate through bridged puppet accounts — the two sides are fully equal at the protocol level.
 
 ## Before You Read
 
@@ -34,29 +34,29 @@ The three speak the **Matrix protocol** as their common language. Choosing Matri
 
 **Path A: I want to get it running as fast as possible** (users)
 
-> Preface → Chapter 4 Deployment Guide (pick one route) → Chapter 5 Team Collaboration in Practice (follow the screenshots)
+> Preface → Chapter 4 deployment guide (pick one route) → Chapter 5 team collaboration in practice (follow the screenshots)
 
-**Path B: I want to understand why it can be trusted first** (evaluators / security-minded readers)
+**Path B: I first want to understand why it deserves trust** (evaluators / security perspective)
 
-> Preface → Chapter 3 Concept and Architecture → Chapter 5.4 Owner Approval → Chapter 6 Security Model → then back to deployment
+> Preface → Chapter 3 philosophy and architecture → Chapter 5.4 Owner approval → Chapter 8 security model → then back to deployment
 
 ### Version and Evidence Baseline
 
-This book was verified on **2026-07-24** against Robrix2 documentation commit `d4f5c4c8` and agent-chat mainline `ad45f67`. Project Board screenshots come from the not-yet-merged `feat/project-board` commit `3102a5f`, so Chapter 5.6 labels it as a preview rather than a shipped mainline feature. Palpo behavior is based on this repository's `palpo-and-octos-deploy/` artifact and the tested node; the published book should pin the exact Palpo commit or release.
+This book was verified on **2026-07-24**, against Robrix2 docs commit `d4f5c4c8` and agent-chat mainline `ad45f67`. The Project Board screenshots come from commit `3102a5f` on the not-yet-merged `feat/project-board` branch, which is why Chapter 5.6 labels it a preview capability rather than a released mainline feature. Palpo's deployment behavior follows this repository's `palpo-and-octos-deploy/` and the actual test node; before the book's formal release, Palpo's exact commit or release version should also be pinned.
 
-The book uses four evidence labels:
+The book uses four evidence labels to avoid presenting behavior observed in one demo as a system guarantee:
 
 | Label | Meaning |
 |------|------|
-| **Protocol-enforced** | backend/bridge validates and fails closed; Agent self-discipline cannot bypass it |
-| **Current implementation** | present in the pinned commits, with stated preconditions |
-| **Workflow convention** | required by a skill/prompt and may fail if the Agent, relay, or session stops |
-| **Planned** | a design direction or partial foundation, not an end-to-end Robrix2 product path yet |
+| **Protocol-enforced** | The backend / bridge validates and fails closed; it cannot be bypassed by relying on agent self-discipline |
+| **Current implementation** | Code and tests exist at the commits above, but explicit preconditions may apply |
+| **Workflow convention** | Defined by skill / prompt; may break down when the agent, relay, or session is interrupted |
+| **Planned** | A design direction or partial foundation exists, but the full Robrix2-to-backend product path is not yet in place |
 
-Every screenshot is from a real run. A screenshot proves what happened in that run; it does not by itself prove a universal, automatic product guarantee.
+This system is under active development; commands and interfaces will keep evolving. All screenshots in the book come from real running sessions; a screenshot proves "what happened in that run" — it does not, by itself, prove something has become a universal, automatic product capability.
 
-## How This Book Is Organized
+## Structure of This Book
 
-**Part I** (Chapters 1–2) briefly introduces Robrix2 as a Matrix IM client in its own right — even without any agents attached, it is a complete, usable instant messenger.
+**Part One** (Chapters 1–2) briefly introduces Robrix2 as a Matrix IM client in its own right — even without connecting any agents, it is a complete, usable instant messaging tool.
 
-**Part II** (Chapters 3–6) is the heart of the book: architecture, two deployment routes, six screenshot-driven scenarios, Agent pools and multi-user boundaries, troubleshooting, and the security model.
+**Part Two** (Chapters 3–8) is the heart of the book: philosophy and architecture, two deployment routes, six screenshot-driven collaboration scenarios (inviting agents in, the board room, Threads, approvals, the four-role workflow, and the Project Board), plus the agent pool, multi-user boundaries, troubleshooting, and the security model.

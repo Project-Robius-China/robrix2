@@ -8,7 +8,7 @@ HAgency 给了 Agent 很大的行动自由，这份自由必须配上同样坚�
 
 **1. Robrix2 永远不是授权来源。** Robrix2 只做两件事：展示（审批卡片、工作流状态）与发起（把你的点击变成结构化 Matrix 事件）。所有授权判定发生在 agent-chat 服务端：verdict 的真实发送者（`event.sender`）必须等于绑定的 owner 账号 —— 不信任 display name，不信任 payload 里自称的身份；房间、agent、project、request_id、input_digest 逐项吻合；审批绑定字段只从**原始事件**读取，`m.replace` 编辑无法篡改一张已发出的卡。即使客户端被替换或伪造，服务端校验依然成立。
 
-**2. 审批一次性、有时效、防重放。** `Approve once` 每张卡只放行一次；服务端先消费审批再通知运行时，allow 不可重放。默认 5 分钟过期。`input_digest` 对 agent、runtime、project、project room、owner、approval room、request ID、upstream request、工具描述和最多 8KB 输入预览等规范字段做 SHA-256，把 verdict 钉在服务端保存的这一条请求记录上。
+**2. 审批一次性、有时效、防重放。** `Approve once` 每张卡只放行一次；服务端先消费审批再通知运行时，allow 不可重放。默认 5 分钟过期。`input_digest` 对 agent、runtime、project、project room、owner、approval room、upstream request、工具描述和最多 8KB 输入预览等规范字段做 SHA-256，把 verdict 钉在服务端保存的这一条请求记录上。
 
 **3. Fail-closed：一切异常等于拒绝。** 从 Codex hook 到 Claude channel，链路异常不会变成 allow。Codex hook 绑定脚本 SHA-256，首次启用或 hash 变化时需在本地 TTY 输入 `TRUST`；hook timeout 由 approval TTL 加缓冲推导。Claude 依赖受管 `auto` 模式和显式 Ask 规则把受保护命令送入 channel。
 

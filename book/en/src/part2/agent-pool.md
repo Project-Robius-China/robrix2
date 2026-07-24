@@ -1,59 +1,59 @@
 # Agent Pools, Models, and Multi-User Boundaries
 
-> **Scope**: This chapter explains where models are selected, agent-chat's role×capability scheduling foundation, and what does not cross instance boundaries when several users share a Matrix room.
+> **Scope**: This chapter explains where models are selected, the role×capability scheduling foundation agent-chat already has, and which capabilities are not shared across instances when several people share one Matrix room. Prerequisites: Chapters 5.2 and 5.5.
 
 ## How Models Are Selected Today
 
-Claude/Codex models are **runtime process configuration**:
+A Claude/Codex model is **runtime process configuration**. It can currently be specified at startup:
 
 ```bash
 bin/agentchat up wf_implementer /path/to/worktree claude --model <model>
 bin/agentchat up wf_final_reviewer /path/to/review-worktree codex --model <model>
 ```
 
-Dashboard runtime profiles can persist launch configuration. An already-running tmux does not change models because someone states a preference in Robrix2; apply a model change through a managed restart. A coordinator should not claim a model switch without checking the actual runtime/profile.
+The dashboard's runtime profile can also save startup configuration; a running tmux session will not switch models because of one natural-language sentence in Robrix2 — after a change, a managed restart is required. Do not let a coordinator claim it has "switched to some model" without verifying the actual runtime/profile.
 
-For parallel implementation and reviews, maintain several Agents with separate managed projects or Git worktrees rather than repeatedly restarting one Agent.
+At any given moment, one Agent has exactly one working directory and one model process. When you need implementation, review, and final review in parallel, the recommendation is to maintain multiple Agents, each bound to its own project path or Git worktree, rather than repeatedly restarting the same Agent.
 
-## Existing Agent Pool
+## The Agent Pool That Already Exists
 
-The backend already has a role×capability pool and `/api/dispatch` foundation:
+The agent-chat backend already has a role×capability pool and a `/api/dispatch` foundation:
 
-| role | default capability |
+| role | Default capability |
 |------|--------------------|
 | architect / review | `strong` |
 | coding / testing / integration | `medium` |
 | documentation | `lightweight` |
 
-The scheduler picks the cheapest sufficient idle Agent, otherwise returning a provision plan or queueing work. Dispatch uses an owner-bound renewable lease; mismatched owner/lease/agent tuples cannot renew or release it. Queues and in-flight leases remain process-local, so backend restart is not yet a fully durable scheduler.
+The scheduler prefers "the cheapest idle Agent that meets the requirements"; when there is no candidate, it returns a provision plan or enters a queue. Dispatch uses owner-bound, renewable leases; when owner/lease/agent do not match, renew/release is not possible. The queue and in-flight leases are currently still in-process state — after a backend restart this is not a fully durable scheduler.
 
-This is one backend's pool, not a shared pool of every Matrix room member. A teammate's **UNREGISTERED** Agent cannot be assigned your paths, tokens, or leases.
+This pool is the current backend's resource pool, not a public pool of all members of a Matrix room. A teammate instance's `UNREGISTERED` Agents, even when they appear in the same room, cannot be assigned local paths, tokens, or task leases by this backend.
 
-## Target Per-Task Model Flow
+## The Target Shape of Task-Level Model Scheduling
 
-The target discussed in this project is:
+The target interaction discussed in this session:
 
 ```text
-"medium implementation, strong Claude review, strong Codex final review"
-                              ↓
-Robrix2 shows a structured plan (Agent/runtime/model/project/worktree)
-                              ↓
-human confirms
-                              ↓
-agent-chat selects from its pool and creates dispatch leases
+"medium for implementation, strong Claude for review, strong Codex for final review"
+                         ↓
+Robrix2 shows a structured dispatch preview (Agent / runtime / model / project / worktree)
+                         ↓
+User confirms
+                         ↓
+agent-chat selects from its own model pool and establishes a dispatch lease
 ```
 
-The Robrix2 natural-language → structured preview → confirmation → `/api/dispatch` path is **planned, not shipped**. Today, owners pre-create runtime profiles/Agents and the workflow selects explicit Agent names.
+This is a reasonable design, but the **Robrix2 natural language → structured preview → user confirmation → `/api/dispatch`** pipeline is not yet wired up, and should be marked as planned. The currently reproducible approach is for the owner to pre-create multiple profiles/Agents, and for the coordinator to select explicit Agent names within the workflow convention.
 
-## Multi-User Security Model
+## The Multi-User Security Model
 
-When several users invite their Agents to one public project room:
+When several people invite their own Agents into the same public project room:
 
-- each Agent's owner is still the full MXID that invited that Agent;
-- each backend manages only its Agents, paths, profiles, tokens, and leases;
-- the public room shares only explicitly posted messages and redacted approval status;
-- details go to each `(agent, owner)` approval room;
-- Robrix2 may display cross-instance members but cannot infer or transfer authority;
-- a future batch-invite UI may assist, but must show exact MXIDs, Agent/backend, room, and the owner relationship before the logged-in owner confirms.
+- Each Agent's owner still comes from the full MXID of "whoever invited this Agent";
+- Each backend manages only its own Agents, project paths, runtime profiles, API tokens, and dispatch leases;
+- The shared room only shares explicitly published messages and sanitized approval status;
+- Detailed approvals go into each `(agent, owner)` pair's E2EE approval room;
+- Robrix2 may display cross-instance members, but must not grant, transfer, or infer permissions on that basis;
+- Auto-inviting your own Agents can serve as a UI convenience, but the currently logged-in owner must explicitly confirm the target Agent and room, and the server must establish provenance from the real invite event — a coordinator or an ordinary member must not silently do it on the owner's behalf.
 
-Inviting an Agent is both membership management and a security operation.
+So "inviting an Agent into the group" is both a membership operation and a security operation. If a bulk-invite UI is ever implemented, it should first display the full MXID, the backend each Agent belongs to, the target project room, and the owner relationship about to be established, and only then let the user confirm.

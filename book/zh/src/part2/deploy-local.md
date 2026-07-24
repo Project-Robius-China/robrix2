@@ -85,7 +85,7 @@ MATRIX_OPERATOR_MXIDS=@alex:127.0.0.1:8128
 MATRIX_DEFAULT_WAKE=off
 ```
 
-不要只写 display name 或 `alex`；安全边界使用完整 MXID。`MATRIX_OPERATOR_MXIDS` / `MATRIX_ADMIN_MXIDS` 不能都留空，因为管理命令 ACL 为兼容旧部署存在 `no_acl` 回退。关闭 homeserver 注册时，还要预创建桥账号和每个 `@ac_*` 账号，或配置服务器支持的 registration token。
+不要只写 display name 或 `alex`；安全边界使用完整 MXID。`MATRIX_OPERATOR_MXIDS` / `MATRIX_ADMIN_MXIDS` 不能都留空，因为管理命令 ACL 为兼容旧部署存在 `no_acl` 回退（这两项在 `.env.example` 里没有现成条目，需自行新增）。关闭 homeserver 注册时，还要预创建桥账号和每个 `@ac_*` 账号，或配置服务器支持的 registration token。
 
 ### Linux：正式安装路径
 
