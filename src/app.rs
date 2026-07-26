@@ -2088,14 +2088,14 @@ impl MatchEvent for App {
                 // A matching-reconcile Unavailable is a terminal freshness barrier
                 // (round 7): it invalidates the reopen's own Open, so the modal
                 // hands back a fresh post-barrier Open epoch to repopulate via a
-                // (server-fresh) fetch that postdates the invalidation — never a
-                // pre-write cache snapshot, and never wedged read-only.
+                // (server-truth) fetch that postdates the invalidation — never
+                // wedged read-only. A failed recovery Open does not spawn another.
                 let recovery = self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
                     .release_alias_lock(cx, &unavailable.room_id, unavailable.reason);
                 if let Some(recovery_epoch) = recovery {
                     submit_async_request(MatrixRequest::FetchRoomSettings {
                         room_id: unavailable.room_id.clone(),
-                        reason: RoomSettingsFetchReason::Recovery(recovery_epoch),
+                        reason: RoomSettingsFetchReason::Open(recovery_epoch),
                     });
                 }
                 continue;

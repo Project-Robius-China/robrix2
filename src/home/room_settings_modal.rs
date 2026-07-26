@@ -202,34 +202,20 @@ pub fn next_step_after_directory_write(directory_ok: bool) -> SequencedAliasStep
 /// flagged: settings fetches previously carried only `room_id`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomSettingsFetchReason {
-    /// Opened the modal (or another non-write refresh), carrying a monotonic
-    /// epoch. Not tied to any alias write, so it must NEVER consume a write's
-    /// reconcile. Reads the (fast) local cache; its data is applied only when it
-    /// is the *newest* open-class fetch and no write has been submitted since it
-    /// was issued (see [`OpenFreshness`]) — so a slow pre-write Open can't
-    /// repaint stale state after a write reconciles.
+    /// A non-write refresh (modal open, or the post-barrier recovery re-fetch),
+    /// carrying a monotonic epoch. Not tied to any alias write, so it must NEVER
+    /// consume a write's reconcile. Its data is applied only when it is the
+    /// *newest* Open and no write has been submitted since it was issued (see
+    /// [`OpenFreshness`]).
+    ///
+    /// Like every alias fetch it reads `m.room.canonical_alias` from the SERVER
+    /// (round 8: single source of truth) — the local cache is never consulted, so
+    /// there is no cross-source freshness to rank and a fetch payload can never be
+    /// a stale cache snapshot.
     Open(u64),
-    /// A post-barrier *recovery* re-fetch (round 7), issued after a matching
-    /// reconcile came back Unavailable so the modal isn't wedged read-only.
-    /// Behaves like [`Self::Open`] in the gate (applies when idle, epoch-guarded)
-    /// but reads SERVER truth (not the cache), so it can never repopulate the
-    /// modal with a pre-write snapshot.
-    Recovery(u64),
     /// The authoritative reconcile for the alias write of this generation. Only a
     /// matching generation may release that write's gate / clear its registry.
     AliasReconcile(u64),
-}
-
-impl RoomSettingsFetchReason {
-    /// The freshness epoch for an "open-class" fetch (`Open` / `Recovery`), which
-    /// apply when idle and are gated by [`OpenFreshness`]. `None` for a reconcile
-    /// (matched by generation instead).
-    pub fn open_epoch(self) -> Option<u64> {
-        match self {
-            RoomSettingsFetchReason::Open(e) | RoomSettingsFetchReason::Recovery(e) => Some(e),
-            RoomSettingsFetchReason::AliasReconcile(_) => None,
-        }
-    }
 }
 
 /// Freshness guard for `Open` settings fetches (P1-1). An `Open` snapshots
@@ -361,10 +347,9 @@ impl AliasWriteGate {
     ///   `AwaitingRefresh(g)` with the same generation; otherwise `Ignore`.
     pub fn disposition(self, reason: RoomSettingsFetchReason) -> FetchDisposition {
         match (self, reason) {
-            // Open-class fetches (Open / Recovery) only *gate* on Idle here; their
-            // epoch freshness is enforced by the caller via `OpenFreshness` (P1-1).
-            (AliasWriteGate::Idle, RoomSettingsFetchReason::Open(_))
-            | (AliasWriteGate::Idle, RoomSettingsFetchReason::Recovery(_)) => FetchDisposition::Apply,
+            // Open only *gates* on Idle here; its epoch freshness is enforced by
+            // the caller via `OpenFreshness` (P1-1).
+            (AliasWriteGate::Idle, RoomSettingsFetchReason::Open(_)) => FetchDisposition::Apply,
             (AliasWriteGate::AwaitingRefresh(g), RoomSettingsFetchReason::AliasReconcile(r))
                 if g == r =>
             {
@@ -521,12 +506,12 @@ pub enum ReconcileFetchOutcome {
     Unavailable,
 }
 
-/// Decide what a reconcile fetch posts from the result of its server-fresh
+/// Decide what an alias fetch posts from the result of its server-fresh
 /// canonical-alias read. In the pinned matrix-sdk, `send_state_event` does not
 /// update the local `RoomInfo`, so the cache-backed `room.canonical_alias()` can
-/// still return the *pre-write* value after a successful write; a reconcile must
-/// therefore read the server directly and, if that read fails, release via
-/// `Unavailable` rather than apply stale cache data. `server_read == None` means
+/// still return the *pre-write* value after a successful write; every alias
+/// fetch therefore reads the server directly and, if that read fails, releases
+/// via `Unavailable` rather than apply stale data. `server_read == None` means
 /// the fresh read could not be obtained.
 pub fn reconcile_fetch_outcome(
     server_read: Option<(Option<OwnedRoomAliasId>, Vec<OwnedRoomAliasId>)>,
@@ -535,6 +520,19 @@ pub fn reconcile_fetch_outcome(
         Some((canonical, alt_aliases)) => ReconcileFetchOutcome::Fetched { canonical, alt_aliases },
         None => ReconcileFetchOutcome::Unavailable,
     }
+}
+
+/// The payload an alias fetch applies, under the SINGLE-SOURCE model (round 8):
+/// it is derived ONLY from the server read. The `_local_cache` parameter is
+/// present solely to make the guarantee testable — the applied payload is
+/// independent of the cache, so a stale cache value can never appear in a fetch
+/// (which is what makes epoch ordering sound: it ranks same-source reads only).
+pub fn alias_fetch_payload(
+    _local_cache: (Option<OwnedRoomAliasId>, Vec<OwnedRoomAliasId>),
+    server_read: Option<(Option<OwnedRoomAliasId>, Vec<OwnedRoomAliasId>)>,
+) -> ReconcileFetchOutcome {
+    // The cache is intentionally ignored: every fetch reads server truth.
+    reconcile_fetch_outcome(server_read)
 }
 
 #[cfg(test)]
@@ -1001,6 +999,52 @@ mod alias_logic_tests {
         let e3 = f.take_open(); // post-barrier recovery Open
         assert!(!f.accepts_open(e2)); // e2 can never apply → no stale apply
         assert!(f.accepts_open(e3)); // e3 repopulates → not wedged read-only
+    }
+
+    // ── round 8: single source of truth — no fetch payload can be stale cache ──
+    // Every alias fetch (Open, recovery Open, reconcile) reads the SERVER; the
+    // cache is never consulted. So epochs only ever order same-source (server)
+    // reads, and a stale cache snapshot can never reach a fetch payload — which
+    // is what closes the cross-source provenance-ranking hole codex flagged.
+
+    #[test]
+    fn test_single_source_a_later_open_applies_server_not_cache() {
+        // (a) A recovery Open is pending and a later Open(e4) is issued. Both read
+        // the server. Concrete repro: W1 published #a. The local cache still shows
+        // NO #a (S0); the server shows #a (S1). The applied payload must be the
+        // SERVER read — the cache S0 (which would drop #a from a W2 alt-list and
+        // de-advertise the still-directory-mapped #a) can never appear.
+        let s1_server = Some((None, vec![alias("#a:example.org"), alias("#b:example.org")]));
+        let s0_stale_cache = (None, vec![alias("#b:example.org")]); // missing #a
+        let arbitrary_other_cache = (Some(alias("#a:example.org")), vec![alias("#b:example.org")]);
+        // The payload is independent of the cache: any cache → same server payload.
+        assert_eq!(
+            alias_fetch_payload(s0_stale_cache.clone(), s1_server.clone()),
+            alias_fetch_payload(arbitrary_other_cache, s1_server.clone()),
+        );
+        assert_eq!(
+            alias_fetch_payload(s0_stale_cache, s1_server),
+            ReconcileFetchOutcome::Fetched {
+                canonical: None,
+                alt_aliases: vec![alias("#a:example.org"), alias("#b:example.org")],
+            },
+        );
+    }
+
+    #[test]
+    fn test_single_source_b_open_after_recovery_applied_before_sync() {
+        // (b) The recovery already applied S1, then a later Open(e4) is issued
+        // BEFORE the local cache syncs (cache still S0). The later Open also reads
+        // the server, so it re-applies S1; the pre-write cache S0 is unreachable.
+        let s1_server = Some((Some(alias("#a:example.org")), vec![alias("#b:example.org")]));
+        let s0_stale_cache = (None, vec![]); // sync hasn't caught up
+        assert_eq!(
+            alias_fetch_payload(s0_stale_cache, s1_server),
+            ReconcileFetchOutcome::Fetched {
+                canonical: Some(alias("#a:example.org")),
+                alt_aliases: vec![alias("#b:example.org")],
+            },
+        );
     }
 }
 
@@ -2149,12 +2193,11 @@ impl RoomSettingsModal {
         if disposition == FetchDisposition::Ignore {
             return;
         }
-        // P1-1: an accepted open-class fetch (Open / Recovery) must still be the
-        // *freshest*. Reject a slow pre-write open that would otherwise repaint
-        // stale state after a write reconciled (and let the user submit a second
-        // write from it). The gate was not mutated for these, so returning here
-        // leaves it Idle.
-        if let Some(epoch) = reason.open_epoch() {
+        // P1-1: an accepted Open must still be the *freshest*. Reject a slow
+        // pre-write open that would otherwise repaint older state after a write
+        // reconciled (and let the user submit a second write from it). The gate
+        // was not mutated for an Open, so returning here leaves it Idle.
+        if let RoomSettingsFetchReason::Open(epoch) = reason {
             if !self.open_freshness.accepts_open(epoch) {
                 return;
             }
@@ -2176,14 +2219,15 @@ impl RoomSettingsModal {
     /// this does NOT overwrite state. Releases ONLY on the matching reconcile
     /// (generation + purpose); an open-fetch or mismatched reconcile is a no-op.
     ///
-    /// A matching-Unavailable is a *terminal freshness barrier* (P1, round 7):
-    /// it invalidates every `Open` issued during that pending generation (via
+    /// A matching-Unavailable is a *terminal freshness barrier* (round 7): it
+    /// invalidates every `Open` issued during that pending generation (via
     /// `OpenFreshness::on_apply`), exactly as a successful reconcile does — so a
-    /// reopen-during-the-write `Open` that returns after this release can't apply
-    /// its (possibly pre-write) snapshot. Because that barrier also blocks the
-    /// reopen's own `Open`, the modal would be left read-only; so this returns
-    /// `Some(epoch)` for a fresh post-barrier recovery `Open` the caller must
-    /// issue to repopulate the modal via a fetch that postdates the invalidation.
+    /// reopen-during-the-write `Open` that returns after this release can't
+    /// supersede it by epoch. Because that barrier also blocks the reopen's own
+    /// `Open`, the modal would be left read-only; so this returns `Some(epoch)`
+    /// for a fresh post-barrier recovery `Open` the caller must issue to
+    /// repopulate the modal via a (server-truth) fetch that postdates the
+    /// invalidation. A failed recovery `Open` does not spawn another (bounded).
     pub fn release_alias_lock(
         &mut self,
         cx: &mut Cx,

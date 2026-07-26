@@ -4471,9 +4471,7 @@ async fn matrix_worker_task(
                     continue;
                 };
                 let _fetch_room_settings_task = Handle::current().spawn(async move {
-                    use crate::home::room_settings_modal::{
-                        reconcile_fetch_outcome, ReconcileFetchOutcome, RoomSettingsFetchReason,
-                    };
+                    use crate::home::room_settings_modal::{reconcile_fetch_outcome, ReconcileFetchOutcome};
                     if let Some(room) = client.get_room(&room_id) {
                         let topic = room.topic();
                         let is_public = room.is_public().unwrap_or(false);
@@ -4485,30 +4483,25 @@ async fn matrix_worker_task(
                                 .is_some_and(|pl| pl.can_set_canonical_alias()),
                             None => false,
                         };
-                        // Capture alias data AFTER the power-level await, at post
-                        // time (P1-2). A reconcile and a post-barrier Recovery read
-                        // SERVER truth (the local cache lags `send_state_event`); if
-                        // that fresh read fails they release via Unavailable rather
-                        // than apply stale data. A plain Open uses the cache
-                        // (fast, no round-trip) — a stale reopen Open is rejected by
-                        // the OpenFreshness barrier, so it never applies (round 7).
-                        let (canonical_alias, alt_aliases) = match reason {
-                            RoomSettingsFetchReason::AliasReconcile(_)
-                            | RoomSettingsFetchReason::Recovery(_) => {
-                                match reconcile_fetch_outcome(
-                                    fetch_canonical_alias_from_server(&client, &room_id).await,
-                                ) {
-                                    ReconcileFetchOutcome::Fetched { canonical, alt_aliases } => {
-                                        (canonical, alt_aliases)
-                                    }
-                                    ReconcileFetchOutcome::Unavailable => {
-                                        Cx::post_action(RoomSettingsFetchUnavailableAction { room_id, reason });
-                                        return;
-                                    }
-                                }
+                        // SINGLE SOURCE OF TRUTH (round 8): EVERY alias fetch —
+                        // Open, recovery Open, and reconcile alike — reads
+                        // `m.room.canonical_alias` from the SERVER, captured AFTER
+                        // the power-level await (post time). The local
+                        // `room.canonical_alias()/alt_aliases()` cache lags
+                        // `send_state_event`, so ranking a cache read against a
+                        // server read by epoch could apply a stale snapshot; with
+                        // one source there is no cross-source provenance to rank and
+                        // a payload can never be a stale cache value. A failed fresh
+                        // read releases via Unavailable rather than apply anything.
+                        let (canonical_alias, alt_aliases) = match reconcile_fetch_outcome(
+                            fetch_canonical_alias_from_server(&client, &room_id).await,
+                        ) {
+                            ReconcileFetchOutcome::Fetched { canonical, alt_aliases } => {
+                                (canonical, alt_aliases)
                             }
-                            RoomSettingsFetchReason::Open(_) => {
-                                (room.canonical_alias(), room.alt_aliases())
+                            ReconcileFetchOutcome::Unavailable => {
+                                Cx::post_action(RoomSettingsFetchUnavailableAction { room_id, reason });
+                                return;
                             }
                         };
                         Cx::post_action(RoomSettingsFetchedAction {
