@@ -701,6 +701,9 @@ pub type OnLinkPreviewFetchedFn = fn(
 #[derive(Clone, Debug)]
 pub struct RoomSettingsFetchedAction {
     pub room_id: OwnedRoomId,
+    /// Why this fetch was issued — echoed from the request so a stale or
+    /// unrelated fetch can never be mistaken for a specific write's reconcile.
+    pub reason: crate::home::room_settings_modal::RoomSettingsFetchReason,
     pub topic: Option<String>,
     pub is_public: bool,
     /// The room's canonical (main) alias, if any.
@@ -719,6 +722,9 @@ pub struct RoomSettingsFetchedAction {
 #[derive(Clone, Debug)]
 pub struct RoomSettingsFetchUnavailableAction {
     pub room_id: OwnedRoomId,
+    /// Why the fetch was issued (echoed from the request) — release only fires
+    /// on the matching write reconcile, never an open-fetch.
+    pub reason: crate::home::room_settings_modal::RoomSettingsFetchReason,
 }
 
 /// Posted after a room avatar is successfully uploaded and set.
@@ -1687,9 +1693,13 @@ pub enum MatrixRequest {
         update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
     },
     /// Fetch room-specific settings: topic and whether the room is public.
-    /// Response arrives as a [`RoomSettingsFetchedAction`].
+    /// Response arrives as a [`RoomSettingsFetchedAction`] (or a
+    /// [`RoomSettingsFetchUnavailableAction`] if the room can't be read). Both
+    /// echo `reason` so the alias write gate/registry only accept the reconcile
+    /// that matches the write in flight.
     FetchRoomSettings {
         room_id: OwnedRoomId,
+        reason: crate::home::room_settings_modal::RoomSettingsFetchReason,
     },
     /// Publish a new alias into the room directory, mapping it to this room
     /// (`PUT /directory/room/{alias}`), then — only on success — advertise it
@@ -4405,12 +4415,13 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::FetchRoomSettings { room_id } => {
+            MatrixRequest::FetchRoomSettings { room_id, reason } => {
                 // No client → still signal "unavailable" so a waiting alias write
                 // releases its gate/registry instead of stranding (never silently
-                // drop this fetch — the alias reconcile depends on a reply).
+                // drop this fetch — the alias reconcile depends on a reply). The
+                // `reason` is echoed so only the matching write reconcile acts.
                 let Some(client) = get_client() else {
-                    Cx::post_action(RoomSettingsFetchUnavailableAction { room_id });
+                    Cx::post_action(RoomSettingsFetchUnavailableAction { room_id, reason });
                     continue;
                 };
                 let _fetch_room_settings_task = Handle::current().spawn(async move {
@@ -4429,6 +4440,7 @@ async fn matrix_worker_task(
                         };
                         Cx::post_action(RoomSettingsFetchedAction {
                             room_id,
+                            reason,
                             topic,
                             is_public,
                             canonical_alias,
@@ -4437,7 +4449,7 @@ async fn matrix_worker_task(
                         });
                     } else {
                         // Room not currently available — release any waiting gate.
-                        Cx::post_action(RoomSettingsFetchUnavailableAction { room_id });
+                        Cx::post_action(RoomSettingsFetchUnavailableAction { room_id, reason });
                     }
                 });
             }

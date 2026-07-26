@@ -19,7 +19,7 @@ use crate::{
         add_menu::{AddMenuAction, AddMenuWidgetRefExt},
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, JoinRoomModalAction, JoinRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, set_room_info_action_modal_open}, room_settings_modal::{PendingAliasWrites, RoomSettingsAction, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
+        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, set_room_info_action_modal_open}, room_settings_modal::{PendingAliasWrites, RoomSettingsAction, RoomSettingsFetchReason, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
@@ -1937,7 +1937,12 @@ impl MatchEvent for App {
                     self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
                         .show_settings(cx, room_id.clone(), &room_name, "", alias_str, alias_stage);
                     self.ui.modal(cx, ids!(room_settings_modal)).open(cx);
-                    submit_async_request(MatrixRequest::FetchRoomSettings { room_id });
+                    // Open-fetch: not tied to any write, so it can never consume a
+                    // write reconcile (purpose = Open).
+                    submit_async_request(MatrixRequest::FetchRoomSettings {
+                        room_id,
+                        reason: RoomSettingsFetchReason::Open,
+                    });
                     continue;
                 }
                 Some(RoomSettingsAction::Close) | Some(RoomSettingsAction::Cancel) => {
@@ -1973,12 +1978,12 @@ impl MatchEvent for App {
                     self.ui.modal(cx, ids!(room_settings_modal)).close(cx);
                     continue;
                 }
-                Some(RoomSettingsAction::PublishAlias { room_id, alias, canonical, alt_aliases }) => {
+                Some(RoomSettingsAction::PublishAlias { room_id, alias, canonical, alt_aliases, generation }) => {
                     // The modal already validated the alias and optimistically
                     // advertised it. A single sequenced request registers it in
                     // the directory, then advertises it into `m.room.canonical_alias`
                     // only if that succeeds (see MatrixRequest::PublishRoomAlias).
-                    self.pending_alias_writes.register(room_id.clone());
+                    self.pending_alias_writes.register(room_id.clone(), *generation);
                     submit_async_request(MatrixRequest::PublishRoomAlias {
                         room_id: room_id.clone(),
                         alias: alias.clone(),
@@ -1992,8 +1997,8 @@ impl MatchEvent for App {
                     );
                     continue;
                 }
-                Some(RoomSettingsAction::SetCanonicalAlias { room_id, canonical, alt_aliases }) => {
-                    self.pending_alias_writes.register(room_id.clone());
+                Some(RoomSettingsAction::SetCanonicalAlias { room_id, canonical, alt_aliases, generation }) => {
+                    self.pending_alias_writes.register(room_id.clone(), *generation);
                     submit_async_request(MatrixRequest::SetRoomCanonicalAlias {
                         room_id: room_id.clone(),
                         alias: canonical.clone(),
@@ -2006,10 +2011,10 @@ impl MatchEvent for App {
                     );
                     continue;
                 }
-                Some(RoomSettingsAction::RemoveAlias { room_id, alias, canonical, alt_aliases }) => {
+                Some(RoomSettingsAction::RemoveAlias { room_id, alias, canonical, alt_aliases, generation }) => {
                     // Single sequenced request: unbind from the directory, then
                     // drop it from `m.room.canonical_alias` only if that succeeds.
-                    self.pending_alias_writes.register(room_id.clone());
+                    self.pending_alias_writes.register(room_id.clone(), *generation);
                     submit_async_request(MatrixRequest::RemoveRoomAlias {
                         room_id: room_id.clone(),
                         alias: alias.clone(),
@@ -2043,10 +2048,13 @@ impl MatchEvent for App {
 
             // Handle RoomSettingsFetchedAction.
             if let Some(fetched) = action.downcast_ref::<RoomSettingsFetchedAction>() {
-                // This authoritative fetch reconciles any in-flight alias write
-                // for the room — clear it from the pending registry (P1-2) so the
-                // controls re-enable on the next open.
-                self.pending_alias_writes.on_reconciled(&fetched.room_id);
+                // Clear the pending registry entry ONLY on the matching write
+                // reconcile (generation + purpose). An open-fetch or a stale/
+                // mismatched reconcile is ignored, keeping registry and gate in
+                // lockstep regardless of same-batch processing order (P1).
+                if let RoomSettingsFetchReason::AliasReconcile(generation) = fetched.reason {
+                    self.pending_alias_writes.on_reconciled(&fetched.room_id, generation);
+                }
                 // The modal is a singleton reused across rooms; it drops the
                 // response if `fetched.room_id` isn't the room it currently shows
                 // (P1-B: stale/out-of-order fetch guard).
@@ -2056,6 +2064,7 @@ impl MatchEvent for App {
                     .apply_alias_settings(
                         cx,
                         &fetched.room_id,
+                        fetched.reason,
                         self.app_state.app_language,
                         fetched.canonical_alias.clone(),
                         fetched.alt_aliases.clone(),
@@ -2067,10 +2076,14 @@ impl MatchEvent for App {
             // A reconcile fetch could not produce data (no client / room gone):
             // clear the pending entry and release the modal's gate so the alias
             // controls never strand disabled (they keep the optimistic state).
+            // Matched by generation + purpose, so only the write's own reconcile
+            // releases it — an open-fetch failure never does.
             if let Some(unavailable) = action.downcast_ref::<crate::sliding_sync::RoomSettingsFetchUnavailableAction>() {
-                self.pending_alias_writes.on_reconciled(&unavailable.room_id);
+                if let RoomSettingsFetchReason::AliasReconcile(generation) = unavailable.reason {
+                    self.pending_alias_writes.on_reconciled(&unavailable.room_id, generation);
+                }
                 self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
-                    .release_alias_lock(cx, &unavailable.room_id);
+                    .release_alias_lock(cx, &unavailable.room_id, unavailable.reason);
                 continue;
             }
 
@@ -2091,10 +2104,17 @@ impl MatchEvent for App {
                     enqueue_popup_notification(message.clone(), PopupKind::Error, Some(5.0));
                 }
                 self.pending_alias_writes.on_result(&result.room_id, result.attempted);
+                // Reconcile fetch tagged with THIS write's generation (from the
+                // registry, which on_result kept for an attempted write), so only
+                // this fetch can release the write's gate. Skip if there's no
+                // pending entry (already reconciled) or it was a preflight failure.
                 if result.attempted {
-                    submit_async_request(MatrixRequest::FetchRoomSettings {
-                        room_id: result.room_id.clone(),
-                    });
+                    if let Some((_, generation)) = self.pending_alias_writes.stage(&result.room_id) {
+                        submit_async_request(MatrixRequest::FetchRoomSettings {
+                            room_id: result.room_id.clone(),
+                            reason: RoomSettingsFetchReason::AliasReconcile(generation),
+                        });
+                    }
                 }
                 continue;
             }

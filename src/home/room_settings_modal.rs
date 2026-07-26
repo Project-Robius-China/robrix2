@@ -196,6 +196,20 @@ pub fn next_step_after_directory_write(directory_ok: bool) -> SequencedAliasStep
     }
 }
 
+/// Why a `FetchRoomSettings` was issued — carried through the request and echoed
+/// back on both the fetched and unavailable responses so a stale or unrelated
+/// fetch can never be mistaken for a specific write's reconcile (the race codex
+/// flagged: settings fetches previously carried only `room_id`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomSettingsFetchReason {
+    /// Opened the modal (or another non-write refresh). Not tied to any alias
+    /// write, so it must NEVER consume a write's reconcile gate/registry entry.
+    Open,
+    /// The authoritative reconcile for the alias write of this generation. Only a
+    /// matching generation may release that write's gate / clear its registry.
+    AliasReconcile(u64),
+}
+
 /// Serializes alias mutations for the modal's room: at most one may be in
 /// flight at a time. Overlapping mutations are the cross-operation race that
 /// can resurrect an unbound alias — each write snapshots the *full*
@@ -203,19 +217,31 @@ pub fn next_step_after_directory_write(directory_ok: bool) -> SequencedAliasStep
 /// gate keeps the edit controls disabled from submit until the operation fully
 /// settles, so the next mutation always builds on reconciled state.
 ///
-/// A successful write holds the gate until the authoritative refresh confirms
-/// server state; a *failed* write releases immediately, since the modal has
-/// already rolled back to the pre-edit snapshot (and the refresh may never
-/// arrive, e.g. the client was torn down).
+/// Each in-flight write carries a monotonic *generation*. Only its own
+/// reconcile fetch — matched by generation AND purpose — releases the gate, so a
+/// stale open-fetch or a mismatched reconcile can neither release it nor clobber
+/// the optimistic state, independent of arrival timing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AliasWriteGate {
     /// No mutation in flight — edit controls are live and submits are allowed.
     #[default]
     Idle,
-    /// A mutation was submitted; awaiting its server write result.
-    AwaitingResult,
-    /// The write succeeded; awaiting the authoritative `FetchRoomSettings` refresh.
-    AwaitingRefresh,
+    /// A mutation (this generation) was submitted; awaiting its server result.
+    AwaitingResult(u64),
+    /// The write (this generation) reached the server; awaiting its reconcile.
+    AwaitingRefresh(u64),
+}
+
+/// What the modal should do with an incoming settings fetch, decided purely from
+/// the gate state and the fetch's [`RoomSettingsFetchReason`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchDisposition {
+    /// Ignore it (stale/unrelated) — do not touch state or the gate.
+    Ignore,
+    /// Apply its data (authoritative load) but leave the gate as-is.
+    Apply,
+    /// Apply its data AND release the gate — this is the matching reconcile.
+    ApplyAndRelease,
 }
 
 impl AliasWriteGate {
@@ -224,11 +250,11 @@ impl AliasWriteGate {
         matches!(self, AliasWriteGate::Idle)
     }
 
-    /// Record a submitted mutation. Returns `false` (and does nothing) if a
-    /// mutation is already in flight, so callers can reject the overlap.
-    pub fn on_submit(&mut self) -> bool {
+    /// Record a submitted mutation of `generation`. Returns `false` (and does
+    /// nothing) if a mutation is already in flight, so callers reject the overlap.
+    pub fn on_submit(&mut self, generation: u64) -> bool {
         if self.can_submit() {
-            *self = AliasWriteGate::AwaitingResult;
+            *self = AliasWriteGate::AwaitingResult(generation);
             true
         } else {
             false
@@ -237,42 +263,66 @@ impl AliasWriteGate {
 
     /// Record the write result, keyed on whether the server was actually
     /// *attempted*:
-    /// - `attempted == true` (a request was sent — success OR server-side
-    ///   failure): hold the gate until this op's own reconciliation fetch lands,
-    ///   because a `FetchRoomSettings` is in flight for it. Releasing now would
-    ///   let a new op start while that fetch is outstanding — the stray-refresh
-    ///   race codex flagged.
-    /// - `attempted == false` (preflight failure, e.g. no client — nothing was
-    ///   sent, no fetch spawned, state unchanged): release straight to `Idle`.
+    /// - `attempted == true` (request sent — success OR server-side failure):
+    ///   hold the gate at `AwaitingRefresh(gen)` until this op's own reconcile
+    ///   (matched by `gen`) lands. Releasing now would let a new op start while
+    ///   that fetch is outstanding.
+    /// - `attempted == false` (preflight failure — nothing sent, no fetch, state
+    ///   unchanged): release straight to `Idle`.
     ///
     /// Ignores stray results (not in `AwaitingResult`).
     pub fn on_result(&mut self, attempted: bool) {
-        if matches!(self, AliasWriteGate::AwaitingResult) {
+        if let AliasWriteGate::AwaitingResult(generation) = *self {
             *self = if attempted {
-                AliasWriteGate::AwaitingRefresh
+                AliasWriteGate::AwaitingRefresh(generation)
             } else {
                 AliasWriteGate::Idle
             };
         }
     }
 
-    /// Whether an incoming authoritative refresh should be applied to the modal.
-    /// A refresh arriving while `AwaitingResult` is a stray fetch (this op's own
-    /// fetch is only spawned after its result) — applying it would clobber the
-    /// optimistic state mid-flight, so it is rejected. `Idle` accepts the
-    /// open/initial fetch; `AwaitingRefresh` accepts this op's own reconcile.
-    pub fn should_accept_refresh(self) -> bool {
-        !matches!(self, AliasWriteGate::AwaitingResult)
+    /// Decide what to do with a settings fetch, matched by generation + purpose:
+    /// - An `Open` fetch applies its data ONLY while `Idle` (initial/reopen load);
+    ///   during any in-flight write it is stale → `Ignore` (never clobbers, never
+    ///   releases).
+    /// - An `AliasReconcile(g)` releases and applies ONLY when the gate is
+    ///   `AwaitingRefresh(g)` with the same generation; otherwise `Ignore`.
+    pub fn disposition(self, reason: RoomSettingsFetchReason) -> FetchDisposition {
+        match (self, reason) {
+            (AliasWriteGate::Idle, RoomSettingsFetchReason::Open) => FetchDisposition::Apply,
+            (AliasWriteGate::AwaitingRefresh(g), RoomSettingsFetchReason::AliasReconcile(r))
+                if g == r =>
+            {
+                FetchDisposition::ApplyAndRelease
+            }
+            _ => FetchDisposition::Ignore,
+        }
     }
 
-    /// The authoritative refresh landed — release only from `AwaitingRefresh`
-    /// (this op's own reconciliation). Callers must gate the state overwrite on
-    /// [`Self::should_accept_refresh`] and call this to advance the enum. Room
-    /// switches reset to `Idle` directly in `show`, not via this method.
-    pub fn on_refresh(&mut self) {
-        if matches!(self, AliasWriteGate::AwaitingRefresh) {
+    /// Apply the disposition of a fetch, releasing the gate iff it is the
+    /// matching reconcile. Returns the disposition so the caller can decide
+    /// whether to overwrite state.
+    pub fn on_fetch(&mut self, reason: RoomSettingsFetchReason) -> FetchDisposition {
+        let disposition = self.disposition(reason);
+        if disposition == FetchDisposition::ApplyAndRelease {
             *self = AliasWriteGate::Idle;
         }
+        disposition
+    }
+
+    /// A settings fetch could not produce data (no client / room gone). Release
+    /// the gate ONLY if it is the matching reconcile for a write awaiting one
+    /// (so the controls never strand disabled). Returns whether it released.
+    pub fn on_fetch_unavailable(&mut self, reason: RoomSettingsFetchReason) -> bool {
+        if let (AliasWriteGate::AwaitingRefresh(g), RoomSettingsFetchReason::AliasReconcile(r)) =
+            (*self, reason)
+        {
+            if g == r {
+                *self = AliasWriteGate::Idle;
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -298,38 +348,53 @@ pub enum PendingAliasStage {
 /// Ownership: `app.rs` holds the single instance; `show` consults it to decide
 /// whether to open a room locked. Transitions survive the modal being torn down
 /// and reopened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingAliasEntry {
+    stage: PendingAliasStage,
+    /// Generation of the in-flight write; only a reconcile with this generation
+    /// may clear the entry.
+    generation: u64,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct PendingAliasWrites {
-    rooms: std::collections::HashMap<OwnedRoomId, PendingAliasStage>,
+    rooms: std::collections::HashMap<OwnedRoomId, PendingAliasEntry>,
 }
 
 impl PendingAliasWrites {
-    /// A mutation was submitted for `room_id` — mark it pending (`Submitted`).
-    pub fn register(&mut self, room_id: OwnedRoomId) {
-        self.rooms.insert(room_id, PendingAliasStage::Submitted);
+    /// A mutation of `generation` was submitted for `room_id` — mark it pending.
+    pub fn register(&mut self, room_id: OwnedRoomId, generation: u64) {
+        self.rooms.insert(
+            room_id,
+            PendingAliasEntry { stage: PendingAliasStage::Submitted, generation },
+        );
     }
 
     /// The write result arrived. `attempted == false` (preflight failure) is
     /// terminal — clear immediately (no reconcile fetch will follow).
     /// `attempted == true` advances to `AwaitingReconcile`: the write completed
-    /// server-side and a reconcile fetch is expected.
+    /// server-side and a reconcile fetch (matching generation) is expected.
     pub fn on_result(&mut self, room_id: &RoomId, attempted: bool) {
         if attempted {
-            if self.rooms.contains_key(room_id) {
-                self.rooms.insert(room_id.to_owned(), PendingAliasStage::AwaitingReconcile);
+            if let Some(entry) = self.rooms.get_mut(room_id) {
+                entry.stage = PendingAliasStage::AwaitingReconcile;
             }
         } else {
             self.rooms.remove(room_id);
         }
     }
 
-    /// A settings fetch for `room_id` landed. It clears the entry only from
-    /// `AwaitingReconcile` (the write already completed server-side, so the fetch
-    /// reflects it). While still `Submitted`, an open-fetch from a reopen must
-    /// not clear the pending write — its outcome is not yet known.
-    pub fn on_reconciled(&mut self, room_id: &RoomId) {
-        if self.rooms.get(room_id) == Some(&PendingAliasStage::AwaitingReconcile) {
-            self.rooms.remove(room_id);
+    /// A reconcile fetch of `generation` for `room_id` landed. It clears the entry
+    /// ONLY when the entry is `AwaitingReconcile` AND the generation matches — so
+    /// a stale/open fetch (wrong or absent generation) never clears a pending
+    /// write, independent of arrival timing.
+    pub fn on_reconciled(&mut self, room_id: &RoomId, generation: u64) {
+        if let Some(entry) = self.rooms.get(room_id) {
+            if entry.stage == PendingAliasStage::AwaitingReconcile
+                && entry.generation == generation
+            {
+                self.rooms.remove(room_id);
+            }
         }
     }
 
@@ -338,11 +403,10 @@ impl PendingAliasWrites {
         self.rooms.contains_key(room_id)
     }
 
-    /// The in-flight stage for `room_id`, if any — so `show` can open the modal
-    /// in the matching locked state (reject open-fetches while `Submitted`,
-    /// accept the reconcile while `AwaitingReconcile`).
-    pub fn stage(&self, room_id: &RoomId) -> Option<PendingAliasStage> {
-        self.rooms.get(room_id).copied()
+    /// The in-flight `(stage, generation)` for `room_id`, if any — so `show` can
+    /// open the modal locked in the matching gate state with the right generation.
+    pub fn stage(&self, room_id: &RoomId) -> Option<(PendingAliasStage, u64)> {
+        self.rooms.get(room_id).map(|e| (e.stage, e.generation))
     }
 }
 
@@ -506,25 +570,26 @@ mod alias_logic_tests {
     fn test_alias_gate_blocks_overlapping_mutation() {
         let mut gate = AliasWriteGate::default();
         assert!(gate.can_submit());
-        assert!(gate.on_submit()); // first submit accepted
+        assert!(gate.on_submit(1)); // first submit accepted
         assert!(!gate.can_submit()); // controls now gated
-        assert!(!gate.on_submit()); // overlapping submit rejected
-        assert_eq!(gate, AliasWriteGate::AwaitingResult);
+        assert!(!gate.on_submit(2)); // overlapping submit rejected
+        assert_eq!(gate, AliasWriteGate::AwaitingResult(1));
     }
 
     #[test]
-    fn test_alias_gate_attempted_result_holds_until_refresh() {
-        // Both success AND server-attempted failure hold the gate until this
-        // op's own reconcile fetch lands (a fetch is in flight for it).
-        for attempted in [true, true] {
-            let mut gate = AliasWriteGate::default();
-            gate.on_submit();
-            gate.on_result(attempted); // attempted → awaiting its own refresh
-            assert_eq!(gate, AliasWriteGate::AwaitingRefresh);
-            assert!(!gate.can_submit());
-            gate.on_refresh(); // this op's authoritative refresh releases it
-            assert!(gate.can_submit());
-        }
+    fn test_alias_gate_attempted_result_holds_until_matching_reconcile() {
+        // Success AND server-attempted failure hold the gate until this op's own
+        // reconcile fetch (matched by generation) lands.
+        let mut gate = AliasWriteGate::default();
+        gate.on_submit(7);
+        gate.on_result(true); // attempted → awaiting its own refresh
+        assert_eq!(gate, AliasWriteGate::AwaitingRefresh(7));
+        assert!(!gate.can_submit());
+        assert_eq!(
+            gate.on_fetch(RoomSettingsFetchReason::AliasReconcile(7)),
+            FetchDisposition::ApplyAndRelease,
+        );
+        assert!(gate.can_submit());
     }
 
     #[test]
@@ -532,7 +597,7 @@ mod alias_logic_tests {
         // A preflight failure (attempted == false: nothing sent, no fetch
         // spawned, state unchanged) releases straight to Idle.
         let mut gate = AliasWriteGate::default();
-        gate.on_submit();
+        gate.on_submit(3);
         gate.on_result(false);
         assert!(gate.can_submit());
         assert_eq!(gate, AliasWriteGate::Idle);
@@ -546,24 +611,102 @@ mod alias_logic_tests {
     }
 
     #[test]
-    fn test_alias_gate_stray_refresh_while_awaiting_result_does_not_release() {
-        // The op's own fetch is only spawned after its result, so a refresh
-        // arriving during AwaitingResult is a stray from a prior op: it must
-        // neither release the gate nor be accepted (would clobber optimism).
-        let mut gate = AliasWriteGate::default();
-        gate.on_submit();
-        assert_eq!(gate, AliasWriteGate::AwaitingResult);
-        assert!(!gate.should_accept_refresh()); // reject stray
-        gate.on_refresh();
-        assert_eq!(gate, AliasWriteGate::AwaitingResult);
-        assert!(!gate.can_submit());
+    fn test_alias_gate_open_fetch_applies_only_when_idle() {
+        // An open-fetch loads state only when idle; during any in-flight write it
+        // is stale and must be ignored (never clobber, never release).
+        assert_eq!(
+            AliasWriteGate::Idle.disposition(RoomSettingsFetchReason::Open),
+            FetchDisposition::Apply,
+        );
+        assert_eq!(
+            AliasWriteGate::AwaitingResult(1).disposition(RoomSettingsFetchReason::Open),
+            FetchDisposition::Ignore,
+        );
+        assert_eq!(
+            AliasWriteGate::AwaitingRefresh(1).disposition(RoomSettingsFetchReason::Open),
+            FetchDisposition::Ignore,
+        );
     }
 
     #[test]
-    fn test_alias_gate_accepts_refresh_when_idle_or_awaiting_refresh() {
-        assert!(AliasWriteGate::Idle.should_accept_refresh()); // open/initial fetch
-        assert!(AliasWriteGate::AwaitingRefresh.should_accept_refresh()); // own reconcile
-        assert!(!AliasWriteGate::AwaitingResult.should_accept_refresh()); // stray
+    fn test_alias_gate_reconcile_requires_matching_generation() {
+        let mut gate = AliasWriteGate::AwaitingRefresh(2);
+        // Mismatched generation → ignored, gate unchanged.
+        assert_eq!(
+            gate.on_fetch(RoomSettingsFetchReason::AliasReconcile(3)),
+            FetchDisposition::Ignore,
+        );
+        assert_eq!(gate, AliasWriteGate::AwaitingRefresh(2));
+        // A reconcile arriving while still AwaitingResult is stale (result not
+        // back yet) → ignored.
+        assert_eq!(
+            AliasWriteGate::AwaitingResult(2).disposition(RoomSettingsFetchReason::AliasReconcile(2)),
+            FetchDisposition::Ignore,
+        );
+    }
+
+    #[test]
+    fn test_alias_gate_unavailable_releases_only_matching_reconcile() {
+        let mut gate = AliasWriteGate::AwaitingRefresh(4);
+        assert!(!gate.on_fetch_unavailable(RoomSettingsFetchReason::Open)); // open-fetch never releases
+        assert!(!gate.on_fetch_unavailable(RoomSettingsFetchReason::AliasReconcile(5))); // wrong gen
+        assert_eq!(gate, AliasWriteGate::AwaitingRefresh(4)); // still held
+        assert!(gate.on_fetch_unavailable(RoomSettingsFetchReason::AliasReconcile(4))); // matching → release
+        assert_eq!(gate, AliasWriteGate::Idle);
+    }
+
+    // ── codex-named regression tests (generation/purpose correlation) ──
+
+    #[test]
+    fn test_regression_two_open_fetches_stale_after_write_result() {
+        // Repro (a): W1 completes → AwaitingRefresh; a stale open-fetch (from a
+        // second open) returns AFTER the write result. It must NOT release the
+        // gate or apply its (pre-W1) state; only W1's own reconcile releases it.
+        let mut gate = AliasWriteGate::default();
+        gate.on_submit(1); // W1
+        gate.on_result(true); // AwaitingRefresh(1)
+        assert_eq!(
+            gate.on_fetch(RoomSettingsFetchReason::Open),
+            FetchDisposition::Ignore,
+        );
+        assert_eq!(gate, AliasWriteGate::AwaitingRefresh(1)); // still held, not clobbered
+        assert_eq!(
+            gate.on_fetch(RoomSettingsFetchReason::AliasReconcile(1)),
+            FetchDisposition::ApplyAndRelease,
+        );
+        assert_eq!(gate, AliasWriteGate::Idle);
+    }
+
+    #[test]
+    fn test_regression_write_result_and_stale_fetch_same_batch_consistent() {
+        // Repro (b): a write result and a STALE fetch land in one Actions batch.
+        // App (registry) processes before UI (gate); both must reach the SAME
+        // decision for the stale fetch — registry and gate stay in lockstep —
+        // because both match on generation+purpose, independent of order.
+        let mut reg = PendingAliasWrites::default();
+        let mut gate = AliasWriteGate::default();
+        let r = room("!a:example.org");
+        reg.register(r.clone(), 1);
+        gate.on_submit(1);
+        reg.on_result(&r, true); // AwaitingReconcile(gen 1)
+        gate.on_result(true); // AwaitingRefresh(1)
+
+        // Stale fetch (older generation 0). App side:
+        reg.on_reconciled(&r, 0);
+        assert!(reg.is_pending(&r)); // registry NOT cleared (gen mismatch)
+        // UI side, same batch:
+        assert_eq!(
+            gate.on_fetch(RoomSettingsFetchReason::AliasReconcile(0)),
+            FetchDisposition::Ignore,
+        );
+        assert_eq!(gate, AliasWriteGate::AwaitingRefresh(1)); // gate NOT released
+        // Consistent: both still in-flight. The real reconcile clears both.
+        reg.on_reconciled(&r, 1);
+        assert!(!reg.is_pending(&r));
+        assert_eq!(
+            gate.on_fetch(RoomSettingsFetchReason::AliasReconcile(1)),
+            FetchDisposition::ApplyAndRelease,
+        );
     }
 
     // ── PendingAliasWrites (app-level per-room registry, survives reopen) ──
@@ -578,19 +721,21 @@ mod alias_logic_tests {
         // number of reads (a modal close/reopen just re-reads is_pending).
         let mut reg = PendingAliasWrites::default();
         let r = room("!a:example.org");
-        reg.register(r.clone());
+        reg.register(r.clone(), 1);
         assert!(reg.is_pending(&r));
-        assert!(reg.is_pending(&r)); // reopen consults it again → still pending
+        assert_eq!(reg.stage(&r), Some((PendingAliasStage::Submitted, 1)));
     }
 
     #[test]
-    fn test_pending_registry_cleared_on_reconcile() {
+    fn test_pending_registry_cleared_on_matching_reconcile() {
         let mut reg = PendingAliasWrites::default();
         let r = room("!a:example.org");
-        reg.register(r.clone());
+        reg.register(r.clone(), 1);
         reg.on_result(&r, true); // attempted → still pending, awaiting reconcile
         assert!(reg.is_pending(&r));
-        reg.on_reconciled(&r);
+        reg.on_reconciled(&r, 2); // mismatched generation → does NOT clear
+        assert!(reg.is_pending(&r));
+        reg.on_reconciled(&r, 1); // matching → clears
         assert!(!reg.is_pending(&r));
     }
 
@@ -598,14 +743,15 @@ mod alias_logic_tests {
     fn test_pending_registry_open_fetch_does_not_clear_submitted() {
         // A settings fetch (e.g. an open-fetch from a reopen) that lands BEFORE
         // the write result must not clear a still-Submitted write — the outcome
-        // is unknown, so the room must stay locked.
+        // is unknown, so the room must stay locked. Even a matching generation is
+        // ignored while Submitted.
         let mut reg = PendingAliasWrites::default();
         let r = room("!a:example.org");
-        reg.register(r.clone()); // Submitted
-        reg.on_reconciled(&r); // stray/open fetch while Submitted
+        reg.register(r.clone(), 1); // Submitted
+        reg.on_reconciled(&r, 1); // fetch while Submitted (matching gen)
         assert!(reg.is_pending(&r)); // still pending
         reg.on_result(&r, true); // now AwaitingReconcile
-        reg.on_reconciled(&r); // the real reconcile clears it
+        reg.on_reconciled(&r, 1); // the real reconcile clears it
         assert!(!reg.is_pending(&r));
     }
 
@@ -613,7 +759,7 @@ mod alias_logic_tests {
     fn test_pending_registry_preflight_failure_clears_immediately() {
         let mut reg = PendingAliasWrites::default();
         let r = room("!a:example.org");
-        reg.register(r.clone());
+        reg.register(r.clone(), 1);
         reg.on_result(&r, false); // preflight failure is terminal
         assert!(!reg.is_pending(&r));
     }
@@ -623,7 +769,7 @@ mod alias_logic_tests {
         let mut reg = PendingAliasWrites::default();
         let a = room("!a:example.org");
         let b = room("!b:example.org");
-        reg.register(a.clone());
+        reg.register(a.clone(), 1);
         assert!(reg.is_pending(&a));
         assert!(!reg.is_pending(&b)); // other rooms unaffected
     }
@@ -1413,11 +1559,13 @@ pub enum RoomSettingsAction {
     /// Publish a new (already-validated) alias and advertise it into
     /// `m.room.canonical_alias`'s `alt_aliases`. `canonical`/`alt_aliases` are
     /// the reconciled state to write (alt_aliases already includes `alias`).
+    /// `generation` is the modal-allocated write generation (see registry match).
     PublishAlias {
         room_id: OwnedRoomId,
         alias: OwnedRoomAliasId,
         canonical: Option<OwnedRoomAliasId>,
         alt_aliases: Vec<OwnedRoomAliasId>,
+        generation: u64,
     },
     /// Promote an existing alias to canonical. `canonical`/`alt_aliases` are the
     /// reconciled target of the `m.room.canonical_alias` state event.
@@ -1425,6 +1573,7 @@ pub enum RoomSettingsAction {
         room_id: OwnedRoomId,
         canonical: Option<OwnedRoomAliasId>,
         alt_aliases: Vec<OwnedRoomAliasId>,
+        generation: u64,
     },
     /// Remove an alias: unbind it from the room directory and drop it from
     /// `m.room.canonical_alias` (reconciled `canonical`/`alt_aliases`).
@@ -1433,6 +1582,7 @@ pub enum RoomSettingsAction {
         alias: OwnedRoomAliasId,
         canonical: Option<OwnedRoomAliasId>,
         alt_aliases: Vec<OwnedRoomAliasId>,
+        generation: u64,
     },
     /// Change media visibility preference.
     SetMediaVisibility { room_id: OwnedRoomId, always_show: bool },
@@ -1474,6 +1624,10 @@ pub struct RoomSettingsModal {
     /// Serializes alias mutations: at most one write in flight per room. Gates
     /// the edit controls from submit until the operation fully settles.
     #[rust] alias_gate: AliasWriteGate,
+    /// Monotonic source of write generations. Each mutation takes the next value
+    /// so its reconcile fetch can be matched by generation (never confused with
+    /// an open-fetch or a stale reconcile). Persists across close/reopen.
+    #[rust] next_alias_generation: u64,
     /// The alias rows to render, in display order (canonical first). Drives the
     /// alias `PortalList` in `draw_walk`; rebuilt by `render_alias_section`.
     #[rust] alias_entries: Vec<AliasRowProps>,
@@ -1642,7 +1796,7 @@ impl RoomSettingsModal {
         room_name: &str,
         room_topic: &str,
         canonical_alias: Option<&str>,
-        alias_stage: Option<PendingAliasStage>,
+        alias_stage: Option<(PendingAliasStage, u64)>,
     ) {
         let room_id_text = room_id.as_str().to_string();
         self.room_id = Some(room_id);
@@ -1676,15 +1830,21 @@ impl RoomSettingsModal {
         self.can_manage_aliases = false;
         self.alias_snapshot = None;
         // P1-2: if a write for this room is still settling (registry), open locked
-        // in the matching gate state so a close→reopen can't re-enable controls
-        // mid-flight. `Submitted` → AwaitingResult (reject an unrelated open-fetch
-        // until the write result returns); `AwaitingReconcile` → AwaitingRefresh
-        // (the op's reconcile fetch unlocks it). No pending write → Idle.
+        // in the matching gate state — carrying the SAME generation — so a
+        // close→reopen can't re-enable controls mid-flight and only that write's
+        // own reconcile (matching generation) unlocks it. `Submitted` →
+        // AwaitingResult (reject an unrelated open-fetch until the result
+        // returns); `AwaitingReconcile` → AwaitingRefresh. No pending write → Idle.
         self.alias_gate = match alias_stage {
-            Some(PendingAliasStage::Submitted) => AliasWriteGate::AwaitingResult,
-            Some(PendingAliasStage::AwaitingReconcile) => AliasWriteGate::AwaitingRefresh,
+            Some((PendingAliasStage::Submitted, generation)) => AliasWriteGate::AwaitingResult(generation),
+            Some((PendingAliasStage::AwaitingReconcile, generation)) => AliasWriteGate::AwaitingRefresh(generation),
             None => AliasWriteGate::Idle,
         };
+        // Keep the local generation source ahead of any adopted pending write so
+        // the next new mutation can't collide with it.
+        if let Some((_, generation)) = alias_stage {
+            self.next_alias_generation = self.next_alias_generation.max(generation);
+        }
         self.render_alias_section(cx);
 
         // Avatar fallback text (first char of name)
@@ -1750,6 +1910,7 @@ impl RoomSettingsModal {
         &mut self,
         cx: &mut Cx,
         room_id: &RoomId,
+        reason: RoomSettingsFetchReason,
         language: AppLanguage,
         canonical_alias: Option<OwnedRoomAliasId>,
         alt_aliases: Vec<OwnedRoomAliasId>,
@@ -1758,14 +1919,15 @@ impl RoomSettingsModal {
         if !self.is_current_room(room_id) {
             return;
         }
-        // P1-1: route the gate decision BEFORE touching state. A refresh arriving
-        // while a mutation's result is still pending (AwaitingResult) is a stray
-        // fetch from a prior op — reject it so it can't clobber optimistic state
-        // or the rollback snapshot. Otherwise accept and advance the gate.
-        if !self.alias_gate.should_accept_refresh() {
+        // Route the gate decision BEFORE touching state, matched by generation +
+        // purpose (P1). `Ignore` → a stale open-fetch or mismatched reconcile:
+        // drop it (never clobber optimistic state / snapshot). `ApplyAndRelease`
+        // → this write's own reconcile: apply + release. `Apply` → an open-fetch
+        // while idle: load without releasing anything.
+        let disposition = self.alias_gate.on_fetch(reason);
+        if disposition == FetchDisposition::Ignore {
             return;
         }
-        self.alias_gate.on_refresh();
         // Store authoritative state; a fresh fetch supersedes optimism.
         self.language = language;
         self.current_canonical = canonical_alias;
@@ -1779,13 +1941,15 @@ impl RoomSettingsModal {
     /// produce data (no client / room unavailable). Unlike `apply_alias_settings`
     /// this does NOT overwrite state — it keeps the current (optimistic) aliases
     /// and just re-enables the controls, so the gate can never strand disabled.
-    /// Guarded like a refresh: a stray release during `AwaitingResult` is ignored.
-    pub fn release_alias_lock(&mut self, cx: &mut Cx, room_id: &RoomId) {
-        if !self.is_current_room(room_id) || !self.alias_gate.should_accept_refresh() {
+    /// Releases ONLY on the matching reconcile (generation + purpose); an
+    /// open-fetch or mismatched reconcile is a no-op.
+    pub fn release_alias_lock(&mut self, cx: &mut Cx, room_id: &RoomId, reason: RoomSettingsFetchReason) {
+        if !self.is_current_room(room_id) {
             return;
         }
-        self.alias_gate.on_refresh();
-        self.render_alias_section(cx);
+        if self.alias_gate.on_fetch_unavailable(reason) {
+            self.render_alias_section(cx);
+        }
     }
 
     /// Render the whole alias section (labels, per-row list, gating) from the
@@ -1903,7 +2067,8 @@ impl RoomSettingsModal {
         );
         self.snapshot_alias_state();
         self.current_alts = new_alts.clone();
-        self.alias_gate.on_submit();
+        let generation = self.take_alias_generation();
+        self.alias_gate.on_submit(generation);
         self.render_alias_section(cx);
         self.view.text_input(cx, ids!(add_address_input)).set_text(cx, "");
 
@@ -1912,7 +2077,14 @@ impl RoomSettingsModal {
             alias: valid_alias,
             canonical: self.current_canonical.clone(),
             alt_aliases: new_alts,
+            generation,
         });
+    }
+
+    /// Allocate the next monotonic write generation for a new mutation.
+    fn take_alias_generation(&mut self) -> u64 {
+        self.next_alias_generation = self.next_alias_generation.wrapping_add(1);
+        self.next_alias_generation
     }
 
     /// Promote `alias` to canonical: reconcile, optimistically update, emit.
@@ -1932,12 +2104,14 @@ impl RoomSettingsModal {
                 self.snapshot_alias_state();
                 self.current_canonical = state.canonical.clone();
                 self.current_alts = state.alt_aliases.clone();
-                self.alias_gate.on_submit();
+                let generation = self.take_alias_generation();
+                self.alias_gate.on_submit(generation);
                 self.render_alias_section(cx);
                 cx.action(RoomSettingsAction::SetCanonicalAlias {
                     room_id,
                     canonical: state.canonical,
                     alt_aliases: state.alt_aliases,
+                    generation,
                 });
             }
             Err(CanonicalReconcileError::NotPublished) => {
@@ -1975,13 +2149,15 @@ impl RoomSettingsModal {
             self.snapshot_alias_state();
             self.current_canonical = state.canonical.clone();
             self.current_alts = state.alt_aliases.clone();
-            self.alias_gate.on_submit();
+            let generation = self.take_alias_generation();
+            self.alias_gate.on_submit(generation);
             self.render_alias_section(cx);
             cx.action(RoomSettingsAction::RemoveAlias {
                 room_id,
                 alias,
                 canonical: state.canonical,
                 alt_aliases: state.alt_aliases,
+                generation,
             });
         }
     }
@@ -2042,7 +2218,7 @@ impl RoomSettingsModalRef {
         room_name: &str,
         room_topic: &str,
         canonical_alias: Option<&str>,
-        alias_stage: Option<PendingAliasStage>,
+        alias_stage: Option<(PendingAliasStage, u64)>,
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.show(cx, room_id, room_name, room_topic, canonical_alias, alias_stage);
@@ -2067,19 +2243,20 @@ impl RoomSettingsModalRef {
         &self,
         cx: &mut Cx,
         room_id: &RoomId,
+        reason: RoomSettingsFetchReason,
         language: AppLanguage,
         canonical_alias: Option<OwnedRoomAliasId>,
         alt_aliases: Vec<OwnedRoomAliasId>,
         can_manage: bool,
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.apply_alias_settings(cx, room_id, language, canonical_alias, alt_aliases, can_manage);
+        inner.apply_alias_settings(cx, room_id, reason, language, canonical_alias, alt_aliases, can_manage);
     }
 
     /// Release a stranded alias gate when its reconcile fetch was unavailable.
-    pub fn release_alias_lock(&self, cx: &mut Cx, room_id: &RoomId) {
+    pub fn release_alias_lock(&self, cx: &mut Cx, room_id: &RoomId, reason: RoomSettingsFetchReason) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.release_alias_lock(cx, room_id);
+        inner.release_alias_lock(cx, room_id, reason);
     }
 
     /// Update the avatar widget after a successful upload.
