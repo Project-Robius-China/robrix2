@@ -204,13 +204,32 @@ pub fn next_step_after_directory_write(directory_ok: bool) -> SequencedAliasStep
 pub enum RoomSettingsFetchReason {
     /// Opened the modal (or another non-write refresh), carrying a monotonic
     /// epoch. Not tied to any alias write, so it must NEVER consume a write's
-    /// reconcile. Its data is applied only when it is the *newest* Open and no
-    /// write has been submitted since it was issued (see [`OpenFreshness`]) — so
-    /// a slow pre-write Open can't repaint stale state after a write reconciles.
+    /// reconcile. Reads the (fast) local cache; its data is applied only when it
+    /// is the *newest* open-class fetch and no write has been submitted since it
+    /// was issued (see [`OpenFreshness`]) — so a slow pre-write Open can't
+    /// repaint stale state after a write reconciles.
     Open(u64),
+    /// A post-barrier *recovery* re-fetch (round 7), issued after a matching
+    /// reconcile came back Unavailable so the modal isn't wedged read-only.
+    /// Behaves like [`Self::Open`] in the gate (applies when idle, epoch-guarded)
+    /// but reads SERVER truth (not the cache), so it can never repopulate the
+    /// modal with a pre-write snapshot.
+    Recovery(u64),
     /// The authoritative reconcile for the alias write of this generation. Only a
     /// matching generation may release that write's gate / clear its registry.
     AliasReconcile(u64),
+}
+
+impl RoomSettingsFetchReason {
+    /// The freshness epoch for an "open-class" fetch (`Open` / `Recovery`), which
+    /// apply when idle and are gated by [`OpenFreshness`]. `None` for a reconcile
+    /// (matched by generation instead).
+    pub fn open_epoch(self) -> Option<u64> {
+        match self {
+            RoomSettingsFetchReason::Open(e) | RoomSettingsFetchReason::Recovery(e) => Some(e),
+            RoomSettingsFetchReason::AliasReconcile(_) => None,
+        }
+    }
 }
 
 /// Freshness guard for `Open` settings fetches (P1-1). An `Open` snapshots
@@ -342,9 +361,10 @@ impl AliasWriteGate {
     ///   `AwaitingRefresh(g)` with the same generation; otherwise `Ignore`.
     pub fn disposition(self, reason: RoomSettingsFetchReason) -> FetchDisposition {
         match (self, reason) {
-            // Open only *gates* on Idle here; its epoch freshness is enforced by
-            // the caller via `OpenFreshness` (P1-1).
-            (AliasWriteGate::Idle, RoomSettingsFetchReason::Open(_)) => FetchDisposition::Apply,
+            // Open-class fetches (Open / Recovery) only *gate* on Idle here; their
+            // epoch freshness is enforced by the caller via `OpenFreshness` (P1-1).
+            (AliasWriteGate::Idle, RoomSettingsFetchReason::Open(_))
+            | (AliasWriteGate::Idle, RoomSettingsFetchReason::Recovery(_)) => FetchDisposition::Apply,
             (AliasWriteGate::AwaitingRefresh(g), RoomSettingsFetchReason::AliasReconcile(r))
                 if g == r =>
             {
@@ -946,6 +966,41 @@ mod alias_logic_tests {
         // server-fresh read; if that read is unavailable it must NOT apply stale
         // cache data — it releases via Unavailable instead.
         assert_eq!(reconcile_fetch_outcome(None), ReconcileFetchOutcome::Unavailable);
+    }
+
+    // ── round 7: matching-Unavailable is a terminal freshness barrier ──
+    // The failing interleaving: a reopen DURING a pending write issues Open(e2)
+    // (take_open AFTER take_write); the write's reconcile then comes back
+    // *matching-Unavailable*. Unlike round 6's test (Open issued BEFORE the
+    // write), here e2 > the write generation, so only a terminal barrier on the
+    // Unavailable path can invalidate it.
+
+    #[test]
+    fn test_regression_unavailable_barrier_then_reopen_open_rejected() {
+        // Order (a): matching Unavailable THEN the post-write reopen Open. The
+        // barrier (on_apply, fired on the matching Unavailable) must reject e2 so
+        // it can never apply its possibly-pre-write snapshot.
+        let mut f = OpenFreshness::default();
+        let _g_w1 = f.take_write(); // W1 submitted (pending)
+        let e2 = f.take_open(); // reopen-during-pending Open (e2 > W1 generation)
+        f.on_apply(); // matching-Unavailable terminal barrier
+        assert!(!f.accepts_open(e2)); // rejected — no stale apply
+    }
+
+    #[test]
+    fn test_regression_reopen_open_then_unavailable_recovers_without_stale_or_wedge() {
+        // Order (b): the reopen Open(e2) arrives first (ignored while the gate is
+        // held — modeled by NOT applying it), THEN the matching Unavailable fires
+        // the barrier + a recovery Open(e3). e2 must be stale (no stale apply);
+        // e3 (issued post-barrier, after show() reset can_manage=false) must be
+        // acceptable so the modal repopulates and is NOT wedged read-only.
+        let mut f = OpenFreshness::default();
+        let _g_w1 = f.take_write();
+        let e2 = f.take_open(); // reopen Open — arrives first, gate-ignored (not applied)
+        f.on_apply(); // matching-Unavailable barrier
+        let e3 = f.take_open(); // post-barrier recovery Open
+        assert!(!f.accepts_open(e2)); // e2 can never apply → no stale apply
+        assert!(f.accepts_open(e3)); // e3 repopulates → not wedged read-only
     }
 }
 
@@ -2094,11 +2149,12 @@ impl RoomSettingsModal {
         if disposition == FetchDisposition::Ignore {
             return;
         }
-        // P1-1: an accepted Open must still be the *freshest*. Reject a slow
-        // pre-write open that would otherwise repaint stale state after a write
-        // reconciled (and let the user submit a second write from it). The gate
-        // was not mutated for an Open, so returning here leaves it Idle.
-        if let RoomSettingsFetchReason::Open(epoch) = reason {
+        // P1-1: an accepted open-class fetch (Open / Recovery) must still be the
+        // *freshest*. Reject a slow pre-write open that would otherwise repaint
+        // stale state after a write reconciled (and let the user submit a second
+        // write from it). The gate was not mutated for these, so returning here
+        // leaves it Idle.
+        if let Some(epoch) = reason.open_epoch() {
             if !self.open_freshness.accepts_open(epoch) {
                 return;
             }
@@ -2117,16 +2173,35 @@ impl RoomSettingsModal {
 
     /// Release a waiting alias write's gate when its reconcile fetch could not
     /// produce data (no client / room unavailable). Unlike `apply_alias_settings`
-    /// this does NOT overwrite state — it keeps the current (optimistic) aliases
-    /// and just re-enables the controls, so the gate can never strand disabled.
-    /// Releases ONLY on the matching reconcile (generation + purpose); an
-    /// open-fetch or mismatched reconcile is a no-op.
-    pub fn release_alias_lock(&mut self, cx: &mut Cx, room_id: &RoomId, reason: RoomSettingsFetchReason) {
+    /// this does NOT overwrite state. Releases ONLY on the matching reconcile
+    /// (generation + purpose); an open-fetch or mismatched reconcile is a no-op.
+    ///
+    /// A matching-Unavailable is a *terminal freshness barrier* (P1, round 7):
+    /// it invalidates every `Open` issued during that pending generation (via
+    /// `OpenFreshness::on_apply`), exactly as a successful reconcile does — so a
+    /// reopen-during-the-write `Open` that returns after this release can't apply
+    /// its (possibly pre-write) snapshot. Because that barrier also blocks the
+    /// reopen's own `Open`, the modal would be left read-only; so this returns
+    /// `Some(epoch)` for a fresh post-barrier recovery `Open` the caller must
+    /// issue to repopulate the modal via a fetch that postdates the invalidation.
+    pub fn release_alias_lock(
+        &mut self,
+        cx: &mut Cx,
+        room_id: &RoomId,
+        reason: RoomSettingsFetchReason,
+    ) -> Option<u64> {
         if !self.is_current_room(room_id) {
-            return;
+            return None;
         }
         if self.alias_gate.on_fetch_unavailable(reason) {
+            // Terminal barrier: invalidate all Opens from the pending generation.
+            self.open_freshness.on_apply();
             self.render_alias_section(cx);
+            // Recovery: a fresh post-barrier Open so the modal isn't wedged
+            // read-only (the reopen's own Open was just invalidated).
+            Some(self.open_freshness.take_open())
+        } else {
+            None
         }
     }
 
@@ -2434,9 +2509,15 @@ impl RoomSettingsModalRef {
     }
 
     /// Release a stranded alias gate when its reconcile fetch was unavailable.
-    pub fn release_alias_lock(&self, cx: &mut Cx, room_id: &RoomId, reason: RoomSettingsFetchReason) {
-        let Some(mut inner) = self.borrow_mut() else { return };
-        inner.release_alias_lock(cx, room_id, reason);
+    /// Returns `Some(epoch)` for a fresh recovery `Open` the caller must issue.
+    pub fn release_alias_lock(
+        &self,
+        cx: &mut Cx,
+        room_id: &RoomId,
+        reason: RoomSettingsFetchReason,
+    ) -> Option<u64> {
+        let mut inner = self.borrow_mut()?;
+        inner.release_alias_lock(cx, room_id, reason)
     }
 
     /// Update the avatar widget after a successful upload.

@@ -4486,12 +4486,15 @@ async fn matrix_worker_task(
                             None => false,
                         };
                         // Capture alias data AFTER the power-level await, at post
-                        // time (P1-2). A reconcile reads SERVER truth (the local
-                        // cache lags `send_state_event`); if that fresh read fails
-                        // it releases via Unavailable rather than apply stale data.
-                        // An open uses the cache (epoch-guarded, no extra round-trip).
+                        // time (P1-2). A reconcile and a post-barrier Recovery read
+                        // SERVER truth (the local cache lags `send_state_event`); if
+                        // that fresh read fails they release via Unavailable rather
+                        // than apply stale data. A plain Open uses the cache
+                        // (fast, no round-trip) — a stale reopen Open is rejected by
+                        // the OpenFreshness barrier, so it never applies (round 7).
                         let (canonical_alias, alt_aliases) = match reason {
-                            RoomSettingsFetchReason::AliasReconcile(_) => {
+                            RoomSettingsFetchReason::AliasReconcile(_)
+                            | RoomSettingsFetchReason::Recovery(_) => {
                                 match reconcile_fetch_outcome(
                                     fetch_canonical_alias_from_server(&client, &room_id).await,
                                 ) {
