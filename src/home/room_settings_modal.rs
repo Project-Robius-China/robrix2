@@ -202,12 +202,65 @@ pub fn next_step_after_directory_write(directory_ok: bool) -> SequencedAliasStep
 /// flagged: settings fetches previously carried only `room_id`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomSettingsFetchReason {
-    /// Opened the modal (or another non-write refresh). Not tied to any alias
-    /// write, so it must NEVER consume a write's reconcile gate/registry entry.
-    Open,
+    /// Opened the modal (or another non-write refresh), carrying a monotonic
+    /// epoch. Not tied to any alias write, so it must NEVER consume a write's
+    /// reconcile. Its data is applied only when it is the *newest* Open and no
+    /// write has been submitted since it was issued (see [`OpenFreshness`]) — so
+    /// a slow pre-write Open can't repaint stale state after a write reconciles.
+    Open(u64),
     /// The authoritative reconcile for the alias write of this generation. Only a
     /// matching generation may release that write's gate / clear its registry.
     AliasReconcile(u64),
+}
+
+/// Freshness guard for `Open` settings fetches (P1-1). An `Open` snapshots
+/// server state at request time, so a slow one issued *before* a write can
+/// return *after* that write reconciles and repaint pre-write state — letting
+/// the user submit a second write from stale data and clobber the first.
+///
+/// Every request takes a monotonic epoch; an `Open` is applied only if its epoch
+/// is still `>= min_acceptable`. Both a new write AND any accepted apply push
+/// `min_acceptable` past every epoch issued so far, so an older `Open` can never
+/// become acceptable again — even after the gate returns to `Idle`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OpenFreshness {
+    next_epoch: u64,
+    min_acceptable: u64,
+}
+
+impl OpenFreshness {
+    /// Allocate the epoch for a new `Open` fetch. This `Open` (and any newer one)
+    /// is acceptable; any earlier outstanding `Open` is now stale.
+    pub fn take_open(&mut self) -> u64 {
+        self.next_epoch = self.next_epoch.wrapping_add(1);
+        self.min_acceptable = self.next_epoch;
+        self.next_epoch
+    }
+
+    /// Allocate the generation for a new write. A write permanently invalidates
+    /// every `Open` issued so far (only a *future* Open can be accepted).
+    pub fn take_write(&mut self) -> u64 {
+        self.next_epoch = self.next_epoch.wrapping_add(1);
+        self.min_acceptable = self.next_epoch.wrapping_add(1);
+        self.next_epoch
+    }
+
+    /// An authoritative apply landed (an accepted Open or reconcile). Invalidate
+    /// every `Open` issued so far so none can repaint over the just-applied state.
+    pub fn on_apply(&mut self) {
+        self.min_acceptable = self.next_epoch.wrapping_add(1);
+    }
+
+    /// Whether an `Open` of `epoch` is still fresh enough to apply.
+    pub fn accepts_open(&self, epoch: u64) -> bool {
+        epoch >= self.min_acceptable
+    }
+
+    /// Ensure the epoch source is at least `value` (keeps it monotonic when the
+    /// modal adopts a pending write's generation on reopen).
+    pub fn observe(&mut self, value: u64) {
+        self.next_epoch = self.next_epoch.max(value);
+    }
 }
 
 /// Serializes alias mutations for the modal's room: at most one may be in
@@ -289,7 +342,9 @@ impl AliasWriteGate {
     ///   `AwaitingRefresh(g)` with the same generation; otherwise `Ignore`.
     pub fn disposition(self, reason: RoomSettingsFetchReason) -> FetchDisposition {
         match (self, reason) {
-            (AliasWriteGate::Idle, RoomSettingsFetchReason::Open) => FetchDisposition::Apply,
+            // Open only *gates* on Idle here; its epoch freshness is enforced by
+            // the caller via `OpenFreshness` (P1-1).
+            (AliasWriteGate::Idle, RoomSettingsFetchReason::Open(_)) => FetchDisposition::Apply,
             (AliasWriteGate::AwaitingRefresh(g), RoomSettingsFetchReason::AliasReconcile(r))
                 if g == r =>
             {
@@ -429,6 +484,37 @@ pub fn publish_alias_treat_as_success(
 /// dying on "alias not found".
 pub fn remove_alias_treat_as_success(directory_not_found: bool) -> bool {
     directory_not_found
+}
+
+/// What a reconcile fetch should post, given its **server-fresh** read of
+/// `m.room.canonical_alias` (P1-2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReconcileFetchOutcome {
+    /// A server-fresh read succeeded (`None` inner = no canonical alias set) —
+    /// post it as the authoritative fetched settings.
+    Fetched {
+        canonical: Option<OwnedRoomAliasId>,
+        alt_aliases: Vec<OwnedRoomAliasId>,
+    },
+    /// The server-fresh read was unavailable — release the gate WITHOUT applying
+    /// any (possibly stale) data.
+    Unavailable,
+}
+
+/// Decide what a reconcile fetch posts from the result of its server-fresh
+/// canonical-alias read. In the pinned matrix-sdk, `send_state_event` does not
+/// update the local `RoomInfo`, so the cache-backed `room.canonical_alias()` can
+/// still return the *pre-write* value after a successful write; a reconcile must
+/// therefore read the server directly and, if that read fails, release via
+/// `Unavailable` rather than apply stale cache data. `server_read == None` means
+/// the fresh read could not be obtained.
+pub fn reconcile_fetch_outcome(
+    server_read: Option<(Option<OwnedRoomAliasId>, Vec<OwnedRoomAliasId>)>,
+) -> ReconcileFetchOutcome {
+    match server_read {
+        Some((canonical, alt_aliases)) => ReconcileFetchOutcome::Fetched { canonical, alt_aliases },
+        None => ReconcileFetchOutcome::Unavailable,
+    }
 }
 
 #[cfg(test)]
@@ -615,15 +701,15 @@ mod alias_logic_tests {
         // An open-fetch loads state only when idle; during any in-flight write it
         // is stale and must be ignored (never clobber, never release).
         assert_eq!(
-            AliasWriteGate::Idle.disposition(RoomSettingsFetchReason::Open),
+            AliasWriteGate::Idle.disposition(RoomSettingsFetchReason::Open(1)),
             FetchDisposition::Apply,
         );
         assert_eq!(
-            AliasWriteGate::AwaitingResult(1).disposition(RoomSettingsFetchReason::Open),
+            AliasWriteGate::AwaitingResult(1).disposition(RoomSettingsFetchReason::Open(1)),
             FetchDisposition::Ignore,
         );
         assert_eq!(
-            AliasWriteGate::AwaitingRefresh(1).disposition(RoomSettingsFetchReason::Open),
+            AliasWriteGate::AwaitingRefresh(1).disposition(RoomSettingsFetchReason::Open(1)),
             FetchDisposition::Ignore,
         );
     }
@@ -648,7 +734,7 @@ mod alias_logic_tests {
     #[test]
     fn test_alias_gate_unavailable_releases_only_matching_reconcile() {
         let mut gate = AliasWriteGate::AwaitingRefresh(4);
-        assert!(!gate.on_fetch_unavailable(RoomSettingsFetchReason::Open)); // open-fetch never releases
+        assert!(!gate.on_fetch_unavailable(RoomSettingsFetchReason::Open(1))); // open-fetch never releases
         assert!(!gate.on_fetch_unavailable(RoomSettingsFetchReason::AliasReconcile(5))); // wrong gen
         assert_eq!(gate, AliasWriteGate::AwaitingRefresh(4)); // still held
         assert!(gate.on_fetch_unavailable(RoomSettingsFetchReason::AliasReconcile(4))); // matching → release
@@ -666,7 +752,7 @@ mod alias_logic_tests {
         gate.on_submit(1); // W1
         gate.on_result(true); // AwaitingRefresh(1)
         assert_eq!(
-            gate.on_fetch(RoomSettingsFetchReason::Open),
+            gate.on_fetch(RoomSettingsFetchReason::Open(1)),
             FetchDisposition::Ignore,
         );
         assert_eq!(gate, AliasWriteGate::AwaitingRefresh(1)); // still held, not clobbered
@@ -788,6 +874,78 @@ mod alias_logic_tests {
     fn test_remove_treat_as_success_on_not_found() {
         assert!(remove_alias_treat_as_success(true)); // already gone → success (de-advertise)
         assert!(!remove_alias_treat_as_success(false)); // other error → real fail
+    }
+
+    // ── P1-1: Open-fetch freshness (OpenFreshness) ──
+
+    #[test]
+    fn test_open_freshness_newest_open_wins() {
+        // An older Open is stale the moment a newer Open is issued.
+        let mut f = OpenFreshness::default();
+        let e1 = f.take_open();
+        let e2 = f.take_open();
+        assert!(!f.accepts_open(e1)); // superseded
+        assert!(f.accepts_open(e2)); // newest
+    }
+
+    #[test]
+    fn test_regression_write_then_old_fetched_open_rejected() {
+        // codex-named (a), Fetched variant: F1 issued (pre-write), W1 submitted,
+        // W1's reconcile applies; the OLD F1 returning last must be rejected so it
+        // can't repaint pre-write state (which would let W2 clobber W1).
+        let mut f = OpenFreshness::default();
+        let e_f1 = f.take_open(); // slow open, snapshots S0
+        let _g_w1 = f.take_write(); // write — invalidates all earlier opens
+        f.on_apply(); // W1's reconcile applies authoritative S1
+        assert!(!f.accepts_open(e_f1)); // old F1 can never repaint S0
+    }
+
+    #[test]
+    fn test_regression_write_then_old_open_rejected_via_unavailable_release() {
+        // codex-named (a), Unavailable variant: the write's reconcile came back
+        // Unavailable (released without applying), but the OLD F1 must STILL be
+        // rejected — the write's submit already invalidated it, independent of
+        // whether the reconcile applied or released.
+        let mut f = OpenFreshness::default();
+        let e_f1 = f.take_open();
+        let _g_w1 = f.take_write(); // submit invalidates earlier opens (no on_apply needed)
+        assert!(!f.accepts_open(e_f1));
+    }
+
+    #[test]
+    fn test_open_freshness_apply_invalidates_outstanding_opens() {
+        // After an accepted apply, an Open issued *before* it is stale even though
+        // no new write happened (a duplicate/older open must not repaint).
+        let mut f = OpenFreshness::default();
+        let e_old = f.take_open();
+        let _e_new = f.take_open(); // a newer open we accept and apply
+        f.on_apply();
+        assert!(!f.accepts_open(e_old));
+    }
+
+    // ── P1-2: reconcile must carry server truth, not stale cache ──
+
+    #[test]
+    fn test_reconcile_outcome_applies_server_read() {
+        let out = reconcile_fetch_outcome(Some((
+            Some(alias("#main:example.org")),
+            vec![alias("#alt:example.org")],
+        )));
+        assert_eq!(
+            out,
+            ReconcileFetchOutcome::Fetched {
+                canonical: Some(alias("#main:example.org")),
+                alt_aliases: vec![alias("#alt:example.org")],
+            },
+        );
+    }
+
+    #[test]
+    fn test_reconcile_outcome_releases_without_applying_when_read_unavailable() {
+        // "send succeeded but local RoomInfo not yet synced": the reconcile does a
+        // server-fresh read; if that read is unavailable it must NOT apply stale
+        // cache data — it releases via Unavailable instead.
+        assert_eq!(reconcile_fetch_outcome(None), ReconcileFetchOutcome::Unavailable);
     }
 }
 
@@ -1624,10 +1782,12 @@ pub struct RoomSettingsModal {
     /// Serializes alias mutations: at most one write in flight per room. Gates
     /// the edit controls from submit until the operation fully settles.
     #[rust] alias_gate: AliasWriteGate,
-    /// Monotonic source of write generations. Each mutation takes the next value
-    /// so its reconcile fetch can be matched by generation (never confused with
-    /// an open-fetch or a stale reconcile). Persists across close/reopen.
-    #[rust] next_alias_generation: u64,
+    /// Monotonic source of request epochs (write generations AND open-fetch
+    /// epochs) plus the `Open`-freshness threshold. Each mutation takes the next
+    /// value so its reconcile is matched by generation; each open takes one so a
+    /// stale pre-write open can't repaint after a write reconciles (P1-1).
+    /// Persists across close/reopen.
+    #[rust] open_freshness: OpenFreshness,
     /// The alias rows to render, in display order (canonical first). Drives the
     /// alias `PortalList` in `draw_walk`; rebuilt by `render_alias_section`.
     #[rust] alias_entries: Vec<AliasRowProps>,
@@ -1789,6 +1949,8 @@ impl RoomSettingsModal {
     /// this room has an alias write still settling (submitted in a prior modal
     /// session), so the section opens locked in the matching gate state until
     /// that op's reconcile fetch lands.
+    /// Returns the epoch to tag this room's open-fetch with, so a stale earlier
+    /// open (from a prior show) can't repaint over it (P1-1).
     pub fn show(
         &mut self,
         cx: &mut Cx,
@@ -1797,7 +1959,7 @@ impl RoomSettingsModal {
         room_topic: &str,
         canonical_alias: Option<&str>,
         alias_stage: Option<(PendingAliasStage, u64)>,
-    ) {
+    ) -> u64 {
         let room_id_text = room_id.as_str().to_string();
         self.room_id = Some(room_id);
         self.original_name = room_name.to_string();
@@ -1840,11 +2002,14 @@ impl RoomSettingsModal {
             Some((PendingAliasStage::AwaitingReconcile, generation)) => AliasWriteGate::AwaitingRefresh(generation),
             None => AliasWriteGate::Idle,
         };
-        // Keep the local generation source ahead of any adopted pending write so
-        // the next new mutation can't collide with it.
+        // Keep the epoch source ahead of any adopted pending write so the next
+        // new mutation / open can't collide with it.
         if let Some((_, generation)) = alias_stage {
-            self.next_alias_generation = self.next_alias_generation.max(generation);
+            self.open_freshness.observe(generation);
         }
+        // Allocate this open's epoch AFTER adopting the pending generation, so it
+        // is strictly newer; it becomes the only acceptable open (P1-1).
+        let open_epoch = self.open_freshness.take_open();
         self.render_alias_section(cx);
 
         // Avatar fallback text (first char of name)
@@ -1857,6 +2022,7 @@ impl RoomSettingsModal {
         self.view.label(cx, ids!(name_error_label)).set_text(cx, "");
 
         self.view.redraw(cx);
+        open_epoch
     }
 
     /// Update the avatar widget with freshly uploaded image bytes.
@@ -1928,6 +2094,18 @@ impl RoomSettingsModal {
         if disposition == FetchDisposition::Ignore {
             return;
         }
+        // P1-1: an accepted Open must still be the *freshest*. Reject a slow
+        // pre-write open that would otherwise repaint stale state after a write
+        // reconciled (and let the user submit a second write from it). The gate
+        // was not mutated for an Open, so returning here leaves it Idle.
+        if let RoomSettingsFetchReason::Open(epoch) = reason {
+            if !self.open_freshness.accepts_open(epoch) {
+                return;
+            }
+        }
+        // Accepted authoritative apply — invalidate every earlier open so none
+        // can repaint over the state we're about to store (P1-1).
+        self.open_freshness.on_apply();
         // Store authoritative state; a fresh fetch supersedes optimism.
         self.language = language;
         self.current_canonical = canonical_alias;
@@ -2081,10 +2259,11 @@ impl RoomSettingsModal {
         });
     }
 
-    /// Allocate the next monotonic write generation for a new mutation.
+    /// Allocate the next monotonic write generation for a new mutation. This also
+    /// invalidates every `Open` fetch issued so far (P1-1), so a slow pre-write
+    /// open can't repaint stale state after this write reconciles.
     fn take_alias_generation(&mut self) -> u64 {
-        self.next_alias_generation = self.next_alias_generation.wrapping_add(1);
-        self.next_alias_generation
+        self.open_freshness.take_write()
     }
 
     /// Promote `alias` to canonical: reconcile, optimistically update, emit.
@@ -2210,7 +2389,8 @@ impl RoomSettingsModal {
 }
 
 impl RoomSettingsModalRef {
-    /// Populate the modal with room data and prepare for display.
+    /// Populate the modal with room data and prepare for display. Returns the
+    /// epoch to tag this room's open-fetch with (P1-1); `0` if the ref is empty.
     pub fn show_settings(
         &self,
         cx: &mut Cx,
@@ -2219,9 +2399,9 @@ impl RoomSettingsModalRef {
         room_topic: &str,
         canonical_alias: Option<&str>,
         alias_stage: Option<(PendingAliasStage, u64)>,
-    ) {
-        let Some(mut inner) = self.borrow_mut() else { return };
-        inner.show(cx, room_id, room_name, room_topic, canonical_alias, alias_stage);
+    ) -> u64 {
+        let Some(mut inner) = self.borrow_mut() else { return 0 };
+        inner.show(cx, room_id, room_name, room_topic, canonical_alias, alias_stage)
     }
 
     /// Apply asynchronously-fetched settings (topic, is_public). Dropped if the

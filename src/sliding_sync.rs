@@ -776,6 +776,52 @@ async fn alias_maps_to_room(client: &Client, alias: &RoomAliasId, room_id: &Room
     matches!(client.send(request).await, Ok(resp) if resp.room_id.as_str() == room_id.as_str())
 }
 
+/// Read `m.room.canonical_alias` DIRECTLY FROM THE SERVER (P1-2).
+///
+/// A reconcile fetch must NOT use `room.canonical_alias()` / `room.alt_aliases()`:
+/// in the pinned matrix-sdk `send_state_event` does not update the local
+/// `RoomInfo`, so those accessors can still return the pre-write value after a
+/// successful write until a later sync. This issues a direct `GET
+/// /state/m.room.canonical_alias` via `client.send`, which reflects the write.
+///
+/// Returns `Some((canonical, alt_aliases))` on a successful read (including a
+/// 404 → no canonical alias set → `(None, [])`), or `None` if the fresh read
+/// could not be obtained (caller then releases the gate without applying stale
+/// data). See [`reconcile_fetch_outcome`](crate::home::room_settings_modal::reconcile_fetch_outcome).
+async fn fetch_canonical_alias_from_server(
+    client: &Client,
+    room_id: &RoomId,
+) -> Option<(Option<OwnedRoomAliasId>, Vec<OwnedRoomAliasId>)> {
+    use matrix_sdk::ruma::api::client::state::get_state_event_for_key;
+    use matrix_sdk::ruma::events::room::canonical_alias::RoomCanonicalAliasEventContent;
+    // Default format returns just the event content as raw JSON.
+    let request = get_state_event_for_key::v3::Request::new(
+        room_id.to_owned(),
+        StateEventType::RoomCanonicalAlias,
+        String::new(),
+    );
+    match client.send(request).await {
+        Ok(resp) => match serde_json::from_str::<RoomCanonicalAliasEventContent>(
+            resp.event_or_content.get(),
+        ) {
+            Ok(content) => Some((content.alias, content.alt_aliases)),
+            Err(e) => {
+                error!("Failed to parse server canonical_alias for {room_id}: {e:?}");
+                None
+            }
+        },
+        Err(e) => {
+            if alias_error_status(&e) == Some(404) {
+                // No canonical_alias state event → a valid, fresh "empty" read.
+                Some((None, Vec::new()))
+            } else {
+                error!("Failed to read server canonical_alias for {room_id}: {e:?}");
+                None
+            }
+        }
+    }
+}
+
 /// Send the room's `m.room.canonical_alias` state event (`alias` + `alt_aliases`).
 ///
 /// Shared by the sequenced publish/remove flows (as their second, gated step)
@@ -4425,11 +4471,12 @@ async fn matrix_worker_task(
                     continue;
                 };
                 let _fetch_room_settings_task = Handle::current().spawn(async move {
+                    use crate::home::room_settings_modal::{
+                        reconcile_fetch_outcome, ReconcileFetchOutcome, RoomSettingsFetchReason,
+                    };
                     if let Some(room) = client.get_room(&room_id) {
                         let topic = room.topic();
                         let is_public = room.is_public().unwrap_or(false);
-                        let canonical_alias = room.canonical_alias();
-                        let alt_aliases = room.alt_aliases();
                         // Alias edit controls are gated on the power level to send
                         // `m.room.canonical_alias` (see `UserPowerLevels`).
                         let can_manage_aliases = match client.user_id() {
@@ -4437,6 +4484,29 @@ async fn matrix_worker_task(
                                 .await
                                 .is_some_and(|pl| pl.can_set_canonical_alias()),
                             None => false,
+                        };
+                        // Capture alias data AFTER the power-level await, at post
+                        // time (P1-2). A reconcile reads SERVER truth (the local
+                        // cache lags `send_state_event`); if that fresh read fails
+                        // it releases via Unavailable rather than apply stale data.
+                        // An open uses the cache (epoch-guarded, no extra round-trip).
+                        let (canonical_alias, alt_aliases) = match reason {
+                            RoomSettingsFetchReason::AliasReconcile(_) => {
+                                match reconcile_fetch_outcome(
+                                    fetch_canonical_alias_from_server(&client, &room_id).await,
+                                ) {
+                                    ReconcileFetchOutcome::Fetched { canonical, alt_aliases } => {
+                                        (canonical, alt_aliases)
+                                    }
+                                    ReconcileFetchOutcome::Unavailable => {
+                                        Cx::post_action(RoomSettingsFetchUnavailableAction { room_id, reason });
+                                        return;
+                                    }
+                                }
+                            }
+                            RoomSettingsFetchReason::Open(_) => {
+                                (room.canonical_alias(), room.alt_aliases())
+                            }
                         };
                         Cx::post_action(RoomSettingsFetchedAction {
                             room_id,

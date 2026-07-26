@@ -1934,14 +1934,17 @@ impl MatchEvent for App {
                     // an alias write still settling.
                     let alias_stage = self.pending_alias_writes.stage(&room_id);
                     log!("RoomSettingsAction::Open for {} (name: {})", room_id, room_name);
-                    self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
+                    // `show_settings` returns the freshness epoch to tag this
+                    // open-fetch with, so a slow earlier open can't repaint over a
+                    // newer one or over a post-write reconcile (P1-1).
+                    let open_epoch = self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
                         .show_settings(cx, room_id.clone(), &room_name, "", alias_str, alias_stage);
                     self.ui.modal(cx, ids!(room_settings_modal)).open(cx);
                     // Open-fetch: not tied to any write, so it can never consume a
                     // write reconcile (purpose = Open).
                     submit_async_request(MatrixRequest::FetchRoomSettings {
                         room_id,
-                        reason: RoomSettingsFetchReason::Open,
+                        reason: RoomSettingsFetchReason::Open(open_epoch),
                     });
                     continue;
                 }
