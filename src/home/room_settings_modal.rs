@@ -288,6 +288,11 @@ pub enum AliasWriteGate {
     AwaitingResult(u64),
     /// The write (this generation) reached the server; awaiting its reconcile.
     AwaitingRefresh(u64),
+    /// The write's reconcile came back Unavailable (round 9): the write outcome
+    /// is unknown, so edit controls stay non-interactive (read-only) until the
+    /// recovery `Open(epoch)` APPLIES server truth. Never releases from an
+    /// unknown state — a failed recovery stays here until an explicit reopen.
+    Recovering(u64),
 }
 
 /// What the modal should do with an incoming settings fetch, decided purely from
@@ -355,13 +360,19 @@ impl AliasWriteGate {
             {
                 FetchDisposition::ApplyAndRelease
             }
+            // The recovery Open (matched by epoch) is what leaves `Recovering`:
+            // it applies server truth AND releases the gate to Idle (round 9), so
+            // controls only come back once authoritative state has been applied.
+            (AliasWriteGate::Recovering(e), RoomSettingsFetchReason::Open(r)) if e == r => {
+                FetchDisposition::ApplyAndRelease
+            }
             _ => FetchDisposition::Ignore,
         }
     }
 
     /// Apply the disposition of a fetch, releasing the gate iff it is the
-    /// matching reconcile. Returns the disposition so the caller can decide
-    /// whether to overwrite state.
+    /// matching reconcile or the matching recovery Open. Returns the disposition
+    /// so the caller can decide whether to overwrite state.
     pub fn on_fetch(&mut self, reason: RoomSettingsFetchReason) -> FetchDisposition {
         let disposition = self.disposition(reason);
         if disposition == FetchDisposition::ApplyAndRelease {
@@ -370,19 +381,21 @@ impl AliasWriteGate {
         disposition
     }
 
-    /// A settings fetch could not produce data (no client / room gone). Release
-    /// the gate ONLY if it is the matching reconcile for a write awaiting one
-    /// (so the controls never strand disabled). Returns whether it released.
-    pub fn on_fetch_unavailable(&mut self, reason: RoomSettingsFetchReason) -> bool {
-        if let (AliasWriteGate::AwaitingRefresh(g), RoomSettingsFetchReason::AliasReconcile(r)) =
-            (*self, reason)
-        {
-            if g == r {
-                *self = AliasWriteGate::Idle;
-                return true;
-            }
-        }
-        false
+    /// Whether `reason` is the matching reconcile for the write this gate is
+    /// awaiting — used to decide whether an Unavailable enters `Recovering`.
+    pub fn matches_reconcile(self, reason: RoomSettingsFetchReason) -> bool {
+        matches!(
+            (self, reason),
+            (AliasWriteGate::AwaitingRefresh(g), RoomSettingsFetchReason::AliasReconcile(r)) if g == r
+        )
+    }
+
+    /// The matching reconcile came back Unavailable: enter `Recovering(epoch)`
+    /// instead of releasing to `Idle`, so edit controls stay non-interactive
+    /// (`can_submit() == false`) until the recovery `Open(epoch)` applies server
+    /// truth. Callers must first confirm [`Self::matches_reconcile`].
+    pub fn enter_recovering(&mut self, recovery_epoch: u64) {
+        *self = AliasWriteGate::Recovering(recovery_epoch);
     }
 }
 
@@ -750,13 +763,17 @@ mod alias_logic_tests {
     }
 
     #[test]
-    fn test_alias_gate_unavailable_releases_only_matching_reconcile() {
-        let mut gate = AliasWriteGate::AwaitingRefresh(4);
-        assert!(!gate.on_fetch_unavailable(RoomSettingsFetchReason::Open(1))); // open-fetch never releases
-        assert!(!gate.on_fetch_unavailable(RoomSettingsFetchReason::AliasReconcile(5))); // wrong gen
-        assert_eq!(gate, AliasWriteGate::AwaitingRefresh(4)); // still held
-        assert!(gate.on_fetch_unavailable(RoomSettingsFetchReason::AliasReconcile(4))); // matching → release
-        assert_eq!(gate, AliasWriteGate::Idle);
+    fn test_alias_gate_matches_reconcile_only_matching() {
+        let gate = AliasWriteGate::AwaitingRefresh(4);
+        assert!(!gate.matches_reconcile(RoomSettingsFetchReason::Open(1))); // open never matches
+        assert!(!gate.matches_reconcile(RoomSettingsFetchReason::AliasReconcile(5))); // wrong gen
+        assert!(gate.matches_reconcile(RoomSettingsFetchReason::AliasReconcile(4))); // matching
+        // A matching Unavailable enters Recovering (NOT Idle) — controls stay
+        // non-interactive until the recovery Open applies (round 9).
+        let mut g = gate;
+        g.enter_recovering(9);
+        assert_eq!(g, AliasWriteGate::Recovering(9));
+        assert!(!g.can_submit());
     }
 
     // ── codex-named regression tests (generation/purpose correlation) ──
@@ -1045,6 +1062,58 @@ mod alias_logic_tests {
                 alt_aliases: vec![alias("#b:example.org")],
             },
         );
+    }
+
+    // ── round 9: don't unlock on matching-Unavailable — stay Recovering ──
+    // A write's send can err ambiguously (server may have applied it), so on a
+    // matching reconcile-Unavailable the modal must NOT re-enable edits from that
+    // unknown state; it stays read-only (Recovering) until the recovery Open
+    // applies server truth, and restores permission only from that apply.
+
+    #[test]
+    fn test_recovering_a_blocks_second_write_until_recovery_applies() {
+        // (a) Unavailable → recovery pending → a second write is rejected.
+        let mut gate = AliasWriteGate::default();
+        gate.on_submit(1); // W1
+        gate.on_result(true); // AwaitingRefresh(1)
+        assert!(gate.matches_reconcile(RoomSettingsFetchReason::AliasReconcile(1)));
+        gate.enter_recovering(3); // matching Unavailable → Recovering(recovery epoch)
+        assert_eq!(gate, AliasWriteGate::Recovering(3));
+        assert!(!gate.can_submit()); // W2 rejected while recovering
+        assert!(!gate.on_submit(4)); // an attempted submit is refused…
+        assert_eq!(gate, AliasWriteGate::Recovering(3)); // …gate unchanged
+        // Only the recovery Open(3) applying server truth releases the gate:
+        assert_eq!(
+            gate.on_fetch(RoomSettingsFetchReason::Open(3)),
+            FetchDisposition::ApplyAndRelease,
+        );
+        assert_eq!(gate, AliasWriteGate::Idle);
+        assert!(gate.can_submit()); // interactive ONLY after the apply
+    }
+
+    #[test]
+    fn test_recovering_b_bounded_failure_stays_read_only_until_reopen() {
+        // (b) The recovery Open also fails: the gate must NOT release from an
+        // unknown state; it stays read-only until an explicit reopen recovers it.
+        let mut gate = AliasWriteGate::Recovering(3);
+        // A failed recovery Open is not a reconcile → release_alias_lock no-ops:
+        assert!(!gate.matches_reconcile(RoomSettingsFetchReason::Open(3)));
+        // A stray/older open can't unlock it either:
+        assert_eq!(
+            gate.on_fetch(RoomSettingsFetchReason::Open(2)),
+            FetchDisposition::Ignore,
+        );
+        assert_eq!(gate, AliasWriteGate::Recovering(3)); // still read-only
+        assert!(!gate.can_submit());
+        // Reopen re-derives from the (cleared) registry → Idle (show() mapping),
+        // and issues its own fresh Open — recovering the modal.
+        let reopened_gate = match None::<(PendingAliasStage, u64)> {
+            Some((PendingAliasStage::Submitted, g)) => AliasWriteGate::AwaitingResult(g),
+            Some((PendingAliasStage::AwaitingReconcile, g)) => AliasWriteGate::AwaitingRefresh(g),
+            None => AliasWriteGate::Idle,
+        };
+        assert_eq!(reopened_gate, AliasWriteGate::Idle);
+        assert!(reopened_gate.can_submit()); // reopen recovers
     }
 }
 
@@ -2096,6 +2165,12 @@ impl RoomSettingsModal {
         // own reconcile (matching generation) unlocks it. `Submitted` →
         // AwaitingResult (reject an unrelated open-fetch until the result
         // returns); `AwaitingReconcile` → AwaitingRefresh. No pending write → Idle.
+        //
+        // Round 9 invariant "reopen replaces recovery": a `Recovering` gate is
+        // never a registry stage (the registry entry is cleared when the reconcile
+        // Unavailable enters Recovering), so reopening a mid-recovery room maps to
+        // `Idle` here and issues its own fresh open-fetch — abandoning the stale
+        // recovery Open (which is rejected by epoch if it still lands).
         self.alias_gate = match alias_stage {
             Some((PendingAliasStage::Submitted, generation)) => AliasWriteGate::AwaitingResult(generation),
             Some((PendingAliasStage::AwaitingReconcile, generation)) => AliasWriteGate::AwaitingRefresh(generation),
@@ -2184,23 +2259,28 @@ impl RoomSettingsModal {
         if !self.is_current_room(room_id) {
             return;
         }
-        // Route the gate decision BEFORE touching state, matched by generation +
-        // purpose (P1). `Ignore` → a stale open-fetch or mismatched reconcile:
-        // drop it (never clobber optimistic state / snapshot). `ApplyAndRelease`
-        // → this write's own reconcile: apply + release. `Apply` → an open-fetch
-        // while idle: load without releasing anything.
-        let disposition = self.alias_gate.on_fetch(reason);
+        // Decide (purely, no gate mutation yet) whether to apply. `Ignore` → a
+        // stale open-fetch or mismatched reconcile: drop it (never clobber
+        // optimistic state / snapshot). `ApplyAndRelease` → this write's own
+        // reconcile OR the recovery Open leaving `Recovering`: apply + release.
+        // `Apply` → an open-fetch while idle: load without releasing.
+        let disposition = self.alias_gate.disposition(reason);
         if disposition == FetchDisposition::Ignore {
             return;
         }
         // P1-1: an accepted Open must still be the *freshest*. Reject a slow
         // pre-write open that would otherwise repaint older state after a write
-        // reconciled (and let the user submit a second write from it). The gate
-        // was not mutated for an Open, so returning here leaves it Idle.
+        // reconciled (and let the user submit a second write from it). Checked
+        // BEFORE mutating the gate, so a stale open can never release it.
         if let RoomSettingsFetchReason::Open(epoch) = reason {
             if !self.open_freshness.accepts_open(epoch) {
                 return;
             }
+        }
+        // Accepted: release the gate to Idle if this was the matching reconcile
+        // or the recovery Open. (`Apply` — an idle open-load — leaves it Idle.)
+        if disposition == FetchDisposition::ApplyAndRelease {
+            self.alias_gate = AliasWriteGate::Idle;
         }
         // Accepted authoritative apply — invalidate every earlier open so none
         // can repaint over the state we're about to store (P1-1).
@@ -2214,39 +2294,37 @@ impl RoomSettingsModal {
         self.render_alias_section(cx);
     }
 
-    /// Release a waiting alias write's gate when its reconcile fetch could not
-    /// produce data (no client / room unavailable). Unlike `apply_alias_settings`
-    /// this does NOT overwrite state. Releases ONLY on the matching reconcile
-    /// (generation + purpose); an open-fetch or mismatched reconcile is a no-op.
+    /// Handle a reconcile fetch that could not produce data (no client / room
+    /// unavailable). Acts ONLY on the matching reconcile (generation + purpose);
+    /// an open-fetch or mismatched reconcile is a no-op.
     ///
-    /// A matching-Unavailable is a *terminal freshness barrier* (round 7): it
-    /// invalidates every `Open` issued during that pending generation (via
-    /// `OpenFreshness::on_apply`), exactly as a successful reconcile does — so a
-    /// reopen-during-the-write `Open` that returns after this release can't
-    /// supersede it by epoch. Because that barrier also blocks the reopen's own
-    /// `Open`, the modal would be left read-only; so this returns `Some(epoch)`
-    /// for a fresh post-barrier recovery `Open` the caller must issue to
-    /// repopulate the modal via a (server-truth) fetch that postdates the
-    /// invalidation. A failed recovery `Open` does not spawn another (bounded).
+    /// The write's outcome is now unknown (the send may have applied server-side;
+    /// error ≠ not-applied), so the modal must NOT unlock from that unknown state
+    /// (round 9). Instead it enters `Recovering(epoch)`: edit controls stay
+    /// non-interactive (`can_submit() == false`, controls hidden) until the
+    /// recovery `Open(epoch)` is ACCEPTED and applies server truth — which also
+    /// re-derives permission from power levels. It is still a terminal freshness
+    /// barrier (round 7): `OpenFreshness::on_apply` invalidates every `Open` from
+    /// the pending generation. Returns `Some(epoch)` for the one recovery `Open`
+    /// the caller must issue. If that recovery `Open` also fails, the gate stays
+    /// `Recovering` (read-only) until an explicit reopen — never unlocked.
     pub fn release_alias_lock(
         &mut self,
         cx: &mut Cx,
         room_id: &RoomId,
         reason: RoomSettingsFetchReason,
     ) -> Option<u64> {
-        if !self.is_current_room(room_id) {
+        if !self.is_current_room(room_id) || !self.alias_gate.matches_reconcile(reason) {
             return None;
         }
-        if self.alias_gate.on_fetch_unavailable(reason) {
-            // Terminal barrier: invalidate all Opens from the pending generation.
-            self.open_freshness.on_apply();
-            self.render_alias_section(cx);
-            // Recovery: a fresh post-barrier Open so the modal isn't wedged
-            // read-only (the reopen's own Open was just invalidated).
-            Some(self.open_freshness.take_open())
-        } else {
-            None
-        }
+        // Terminal barrier: invalidate all Opens from the pending generation.
+        self.open_freshness.on_apply();
+        // Allocate the recovery Open epoch and hold the modal read-only in
+        // `Recovering` until that Open applies server truth.
+        let recovery_epoch = self.open_freshness.take_open();
+        self.alias_gate.enter_recovering(recovery_epoch);
+        self.render_alias_section(cx);
+        Some(recovery_epoch)
     }
 
     /// Render the whole alias section (labels, per-row list, gating) from the
