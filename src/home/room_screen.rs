@@ -211,6 +211,137 @@ impl BotTimelineLayers {
     }
 }
 
+/// How an agent-chat bridge tagged a relayed message: the bridge prefixes every
+/// agent message body with one of three emoji for the message `type`
+/// (`📋` request / `↩️` reply / `ℹ️` inform). It is the only *language-independent*
+/// structured signal on the wire, so it drives the badge instead of any prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentReplyKind {
+    Request,
+    Reply,
+    Inform,
+}
+
+impl AgentReplyKind {
+    /// Splits a leading type emoji off a bot body, if present.
+    /// Returns the kind plus the remaining text with the marker removed.
+    fn split_from_body(body: &str) -> (Option<Self>, &str) {
+        let trimmed = body.trim_start();
+        for (marker, kind) in [
+            ("📋", Self::Request),
+            ("↩️", Self::Reply),
+            // The variation-selector-free form of ℹ️ also occurs in the wild.
+            ("ℹ️", Self::Inform),
+            ("ℹ", Self::Inform),
+        ] {
+            if let Some(rest) = trimmed.strip_prefix(marker) {
+                return (Some(kind), rest.trim_start());
+            }
+        }
+        (None, body)
+    }
+
+    /// Short, translatable-later label shown in the badge next to the sender.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Reply => "reply",
+            Self::Inform => "info",
+        }
+    }
+}
+
+/// Splits a trailing agent-chat permalink line (`🔗 https://…`) off a bot body.
+///
+/// The bridge appends this line to every relayed agent message. Left inline it
+/// is just a bare URL at the bottom of a wall of text — and it disappears
+/// entirely once the body is folded. Pulling it out lets the card pin it in a
+/// footer that stays reachable in both states.
+///
+/// Returns the body without that line, plus the URL.
+fn split_bot_permalink(body: &str) -> (String, Option<String>) {
+    let Some(last_line) = body.lines().next_back() else {
+        return (body.to_string(), None);
+    };
+    let trimmed = last_line.trim();
+    let Some(rest) = trimmed.strip_prefix('🔗') else {
+        return (body.to_string(), None);
+    };
+    let url = rest.trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return (body.to_string(), None);
+    }
+    let kept: Vec<&str> = {
+        let mut lines: Vec<&str> = body.lines().collect();
+        lines.pop();
+        while lines.last().is_some_and(|line| line.trim().is_empty()) {
+            lines.pop();
+        }
+        lines
+    };
+    (kept.join("\n"), Some(url.to_string()))
+}
+
+/// Removes the bridge's trailing `<a …>🔗 View formatted</a>` anchor (and the
+/// `<br>`s leading up to it) from a formatted body, so the permalink is not
+/// rendered twice once it has been promoted to the card footer.
+fn strip_permalink_anchor_from_html(html: &str) -> String {
+    let Some(anchor_start) = html.rfind("<a ") else {
+        return html.to_string();
+    };
+    let tail = &html[anchor_start..];
+    if !tail.contains('🔗') || !tail.trim_end().ends_with("</a>") {
+        return html.to_string();
+    }
+    let mut head = html[..anchor_start].trim_end();
+    loop {
+        let trimmed = head
+            .strip_suffix("<br>")
+            .or_else(|| head.strip_suffix("<br/>"))
+            .or_else(|| head.strip_suffix("<br />"));
+        match trimmed {
+            Some(shorter) => head = shorter.trim_end(),
+            None => break,
+        }
+    }
+    head.to_string()
+}
+
+/// Bot bodies longer than this (in lines) are folded to a preview so a long
+/// agent report does not push every neighbouring message off-screen.
+const BOT_BODY_FOLD_LINE_THRESHOLD: usize = 8;
+/// How many lines of the body remain visible while folded.
+const BOT_BODY_FOLD_PREVIEW_LINES: usize = 3;
+
+/// Folds `body` to its first [`BOT_BODY_FOLD_PREVIEW_LINES`] non-empty-prefixed
+/// lines when it exceeds [`BOT_BODY_FOLD_LINE_THRESHOLD`].
+///
+/// Returns `None` when the body is short enough to show in full — callers treat
+/// that as "not foldable", so the toggle stays hidden.
+fn fold_bot_body_preview(body: &str) -> Option<String> {
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.len() <= BOT_BODY_FOLD_LINE_THRESHOLD {
+        return None;
+    }
+    let preview: Vec<&str> = lines
+        .iter()
+        .copied()
+        .take(BOT_BODY_FOLD_PREVIEW_LINES)
+        .collect();
+    // A preview that ended up blank carries no information scent; showing the
+    // full body is better than an empty card with a "show more" affordance.
+    if preview.iter().all(|line| line.trim().is_empty()) {
+        return None;
+    }
+    let mut preview = preview.join("\n");
+    // Cutting mid-body can leave a ``` fence open, which would swallow the rest
+    // of the preview into an unterminated code block. Close it.
+    if preview.matches("```").count() % 2 == 1 {
+        preview.push_str("\n```");
+    }
+    Some(preview)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BotTimelineRenderState {
     show_card: bool,
@@ -221,6 +352,14 @@ struct BotTimelineRenderState {
     provider: Option<String>,
     body: String,
     footer: Option<String>,
+    /// Message-type badge derived from the bridge's leading emoji marker.
+    kind: Option<AgentReplyKind>,
+    /// Set when `body` was long enough to fold; holds the folded preview text.
+    /// `None` means the body is short and the fold toggle must stay hidden.
+    folded_body: Option<String>,
+    /// The bridge's trailing permalink, promoted out of the body so the card can
+    /// pin it in a footer that stays visible while the body is folded.
+    permalink: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1200,7 +1339,25 @@ fn parse_bot_timeline_layers(raw_body: &str, is_bot_sender: bool) -> BotTimeline
 fn compute_bot_timeline_render_state(raw_body: &str, is_bot_sender: bool) -> BotTimelineRenderState {
     let layers = parse_bot_timeline_layers(raw_body, is_bot_sender);
     let show_card = is_bot_sender;
-    let show_body_card = show_card && !layers.body.trim().is_empty();
+
+    // Strip the bridge's leading type emoji off the body and keep it as a badge
+    // instead: it is redundant as prose but valuable as a typed affordance.
+    let (kind, body, permalink) = if show_card {
+        let (kind, rest) = AgentReplyKind::split_from_body(&layers.body);
+        // Promote the trailing permalink out of the body before measuring it for
+        // folding, so the preview spends its lines on content rather than a URL.
+        let (body, permalink) = split_bot_permalink(rest);
+        (kind, body, permalink)
+    } else {
+        (None, layers.body, None)
+    };
+
+    let show_body_card = show_card && !body.trim().is_empty();
+    let folded_body = if show_body_card {
+        fold_bot_body_preview(&body)
+    } else {
+        None
+    };
 
     BotTimelineRenderState {
         show_card,
@@ -1209,8 +1366,11 @@ fn compute_bot_timeline_render_state(raw_body: &str, is_bot_sender: bool) -> Bot
         show_metadata_footer: show_card && (layers.provider.is_some() || layers.footer.is_some()),
         status: layers.status,
         provider: layers.provider,
-        body: layers.body,
+        body,
         footer: layers.footer,
+        kind,
+        folded_body,
+        permalink,
     }
 }
 
@@ -1694,6 +1854,27 @@ fn is_likely_bot_user_id(
         || localpart.starts_with("bot.")
         || localpart.ends_with("_bot")
         || (localpart.ends_with("bot") && localpart.len() > 3)
+        || is_agent_chat_puppet_localpart(&localpart)
+}
+
+/// Agent-chat puppets an agent per Matrix account named
+/// `<MATRIX_AGENT_PREFIX><team>_<role>` — the prefix defaults to `ac_` and the
+/// roles come from the shared issue-workflow skill. None of those names contain
+/// "bot", so without this they render as human messages and miss the bot card
+/// (and its type badge / fold affordance) entirely.
+fn is_agent_chat_puppet_localpart(localpart: &str) -> bool {
+    const AGENT_CHAT_PREFIX: &str = "ac_";
+    const WORKFLOW_ROLE_SUFFIXES: &[&str] = &[
+        "_coordinator",
+        "_implementer",
+        "_reviewer",
+        "_final_reviewer",
+    ];
+
+    localpart.starts_with(AGENT_CHAT_PREFIX)
+        || WORKFLOW_ROLE_SUFFIXES
+            .iter()
+            .any(|suffix| localpart.ends_with(suffix))
 }
 
 pub(crate) fn is_known_or_likely_bot(
@@ -2256,6 +2437,33 @@ script_mod! {
         align: Align{y: 0.5}
         spacing: (SPACE_XS)
 
+        // Message-type badge (request / reply / info) for bridge-relayed agent
+        // messages, derived from the leading emoji marker the bridge stamps on
+        // the body — the one language-independent signal on the wire. It rides
+        // in the meta band rather than on its own row so it costs no vertical
+        // space. Hidden for every message without that marker.
+        kind_badge := RoundedView {
+            visible: false
+            width: Fit,
+            height: Fit
+            padding: Inset{ left: 6.0, right: 6.0, top: 1.0, bottom: 1.0 }
+            show_bg: true
+            draw_bg +: {
+                color: (RBX_ACCENT_SOFT)
+                border_radius: 3.0
+            }
+
+            kind_badge_label := Label {
+                width: Fit,
+                height: Fit
+                padding: 0
+                draw_text +: {
+                    text_style: RBX_TEXT_META {}
+                    color: (RBX_ACCENT)
+                }
+                text: ""
+            }
+        }
         copy_button := RobrixNeutralIconButton {
             visible: false
             width: Fit,
@@ -2507,6 +2715,45 @@ script_mod! {
                             use_code_block_widget: false
                             body: ""
                         }
+
+                        // Card footer: the fold affordance and the permalink sit
+                        // on one row so both stay reachable while folded.
+                        bot_card_footer_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            align: Align{y: 0.5}
+                            spacing: 10.0
+                            margin: Inset{ top: 6.0 }
+
+                            // Fold affordance for long agent replies. Only shown
+                            // when the body exceeded the fold threshold.
+                            bot_body_fold_toggle := mod.widgets.SmallStateGroupToggleButton {
+                                visible: false
+                                padding: Inset{ left: 0.0, right: 6.0, top: 0.0, bottom: 0.0 }
+                                draw_text +: {
+                                    text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                    color: (mod.widgets.RBX_ACCENT)
+                                }
+                                text: ""
+                            }
+
+                            // The bridge's permalink, pinned here so folding the
+                            // body never hides it.
+                            bot_permalink_link := LinkLabel {
+                                visible: false
+                                width: Fit
+                                height: Fit
+                                padding: 0
+                                margin: 0
+                                spacing: 0
+                                draw_text +: {
+                                    text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                    color: (mod.widgets.RBX_ACCENT)
+                                }
+                                text: ""
+                            }
+                        }
                     }
 
                 }
@@ -2633,6 +2880,45 @@ script_mod! {
                         bot_card_markdown_plain := mod.widgets.BotTimelineMarkdown {
                             use_code_block_widget: false
                             body: ""
+                        }
+
+                        // Card footer: the fold affordance and the permalink sit
+                        // on one row so both stay reachable while folded.
+                        bot_card_footer_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            align: Align{y: 0.5}
+                            spacing: 10.0
+                            margin: Inset{ top: 6.0 }
+
+                            // Fold affordance for long agent replies. Only shown
+                            // when the body exceeded the fold threshold.
+                            bot_body_fold_toggle := mod.widgets.SmallStateGroupToggleButton {
+                                visible: false
+                                padding: Inset{ left: 0.0, right: 6.0, top: 0.0, bottom: 0.0 }
+                                draw_text +: {
+                                    text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                    color: (mod.widgets.RBX_ACCENT)
+                                }
+                                text: ""
+                            }
+
+                            // The bridge's permalink, pinned here so folding the
+                            // body never hides it.
+                            bot_permalink_link := LinkLabel {
+                                visible: false
+                                width: Fit
+                                height: Fit
+                                padding: 0
+                                margin: 0
+                                spacing: 0
+                                draw_text +: {
+                                    text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                    color: (mod.widgets.RBX_ACCENT)
+                                }
+                                text: ""
+                            }
                         }
                     }
 
@@ -6350,6 +6636,17 @@ impl Widget for RoomScreen {
                     continue;
                 }
 
+                // "Show more" / "Show less" on a folded long bot reply.
+                if wr
+                    .button(cx, ids!(content.bot_message_card.bot_body_card.bot_body_fold_toggle))
+                    .clicked(actions)
+                {
+                    if let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) {
+                        self.toggle_bot_body_expanded(cx, tl_idx);
+                    }
+                    continue;
+                }
+
                 // Handle the invite_user_button (in a SmallStateEvent) being clicked.
                 if wr.button(cx, ids!(event_row.invite_user_button)).clicked(actions) {
                     let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) else { continue };
@@ -7421,6 +7718,7 @@ impl Widget for RoomScreen {
                                                 &mut self.octos_action_button_contexts,
                                                 &self.disabled_octos_action_source_event_ids,
                                                 &self.selected_octos_action_by_source_event_id,
+                                                &tl_state.expanded_bot_body_event_ids,
                                             )
                                         },
                                         // TODO: properly implement `Poll` as a regular Message-like timeline item.
@@ -7634,6 +7932,29 @@ impl RoomScreen {
         tl_state.profile_drawn_since_last_update.remove(group.start .. group.end);
         self.redraw_timeline_list(cx);
         log!("[encryption-notice/toggle] state mutated, redraw_timeline_list called");
+    }
+
+    /// Folds/unfolds the long bot reply at `tl_idx`, keyed by its event ID so the
+    /// choice survives PortalList recycling. Invalidates that item's content-draw
+    /// cache so the body re-populates at its new length.
+    fn toggle_bot_body_expanded(&mut self, cx: &mut Cx, tl_idx: usize) {
+        let Some(tl_state) = self.tl_state.as_mut() else { return };
+        let Some(event_id) = tl_state
+            .items
+            .get(tl_idx)
+            .and_then(|item| item.as_event())
+            .and_then(|ev| ev.event_id())
+            .map(|id| id.to_owned())
+        else {
+            return;
+        };
+        if !tl_state.expanded_bot_body_event_ids.remove(&event_id) {
+            tl_state.expanded_bot_body_event_ids.insert(event_id);
+        }
+        tl_state
+            .content_drawn_since_last_update
+            .remove(tl_idx .. tl_idx + 1);
+        self.redraw_timeline_list(cx);
     }
 
     fn sync_translation_lang_popup(&mut self, cx: &mut Cx) {
@@ -10390,6 +10711,7 @@ impl RoomScreen {
                 backwards_pagination_in_flight: false,
                 items: Vector::new(),
                 expanded_small_state_group_event_ids: HashSet::new(),
+                expanded_bot_body_event_ids: HashSet::new(),
                 content_drawn_since_last_update: RangeSet::new(),
                 profile_drawn_since_last_update: RangeSet::new(),
                 update_receiver,
@@ -11034,6 +11356,14 @@ struct TimelineUiState {
     /// By default, groups are collapsed unless their first event ID appears in this set.
     expanded_small_state_group_event_ids: HashSet<OwnedEventId>,
 
+    /// Event IDs of long bot messages the user chose to unfold.
+    ///
+    /// Long agent replies are folded to a short preview by default; an ID lands
+    /// here only after the user taps "show more". Kept on the timeline state
+    /// (not the recycled item widget) so the choice survives PortalList
+    /// virtualization, exactly like `expanded_small_state_group_event_ids`.
+    expanded_bot_body_event_ids: HashSet<OwnedEventId>,
+
     /// The range of items (indices in the above `items` list) whose event **contents** have been drawn
     /// since the last update and thus do not need to be re-populated on future draw events.
     ///
@@ -11577,9 +11907,14 @@ fn populate_message_view(
     action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
     disabled_action_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
+    expanded_bot_body_event_ids: &HashSet<OwnedEventId>,
 ) -> (WidgetRef, ItemDrawnStatus) {
     let mut new_drawn_status = item_drawn_status;
     let ts_millis = event_tl_item.timestamp();
+    // Whether the user unfolded this (long) bot reply; folded is the default.
+    let bot_body_expanded = event_tl_item
+        .event_id()
+        .is_some_and(|id| expanded_bot_body_event_ids.contains(id));
     let sender_is_bot = is_timeline_sender_bot(
         event_tl_item.sender(),
         resolved_parent_bot_user_id,
@@ -11679,6 +12014,7 @@ fn populate_message_view(
                                 Some(media_cache),
                                 Some(link_preview_cache),
                                 sender_is_bot,
+                                bot_body_expanded,
                             );
                             band_metadata = stream_meta;
                             new_drawn_status.content_drawn = false; // force re-render
@@ -11713,6 +12049,7 @@ fn populate_message_view(
                                     Some(media_cache),
                                     Some(link_preview_cache),
                                     sender_is_bot,
+                                    bot_body_expanded,
                                 );
                                 new_drawn_status.content_drawn = bot_drawn;
                                 band_metadata = bot_meta;
@@ -11768,6 +12105,7 @@ fn populate_message_view(
                             Some(media_cache),
                             Some(link_preview_cache),
                             sender_is_bot,
+                            bot_body_expanded,
                         );
                         new_drawn_status.content_drawn = bot_drawn;
                         band_metadata = bot_meta;
@@ -12489,6 +12827,7 @@ fn populate_bot_text_message_content(
     media_cache: Option<&mut MediaCache>,
     link_preview_cache: Option<&mut LinkPreviewCache>,
     is_bot_sender: bool,
+    bot_body_expanded: bool,
 ) -> (bool, Option<String>) {
     let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
     let bot_card_view = item.view(cx, ids!(content.bot_message_card));
@@ -12498,6 +12837,11 @@ fn populate_bot_text_message_content(
     message_view.set_visible(cx, !render_state.show_card);
 
     if !render_state.show_card {
+        // Clear the meta-band badge before returning: this item widget is
+        // recycled by the PortalList, so a stale badge from a previously drawn
+        // bot message would otherwise linger on a plain/human message.
+        item.view(cx, ids!(content.message_action_bar.kind_badge))
+            .set_visible(cx, false);
         let drawn = populate_text_message_content(
             cx,
             &message_view,
@@ -12519,6 +12863,16 @@ fn populate_bot_text_message_content(
             .set_text(cx, status);
     }
 
+    // Type badge: shown only when the bridge marked the message type.
+    // The type badge lives in the meta band (next to the copy icon), so it adds
+    // no vertical space of its own.
+    let kind_badge = item.view(cx, ids!(content.message_action_bar.kind_badge));
+    kind_badge.set_visible(cx, render_state.kind.is_some());
+    if let Some(kind) = render_state.kind {
+        item.label(cx, ids!(content.message_action_bar.kind_badge.kind_badge_label))
+            .set_text(cx, kind.label());
+    }
+
     // The provider/footer metadata is rendered by the meta band below the card
     // (content.message_action_bar.metadata_label), joined into a single line.
     let band_metadata = if render_state.show_metadata_footer {
@@ -12538,10 +12892,88 @@ fn populate_bot_text_message_content(
     let body_widget = item.html_or_plaintext(cx, ids!(content.bot_message_card.bot_body_card.bot_card_body));
     let mut markdown_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown));
     let mut markdown_plain_widget = item.markdown(cx, ids!(content.bot_message_card.bot_body_card.bot_card_markdown_plain));
+    // Fold state: a long body renders its preview until the user expands it.
+    // `folded_body` is `None` for short bodies, so the toggle stays hidden and
+    // the full text renders exactly as before.
+    let is_folded = render_state.folded_body.is_some() && !bot_body_expanded;
+    let fold_toggle = item.button(
+        cx,
+        ids!(content.bot_message_card.bot_body_card.bot_card_footer_row.bot_body_fold_toggle),
+    );
+    fold_toggle.set_visible(cx, render_state.folded_body.is_some());
+    if render_state.folded_body.is_some() {
+        fold_toggle.set_text(cx, if is_folded { "Show more" } else { "Show less" });
+    }
+
+    // Permalink pinned in the card footer — visible whether or not the body is
+    // folded, and clickable via the room screen's existing `HtmlLinkAction`
+    // handler.
+    let permalink_link = item.link_label(
+        cx,
+        ids!(content.bot_message_card.bot_body_card.bot_card_footer_row.bot_permalink_link),
+    );
+    permalink_link.set_visible(cx, render_state.permalink.is_some());
+    if let Some(url) = render_state.permalink.as_ref() {
+        permalink_link.set_text(cx, "View formatted");
+        if let Some(mut inner) = permalink_link.borrow_mut() {
+            inner.url = url.clone();
+        }
+    }
+
+    // Folding swaps the body for its preview *inside the render state* rather
+    // than switching rendering modes. Every downstream decision (code-block
+    // mode, formatted-body selection, which widget is visible) is then derived
+    // from the text actually on screen — one path, one visible widget. Choosing
+    // a different mode for the folded case instead would leave the preview in
+    // the plaintext widget and the full text in the markdown widget, and both
+    // would render (a duplicated body).
+    let render_state = if is_folded {
+        let mut folded = render_state.clone();
+        folded.body = folded.folded_body.clone().unwrap_or(folded.body);
+        folded
+    } else {
+        render_state
+    };
+    // A folded preview never carries the message's `formatted_body`: that HTML
+    // describes the full text, not this truncated slice. When the permalink has
+    // been promoted to the footer, drop its anchor from the HTML too so it does
+    // not render a second time inside the body.
+    let formatted_body_owned;
+    let formatted_body = if is_folded {
+        None
+    } else if render_state.permalink.is_some() {
+        match formatted_body {
+            Some(fb) => {
+                let mut stripped = fb.clone();
+                stripped.body = strip_permalink_anchor_from_html(&fb.body);
+                formatted_body_owned = stripped;
+                Some(&formatted_body_owned)
+            }
+            None => None,
+        }
+    } else {
+        formatted_body
+    };
+
     let code_block_mode = bot_timeline_code_block_mode(&render_state);
     body_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::None);
     markdown_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Highlighted);
     markdown_plain_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Plain);
+    // Hiding the inactive renderer is not enough: a Markdown widget that still
+    // holds text keeps drawing its own DrawList after `set_visible(false)`, so
+    // toggling the fold on a body with a ``` block stacked the folded preview on
+    // top of the leftover full text. Worse, that leftover is invisible for
+    // hit-testing, so its links stopped responding to clicks. Clearing the text
+    // of whichever renderer is not in use makes it draw nothing at all.
+    if code_block_mode != BotTimelineCodeBlockMode::Highlighted {
+        markdown_widget.set_text(cx, "");
+    }
+    if code_block_mode != BotTimelineCodeBlockMode::Plain {
+        markdown_plain_widget.set_text(cx, "");
+    }
+    if code_block_mode != BotTimelineCodeBlockMode::None {
+        body_widget.show_plaintext(cx, "");
+    }
 
     let drawn = if render_state.show_body_card {
         if code_block_mode != BotTimelineCodeBlockMode::None {
@@ -15813,6 +16245,86 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_chat_puppets_are_treated_as_bots() {
+        // Real MXIDs from an agent-chat team: none contain "bot".
+        for localpart in [
+            "ac_tyrese_coordinator",
+            "ac_tyrese_implementer",
+            "ac_tyrese_reviewer",
+            "ac_tyrese_final_reviewer",
+            "wf_coordinator",
+        ] {
+            assert!(
+                is_agent_chat_puppet_localpart(localpart),
+                "{localpart} must be recognised as an agent-chat puppet"
+            );
+        }
+        // Humans must not be swept up by the role-suffix rule.
+        for localpart in ["tyreseluo", "alex", "haitang", "coordinator_notes"] {
+            assert!(
+                !is_agent_chat_puppet_localpart(localpart),
+                "{localpart} must NOT be treated as a bot"
+            );
+        }
+    }
+
+    #[test]
+    fn test_agent_reply_kind_split_from_body() {
+        let (kind, rest) = AgentReplyKind::split_from_body("📋 Issue 001 spec ready");
+        assert_eq!(kind, Some(AgentReplyKind::Request));
+        assert_eq!(rest, "Issue 001 spec ready");
+
+        let (kind, rest) = AgentReplyKind::split_from_body("↩️ Review verdict: APPROVE");
+        assert_eq!(kind, Some(AgentReplyKind::Reply));
+        assert_eq!(rest, "Review verdict: APPROVE");
+
+        // No marker → body is returned untouched and no badge is shown.
+        let (kind, rest) = AgentReplyKind::split_from_body("plain agent text");
+        assert_eq!(kind, None);
+        assert_eq!(rest, "plain agent text");
+    }
+
+    #[test]
+    fn test_bot_kind_badge_strips_marker_from_rendered_body() {
+        let state = compute_bot_timeline_render_state("ℹ️ Status update\n\nAll good.", true);
+        assert_eq!(state.kind, Some(AgentReplyKind::Inform));
+        assert!(
+            !state.body.starts_with('ℹ'),
+            "type marker must move to the badge, not stay in the body: {:?}",
+            state.body
+        );
+    }
+
+    #[test]
+    fn test_short_bot_body_is_not_folded() {
+        let state = compute_bot_timeline_render_state("via x\n\nline1\nline2\nline3", true);
+        assert!(
+            state.folded_body.is_none(),
+            "a short reply must render in full with no fold toggle"
+        );
+    }
+
+    #[test]
+    fn test_long_bot_body_folds_to_preview() {
+        let long = (1..=30).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let state = compute_bot_timeline_render_state(&long, true);
+        let folded = state.folded_body.expect("a long reply must fold");
+        assert_eq!(folded.lines().count(), BOT_BODY_FOLD_PREVIEW_LINES);
+        assert!(folded.starts_with("line 1"));
+        // The full text stays available for the expanded state.
+        assert!(state.body.lines().count() > BOT_BODY_FOLD_LINE_THRESHOLD);
+    }
+
+    #[test]
+    fn test_human_messages_are_never_folded_or_badged() {
+        let long = (1..=30).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let state = compute_bot_timeline_render_state(&long, false);
+        assert!(state.folded_body.is_none());
+        assert_eq!(state.kind, None);
+        assert!(!state.show_card);
+    }
+
+    #[test]
     fn test_bot_metadata_extracted_for_meta_band() {
         let state = compute_bot_timeline_render_state(
             "via moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。\n\n_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_",
@@ -15975,5 +16487,72 @@ mod tests {
         assert!(condensed_state.show_card);
         assert!(reply_state.show_metadata_footer);
         assert!(condensed_state.show_metadata_footer);
+    }
+}
+
+
+#[cfg(test)]
+mod t1_fold_tests {
+    use super::*;
+
+    /// The real 4:43 message: permalink must leave the body and land in the footer.
+    #[test]
+    fn permalink_is_promoted_out_of_body() {
+        let body = "\u{21a9}\u{fe0f} Saved to docs/weekly/ ... \u{b7} @tyreseluo\n\n@tyreseluo ok:\n\n```\n/Users/x/f.md\n```\n\nmore\nmore\nmore\nmore\nmore\n\n\u{1f517} http://127.0.0.1:8090/msg/msg_0392?view=Frwug96p";
+        let st = compute_bot_timeline_render_state(body, true);
+        assert_eq!(st.permalink.as_deref(), Some("http://127.0.0.1:8090/msg/msg_0392?view=Frwug96p"));
+        assert!(!st.body.contains('\u{1f517}'), "permalink line removed from body");
+        assert!(!st.body.trim_end().ends_with("Frwug96p"), "url gone from body");
+        let folded = st.folded_body.expect("still folds");
+        assert!(!folded.contains('\u{1f517}'), "preview has no permalink");
+    }
+
+    #[test]
+    fn html_anchor_for_permalink_is_stripped() {
+        let html = "<b>hi</b><br><br>body text<br><br><a href=\"http://x/msg/1\">\u{1f517} View formatted</a>";
+        let out = strip_permalink_anchor_from_html(html);
+        assert_eq!(out, "<b>hi</b><br><br>body text");
+    }
+
+    #[test]
+    fn html_without_permalink_anchor_is_untouched() {
+        let html = "<b>hi</b><br><a href=\"http://x\">docs</a>";
+        assert_eq!(strip_permalink_anchor_from_html(html), html);
+    }
+
+    #[test]
+    fn body_without_permalink_is_untouched() {
+        let (body, link) = split_bot_permalink("just text\nsecond line");
+        assert_eq!(body, "just text\nsecond line");
+        assert!(link.is_none());
+    }
+
+    /// The screenshot-3 regression: a long body containing a fenced code block
+    /// must fold to a preview that is itself renderable by a single widget.
+    #[test]
+    fn folded_preview_is_fence_balanced_and_short() {
+        let body = "↩️ Summary line here\n\n@user ok:\n\n```\n/Users/x/file.md\n```\n\nmore text\nand more\nand more\nand more\nand more";
+        let st = compute_bot_timeline_render_state(body, true);
+        assert_eq!(st.kind, Some(AgentReplyKind::Reply), "type marker parsed");
+        assert!(!st.body.starts_with('↩'), "marker stripped from body");
+        let folded = st.folded_body.expect("long body folds");
+        assert!(folded.lines().count() <= BOT_BODY_FOLD_PREVIEW_LINES + 1);
+        assert_eq!(folded.matches("```").count() % 2, 0, "fences balanced");
+    }
+
+    #[test]
+    fn short_body_does_not_fold() {
+        let st = compute_bot_timeline_render_state("ℹ️ short\n\none line", true);
+        assert_eq!(st.kind, Some(AgentReplyKind::Inform));
+        assert!(st.folded_body.is_none(), "short body must not show a toggle");
+    }
+
+    #[test]
+    fn human_message_is_untouched() {
+        let body = "📋 not a bot\nline\nline\nline\nline\nline\nline\nline\nline\nline";
+        let st = compute_bot_timeline_render_state(body, false);
+        assert!(st.kind.is_none(), "no badge for human senders");
+        assert!(st.folded_body.is_none(), "no folding for human senders");
+        assert_eq!(st.body, body, "human body verbatim");
     }
 }
