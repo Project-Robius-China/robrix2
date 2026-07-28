@@ -251,6 +251,53 @@ impl AgentReplyKind {
     }
 }
 
+/// The role an agent plays in an agent-chat workflow, derived from its Matrix
+/// localpart (`@ac_<team>_<role>:…`).
+///
+/// Every message in a workflow room otherwise carries the same generic `bot`
+/// badge, which says nothing about *who* is speaking — the coordinator handing
+/// off work, the implementer reporting a build, or a reviewer returning a
+/// verdict. The role is encoded in the account name, so reading it needs no
+/// prose parsing and is unaffected by the language the agent replies in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentRole {
+    Coordinator,
+    Implementer,
+    Reviewer,
+    FinalReviewer,
+}
+
+impl AgentRole {
+    /// Derives the role from a Matrix localpart, e.g. `ac_tyrese_reviewer`.
+    fn from_localpart(localpart: &str) -> Option<Self> {
+        let name = localpart.to_ascii_lowercase();
+        let matches = |suffix: &str| name == suffix || name.ends_with(&format!("_{suffix}"));
+        // `final_reviewer` also ends with `reviewer`, so it has to be tested
+        // first or every final reviewer would be labelled a plain reviewer.
+        if matches("final_reviewer") {
+            Some(Self::FinalReviewer)
+        } else if matches("coordinator") {
+            Some(Self::Coordinator)
+        } else if matches("implementer") {
+            Some(Self::Implementer)
+        } else if matches("reviewer") {
+            Some(Self::Reviewer)
+        } else {
+            None
+        }
+    }
+
+    /// Badge text. Kept lowercase to match the existing `bot` badge's voice.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Coordinator => "coordinator",
+            Self::Implementer => "implementer",
+            Self::Reviewer => "reviewer",
+            Self::FinalReviewer => "final review",
+        }
+    }
+}
+
 /// Splits a trailing agent-chat permalink line (`🔗 https://…`) off a bot body.
 ///
 /// The bridge appends this line to every relayed agent message. Left inline it
@@ -12648,6 +12695,9 @@ fn populate_message_view(
 
             // Show/hide the bot badge based on sender's user ID
             item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, sender_is_bot);
+            if sender_is_bot {
+                populate_bot_badge_identity(cx, &item, event_tl_item.sender().localpart());
+            }
         }
         else {
             // Server notices are drawn with a red color avatar background and username.
@@ -12813,6 +12863,38 @@ fn populate_text_message_content(
         )
     } else {
         true
+    }
+}
+
+/// Labels the bot badge with the sender's workflow role, when it has one.
+///
+/// A workflow agent gets its role (`coordinator`, `reviewer`, …) in the accent
+/// style, so the participants of a run stand out from incidental bots, which
+/// keep the generic `bot` label in the quieter neutral style.
+///
+/// Both the text and both colors are always written, never only on the branch
+/// that needs them: these item widgets are recycled by the PortalList, so a
+/// value left unset would keep whatever the previously drawn message put there.
+fn populate_bot_badge_identity(cx: &mut Cx, item: &WidgetRef, sender_localpart: &str) {
+    let role = AgentRole::from_localpart(sender_localpart);
+    let mut badge = item.view(cx, ids!(content.username_view.bot_badge));
+    let mut label = item.label(cx, ids!(content.username_view.bot_badge.bot_badge_label));
+
+    label.set_text(cx, role.map_or("bot", AgentRole::label));
+    if role.is_some() {
+        script_apply_eval!(cx, badge, {
+            draw_bg +: { color: (mod.widgets.RBX_ACCENT_SOFT) }
+        });
+        script_apply_eval!(cx, label, {
+            draw_text +: { color: (mod.widgets.RBX_ACCENT) }
+        });
+    } else {
+        script_apply_eval!(cx, badge, {
+            draw_bg +: { color: (mod.widgets.RBX_NEUTRAL_BG) }
+        });
+        script_apply_eval!(cx, label, {
+            draw_text +: { color: (mod.widgets.RBX_NEUTRAL_FG) }
+        });
     }
 }
 
@@ -16494,6 +16576,29 @@ mod tests {
 #[cfg(test)]
 mod t1_fold_tests {
     use super::*;
+
+    #[test]
+    fn agent_role_is_derived_from_localpart() {
+        use AgentRole::*;
+        // Real MXIDs from the agent-chat demo: @ac_<team>_<role>
+        assert_eq!(AgentRole::from_localpart("ac_tyrese_coordinator"), Some(Coordinator));
+        assert_eq!(AgentRole::from_localpart("ac_tyrese_implementer"), Some(Implementer));
+        assert_eq!(AgentRole::from_localpart("ac_tyrese_reviewer"), Some(Reviewer));
+        // `final_reviewer` also ends with `reviewer` — it must not be mislabelled.
+        assert_eq!(AgentRole::from_localpart("ac_tyrese_final_reviewer"), Some(FinalReviewer));
+        assert_eq!(AgentRole::from_localpart("ac_wf_final_reviewer"), Some(FinalReviewer));
+        // Bare role names (no team prefix) still resolve.
+        assert_eq!(AgentRole::from_localpart("coordinator"), Some(Coordinator));
+    }
+
+    #[test]
+    fn non_workflow_bots_have_no_role() {
+        assert_eq!(AgentRole::from_localpart("octosbot"), None);
+        assert_eq!(AgentRole::from_localpart("agent-bridge-tyrese"), None);
+        assert_eq!(AgentRole::from_localpart("tyreseluo"), None);
+        // A name that merely contains a role word is not a role.
+        assert_eq!(AgentRole::from_localpart("reviewerbot"), None);
+    }
 
     /// The real 4:43 message: permalink must leave the body and land in the footer.
     #[test]
