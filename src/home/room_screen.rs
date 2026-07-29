@@ -2164,13 +2164,17 @@ script_mod! {
     mod.widgets.COLOR_THREAD_SUMMARY_BG_HOVER = #FFEACC
     mod.widgets.COLOR_THREAD_SUMMARY_BORDER = #E8C99A
     mod.widgets.COLOR_THREAD_SUMMARY_REPLY_COUNT = #A35A00
-    mod.widgets.COLOR_BOT_CARD_BG = #xF7FAFE
-    mod.widgets.COLOR_BOT_CARD_BORDER = #xD8E3F0
-    mod.widgets.COLOR_BOT_STATUS_BG = #xEEF4FB
-    mod.widgets.COLOR_BOT_STATUS_TEXT = #x5A6F86
-    mod.widgets.COLOR_BOT_FOOTER_TEXT = #x8B98A7
-    mod.widgets.COLOR_BOT_CODE_BG = #xECF2F8
-    mod.widgets.COLOR_BOT_CODE_BORDER = #xD5E0ED
+    // Aliases onto the token layer. These were seven hand-picked blue-greys that
+    // belonged to no ramp — each within ~2% of a real token, which is exactly
+    // the drift that makes an agent card read as slightly "off" next to the
+    // approval card and every other surface nested inside it.
+    mod.widgets.COLOR_BOT_CARD_BG = (mod.widgets.RBX_BG_CANVAS)
+    mod.widgets.COLOR_BOT_CARD_BORDER = (mod.widgets.RBX_STROKE_STRONG)
+    mod.widgets.COLOR_BOT_STATUS_BG = (mod.widgets.RBX_BG_SUNKEN)
+    mod.widgets.COLOR_BOT_STATUS_TEXT = (mod.widgets.RBX_FG_SECONDARY)
+    mod.widgets.COLOR_BOT_FOOTER_TEXT = (mod.widgets.RBX_FG_TERTIARY)
+    mod.widgets.COLOR_BOT_CODE_BG = (mod.widgets.RBX_BG_SUNKEN)
+    mod.widgets.COLOR_BOT_CODE_BORDER = (mod.widgets.RBX_STROKE_STRONG)
 
     mod.widgets.MessageActionPrimaryButton = RobrixPositiveIconButton {
         width: Fit
@@ -2283,8 +2287,8 @@ script_mod! {
         draw_block +: {
             line_color: (MESSAGE_TEXT_COLOR)
             sep_color: (mod.widgets.COLOR_BOT_CODE_BORDER)
-            quote_bg_color: #xEFF5FB
-            quote_fg_color: #x7892AC
+            quote_bg_color: (mod.widgets.RBX_BG_SUNKEN)
+            quote_fg_color: (mod.widgets.RBX_FG_SECONDARY)
             code_color: (mod.widgets.COLOR_BOT_CODE_BG)
         }
         code_layout: Layout{
@@ -3175,7 +3179,10 @@ script_mod! {
                 height: Fit
                 flow: Right
                 spacing: 0.0
-                padding: Inset{ left: 50.0, right: 10.0, bottom: 1.0 }
+                // 43 + the parent `body`'s 7 = the 50 that
+                // `SmallStateEventsSummary` uses, so the summary text keeps its
+                // left edge when the group is expanded instead of shifting 7px.
+                padding: Inset{ left: 43.0, right: 10.0, bottom: 1.0 }
 
                 group_summary_label := Label {
                     width: Fit,

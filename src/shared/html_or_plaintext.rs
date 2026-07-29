@@ -152,8 +152,11 @@ script_mod! {
         draw_block +: {
             line_color: (MESSAGE_TEXT_COLOR)
             sep_color: (MESSAGE_TEXT_COLOR)
-            code_color: (#EDEDED)
-            quote_bg_color: (#EDEDED)
+            // Same inset surface the markdown path uses, so a bot's inline
+            // `code` does not change shade depending on whether the message
+            // happened to contain a fenced block.
+            code_color: (RBX_BG_SUNKEN)
+            quote_bg_color: (RBX_BG_SUNKEN)
             quote_fg_color: (MESSAGE_TEXT_COLOR)
         }
 
