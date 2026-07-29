@@ -3706,7 +3706,7 @@ script_mod! {
                     Label {
                         width: Fit, height: Fit
                         draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_ACCENT) }
-                        text: "Bot"
+                        text: "bot"
                     }
                 }
             }
@@ -3921,14 +3921,14 @@ script_mod! {
                                             show_bg: true
                                             new_batch: true
                                             draw_bg +: {
-                                                color: (COLOR_ACTIVE_PRIMARY)
+                                                color: (RBX_ACCENT_SOFT)
                                                 border_radius: 3.0
                                             }
                                             Label {
                                                 width: Fit, height: Fit, padding: 0
                                                 draw_text +: {
                                                     text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
-                                                    color: (RBX_FG_ON_ACCENT)
+                                                    color: (RBX_ACCENT)
                                                 }
                                                 text: "bot"
                                             }
