@@ -35,15 +35,18 @@ script_mod! {
             spacing: 1,
 
             show_bg: true,
+            // Two tiers, both drawn from the accent pair: a mention of someone
+            // else is a quiet soft chip, while a mention of *you* (or @room) is
+            // filled. Set from Rust per pill; these are the quiet defaults.
             draw_bg +: {
-                color: #000
+                color: (RBX_ACCENT_SOFT)
                 border_radius: 6.0
             }
 
             avatar := Avatar {
                 height: (MESSAGE_FONT_SIZE + 5), width: (MESSAGE_FONT_SIZE + 5),
-                // White bg so transparent avatar images are visible on the
-                // pill's black background.
+                // Opaque bg so transparent avatar images stay legible whichever
+                // tier the pill is drawn in.
                 img_view +: {
                     show_bg: true,
                     draw_bg +: { color: #fff }
@@ -60,7 +63,7 @@ script_mod! {
             title := Label {
                 flow: Right, // do not wrap
                 draw_text +: {
-                    color: #f,
+                    color: (RBX_ACCENT),
                     // line_spacing 1.0 prevents the label's row height from
                     // inflating the pill vertically (pill is single-line).
                     text_style: MESSAGE_TEXT_STYLE { font_size: (MESSAGE_FONT_SIZE), line_spacing: 1.0 },
@@ -90,7 +93,7 @@ script_mod! {
         align: Align{ y: 0.5 },
 
         html_link := HtmlLink {
-            hover_color: (COLOR_LINK_HOVER)
+            hover_color: (RBX_LINK_HOVER)
             grab_key_focus: false,
             padding: Inset{left: 1.0, right: 1.5},
         }
@@ -412,15 +415,20 @@ impl MatrixLinkPill {
         let is_room_mention = link_text == "@room";
         let is_self_mention = matches!(matrix_id, MatrixId::User(uid) if current_user_id().is_some_and(|u| &u == uid));
 
-        // Reset pill bg to default black, then apply red for mentions.
-        // This prevents stale red from persisting if a cached widget is
-        // reused for a different (non-mention) link after a message edit.
+        // A mention that targets the local user (or the whole room) is filled
+        // with the accent so it stands out mid-sentence; every other mention
+        // stays a quiet soft chip. Both branches always write both the fill and
+        // the label colour — a cached pill reused for a different link after an
+        // edit must not keep the previous pill's emphasis.
         {
             let mut pill_bg = self.view(cx, ids!(pill_bg));
+            let mut title = self.label(cx, ids!(pill_bg.title));
             if is_room_mention || is_self_mention {
-                script_apply_eval!(cx, pill_bg, { draw_bg +: { color: #d91b38 } });
+                script_apply_eval!(cx, pill_bg, { draw_bg +: { color: (mod.widgets.RBX_ACCENT) } });
+                script_apply_eval!(cx, title, { draw_text +: { color: (mod.widgets.RBX_FG_ON_ACCENT) } });
             } else {
-                script_apply_eval!(cx, pill_bg, { draw_bg +: { color: #000 } });
+                script_apply_eval!(cx, pill_bg, { draw_bg +: { color: (mod.widgets.RBX_ACCENT_SOFT) } });
+                script_apply_eval!(cx, title, { draw_text +: { color: (mod.widgets.RBX_ACCENT) } });
             }
         }
 

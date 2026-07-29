@@ -98,6 +98,9 @@ script_mod! {
     mod.widgets.RBX_ACCENT_SOFT    = #xE4F5F7
     // Hyperlink / inline-link color.
     mod.widgets.RBX_LINK           = #x1887C9
+    // Hovered link. Same hue, darkened like ACCENT → ACCENT_HOVER, so a link
+    // deepens on hover instead of jumping to another hue.
+    mod.widgets.RBX_LINK_HOVER     = #x1577B1
 
     // =========================================================================
     // 4. BRAND — logo colors. Use sparingly (brand entry points, app icon, the
@@ -329,6 +332,8 @@ pub const RBX_ACCENT_PRESSED:    Vec4 = vec4(0.043, 0.455, 0.518, 1.0);
 pub const RBX_ACCENT_SOFT:       Vec4 = vec4(0.894, 0.961, 0.969, 1.0);
 /// #1887C9 — link.
 pub const RBX_LINK:              Vec4 = vec4(0.094, 0.529, 0.788, 1.0);
+/// #1577B1 — hovered link (same hue as `RBX_LINK`, darkened).
+pub const RBX_LINK_HOVER:        Vec4 = vec4(0.082, 0.467, 0.694, 1.0);
 
 // --- Brand ---
 /// #572DCC — brand purple.

@@ -228,11 +228,14 @@ script_mod! {
     mod.widgets.COLOR_AVATAR_BG_IDLE = #d8d8d8
 
 
-    mod.widgets.COLOR_UNREAD_BADGE_MENTIONS = #FF0000;
-
-
-    mod.widgets.COLOR_UNREAD_BADGE_MARKED = (mod.widgets.COLOR_ROBRIX_CYAN);
-    mod.widgets.COLOR_UNREAD_BADGE_MESSAGES = #AAAAAA
+    // Unread badge fills. A mention keeps the conventional red, but the
+    // system's red rather than pure #FF0000 — the latter was the most saturated
+    // pixel in the app and appeared nowhere else. "Marked unread" is a user
+    // action, so it takes the functional accent instead of the logo cyan (the
+    // brand ramp is reserved for brand entry points, per design_tokens.rs).
+    mod.widgets.COLOR_UNREAD_BADGE_MENTIONS = (mod.widgets.RBX_DANGER_FG);
+    mod.widgets.COLOR_UNREAD_BADGE_MARKED = (mod.widgets.RBX_ACCENT);
+    mod.widgets.COLOR_UNREAD_BADGE_MESSAGES = (mod.widgets.RBX_FG_TERTIARY)
 
 
     mod.widgets.COLOR_TEXT_IDLE = #d8d8d8
@@ -397,12 +400,13 @@ pub const COLOR_BG_DANGER_RED:         Vec4 = vec4(1.0, 0.941, 0.941, 1.0);
 pub const COLOR_ROBRIX_PURPLE:         Vec4 = vec4(0.341, 0.176, 0.8, 1.0);
 /// #05CDC7
 pub const COLOR_ROBRIX_CYAN:           Vec4 = vec4(0.031, 0.804, 0.78, 1.0);
-/// #FF0000
-pub const COLOR_UNREAD_BADGE_MENTIONS: Vec4 = vec4(1.0, 0.0, 0.0, 1.0);
-/// #572DCC
-pub const COLOR_UNREAD_BADGE_MARKED:   Vec4 = COLOR_ROBRIX_CYAN;
-/// #AAAAAA
-pub const COLOR_UNREAD_BADGE_MESSAGES: Vec4 = vec4(0.667, 0.667, 0.667, 1.0);
+// Keep these in sync with the DSL definitions above.
+/// #C5392F — mention badge (`RBX_DANGER_FG`).
+pub const COLOR_UNREAD_BADGE_MENTIONS: Vec4 = crate::shared::design_tokens::RBX_DANGER_FG;
+/// #119FB3 — marked-unread badge (`RBX_ACCENT`).
+pub const COLOR_UNREAD_BADGE_MARKED:   Vec4 = crate::shared::design_tokens::RBX_ACCENT;
+/// #8A98AE — plain unread-count badge (`RBX_FG_TERTIARY`).
+pub const COLOR_UNREAD_BADGE_MESSAGES: Vec4 = crate::shared::design_tokens::RBX_FG_TERTIARY;
 /// #FF6e00
 pub const COLOR_UNKNOWN_ROOM_AVATAR:   Vec4 = vec4(1.0, 0.431, 0.0, 1.0);
 /// #888888
