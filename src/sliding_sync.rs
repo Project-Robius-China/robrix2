@@ -36,7 +36,7 @@ use matrix_sdk_ui::{
     RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails, default_event_filter}
 };
 use robius_open::Uri;
-use ruma::{OwnedRoomOrAliasId, RoomId, events::tag::Tags};
+use ruma::{OwnedRoomAliasId, OwnedRoomOrAliasId, RoomAliasId, RoomId, events::tag::Tags};
 use tokio::{
     runtime::Handle,
     sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
@@ -701,8 +701,30 @@ pub type OnLinkPreviewFetchedFn = fn(
 #[derive(Clone, Debug)]
 pub struct RoomSettingsFetchedAction {
     pub room_id: OwnedRoomId,
+    /// Why this fetch was issued — echoed from the request so a stale or
+    /// unrelated fetch can never be mistaken for a specific write's reconcile.
+    pub reason: crate::home::room_settings_modal::RoomSettingsFetchReason,
     pub topic: Option<String>,
     pub is_public: bool,
+    /// The room's canonical (main) alias, if any.
+    pub canonical_alias: Option<OwnedRoomAliasId>,
+    /// The room's published alternate aliases.
+    pub alt_aliases: Vec<OwnedRoomAliasId>,
+    /// Whether the current user may send the `m.room.canonical_alias` state
+    /// event — gates the alias edit controls in the Room Settings modal.
+    pub can_manage_aliases: bool,
+}
+
+/// Posted when a [`MatrixRequest::FetchRoomSettings`] could not produce data
+/// (no client, or the room isn't currently available). It carries no settings —
+/// its sole job is to let a waiting alias write release its in-flight gate /
+/// pending registry instead of stranding the edit controls disabled.
+#[derive(Clone, Debug)]
+pub struct RoomSettingsFetchUnavailableAction {
+    pub room_id: OwnedRoomId,
+    /// Why the fetch was issued (echoed from the request) — release only fires
+    /// on the matching write reconcile, never an open-fetch.
+    pub reason: crate::home::room_settings_modal::RoomSettingsFetchReason,
 }
 
 /// Posted after a room avatar is successfully uploaded and set.
@@ -711,6 +733,122 @@ pub struct RoomAvatarUploadedAction {
     pub room_id: OwnedRoomId,
     /// Raw image bytes of the newly uploaded avatar.
     pub image_data: Arc<[u8]>,
+}
+
+/// Which alias write a [`RoomAliasWriteResultAction`] reports the outcome of.
+#[derive(Clone, Debug)]
+pub enum AliasWriteKind {
+    /// `MatrixRequest::PublishRoomAlias` (directory registration).
+    Publish,
+    /// `MatrixRequest::RemoveRoomAlias` (directory unbind).
+    Remove,
+    /// `MatrixRequest::SetRoomCanonicalAlias` (`m.room.canonical_alias`).
+    SetCanonical,
+}
+
+/// Server outcome of an alias write, used by the Room Settings modal to commit
+/// or roll back its optimistic UI and to surface server errors as a toast.
+#[derive(Clone, Debug)]
+pub struct RoomAliasWriteResultAction {
+    pub room_id: OwnedRoomId,
+    pub kind: AliasWriteKind,
+    /// The alias involved, when the write targets a specific one.
+    pub alias: Option<OwnedRoomAliasId>,
+    /// `None` on success; a human-readable server error message on failure.
+    pub error: Option<String>,
+    /// Whether the server was actually contacted. `false` only for preflight
+    /// failures (e.g. no client) where nothing was sent and state is unchanged;
+    /// app.rs skips the reconcile fetch for these, and the modal/registry
+    /// release their in-flight gate immediately instead of awaiting a refresh.
+    pub attempted: bool,
+}
+
+/// HTTP status code of a failed matrix request, if it carries a client-API error.
+fn alias_error_status(e: &matrix_sdk::HttpError) -> Option<u16> {
+    e.as_client_api_error().map(|api| api.status_code.as_u16())
+}
+
+/// Whether `alias` currently resolves to `room_id` in the room directory. Used
+/// on the publish-conflict path to decide idempotent success (the mapping we
+/// wanted already exists). Any resolution failure counts as "not this room".
+async fn alias_maps_to_room(client: &Client, alias: &RoomAliasId, room_id: &RoomId) -> bool {
+    let request = matrix_sdk::ruma::api::client::alias::get_alias::v3::Request::new(alias.to_owned());
+    matches!(client.send(request).await, Ok(resp) if resp.room_id.as_str() == room_id.as_str())
+}
+
+/// Read `m.room.canonical_alias` DIRECTLY FROM THE SERVER (P1-2).
+///
+/// A reconcile fetch must NOT use `room.canonical_alias()` / `room.alt_aliases()`:
+/// in the pinned matrix-sdk `send_state_event` does not update the local
+/// `RoomInfo`, so those accessors can still return the pre-write value after a
+/// successful write until a later sync. This issues a direct `GET
+/// /state/m.room.canonical_alias` via `client.send`, which reflects the write.
+///
+/// Returns `Some((canonical, alt_aliases))` on a successful read (including a
+/// 404 → no canonical alias set → `(None, [])`), or `None` if the fresh read
+/// could not be obtained (caller then releases the gate without applying stale
+/// data). See [`reconcile_fetch_outcome`](crate::home::room_settings_modal::reconcile_fetch_outcome).
+async fn fetch_canonical_alias_from_server(
+    client: &Client,
+    room_id: &RoomId,
+) -> Option<(Option<OwnedRoomAliasId>, Vec<OwnedRoomAliasId>)> {
+    use matrix_sdk::ruma::api::client::state::get_state_event_for_key;
+    use matrix_sdk::ruma::events::room::canonical_alias::RoomCanonicalAliasEventContent;
+    // Default format returns just the event content as raw JSON.
+    let request = get_state_event_for_key::v3::Request::new(
+        room_id.to_owned(),
+        StateEventType::RoomCanonicalAlias,
+        String::new(),
+    );
+    match client.send(request).await {
+        Ok(resp) => match serde_json::from_str::<RoomCanonicalAliasEventContent>(
+            resp.event_or_content.get(),
+        ) {
+            Ok(content) => Some((content.alias, content.alt_aliases)),
+            Err(e) => {
+                error!("Failed to parse server canonical_alias for {room_id}: {e:?}");
+                None
+            }
+        },
+        Err(e) => {
+            if alias_error_status(&e) == Some(404) {
+                // No canonical_alias state event → a valid, fresh "empty" read.
+                Some((None, Vec::new()))
+            } else {
+                error!("Failed to read server canonical_alias for {room_id}: {e:?}");
+                None
+            }
+        }
+    }
+}
+
+/// Send the room's `m.room.canonical_alias` state event (`alias` + `alt_aliases`).
+///
+/// Shared by the sequenced publish/remove flows (as their second, gated step)
+/// and by the standalone Set-as-main request. Returns a human-readable error
+/// string on failure so callers can surface it in a toast.
+async fn set_room_canonical_alias(
+    client: &Client,
+    room_id: &RoomId,
+    alias: Option<OwnedRoomAliasId>,
+    alt_aliases: Vec<OwnedRoomAliasId>,
+) -> Result<(), String> {
+    let Some(room) = client.get_room(room_id) else {
+        return Err(format!("room {room_id} not found"));
+    };
+    let mut content = matrix_sdk::ruma::events::room::canonical_alias::RoomCanonicalAliasEventContent::new();
+    content.alias = alias;
+    content.alt_aliases = alt_aliases;
+    match room.send_state_event(content).await {
+        Ok(_) => {
+            log!("Set canonical alias for room {room_id}.");
+            Ok(())
+        }
+        Err(e) => {
+            error!("Failed to set canonical alias for room {room_id}: {e:?}");
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Actions emitted in response to a [`MatrixRequest::GenerateMatrixLink`].
@@ -1630,9 +1768,46 @@ pub enum MatrixRequest {
         update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
     },
     /// Fetch room-specific settings: topic and whether the room is public.
-    /// Response arrives as a [`RoomSettingsFetchedAction`].
+    /// Response arrives as a [`RoomSettingsFetchedAction`] (or a
+    /// [`RoomSettingsFetchUnavailableAction`] if the room can't be read). Both
+    /// echo `reason` so the alias write gate/registry only accept the reconcile
+    /// that matches the write in flight.
     FetchRoomSettings {
         room_id: OwnedRoomId,
+        reason: crate::home::room_settings_modal::RoomSettingsFetchReason,
+    },
+    /// Publish a new alias into the room directory, mapping it to this room
+    /// (`PUT /directory/room/{alias}`), then — only on success — advertise it
+    /// into `m.room.canonical_alias` using `canonical`/`alt_aliases`. The two
+    /// writes are sequenced (not parallel) so a directory failure never leaves
+    /// an advertised-but-unregistered alias. Requires directory permission on
+    /// the alias's homeserver.
+    PublishRoomAlias {
+        room_id: OwnedRoomId,
+        alias: OwnedRoomAliasId,
+        /// Reconciled canonical alias to write once the directory step succeeds.
+        canonical: Option<OwnedRoomAliasId>,
+        /// Reconciled alt_aliases (already including `alias`) to advertise.
+        alt_aliases: Vec<OwnedRoomAliasId>,
+    },
+    /// Remove an alias from the room directory (`DELETE /directory/room/{alias}`),
+    /// then — only on success — de-advertise it from `m.room.canonical_alias`
+    /// using `canonical`/`alt_aliases`. Sequenced like [`Self::PublishRoomAlias`].
+    RemoveRoomAlias {
+        room_id: OwnedRoomId,
+        alias: OwnedRoomAliasId,
+        /// Reconciled canonical alias to write once the directory step succeeds.
+        canonical: Option<OwnedRoomAliasId>,
+        /// Reconciled alt_aliases (already excluding `alias`) to write.
+        alt_aliases: Vec<OwnedRoomAliasId>,
+    },
+    /// Set the room's canonical alias and alt aliases via the
+    /// `m.room.canonical_alias` state event. Requires the corresponding power
+    /// level (see [`UserPowerLevels::can_set_canonical_alias`]).
+    SetRoomCanonicalAlias {
+        room_id: OwnedRoomId,
+        alias: Option<OwnedRoomAliasId>,
+        alt_aliases: Vec<OwnedRoomAliasId>,
     },
     /// Set the display name (title) of a room.
     SetRoomName {
@@ -4377,14 +4552,212 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::FetchRoomSettings { room_id } => {
-                let Some(client) = get_client() else { continue };
+            MatrixRequest::FetchRoomSettings { room_id, reason } => {
+                // No client → still signal "unavailable" so a waiting alias write
+                // releases its gate/registry instead of stranding (never silently
+                // drop this fetch — the alias reconcile depends on a reply). The
+                // `reason` is echoed so only the matching write reconcile acts.
+                let Some(client) = get_client() else {
+                    Cx::post_action(RoomSettingsFetchUnavailableAction { room_id, reason });
+                    continue;
+                };
                 let _fetch_room_settings_task = Handle::current().spawn(async move {
+                    use crate::home::room_settings_modal::{reconcile_fetch_outcome, ReconcileFetchOutcome};
                     if let Some(room) = client.get_room(&room_id) {
                         let topic = room.topic();
                         let is_public = room.is_public().unwrap_or(false);
-                        Cx::post_action(RoomSettingsFetchedAction { room_id, topic, is_public });
+                        // Alias edit controls are gated on the power level to send
+                        // `m.room.canonical_alias` (see `UserPowerLevels`).
+                        let can_manage_aliases = match client.user_id() {
+                            Some(user_id) => UserPowerLevels::from_room(&room, user_id)
+                                .await
+                                .is_some_and(|pl| pl.can_set_canonical_alias()),
+                            None => false,
+                        };
+                        // SINGLE SOURCE OF TRUTH (round 8): EVERY alias fetch —
+                        // Open, recovery Open, and reconcile alike — reads
+                        // `m.room.canonical_alias` from the SERVER, captured AFTER
+                        // the power-level await (post time). The local
+                        // `room.canonical_alias()/alt_aliases()` cache lags
+                        // `send_state_event`, so ranking a cache read against a
+                        // server read by epoch could apply a stale snapshot; with
+                        // one source there is no cross-source provenance to rank and
+                        // a payload can never be a stale cache value. A failed fresh
+                        // read releases via Unavailable rather than apply anything.
+                        let (canonical_alias, alt_aliases) = match reconcile_fetch_outcome(
+                            fetch_canonical_alias_from_server(&client, &room_id).await,
+                        ) {
+                            ReconcileFetchOutcome::Fetched { canonical, alt_aliases } => {
+                                (canonical, alt_aliases)
+                            }
+                            ReconcileFetchOutcome::Unavailable => {
+                                Cx::post_action(RoomSettingsFetchUnavailableAction { room_id, reason });
+                                return;
+                            }
+                        };
+                        Cx::post_action(RoomSettingsFetchedAction {
+                            room_id,
+                            reason,
+                            topic,
+                            is_public,
+                            canonical_alias,
+                            alt_aliases,
+                            can_manage_aliases,
+                        });
+                    } else {
+                        // Room not currently available — release any waiting gate.
+                        Cx::post_action(RoomSettingsFetchUnavailableAction { room_id, reason });
                     }
+                });
+            }
+
+            MatrixRequest::PublishRoomAlias { room_id, alias, canonical, alt_aliases } => {
+                // P2 preflight: if the client is gone nothing is sent (attempted:
+                // false), so the modal/registry release immediately with no fetch.
+                let Some(client) = get_client() else {
+                    let _ = (canonical, alt_aliases);
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::Publish,
+                        alias: Some(alias),
+                        error: Some("Not signed in — couldn't publish the address".to_string()),
+                        attempted: false,
+                    });
+                    continue;
+                };
+                let _publish_alias_task = Handle::current().spawn(async move {
+                    use crate::home::room_settings_modal::{
+                        next_step_after_directory_write, publish_alias_treat_as_success, SequencedAliasStep,
+                    };
+                    // Step 1 — register the alias in the room directory. Idempotent
+                    // repair (P1-3): a 409 conflict is success iff the alias already
+                    // maps to THIS room, so a retry after a prior partial publish
+                    // (registered-but-unadvertised) proceeds to re-advertise instead
+                    // of dying on "already in use".
+                    let request = matrix_sdk::ruma::api::client::alias::create_alias::v3::Request::new(
+                        alias.clone(),
+                        room_id.clone(),
+                    );
+                    let dir_outcome: Result<(), String> = match client.send(request).await {
+                        Ok(_) => Ok(()),
+                        Err(e) => {
+                            let conflict = alias_error_status(&e) == Some(409);
+                            let maps_here = conflict && alias_maps_to_room(&client, &alias, &room_id).await;
+                            if publish_alias_treat_as_success(conflict, maps_here) {
+                                log!("Alias {alias} already maps to this room; treating publish as success.");
+                                Ok(())
+                            } else {
+                                error!("Failed to publish room alias {alias}: {e:?}");
+                                Err(format!("Couldn't publish address {alias}: {e}"))
+                            }
+                        }
+                    };
+                    let error = match next_step_after_directory_write(dir_outcome.is_ok()) {
+                        SequencedAliasStep::Abort => Some(dir_outcome.unwrap_err()),
+                        // Step 2 — only after a successful (or repaired) directory
+                        // write, advertise the alias into `m.room.canonical_alias`.
+                        SequencedAliasStep::WriteCanonical => {
+                            log!("Published room alias {alias}.");
+                            set_room_canonical_alias(&client, &room_id, canonical, alt_aliases)
+                                .await
+                                .err()
+                                .map(|e| format!("Couldn't advertise address {alias}: {e}"))
+                        }
+                    };
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::Publish,
+                        alias: Some(alias),
+                        error,
+                        attempted: true,
+                    });
+                });
+            }
+
+            MatrixRequest::RemoveRoomAlias { room_id, alias, canonical, alt_aliases } => {
+                // P2 preflight: nothing sent → attempted: false.
+                let Some(client) = get_client() else {
+                    let _ = (canonical, alt_aliases);
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::Remove,
+                        alias: Some(alias),
+                        error: Some("Not signed in — couldn't remove the address".to_string()),
+                        attempted: false,
+                    });
+                    continue;
+                };
+                let _remove_alias_task = Handle::current().spawn(async move {
+                    use crate::home::room_settings_modal::{
+                        next_step_after_directory_write, remove_alias_treat_as_success, SequencedAliasStep,
+                    };
+                    // Step 1 — unbind the alias from the room directory. Idempotent
+                    // repair (P1-3): a 404 "not found" is success (already unbound),
+                    // so a retry after a prior partial remove
+                    // (unbound-but-still-advertised) proceeds to de-advertise.
+                    let request = matrix_sdk::ruma::api::client::alias::delete_alias::v3::Request::new(
+                        alias.clone(),
+                    );
+                    let dir_outcome: Result<(), String> = match client.send(request).await {
+                        Ok(_) => Ok(()),
+                        Err(e) => {
+                            let not_found = alias_error_status(&e) == Some(404);
+                            if remove_alias_treat_as_success(not_found) {
+                                log!("Alias {alias} already unbound; treating remove as success.");
+                                Ok(())
+                            } else {
+                                error!("Failed to remove room alias {alias}: {e:?}");
+                                Err(format!("Couldn't remove address {alias}: {e}"))
+                            }
+                        }
+                    };
+                    let error = match next_step_after_directory_write(dir_outcome.is_ok()) {
+                        SequencedAliasStep::Abort => Some(dir_outcome.unwrap_err()),
+                        // Step 2 — only after a successful (or repaired) unbind, drop
+                        // the alias from `m.room.canonical_alias`.
+                        SequencedAliasStep::WriteCanonical => {
+                            log!("Removed room alias {alias}.");
+                            set_room_canonical_alias(&client, &room_id, canonical, alt_aliases)
+                                .await
+                                .err()
+                                .map(|e| format!("Couldn't update the room's addresses: {e}"))
+                        }
+                    };
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::Remove,
+                        alias: Some(alias),
+                        error,
+                        attempted: true,
+                    });
+                });
+            }
+
+            MatrixRequest::SetRoomCanonicalAlias { room_id, alias, alt_aliases } => {
+                // P2 preflight: nothing sent → attempted: false.
+                let Some(client) = get_client() else {
+                    let _ = (alias, alt_aliases);
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::SetCanonical,
+                        alias: None,
+                        error: Some("Not signed in — couldn't update the room's main address".to_string()),
+                        attempted: false,
+                    });
+                    continue;
+                };
+                let _set_canonical_alias_task = Handle::current().spawn(async move {
+                    let error = set_room_canonical_alias(&client, &room_id, alias, alt_aliases)
+                        .await
+                        .err()
+                        .map(|e| format!("Couldn't update the room's main address: {e}"));
+                    Cx::post_action(RoomAliasWriteResultAction {
+                        room_id,
+                        kind: AliasWriteKind::SetCanonical,
+                        alias: None,
+                        error,
+                        attempted: true,
+                    });
                 });
             }
 
@@ -8990,7 +9363,7 @@ bitflags! {
         // const PolicyRuleUser = 1 << 37;
         // const RoomAliases = 1 << 38;
         // const RoomAvatar = 1 << 39;
-        // const RoomCanonicalAlias = 1 << 40;
+        const RoomCanonicalAlias = 1 << 40;
         // const RoomCreate = 1 << 41;
         // const RoomEncryption = 1 << 42;
         // const RoomGuestAccess = 1 << 43;
@@ -9028,6 +9401,7 @@ impl UserPowerLevels {
         retval.set(UserPowerLevels::Sticker, user_power >= power_levels.for_message(MessageLikeEventType::Sticker));
         retval.set(UserPowerLevels::RoomPinnedEvents, user_power >= power_levels.for_state(StateEventType::RoomPinnedEvents));
         retval.set(UserPowerLevels::RoomPowerLevels, power_levels.user_can_send_state(user_id, StateEventType::RoomPowerLevels));
+        retval.set(UserPowerLevels::RoomCanonicalAlias, power_levels.user_can_send_state(user_id, StateEventType::RoomCanonicalAlias));
         retval
     }
 
@@ -9092,6 +9466,12 @@ impl UserPowerLevels {
 
     pub fn can_change_room_power_levels(self) -> bool {
         self.contains(UserPowerLevels::RoomPowerLevels)
+    }
+
+    /// Whether the user may set the room's canonical alias / alt aliases
+    /// (i.e. send the `m.room.canonical_alias` state event).
+    pub fn can_set_canonical_alias(self) -> bool {
+        self.contains(UserPowerLevels::RoomCanonicalAlias)
     }
 }
 
