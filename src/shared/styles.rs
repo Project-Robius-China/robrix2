@@ -211,10 +211,14 @@ script_mod! {
 
     mod.widgets.COLOR_PRIMARY = #ffffff
 
-    // Legacy alias for the surface token. Was a stray `#fefefe` that belonged to
-    // no ramp; every use is a near-white panel background or border, so it now
-    // resolves to the real surface colour (a 0.4% shift, invisible in place).
-    mod.widgets.COLOR_PRIMARY_DARKER = (mod.widgets.RBX_BG_SURFACE)
+    // Was a stray `#fefefe` that belonged to no ramp; every use is a near-white
+    // panel background or border, so it takes the surface value instead (a 0.4%
+    // shift, invisible in place).
+    // NOTE: this file is registered BEFORE design_tokens.rs (see shared/mod.rs),
+    // so it cannot reference `RBX_*` — doing so silently fails to resolve at
+    // runtime and the property falls back to a grey default. Keep the literal,
+    // mirroring RBX_BG_SURFACE.
+    mod.widgets.COLOR_PRIMARY_DARKER = #ffffff
     mod.widgets.COLOR_SECONDARY = #E3E3E3
     mod.widgets.COLOR_SECONDARY_DARKER = #C8C8C8
 
@@ -236,9 +240,13 @@ script_mod! {
     // pixel in the app and appeared nowhere else. "Marked unread" is a user
     // action, so it takes the functional accent instead of the logo cyan (the
     // brand ramp is reserved for brand entry points, per design_tokens.rs).
-    mod.widgets.COLOR_UNREAD_BADGE_MENTIONS = (mod.widgets.RBX_DANGER_FG);
-    mod.widgets.COLOR_UNREAD_BADGE_MARKED = (mod.widgets.RBX_ACCENT);
-    mod.widgets.COLOR_UNREAD_BADGE_MESSAGES = (mod.widgets.RBX_FG_TERTIARY)
+    // Literals mirroring RBX_DANGER_FG / RBX_ACCENT / RBX_FG_TERTIARY — this file
+    // is registered before design_tokens.rs, so `RBX_*` is not resolvable here
+    // (see the note on COLOR_PRIMARY_DARKER above). The Rust consts below do
+    // reference the tokens directly, which keeps the two sides tied together.
+    mod.widgets.COLOR_UNREAD_BADGE_MENTIONS = #C5392F;
+    mod.widgets.COLOR_UNREAD_BADGE_MARKED = #119FB3;
+    mod.widgets.COLOR_UNREAD_BADGE_MESSAGES = #8A98AE
 
 
     mod.widgets.COLOR_TEXT_IDLE = #d8d8d8
