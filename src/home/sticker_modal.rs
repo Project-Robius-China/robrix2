@@ -69,7 +69,7 @@ script_mod! {
                 color: (COLOR_PRIMARY)
                 border_radius: 10.0
                 border_size: 1.0
-                border_color: #xE5E7EB
+                border_color: (RBX_STROKE_SOFT)
             }
 
             // Rounded slot that's always visible. Acts as a placeholder
@@ -80,7 +80,7 @@ script_mod! {
                 flow: Overlay
                 show_bg: true
                 draw_bg +: {
-                    color: #xEDEFF3
+                    color: (RBX_BG_SUNKEN)
                     border_radius: 8.0
                 }
                 thumb := Image {
@@ -99,7 +99,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     draw_text +: {
                         text_style: TITLE_TEXT { font_size: 13 }
-                        color: #x111111
+                        color: (RBX_FG_PRIMARY)
                     }
                     text: ""
                 }
@@ -109,7 +109,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     draw_text +: {
                         text_style: REGULAR_TEXT { font_size: 11 }
-                        color: #x6B7280
+                        color: (RBX_FG_SECONDARY)
                     }
                     text: ""
                 }
@@ -136,7 +136,7 @@ script_mod! {
             flow: Overlay
             show_bg: true
             draw_bg +: {
-                color: #xEDEFF3
+                color: (RBX_BG_SUNKEN)
                 border_radius: 8.0
             }
 
@@ -172,7 +172,7 @@ script_mod! {
                 padding: Inset{left: 4, bottom: 2}
                 draw_text +: {
                     text_style: TITLE_TEXT { font_size: 14 }
-                    color: #x111111
+                    color: (RBX_FG_PRIMARY)
                 }
                 text: ""
             }
@@ -210,7 +210,7 @@ script_mod! {
                 width: Fill, height: Fit
                 draw_text +: {
                     text_style: TITLE_TEXT { font_size: 16 }
-                    color: #x111111
+                    color: (RBX_FG_PRIMARY)
                 }
                 text: "Sticker Packs"
             }
@@ -266,7 +266,7 @@ script_mod! {
                                 width: Fit, height: Fit
                                 draw_text +: {
                                     text_style: TITLE_TEXT { font_size: 13 }
-                                    color: (COLOR_ACTIVE_PRIMARY)
+                                    color: (RBX_ACCENT)
                                 }
                                 text: "Stickers"
                             }
@@ -279,7 +279,7 @@ script_mod! {
                                 width: Fit, height: Fit
                                 draw_text +: {
                                     text_style: REGULAR_TEXT { font_size: 13 }
-                                    color: #x9CA3AF
+                                    color: (RBX_FG_TERTIARY)
                                 }
                                 text: "Stickers"
                             }
@@ -291,7 +291,7 @@ script_mod! {
                         visible: true
                         width: Fill, height: 2
                         show_bg: true
-                        draw_bg +: { color: (COLOR_ACTIVE_PRIMARY) }
+                        draw_bg +: { color: (RBX_ACCENT) }
                     }
                 }
 
@@ -302,7 +302,7 @@ script_mod! {
                     draw_bg +: {
                         color: #0000
                         border_size: 0
-                        color_hover: #00000008
+                        color_hover: (RBX_HIT_HOVER)
                         color_down: #00000015
                         border_radius: 0.0
                     }
@@ -335,7 +335,7 @@ script_mod! {
                                 width: Fit, height: Fit
                                 draw_text +: {
                                     text_style: TITLE_TEXT { font_size: 13 }
-                                    color: (COLOR_ACTIVE_PRIMARY)
+                                    color: (RBX_ACCENT)
                                 }
                                 text: "Catalog"
                             }
@@ -348,7 +348,7 @@ script_mod! {
                                 width: Fit, height: Fit
                                 draw_text +: {
                                     text_style: REGULAR_TEXT { font_size: 13 }
-                                    color: #x9CA3AF
+                                    color: (RBX_FG_TERTIARY)
                                 }
                                 text: "Catalog"
                             }
@@ -360,7 +360,7 @@ script_mod! {
                         visible: false
                         width: Fill, height: 2
                         show_bg: true
-                        draw_bg +: { color: (COLOR_ACTIVE_PRIMARY) }
+                        draw_bg +: { color: (RBX_ACCENT) }
                     }
                 }
 
@@ -371,7 +371,7 @@ script_mod! {
                     draw_bg +: {
                         color: #0000
                         border_size: 0
-                        color_hover: #00000008
+                        color_hover: (RBX_HIT_HOVER)
                         color_down: #00000015
                         border_radius: 0.0
                     }
@@ -384,7 +384,7 @@ script_mod! {
         View {
             width: Fill, height: 1
             show_bg: true
-            draw_bg +: { color: #xE5E7EB }
+            draw_bg +: { color: (RBX_STROKE_SOFT) }
         }
 
         // ── Content panes: Overlay — only one visible at a time ──────────────
@@ -409,13 +409,13 @@ script_mod! {
 
                     LoadingSpinner {
                         width: 32, height: 32
-                        draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                        draw_bg.color: (RBX_ACCENT)
                     }
                     Label {
                         width: Fit, height: Fit
                         draw_text +: {
                             text_style: REGULAR_TEXT { font_size: 12 }
-                            color: #x6B7280
+                            color: (RBX_FG_SECONDARY)
                         }
                         text: "Loading stickers…"
                     }
@@ -449,13 +449,13 @@ script_mod! {
 
                     loading_spinner := LoadingSpinner {
                         width: 36, height: 36
-                        draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                        draw_bg.color: (RBX_ACCENT)
                     }
                     loading_label := Label {
                         width: Fit, height: Fit
                         draw_text +: {
                             text_style: REGULAR_TEXT { font_size: 12 }
-                            color: #x6B7280
+                            color: (RBX_FG_SECONDARY)
                         }
                         text: "Loading sticker packs…"
                     }
@@ -489,7 +489,7 @@ script_mod! {
                         align: Align{x: 0.5, y: 0.5}
                         draw_text +: {
                             text_style: REGULAR_TEXT { font_size: 12 }
-                            color: #xB91C1C
+                            color: (RBX_DANGER_FG)
                         }
                         text: "Failed to load sticker packs."
                     }
@@ -498,9 +498,9 @@ script_mod! {
                         padding: Inset{top: 6, bottom: 6, left: 14, right: 14}
                         text: "Retry"
                         draw_bg +: {
-                            color: (COLOR_ACTIVE_PRIMARY)
-                            color_hover: (COLOR_ACTIVE_PRIMARY_DARKER)
-                            color_down: #0C5DAA
+                            color: (RBX_ACCENT)
+                            color_hover: (RBX_ACCENT_HOVER)
+                            color_down: (RBX_ACCENT_PRESSED)
                             border_radius: 4.0
                         }
                         draw_text +: {
@@ -541,7 +541,7 @@ script_mod! {
                             width: Fill, height: Fit
                             draw_text +: {
                                 text_style: TITLE_TEXT { font_size: 15 }
-                                color: #x111111
+                                color: (RBX_FG_PRIMARY)
                             }
                             text: ""
                         }
@@ -550,7 +550,7 @@ script_mod! {
                     View {
                         width: Fill, height: 1
                         show_bg: true
-                        draw_bg +: { color: #xE5E7EB }
+                        draw_bg +: { color: (RBX_STROKE_SOFT) }
                     }
 
                     sticker_grid_loading := View {
@@ -562,13 +562,13 @@ script_mod! {
 
                         LoadingSpinner {
                             width: 28, height: 28
-                            draw_bg.color: (COLOR_ACTIVE_PRIMARY)
+                            draw_bg.color: (RBX_ACCENT)
                         }
                         Label {
                             width: Fit, height: Fit
                             draw_text +: {
                                 text_style: REGULAR_TEXT { font_size: 11 }
-                                color: #x6B7280
+                                color: (RBX_FG_SECONDARY)
                             }
                             text: "Loading stickers…"
                         }

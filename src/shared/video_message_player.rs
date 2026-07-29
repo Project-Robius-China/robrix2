@@ -315,7 +315,7 @@ script_mod! {
             flow: Overlay
             show_bg: true
             draw_bg +: {
-                color: #x111827
+                color: (RBX_FG_PRIMARY)
                 border_radius: 8.0
             }
 
@@ -336,7 +336,7 @@ script_mod! {
                     height: 48
                     draw_icon +: {
                         svg: (mod.widgets.VIDEO_ICON_FORBIDDEN)
-                        color: #xff4444
+                        color: (RBX_DANGER_FG)
                     }
                     icon_walk: Walk{width: 48, height: 48}
                 }
@@ -358,13 +358,13 @@ script_mod! {
                     icon_walk: Walk{width: 18, height: 18}
                     draw_icon +: {
                         svg: (mod.widgets.VIDEO_ICON_MAXIMISE)
-                        color: #xffffff
+                        color: (RBX_BG_SURFACE)
                     }
                     draw_bg +: {
                         border_radius: 5.0
-                        color: #x111827
-                        color_hover: #x374151
-                        color_down: #x111827
+                        color: (RBX_FG_PRIMARY)
+                        color_hover: (RBX_FG_SECONDARY)
+                        color_down: (RBX_FG_PRIMARY)
                     }
                 }
 
@@ -379,14 +379,14 @@ script_mod! {
                     icon_walk: Walk{width: 18, height: 18}
                     draw_icon +: {
                         svg: (mod.widgets.VIDEO_ICON_VOL_ON)
-                        color: #xffffff
+                        color: (RBX_BG_SURFACE)
                     }
                     draw_bg +: {
                         border_radius: 5.0
-                        color: #x111827
-                        color_hover: #x374151
-                        color_down: #x111827
-                        color_disabled: #x737A85
+                        color: (RBX_FG_PRIMARY)
+                        color_hover: (RBX_FG_SECONDARY)
+                        color_down: (RBX_FG_PRIMARY)
+                        color_disabled: (RBX_FG_DISABLED)
                     }
                 }
             }
@@ -397,7 +397,7 @@ script_mod! {
             height: Fit
             visible: false
             flow: Flow.Right { wrap: true }
-            draw_text +: { color: #xff4444 }
+            draw_text +: { color: (RBX_DANGER_FG) }
         }
     }
 }
