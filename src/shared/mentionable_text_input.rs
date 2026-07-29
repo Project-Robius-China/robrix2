@@ -1054,7 +1054,8 @@ script_mod! {
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 sdf.box(0. 0. self.rect_size.x self.rect_size.y self.border_radius)
-                let highlight = #x1E90FF30
+                // Selected row uses the app's selection tint, not a one-off blue.
+                let highlight = RBX_BG_SELECTED
                 sdf.fill(Pal.premul(self.color.mix(highlight self.selected)))
                 return sdf.result
             }
@@ -1118,7 +1119,8 @@ script_mod! {
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 sdf.box(0. 0. self.rect_size.x self.rect_size.y self.border_radius)
-                let highlight = #x1E90FF30
+                // Selected row uses the app's selection tint, not a one-off blue.
+                let highlight = RBX_BG_SELECTED
                 sdf.fill(Pal.premul(self.color.mix(highlight self.selected)))
                 return sdf.result
             }
@@ -1181,7 +1183,8 @@ script_mod! {
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 sdf.box(0. 0. self.rect_size.x self.rect_size.y self.border_radius)
-                let highlight = #x1E90FF30
+                // Selected row uses the app's selection tint, not a one-off blue.
+                let highlight = RBX_BG_SELECTED
                 sdf.fill(Pal.premul(self.color.mix(highlight self.selected)))
                 return sdf.result
             }

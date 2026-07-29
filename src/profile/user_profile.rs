@@ -279,7 +279,7 @@ script_mod! {
             height: Fill
             visible: false,
             show_bg: true
-            draw_bg.color: #000000BB
+            draw_bg.color: (RBX_SCRIM)
         }
 
         main_content := SolidView {

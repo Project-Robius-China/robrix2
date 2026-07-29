@@ -20,7 +20,7 @@ script_mod! {
 
         show_bg: true
         draw_bg +: {
-            color: #000000b2
+            color: (RBX_SCRIM)
         }
 
         main_content := RoundedView {

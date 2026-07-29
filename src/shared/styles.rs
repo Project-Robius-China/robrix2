@@ -211,7 +211,10 @@ script_mod! {
 
     mod.widgets.COLOR_PRIMARY = #ffffff
 
-    mod.widgets.COLOR_PRIMARY_DARKER = #fefefe
+    // Legacy alias for the surface token. Was a stray `#fefefe` that belonged to
+    // no ramp; every use is a near-white panel background or border, so it now
+    // resolves to the real surface colour (a 0.4% shift, invisible in place).
+    mod.widgets.COLOR_PRIMARY_DARKER = (mod.widgets.RBX_BG_SURFACE)
     mod.widgets.COLOR_SECONDARY = #E3E3E3
     mod.widgets.COLOR_SECONDARY_DARKER = #C8C8C8
 
