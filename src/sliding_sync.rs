@@ -2419,10 +2419,13 @@ pub fn spawn_async_task<F>(future: F)
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let rt_handle = TOKIO_RUNTIME.lock().unwrap().get_or_insert_with(|| {
+    tokio_runtime_handle().spawn(future);
+}
+
+fn tokio_runtime_handle() -> Handle {
+    TOKIO_RUNTIME.lock().unwrap().get_or_insert_with(|| {
         tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime")
-    }).handle().clone();
-    rt_handle.spawn(future);
+    }).handle().clone()
 }
 
 fn forward_success_feedback_text(destination_room_id: &RoomId) -> String {
@@ -2823,14 +2826,22 @@ async fn matrix_worker_task(
             }
 
             MatrixRequest::PaginateTimeline {timeline_kind, num_events, direction} => {
-                let Some((timeline, sender)) = get_timeline_and_sender(&timeline_kind) else {
+                let Some((timeline, sender, pagination_status)) =
+                    get_timeline_sender_and_pagination_status(&timeline_kind)
+                else {
                     log!("Skipping pagination request for unknown {timeline_kind}");
                     continue;
                 };
+                if !pagination_status.try_start(direction) {
+                    log!("Coalescing duplicate {direction} pagination request for {timeline_kind}.");
+                    continue;
+                }
                 let client = get_client();
 
                 // Spawn a new async task that will make the actual pagination request.
                 let _paginate_task = Handle::current().spawn(async move {
+                    let mut pagination_guard =
+                        PaginationInFlightGuard::new(pagination_status, direction);
                     log!("Starting {direction} pagination request for {timeline_kind}...");
                     if sender.send(TimelineUpdate::PaginationRunning(direction)).is_err() {
                         warning!("Skipping {direction} pagination request for {timeline_kind}: timeline receiver was dropped before start.");
@@ -2885,6 +2896,7 @@ async fn matrix_worker_task(
                                 if direction == PaginationDirection::Forwards { "end" } else { "start" },
                                 if fully_paginated { "yes" } else { "no" },
                             );
+                            pagination_guard.finish(true);
                             if sender.send(TimelineUpdate::PaginationIdle {
                                 fully_paginated,
                                 direction,
@@ -2902,6 +2914,7 @@ async fn matrix_worker_task(
                                 warning!(
                                     "Still got invalid batch token for {timeline_kind} after one recovery attempt; treating as fully paginated."
                                 );
+                                pagination_guard.finish(true);
                                 if sender.send(TimelineUpdate::PaginationIdle {
                                     fully_paginated: true,
                                     direction,
@@ -2921,13 +2934,20 @@ async fn matrix_worker_task(
                                 warning!(
                                     "Treating unknown parent event as end-of-thread for {timeline_kind}."
                                 );
-                                sender.send(TimelineUpdate::PaginationIdle {
+                                pagination_guard.finish(true);
+                                if sender.send(TimelineUpdate::PaginationIdle {
                                     fully_paginated: true,
                                     direction,
-                                }).unwrap();
-                                SignalToUI::set_ui_signal();
+                                }).is_ok() {
+                                    SignalToUI::set_ui_signal();
+                                } else {
+                                    warning!(
+                                        "Dropping completed {direction} pagination update for {timeline_kind}: timeline receiver was dropped."
+                                    );
+                                }
                                 return;
                             }
+                            pagination_guard.finish(false);
                             error!("Error sending {direction} pagination request for {timeline_kind}: {error:?}");
                             if sender.send(TimelineUpdate::PaginationError {
                                 error,
@@ -3110,7 +3130,10 @@ async fn matrix_worker_task(
                             log!("Successfully created thread-focused timeline for room {room_id}, thread {thread_root_event_id}.");
                             let thread_timeline = Arc::new(thread_timeline);
                             let (timeline_update_sender, timeline_update_receiver) = crossbeam_channel::unbounded();
-                            let (request_sender, request_receiver) = watch::channel(Vec::new());
+                            let (request_sender, request_receiver) = watch::channel(TimelineRequest {
+                                backwards_paginate: Vec::new(),
+                                is_timeline_open: true,
+                            });
                             let timeline_subscriber_handler_task = Handle::current().spawn(
                                 timeline_subscriber_handler(
                                     main_room_timeline.room().clone(),
@@ -3128,11 +3151,16 @@ async fn matrix_worker_task(
                                 PerTimelineDetails {
                                     timeline: thread_timeline,
                                     timeline_update_sender,
+                                    pagination_status: Arc::new(
+                                        TimelinePaginationStatus::default(),
+                                    ),
                                     timeline_singleton_endpoints: Some((
                                         timeline_update_receiver,
                                         request_sender,
                                     )),
-                                    timeline_subscriber_handler_task,
+                                    timeline_subscriber: TimelineSubscriber::Running(
+                                        timeline_subscriber_handler_task,
+                                    ),
                                 },
                             );
                             SignalToUI::set_ui_signal();
@@ -6015,7 +6043,17 @@ pub fn start_matrix_tokio() -> Result<tokio::runtime::Handle> {
 
 /// A tokio::watch channel sender for sending requests from the RoomScreen UI widget
 /// to the corresponding background async task for that room (its `timeline_subscriber_handler`).
-pub type TimelineRequestSender = watch::Sender<Vec<BackwardsPaginateUntilEventRequest>>;
+pub type TimelineRequestSender = watch::Sender<TimelineRequest>;
+
+/// Requests made by a timeline UI to its background subscriber.
+pub struct TimelineRequest {
+    /// Pending backwards-pagination-until-event requests.
+    pub backwards_paginate: Vec<BackwardsPaginateUntilEventRequest>,
+    /// Whether this timeline is currently visible in the UI.
+    ///
+    /// While closed, the subscriber updates its local snapshot without enqueueing UI work.
+    pub is_timeline_open: bool,
+}
 
 /// The return type for [`take_timeline_endpoints()`].
 ///
@@ -6026,7 +6064,87 @@ pub struct TimelineEndpoints {
     pub update_sender: crossbeam_channel::Sender<TimelineUpdate>,
     pub update_receiver: crossbeam_channel::Receiver<TimelineUpdate>,
     pub request_sender: TimelineRequestSender,
+    pub pagination_status: Arc<TimelinePaginationStatus>,
     pub successor_room: Option<SuccessorRoom>,
+}
+
+/// Shared pagination lifecycle for one room or thread timeline.
+#[derive(Default)]
+pub struct TimelinePaginationStatus {
+    backwards_in_flight: AtomicBool,
+    forwards_in_flight: AtomicBool,
+    backwards_completed_once: AtomicBool,
+}
+impl TimelinePaginationStatus {
+    fn in_flight(&self, direction: PaginationDirection) -> &AtomicBool {
+        match direction {
+            PaginationDirection::Backwards => &self.backwards_in_flight,
+            PaginationDirection::Forwards => &self.forwards_in_flight,
+        }
+    }
+
+    fn try_start(&self, direction: PaginationDirection) -> bool {
+        self.in_flight(direction)
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn finish(&self, direction: PaginationDirection, completed: bool) {
+        if completed && direction == PaginationDirection::Backwards {
+            self.backwards_completed_once.store(true, Ordering::Release);
+        }
+        self.in_flight(direction).store(false, Ordering::Release);
+    }
+
+    /// Whether backwards pagination is running or has completed successfully before.
+    pub fn backwards_has_started(&self) -> bool {
+        self.backwards_is_in_flight()
+            || self.backwards_completed_once.load(Ordering::Acquire)
+    }
+
+    pub fn backwards_is_in_flight(&self) -> bool {
+        self.backwards_in_flight.load(Ordering::Acquire)
+    }
+}
+
+struct PaginationInFlightGuard {
+    status: Arc<TimelinePaginationStatus>,
+    direction: PaginationDirection,
+    active: bool,
+}
+impl PaginationInFlightGuard {
+    fn new(status: Arc<TimelinePaginationStatus>, direction: PaginationDirection) -> Self {
+        Self {
+            status,
+            direction,
+            active: true,
+        }
+    }
+
+    /// Releases ownership before the terminal UI notification is sent.
+    fn finish(&mut self, completed: bool) {
+        if self.active {
+            self.status.finish(self.direction, completed);
+            self.active = false;
+        }
+    }
+}
+impl Drop for PaginationInFlightGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.status.finish(self.direction, false);
+        }
+    }
+}
+
+/// The state of a timeline's background subscriber task.
+///
+/// Main-room subscribers are created only after their timeline is first opened.
+enum TimelineSubscriber {
+    NotStarted {
+        request_receiver: watch::Receiver<TimelineRequest>,
+    },
+    Running(JoinHandle<()>),
 }
 
 /// Info about a timeline for a joined room or a thread in a joined room.
@@ -6035,6 +6153,8 @@ struct PerTimelineDetails {
     timeline: Arc<Timeline>,
     /// A clone-able sender for updates to this timeline.
     timeline_update_sender: crossbeam_channel::Sender<TimelineUpdate>,
+    /// Coordinates overlapping pagination requests for this timeline.
+    pagination_status: Arc<TimelinePaginationStatus>,
     /// A tuple of two separate channel endpoints that can only be taken *once* by the main UI thread.
     ///
     /// 1. The single receiver that can receive updates from this timeline.
@@ -6049,8 +6169,32 @@ struct PerTimelineDetails {
         crossbeam_channel::Receiver<TimelineUpdate>,
         TimelineRequestSender,
     )>,
-    /// The async task that listens for updates for this timeline.
-    timeline_subscriber_handler_task: JoinHandle<()>,
+    /// The backend task that listens for updates for this timeline.
+    timeline_subscriber: TimelineSubscriber,
+}
+impl PerTimelineDetails {
+    /// Starts this timeline's subscriber if it has not been opened before.
+    fn ensure_subscriber_started(&mut self) {
+        let request_receiver = match &self.timeline_subscriber {
+            TimelineSubscriber::NotStarted { request_receiver } => request_receiver.clone(),
+            TimelineSubscriber::Running(_) => return,
+        };
+        let task = tokio_runtime_handle().spawn(timeline_subscriber_handler(
+            self.timeline.room().clone(),
+            self.timeline.clone(),
+            self.timeline_update_sender.clone(),
+            request_receiver,
+            None,
+        ));
+        self.timeline_subscriber = TimelineSubscriber::Running(task);
+    }
+}
+impl Drop for PerTimelineDetails {
+    fn drop(&mut self) {
+        if let TimelineSubscriber::Running(task) = &self.timeline_subscriber {
+            task.abort();
+        }
+    }
 }
 
 struct JoinedRoomDetails {
@@ -6072,10 +6216,6 @@ struct JoinedRoomDetails {
 impl Drop for JoinedRoomDetails {
     fn drop(&mut self) {
         log!("Dropping JoinedRoomDetails for room {}", self.room_id);
-        self.main_timeline.timeline_subscriber_handler_task.abort();
-        for thread_timeline in self.thread_timelines.values() {
-            thread_timeline.timeline_subscriber_handler_task.abort();
-        }
         if let Some(room_encryption_subscriber_task) = self.room_encryption_subscriber_task.take() {
             room_encryption_subscriber_task.abort();
         }
@@ -6114,6 +6254,22 @@ fn get_timeline(kind: &TimelineKind) -> Option<Arc<Timeline>> {
 fn get_timeline_and_sender(kind: &TimelineKind) -> Option<(Arc<Timeline>, crossbeam_channel::Sender<TimelineUpdate>)> {
     get_per_timeline_details(ALL_JOINED_ROOMS.lock().unwrap().deref_mut(), kind)
         .map(|details| (details.timeline.clone(), details.timeline_update_sender.clone()))
+}
+
+/// Returns the timeline endpoints needed by the pagination worker.
+fn get_timeline_sender_and_pagination_status(
+    kind: &TimelineKind,
+) -> Option<(
+    Arc<Timeline>,
+    crossbeam_channel::Sender<TimelineUpdate>,
+    Arc<TimelinePaginationStatus>,
+)> {
+    get_per_timeline_details(ALL_JOINED_ROOMS.lock().unwrap().deref_mut(), kind)
+        .map(|details| (
+            details.timeline.clone(),
+            details.timeline_update_sender.clone(),
+            details.pagination_status.clone(),
+        ))
 }
 
 /// Obtains the lock on `ALL_JOINED_ROOMS` and returns the main timeline for the given room.
@@ -6407,10 +6563,12 @@ pub fn take_timeline_endpoints(kind: &TimelineKind) -> Option<TimelineEndpoints>
         TimelineKind::Thread { thread_root_event_id, .. } => jrd.thread_timelines.get_mut(thread_root_event_id)?,
     };
     let (update_receiver, request_sender) = details.timeline_singleton_endpoints.take()?;
+    details.ensure_subscriber_started();
     Some(TimelineEndpoints {
         update_sender: details.timeline_update_sender.clone(),
         update_receiver,
         request_sender,
+        pagination_status: details.pagination_status.clone(),
         successor_room: details.timeline.room().successor_room(),
     })
 }
@@ -7668,14 +7826,11 @@ async fn add_new_room(
     );
     let (timeline_update_sender, timeline_update_receiver) = crossbeam_channel::unbounded();
 
-    let (request_sender, request_receiver) = watch::channel(Vec::new());
-    let timeline_subscriber_handler_task = Handle::current().spawn(timeline_subscriber_handler(
-        new_room.room.clone(),
-        timeline.clone(),
-        timeline_update_sender.clone(),
-        request_receiver,
-        None,
-    ));
+    // The subscriber is started lazily when this timeline is first opened.
+    let (request_sender, request_receiver) = watch::channel(TimelineRequest {
+        backwards_paginate: Vec::new(),
+        is_timeline_open: true,
+    });
 
     // We need to add the room to the `ALL_JOINED_ROOMS` list before we can send
     // an `AddJoinedRoom` update to the RoomsList widget, because that widget might
@@ -7689,7 +7844,8 @@ async fn add_new_room(
                 timeline,
                 timeline_singleton_endpoints: Some((timeline_update_receiver, request_sender)),
                 timeline_update_sender,
-                timeline_subscriber_handler_task,
+                pagination_status: Arc::new(TimelinePaginationStatus::default()),
+                timeline_subscriber: TimelineSubscriber::NotStarted { request_receiver },
             },
             thread_timelines: HashMap::new(),
             pending_thread_timelines: HashSet::new(),
@@ -8458,7 +8614,7 @@ async fn timeline_subscriber_handler(
     room: Room,
     timeline: Arc<Timeline>,
     timeline_update_sender: crossbeam_channel::Sender<TimelineUpdate>,
-    mut request_receiver: watch::Receiver<Vec<BackwardsPaginateUntilEventRequest>>,
+    mut request_receiver: watch::Receiver<TimelineRequest>,
     thread_root_event_id: Option<OwnedEventId>,
 ) {
 
@@ -8502,6 +8658,9 @@ async fn timeline_subscriber_handler(
     let mut target_event_id = None;
     // the timeline index and event ID of the target event, if it has been found.
     let mut found_target_event_id: Option<(usize, OwnedEventId)> = None;
+    // Subscribers are spawned when opened. Once hidden, they retain only their latest local snapshot.
+    let mut is_timeline_open = true;
+    let mut has_unsent_changes = false;
 
     loop { tokio::select! {
         // we should check for new requests before handling new timeline updates,
@@ -8511,19 +8670,64 @@ async fn timeline_subscriber_handler(
         // Handle updates to the current backwards pagination requests.
         Ok(()) = request_receiver.changed() => {
             let prev_target_event_id = target_event_id.clone();
-            let new_request_details = request_receiver
-                .borrow_and_update()
-                .iter()
-                .find_map(|req| req.room_id
-                    .eq(&room_id)
-                    .then(|| (req.target_event_id.clone(), req.starting_index, req.current_tl_len))
-                );
+            let (now_open, new_request_details) = {
+                let request = request_receiver.borrow_and_update();
+                let details = request.backwards_paginate
+                    .iter()
+                    .find_map(|request| request.room_id
+                        .eq(&room_id)
+                        .then(|| (
+                            request.target_event_id.clone(),
+                            request.starting_index,
+                            request.current_tl_len,
+                        ))
+                    );
+                (request.is_timeline_open, details)
+            };
+
+            let mut target_event_resolved_on_reopen = false;
+            if now_open && !is_timeline_open && has_unsent_changes {
+                let len = timeline_items.len();
+                let snapshot_sent = timeline_update_sender.send(TimelineUpdate::NewItems {
+                    new_items: timeline_items.clone(),
+                    changed_indices: 0..len,
+                    clear_cache: true,
+                    is_append: false,
+                }).is_ok();
+                if snapshot_sent {
+                    if let Some((_stale_index, found_event_id)) =
+                        found_target_event_id.take()
+                    {
+                        if let Some(index) = timeline_items.iter().position(|item| {
+                            item.as_event()
+                                .and_then(|event| event.event_id())
+                                .is_some_and(|event_id| event_id == found_event_id)
+                        }) {
+                            target_event_resolved_on_reopen = true;
+                            let _ = timeline_update_sender.send(
+                                TimelineUpdate::TargetEventFound {
+                                    target_event_id: found_event_id,
+                                    index,
+                                },
+                            );
+                        }
+                    }
+                    SignalToUI::set_ui_signal();
+                }
+                has_unsent_changes = false;
+            }
+            is_timeline_open = now_open;
 
             target_event_id = new_request_details.as_ref().map(|(ev, ..)| ev.clone());
+            if target_event_resolved_on_reopen {
+                target_event_id = None;
+            }
 
             // If we received a new request, start searching backwards for the target event.
             if let Some((new_target_event_id, starting_index, current_tl_len)) = new_request_details {
-                if prev_target_event_id.as_ref() != Some(&new_target_event_id) {
+                if !target_event_resolved_on_reopen
+                    && prev_target_event_id.as_ref() != Some(&new_target_event_id)
+                {
                     let starting_index = if current_tl_len == timeline_items.len() {
                         starting_index
                     } else {
@@ -8727,29 +8931,31 @@ async fn timeline_subscriber_handler(
                 if LOG_TIMELINE_DIFFS {
                     log!("timeline_subscriber: applied {num_updates} updates for room {room_id}, thread {thread_root_event_id:?}, timeline now has {} items. is_append? {is_append}, clear_cache? {clear_cache}. Changes: {changed_indices:?}.", timeline_items.len());
                 }
-                timeline_update_sender.send(TimelineUpdate::NewItems {
-                    new_items: timeline_items.clone(),
-                    changed_indices,
-                    clear_cache,
-                    is_append,
-                }).expect("Error: timeline update sender couldn't send update with new items!");
+                if is_timeline_open {
+                    timeline_update_sender.send(TimelineUpdate::NewItems {
+                        new_items: timeline_items.clone(),
+                        changed_indices,
+                        clear_cache,
+                        is_append,
+                    }).expect("Error: timeline update sender couldn't send update with new items!");
 
-                // We must send this update *after* the actual NewItems update,
-                // otherwise the UI thread (RoomScreen) won't be able to correctly locate the target event.
-                if let Some((index, found_event_id)) = found_target_event_id.take() {
-                    target_event_id = None;
-                    timeline_update_sender.send(
-                        TimelineUpdate::TargetEventFound {
-                            target_event_id: found_event_id.clone(),
-                            index,
-                        }
-                    ).unwrap_or_else(
-                        |_e| panic!("Error: timeline update sender couldn't send TargetEventFound({found_event_id}, {index}) to room {room_id}, thread {thread_root_event_id:?}!")
-                    );
+                    // Send this after NewItems so the UI can resolve the reported index.
+                    if let Some((index, found_event_id)) = found_target_event_id.take() {
+                        target_event_id = None;
+                        timeline_update_sender.send(
+                            TimelineUpdate::TargetEventFound {
+                                target_event_id: found_event_id.clone(),
+                                index,
+                            }
+                        ).unwrap_or_else(
+                            |_e| panic!("Error: timeline update sender couldn't send TargetEventFound({found_event_id}, {index}) to room {room_id}, thread {thread_root_event_id:?}!")
+                        );
+                    }
+
+                    SignalToUI::set_ui_signal();
+                } else {
+                    has_unsent_changes = true;
                 }
-
-                // Send a Makepad-level signal to update this room's timeline UI view.
-                SignalToUI::set_ui_signal();
             }
         }
 
@@ -9335,6 +9541,33 @@ mod tests {
     #[test]
     fn worker_shutdown_is_unexpected_without_controlled_teardown() {
         assert!(worker_shutdown_is_unexpected(false, false));
+    }
+
+    #[test]
+    fn pagination_status_coalesces_overlap_and_releases_on_drop() {
+        let status = std::sync::Arc::new(super::TimelinePaginationStatus::default());
+
+        assert!(status.try_start(super::PaginationDirection::Backwards));
+        assert!(!status.try_start(super::PaginationDirection::Backwards));
+        {
+            let _guard = super::PaginationInFlightGuard::new(
+                status.clone(),
+                super::PaginationDirection::Backwards,
+            );
+        }
+        assert!(!status.backwards_is_in_flight());
+        assert!(!status.backwards_has_started());
+
+        assert!(status.try_start(super::PaginationDirection::Backwards));
+        {
+            let mut guard = super::PaginationInFlightGuard::new(
+                status.clone(),
+                super::PaginationDirection::Backwards,
+            );
+            guard.finish(true);
+        }
+        assert!(!status.backwards_is_in_flight());
+        assert!(status.backwards_has_started());
     }
 
     #[cfg(feature = "agent_chat")]

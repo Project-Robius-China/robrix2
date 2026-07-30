@@ -121,12 +121,12 @@ impl Drop for LoadingPane {
     fn drop(&mut self) {
         if let LoadingPaneState::BackwardsPaginateUntilEvent { target_event_id, request_sender, .. } = &self.state {
             warning!("Dropping LoadingPane with target_event_id: {}", target_event_id);
-            request_sender.send_if_modified(|requests| {
-                let initial_len = requests.len();
-                requests.retain(|r| &r.target_event_id != target_event_id);
+            request_sender.send_if_modified(|request| {
+                let initial_len = request.backwards_paginate.len();
+                request.backwards_paginate.retain(|r| &r.target_event_id != target_event_id);
                 // if we actually cancelled this request, notify the receivers
                 // such that they can stop looking for the target event.
-                requests.len() != initial_len
+                request.backwards_paginate.len() != initial_len
             });
         }
     }
@@ -189,12 +189,12 @@ impl Widget for LoadingPane {
         };
         if close_pane {
             if let LoadingPaneState::BackwardsPaginateUntilEvent { target_event_id, request_sender, .. } = &self.state {
-                let _did_send = request_sender.send_if_modified(|requests| {
-                    let initial_len = requests.len();
-                    requests.retain(|r| &r.target_event_id != target_event_id);
+                let _did_send = request_sender.send_if_modified(|request| {
+                    let initial_len = request.backwards_paginate.len();
+                    request.backwards_paginate.retain(|r| &r.target_event_id != target_event_id);
                     // if we actually cancelled this request, notify the receivers
                     // such that they can stop looking for the target event.
-                    requests.len() != initial_len
+                    request.backwards_paginate.len() != initial_len
                 });
                 log!("LoadingPane: {} cancel request for target_event_id: {target_event_id}",
                     if _did_send { "Sent" } else { "Did not send" },
