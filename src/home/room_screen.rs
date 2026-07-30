@@ -1,7 +1,7 @@
 //! The `RoomScreen` widget is the UI view that displays a single room or thread's timeline
 //! of events (messages，state changes, etc.), along with an input bar at the bottom.
 
-use std::{borrow::Cow, cell::{Cell, RefCell}, ops::{DerefMut, Range}, sync::Arc, time::Duration};
+use std::{borrow::Cow, cell::{Cell, RefCell}, ops::{DerefMut, Range}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 
 use bytesize::ByteSize;
 use hashbrown::{HashMap, HashSet};
@@ -27,13 +27,13 @@ use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, e
 
 use matrix_sdk_ui::sync_service::State;
 use crate::{
-    app::{AppState, AppStateAction, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{bot_binding_modal::BotBindingModalAction, create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, encryption_notice::{EncryptionNoticeWidgetRefExt, first_other_member_display_name}, invite_modal::InviteModalAction, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
+    app::{AppState, AppStateAction, BotSettingsState, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{bot_binding_modal::BotBindingModalAction, create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, encryption_notice::{EncryptionNoticeWidgetRefExt, first_other_member_display_name}, invite_modal::InviteModalAction, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
         user_profile::{ShowUserProfileAction, UserProfile, UserProfileAndRoomId, UserProfilePaneInfo, UserProfileSlidingPaneRef, UserProfileSlidingPaneWidgetExt},
         user_profile_cache,
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, translation, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetExt}, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -85,6 +85,13 @@ const TRANSLATION_LANG_POPUP_SCROLL_HEIGHT: f64 = 288.0;
 const TRANSLATION_LANG_POPUP_HEIGHT: f64 = TRANSLATION_LANG_POPUP_SCROLL_HEIGHT + 8.0;
 const TRANSLATION_LANG_POPUP_GAP: f64 = 6.0;
 const TRANSLATION_LANG_POPUP_MARGIN: f64 = 8.0;
+
+fn invite_result_belongs_to_room_screen(
+    pending_invited_users: &HashSet<OwnedUserId>,
+    user_id: &OwnedUserId,
+) -> bool {
+    pending_invited_users.contains(user_id)
+}
 
 fn tl_idx_from_item_id(item_id: usize, has_encryption_notice: bool) -> Option<usize> {
     if has_encryption_notice {
@@ -141,6 +148,10 @@ const BOT_BADGE_BORDER_RADIUS: f64 = 3.0;
 const BOT_BADGE_TEXT_FONT_SIZE: f64 = 8.5;
 const BOT_BADGE_TEXT_TOP_DROP: f64 = -0.08;
 const MAX_OCTOS_ACTION_BUTTONS: usize = 6;
+const AGENTCHAT_APPROVAL_EVENT_KEY: &str = "com.agentchat.approval";
+const AGENTCHAT_APPROVAL_REQUEST_MSGTYPE: &str = "com.agentchat.approval.request.v1";
+const AGENTCHAT_APPROVAL_STATUS_MSGTYPE: &str = "com.agentchat.approval.status.v1";
+const AGENTCHAT_APPROVAL_VERDICT_MSGTYPE: &str = "com.agentchat.approval.verdict.v1";
 const MIN_SMALL_STATE_EVENTS_TO_COLLAPSE: usize = 2;
 
 const fn centered_top_margin(outer_top_margin: f64, outer_height: f64, inner_height: f64) -> f64 {
@@ -246,6 +257,7 @@ struct ApprovalCardRenderState {
     title: String,
     summary: String,
     buttons_enabled: bool,
+    expired: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,7 +288,18 @@ enum OctosApprovalTimeoutBehavior {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum ApprovalProtocol {
+    Octos,
+    AgentChat {
+        agent: String,
+        project: String,
+        project_room_id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct OctosApprovalRequest {
+    protocol: ApprovalProtocol,
     request_id: String,
     tool_name: String,
     tool_args_digest: String,
@@ -384,6 +407,7 @@ fn parse_octos_approval_request_from_content(content: &serde_json::Value) -> Opt
     }
 
     Some(OctosApprovalRequest {
+        protocol: ApprovalProtocol::Octos,
         request_id: request_id.to_owned(),
         tool_name: tool_name.to_owned(),
         tool_args_digest: tool_args_digest.to_owned(),
@@ -394,6 +418,132 @@ fn parse_octos_approval_request_from_content(content: &serde_json::Value) -> Opt
         expires_at: expires_at.to_owned(),
         on_timeout,
     })
+}
+
+fn is_lowercase_hex(value: &str, expected_len: usize) -> bool {
+    value.len() == expected_len
+        && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn parse_agentchat_approval_actions_from_detail(
+    approval: &serde_json::Value,
+) -> Vec<OctosActionButton> {
+    let Some(actions) = approval.get("actions").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+    if actions.len() != 2 {
+        return Vec::new();
+    }
+
+    let mut parsed = Vec::with_capacity(2);
+    for action in actions {
+        let Some(id) = action.get("id").and_then(|value| value.as_str()).map(str::trim) else {
+            return Vec::new();
+        };
+        let Some(label) = action.get("label").and_then(|value| value.as_str()).map(str::trim) else {
+            return Vec::new();
+        };
+        if label.is_empty() {
+            return Vec::new();
+        }
+        parsed.push(OctosActionButton {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            style: parse_octos_action_style(action.get("style").and_then(|value| value.as_str())),
+        });
+    }
+
+    if parsed[0].id != "approve_once"
+        || parsed[0].style != OctosActionStyle::Primary
+        || parsed[1].id != "deny"
+        || parsed[1].style != OctosActionStyle::Danger
+    {
+        return Vec::new();
+    }
+    parsed
+}
+
+fn parse_agentchat_approval_request_from_content(
+    content: &serde_json::Value,
+) -> Option<OctosApprovalRequest> {
+    if content.get("msgtype").and_then(|value| value.as_str()) != Some(AGENTCHAT_APPROVAL_REQUEST_MSGTYPE) {
+        return None;
+    }
+    let approval = content.get(AGENTCHAT_APPROVAL_EVENT_KEY)?;
+    if approval.get("version").and_then(|value| value.as_u64()) != Some(1)
+        || approval.get("kind").and_then(|value| value.as_str()) != Some("request")
+        || parse_agentchat_approval_actions_from_detail(approval).len() != 2
+    {
+        return None;
+    }
+
+    let agent = approval.get("agent")?.as_str()?.trim();
+    let project = approval.get("project")?.as_str()?.trim();
+    let project_room_id = approval.get("project_room_id")?.as_str()?.trim();
+    let request_id = approval.get("request_id")?.as_str()?.trim();
+    let upstream_request_id = approval.get("upstream_request_id")?.as_str()?.trim();
+    let input_digest = approval.get("input_digest")?.as_str()?.trim();
+    let runtime = approval.get("runtime")?.as_str()?.trim();
+    let tool_name = approval.get("tool_name")?.as_str()?.trim();
+    let description = approval.get("description")?.as_str()?.trim();
+    let input_preview = approval.get("input_preview")?.as_str()?.trim();
+    let expires_at = approval.get("expires_at")?.as_u64()?;
+
+    let request_suffix = request_id.strip_prefix("approval_")?;
+    if agent.is_empty()
+        || project.is_empty()
+        || !project_room_id.starts_with('!')
+        || !project_room_id.contains(':')
+        || !is_lowercase_hex(request_suffix, 32)
+        || upstream_request_id.is_empty()
+        || !is_lowercase_hex(input_digest, 64)
+        || !matches!(runtime, "claude" | "codex")
+        || tool_name.is_empty()
+        || expires_at == 0
+    {
+        return None;
+    }
+
+    let summary = match (description.is_empty(), input_preview.is_empty()) {
+        (false, false) => format!("{description}\n{input_preview}"),
+        (false, true) => description.to_owned(),
+        (true, false) => input_preview.to_owned(),
+        (true, true) => project.to_owned(),
+    };
+
+    Some(OctosApprovalRequest {
+        protocol: ApprovalProtocol::AgentChat {
+            agent: agent.to_owned(),
+            project: project.to_owned(),
+            project_room_id: project_room_id.to_owned(),
+        },
+        request_id: request_id.to_owned(),
+        tool_name: tool_name.to_owned(),
+        tool_args_digest: input_digest.to_owned(),
+        title: tool_name.to_owned(),
+        summary,
+        risk_level: OctosApprovalRiskLevel::Normal,
+        authorized_approvers: Vec::new(),
+        expires_at: expires_at.to_string(),
+        on_timeout: OctosApprovalTimeoutBehavior::Notify,
+    })
+}
+
+fn agentchat_custom_message_body_from_content(content: &serde_json::Value) -> Option<&str> {
+    let msgtype = content.get("msgtype")?.as_str()?;
+    let expected_kind = match msgtype {
+        AGENTCHAT_APPROVAL_REQUEST_MSGTYPE => "request",
+        AGENTCHAT_APPROVAL_STATUS_MSGTYPE => "status",
+        AGENTCHAT_APPROVAL_VERDICT_MSGTYPE => "verdict",
+        _ => return None,
+    };
+    let approval = content.get(AGENTCHAT_APPROVAL_EVENT_KEY)?;
+    if approval.get("version").and_then(|value| value.as_u64()) != Some(1)
+        || approval.get("kind").and_then(|value| value.as_str()) != Some(expected_kind)
+    {
+        return None;
+    }
+    content.get("body")?.as_str()
 }
 
 fn parse_octos_actions_from_content(content: &serde_json::Value) -> Vec<OctosActionButton> {
@@ -448,18 +598,31 @@ fn parse_octos_action_payload_for_render(
     content: Option<&serde_json::Value>,
     original_content: Option<&serde_json::Value>,
 ) -> ParsedOctosActionPayload {
-    let approval_request = original_content
-        .and_then(parse_octos_approval_request_from_content);
-    let malformed_approval_request = original_content
-        .is_some_and(|content| content.get("org.octos.approval_request").is_some())
+    let is_agentchat_request = original_content.is_some_and(|content| {
+        content.get("msgtype").and_then(|value| value.as_str()) == Some(AGENTCHAT_APPROVAL_REQUEST_MSGTYPE)
+    });
+    let has_octos_request = original_content
+        .is_some_and(|content| content.get("org.octos.approval_request").is_some());
+    let approval_request = if is_agentchat_request {
+        original_content.and_then(parse_agentchat_approval_request_from_content)
+    } else {
+        original_content.and_then(parse_octos_approval_request_from_content)
+    };
+    let malformed_approval_request = (is_agentchat_request || has_octos_request)
         && approval_request.is_none();
 
     let actions = if malformed_approval_request {
         Vec::new()
-    } else if approval_request.is_some() {
-        original_content
-            .map(parse_octos_approval_actions_from_content)
-            .unwrap_or_default()
+    } else if let Some(approval_request) = approval_request.as_ref() {
+        match approval_request.protocol {
+            ApprovalProtocol::Octos => original_content
+                .map(parse_octos_approval_actions_from_content)
+                .unwrap_or_default(),
+            ApprovalProtocol::AgentChat { .. } => original_content
+                .and_then(|content| content.get(AGENTCHAT_APPROVAL_EVENT_KEY))
+                .map(parse_agentchat_approval_actions_from_detail)
+                .unwrap_or_default(),
+        }
     } else {
         content
             .map(parse_octos_actions_from_content)
@@ -473,16 +636,47 @@ fn parse_octos_action_payload_for_render(
     }
 }
 
-fn compute_action_button_render_state(
+fn current_unix_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(u64::MAX)
+}
+
+fn approval_expiry_millis(protocol: &ApprovalProtocol, expires_at: &str) -> Option<u64> {
+    match protocol {
+        ApprovalProtocol::AgentChat { .. } => expires_at.parse().ok(),
+        ApprovalProtocol::Octos => chrono::DateTime::parse_from_rfc3339(expires_at)
+            .ok()
+            .and_then(|expires_at| u64::try_from(expires_at.timestamp_millis()).ok()),
+    }
+}
+
+fn approval_request_is_expired(
+    approval_request: &OctosApprovalRequest,
+    now_millis: u64,
+) -> bool {
+    approval_expiry_millis(&approval_request.protocol, &approval_request.expires_at)
+        .map(|expires_at| now_millis >= expires_at)
+        .unwrap_or(true)
+}
+
+fn compute_action_button_render_state_at(
     actions: &[OctosActionButton],
     approval_request: Option<&OctosApprovalRequest>,
     current_user_id: Option<&UserId>,
+    now_millis: u64,
 ) -> ActionButtonRenderState {
     let approval_card = approval_request
-        .and_then(|approval_request| (!actions.is_empty()).then(|| ApprovalCardRenderState {
-            title: approval_request.title.clone(),
-            summary: approval_request.summary.clone(),
-            buttons_enabled: local_user_can_approve(approval_request, current_user_id),
+        .and_then(|approval_request| (!actions.is_empty()).then(|| {
+            let expired = approval_request_is_expired(approval_request, now_millis);
+            ApprovalCardRenderState {
+                title: approval_request.title.clone(),
+                summary: approval_request.summary.clone(),
+                buttons_enabled: !expired && local_user_can_approve(approval_request, current_user_id),
+                expired,
+            }
         }));
     let visible_slots = actions
         .iter()
@@ -507,6 +701,19 @@ fn compute_action_button_render_state(
         buttons_enabled,
         visible_slots,
     }
+}
+
+fn compute_action_button_render_state(
+    actions: &[OctosActionButton],
+    approval_request: Option<&OctosApprovalRequest>,
+    current_user_id: Option<&UserId>,
+) -> ActionButtonRenderState {
+    compute_action_button_render_state_at(
+        actions,
+        approval_request,
+        current_user_id,
+        current_unix_time_millis(),
+    )
 }
 
 fn action_button_render_slots_for_display(
@@ -541,11 +748,13 @@ enum OctosActionButtonRequest {
         style: OctosActionStyle,
     },
     Approval {
+        protocol: ApprovalProtocol,
         request_id: String,
         title: String,
         decision: String,
         label: String,
         tool_args_digest: String,
+        expires_at: String,
         style: OctosActionStyle,
     },
 }
@@ -570,6 +779,34 @@ impl OctosActionButtonRequest {
             Self::Generic { style, .. } | Self::Approval { style, .. } => *style,
         }
     }
+
+    fn expiry_millis(&self) -> Option<u64> {
+        match self {
+            Self::Generic { .. } => None,
+            Self::Approval { protocol, expires_at, .. } => {
+                approval_expiry_millis(protocol, expires_at)
+            }
+        }
+    }
+
+    fn is_expired(&self, now_millis: u64) -> bool {
+        self.expiry_millis()
+            .map(|expires_at| now_millis >= expires_at)
+            .unwrap_or(matches!(self, Self::Approval { .. }))
+    }
+}
+
+fn next_approval_expiry_timeout<'a>(
+    requests: impl IntoIterator<Item = &'a OctosActionButtonRequest>,
+    now_millis: u64,
+) -> Option<Duration> {
+    requests
+        .into_iter()
+        .filter_map(OctosActionButtonRequest::expiry_millis)
+        .min()
+        .map(|expires_at| Duration::from_millis(
+            expires_at.saturating_sub(now_millis).max(1)
+        ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -598,6 +835,45 @@ fn build_octos_approval_response_request(
                 "decision": decision,
                 "source_event_id": source_event_id.as_str(),
                 "tool_args_digest": tool_args_digest,
+            },
+            "m.relates_to": {
+                "m.in_reply_to": {
+                    "event_id": source_event_id.as_str(),
+                }
+            }
+        }),
+        target_user_id: original_sender.to_owned(),
+        explicit_room: false,
+        source_event_id: source_event_id.to_owned(),
+    }
+}
+
+fn build_agentchat_approval_verdict_request(
+    timeline_kind: &TimelineKind,
+    label: &str,
+    request_id: &str,
+    action: &str,
+    input_digest: &str,
+    agent: &str,
+    project: &str,
+    project_room_id: &str,
+    source_event_id: &EventId,
+    original_sender: &UserId,
+) -> OctosActionResponseRequest {
+    OctosActionResponseRequest {
+        timeline_kind: timeline_kind.clone(),
+        content: serde_json::json!({
+            "msgtype": AGENTCHAT_APPROVAL_VERDICT_MSGTYPE,
+            "body": label,
+            "com.agentchat.approval": {
+                "version": 1,
+                "kind": "verdict",
+                "agent": agent,
+                "project": project,
+                "project_room_id": project_room_id,
+                "request_id": request_id,
+                "input_digest": input_digest,
+                "action": action,
             },
             "m.relates_to": {
                 "m.in_reply_to": {
@@ -647,9 +923,15 @@ fn local_user_can_approve(
         return false;
     };
 
-    approval_request.authorized_approvers
-        .iter()
-        .any(|approver| approver == current_user_id.as_str())
+    match &approval_request.protocol {
+        ApprovalProtocol::Octos => approval_request.authorized_approvers
+            .iter()
+            .any(|approver| approver == current_user_id.as_str()),
+        // The dedicated encrypted approval room only contains the owner and
+        // managed service accounts. This enables the UI affordance, but is not
+        // an authorization decision: agent-chat still validates event.sender.
+        ApprovalProtocol::AgentChat { .. } => true,
+    }
 }
 
 fn mark_action_buttons_disabled(
@@ -731,6 +1013,47 @@ fn octos_action_button_paths(index: usize) -> (&'static [LiveId], &'static [Live
             &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(primary_button)],
             &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(secondary_button)],
             &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(danger_button)],
+        ),
+    }
+}
+
+fn approval_action_button_paths(index: usize) -> (&'static [LiveId], &'static [LiveId], &'static [LiveId], &'static [LiveId]) {
+    match index {
+        0 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_0)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_0), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_0), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_0), live_id!(danger_button)],
+        ),
+        1 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_1)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_1), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_1), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_1), live_id!(danger_button)],
+        ),
+        2 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_2)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_2), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_2), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_2), live_id!(danger_button)],
+        ),
+        3 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_3)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_3), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_3), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_3), live_id!(danger_button)],
+        ),
+        4 => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_4)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_4), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_4), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_4), live_id!(danger_button)],
+        ),
+        _ => (
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_5)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_5), live_id!(primary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_5), live_id!(secondary_button)],
+            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_5), live_id!(danger_button)],
         ),
     }
 }
@@ -892,6 +1215,20 @@ fn compute_bot_timeline_render_state(raw_body: &str, is_bot_sender: bool) -> Bot
     }
 }
 
+/// The text that should land on the clipboard when copying a message body.
+///
+/// Bot-sent messages embed status / provider / `_metadata_` scaffolding lines
+/// in their raw body; the bubble strips them at render time via
+/// `compute_bot_timeline_render_state`, so copying must strip them the same
+/// way. Human messages are copied verbatim.
+fn clipboard_text_for_message_body(body: String, sender_is_bot: bool) -> String {
+    if sender_is_bot {
+        compute_bot_timeline_render_state(&body, true).body
+    } else {
+        body
+    }
+}
+
 fn display_bot_footer_text(footer: &str) -> &str {
     strip_streaming_cursor_suffix(footer)
         .strip_prefix('_')
@@ -1031,7 +1368,10 @@ thread_local! {
     static ROOM_INFO_ACTION_MODAL_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
-fn set_room_info_action_modal_open(open: bool) {
+/// Set by app.rs each frame from the GLOBAL room-info-action modals
+/// (report / leave-confirm), so the room info sliding pane knows not to
+/// self-close on Escape / tap-outside while one of them is open over it.
+pub fn set_room_info_action_modal_open(open: bool) {
     ROOM_INFO_ACTION_MODAL_OPEN.with(|state| state.set(open));
 }
 
@@ -1299,7 +1639,7 @@ fn detected_bot_binding_for_members(
         }
     }
 
-    let known_bot_user_ids = app_state.bot_settings.known_bot_user_ids();
+    let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
     if let Some(bot_member) = non_self_members
         .iter()
         .find(|room_member|
@@ -1539,7 +1879,9 @@ fn extract_bot_user_ids_from_listbots_reply(
 
         if token.starts_with('@') && token.contains(':') {
             if let Ok(bot_user_id) = UserId::parse(token).map(|user_id| user_id.to_owned()) {
-                push_bot(bot_user_id);
+                if BotSettingsState::is_valid_known_bot_user_id(bot_user_id.as_ref()) {
+                    push_bot(bot_user_id);
+                }
             }
             continue;
         }
@@ -1547,7 +1889,9 @@ fn extract_bot_user_ids_from_listbots_reply(
         if token.contains(':') && !token.starts_with('@') {
             let full_user_id = format!("@{token}");
             if let Ok(bot_user_id) = UserId::parse(&full_user_id).map(|user_id| user_id.to_owned()) {
-                push_bot(bot_user_id);
+                if BotSettingsState::is_valid_known_bot_user_id(bot_user_id.as_ref()) {
+                    push_bot(bot_user_id);
+                }
             }
             continue;
         }
@@ -1597,7 +1941,6 @@ script_mod! {
     mod.widgets.COLOR_BOT_CARD_BORDER = #xD8E3F0
     mod.widgets.COLOR_BOT_STATUS_BG = #xEEF4FB
     mod.widgets.COLOR_BOT_STATUS_TEXT = #x5A6F86
-    mod.widgets.COLOR_BOT_PROVIDER_TEXT = #x708399
     mod.widgets.COLOR_BOT_FOOTER_TEXT = #x8B98A7
     mod.widgets.COLOR_BOT_CODE_BG = #xECF2F8
     mod.widgets.COLOR_BOT_CODE_BORDER = #xD5E0ED
@@ -1901,6 +2244,54 @@ script_mod! {
     }
 
     // The view used for each text-based message event in a room's timeline.
+    // The per-message meta band: copy action (left) · bot model metadata
+    // (middle) · read receipts (right). Declared once and instantiated by both
+    // the Message and CondensedMessage templates — CondensedMessage re-declares
+    // its whole `body` subtree with `:=`, so it cannot inherit this from Message.
+    // (Named MessageMetaBand to avoid colliding with the retired floating
+    // MessageActionBar popup referenced in a commented-out block below.)
+    mod.widgets.MessageMetaBand = View {
+        width: Fill,
+        height: Fit
+        flow: Right,
+        align: Align{y: 0.5}
+        spacing: (SPACE_XS)
+
+        copy_button := RobrixNeutralIconButton {
+            visible: false
+            width: Fit,
+            height: Fit,
+            padding: (SPACE_XS)
+            // Optical alignment: cancel the button's own SPACE_XS padding so
+            // the icon glyph lines up with the message text's left edge.
+            margin: Inset{ left: -4 }
+            spacing: 0
+            draw_bg +: {
+                color: (RBX_TRANSPARENT)
+                color_hover: (RBX_HIT_HOVER)
+                color_down: (RBX_HIT_DOWN)
+                border_size: 0.0
+            }
+            draw_icon +: { svg: (ICON_COPY), color: (RBX_FG_TERTIARY) }
+            icon_walk: Walk{width: (RBX_ICON_SM), height: (RBX_ICON_SM)}
+            text: ""
+        }
+        metadata_label := Label {
+            visible: false
+            width: Fill,
+            height: Fit
+            padding: 0
+            max_lines: 1
+            text_overflow: Ellipsis
+            draw_text +: {
+                text_style: RBX_TEXT_META {}
+                color: (RBX_FG_TERTIARY)
+            }
+            text: ""
+        }
+        avatar_row := mod.widgets.AvatarRow {}
+    }
+
     mod.widgets.Message = set_type_default() do #(Message::register_widget(vm)) {
 
         width: Fill,
@@ -2004,9 +2395,6 @@ script_mod! {
                     width: #(MESSAGE_PROFILE_AVATAR_SIZE),
                     height: #(MESSAGE_PROFILE_AVATAR_SIZE),
                 }
-                timestamp := Timestamp {
-                    margin: Inset{ top: 5.9 }
-                }
                 edited_indicator := EditedIndicator { }
                 tsp_sign_indicator := TspSignIndicator { }
             }
@@ -2047,7 +2435,7 @@ script_mod! {
                         padding: Inset{left: #(BOT_BADGE_HORIZONTAL_PADDING), right: #(BOT_BADGE_HORIZONTAL_PADDING)}
                         show_bg: true
                         draw_bg +: {
-                            color: (COLOR_ACTIVE_PRIMARY)
+                            color: (RBX_ACCENT_SOFT)
                             border_radius: #(BOT_BADGE_BORDER_RADIUS)
                         }
                         bot_badge_label := Label {
@@ -2059,10 +2447,13 @@ script_mod! {
                                     font_size: #(BOT_BADGE_TEXT_FONT_SIZE)
                                     top_drop: #(BOT_BADGE_TEXT_TOP_DROP)
                                 }
-                                color: #fff
+                                color: (RBX_ACCENT)
                             }
                             text: "bot"
                         }
+                    }
+                    timestamp := Timestamp {
+                        margin: Inset{ left: (SPACE_XS) }
                     }
                 }
 
@@ -2119,34 +2510,6 @@ script_mod! {
                         }
                     }
 
-                    bot_metadata_footer := View {
-                        visible: false
-                        width: Fill
-                        height: Fit
-                        flow: Down
-                        spacing: 2.0
-                        padding: Inset{ left: 2.0 }
-
-                        bot_provider_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
-                            }
-                            text: ""
-                        }
-
-                        bot_footer_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
-                            }
-                            text: ""
-                        }
-                    }
                 }
 
                 message := HtmlOrPlaintext { }
@@ -2159,41 +2522,7 @@ script_mod! {
                     spacing: 6.0
                     margin: Inset{ top: 8.0, bottom: 2.0 }
 
-                    approval_request_view := RoundedView {
-                        visible: false
-                        width: Fill
-                        height: Fit
-                        flow: Down
-                        spacing: 4.0
-                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
-                        show_bg: true
-                        draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 12.0
-                            border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
-                        }
-
-                        approval_title_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: theme.font_bold { font_size: 10.5 }
-                                color: (mod.widgets.COLOR_TEXT)
-                            }
-                            text: ""
-                        }
-
-                        approval_summary_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
-                            }
-                            text: ""
-                        }
-                    }
+                    approval_request_view := mod.widgets.AgentApprovalCard {}
 
                     action_button_row := View {
                         visible: false
@@ -2212,12 +2541,12 @@ script_mod! {
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
                 download_section := mod.widgets.MessageDownloadSection {}
+                message_action_bar := mod.widgets.MessageMetaBand {}
                 View {
                     width: Fill,
                     height: Fit
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2308,34 +2637,6 @@ script_mod! {
                         }
                     }
 
-                    bot_metadata_footer := View {
-                        visible: false
-                        width: Fill
-                        height: Fit
-                        flow: Down
-                        spacing: 2.0
-                        padding: Inset{ left: 2.0 }
-
-                        bot_provider_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_PROVIDER_TEXT)
-                            }
-                            text: ""
-                        }
-
-                        bot_footer_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
-                                color: (mod.widgets.COLOR_BOT_FOOTER_TEXT)
-                            }
-                            text: ""
-                        }
-                    }
                 }
 
                 message := HtmlOrPlaintext { }
@@ -2347,41 +2648,7 @@ script_mod! {
                     spacing: 6.0
                     margin: Inset{ top: 8.0, bottom: 2.0 }
 
-                    approval_request_view := RoundedView {
-                        visible: false
-                        width: Fill
-                        height: Fit
-                        flow: Down
-                        spacing: 4.0
-                        padding: Inset{ left: 12.0, right: 12.0, top: 10.0, bottom: 10.0 }
-                        show_bg: true
-                        draw_bg +: {
-                            color: (mod.widgets.COLOR_BOT_STATUS_BG)
-                            border_radius: 12.0
-                            border_size: 1.0
-                            border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
-                        }
-
-                        approval_title_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: theme.font_bold { font_size: 10.5 }
-                                color: (mod.widgets.COLOR_TEXT)
-                            }
-                            text: ""
-                        }
-
-                        approval_summary_label := Label {
-                            width: Fill
-                            height: Fit
-                            draw_text +: {
-                                text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                                color: (mod.widgets.COLOR_BOT_STATUS_TEXT)
-                            }
-                            text: ""
-                        }
-                    }
+                    approval_request_view := mod.widgets.AgentApprovalCard {}
 
                     action_button_row := View {
                         visible: false
@@ -2400,12 +2667,12 @@ script_mod! {
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
                 download_section := mod.widgets.MessageDownloadSection {}
+                message_action_bar := mod.widgets.MessageMetaBand {}
                 View {
                     width: Fill,
                     height: Fit
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2441,7 +2708,6 @@ script_mod! {
                     height: Fit,
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2469,7 +2735,6 @@ script_mod! {
                     height: Fit,
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2500,7 +2765,6 @@ script_mod! {
                     height: Fit,
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -2529,7 +2793,6 @@ script_mod! {
                     height: Fit,
                     flow: Right,
                     reaction_list := mod.widgets.ReactionList { }
-                    avatar_row := mod.widgets.AvatarRow {}
                 }
                 thread_root_summary := mod.widgets.ThreadRootSummary {}
             }
@@ -4085,11 +4348,12 @@ script_mod! {
     }
 
     mod.widgets.ReportRoomModal = #(ReportRoomModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 430 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 430
+        RoundedShadowView {
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -4098,8 +4362,13 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: (COLOR_PRIMARY)
-                border_radius: 6.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title := Label {
@@ -4107,7 +4376,7 @@ script_mod! {
                 height: Fit
                 draw_text +: {
                     text_style: TITLE_TEXT { font_size: 13 }
-                    color: #000
+                    color: (RBX_FG_PRIMARY)
                 }
                 text: "Report Room"
             }
@@ -4672,19 +4941,6 @@ script_mod! {
                     delete_bot_modal_inner := mod.widgets.DeleteBotModal {}
                 }
             }
-
-            report_room_modal := Modal {
-                content +: {
-                    report_room_modal_inner := mod.widgets.ReportRoomModal {}
-                }
-            }
-
-            leave_room_confirm_modal := Modal {
-                content +: {
-                    leave_room_confirm_modal_inner := mod.widgets.NegativeConfirmationModal {}
-                }
-            }
-
 
             /*
              * TODO: add the action bar back in as a series of floating buttons.
@@ -5868,6 +6124,12 @@ impl RoomInfoSlidingPaneRef {
 
 #[derive(Clone, Debug)]
 pub enum ReportRoomModalAction {
+    /// Emitted by RoomScreen to open the (now global, app-root) report modal
+    /// for a specific room. Carries the room so app.rs can route the result.
+    Open {
+        room_id: OwnedRoomId,
+        room_name_id: RoomNameId,
+    },
     Close,
     Submit(String),
 }
@@ -6002,6 +6264,9 @@ pub struct RoomScreen {
     /// Timeout used to evict stalled streaming states without per-frame polling.
     #[rust]
     streaming_timeout_timer: Timer,
+    /// Timeout that redraws visible approval cards when their deadline passes.
+    #[rust]
+    approval_expiry_timer: Timer,
     /// Whether the in-room app service quick actions card is currently visible.
     #[rust] show_app_service_actions: bool,
     #[rust] threads_pane_state: ThreadsPaneState,
@@ -6095,10 +6360,6 @@ impl Widget for RoomScreen {
         // uid, so route them the same as the overlay pane's.
         let info_content_widget_uid = self.room_info_sliding_pane(cx, ids!(info_content)).widget_uid();
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
-        set_room_info_action_modal_open(
-            self.view.modal(cx, ids!(report_room_modal)).is_open()
-                || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open()
-        );
 
         // Streaming animation frame handler
         if let Some(_ne) = self.streaming_next_frame.is_event(event) {
@@ -6197,6 +6458,11 @@ impl Widget for RoomScreen {
             }
 
             self.schedule_stream_timeout(cx);
+        }
+
+        if self.approval_expiry_timer.is_event(event).is_some() {
+            self.approval_expiry_timer = Timer::empty();
+            self.redraw_timeline_list(cx);
         }
 
         // Handle actions here before processing timeline updates.
@@ -6321,7 +6587,13 @@ impl Widget for RoomScreen {
                             title_text: tr_key(app_language, "room_screen.modal.invite.title").into(),
                             body_text: tr_fmt(app_language, "room_screen.modal.invite.body", &[("username", username)]).into(),
                             accept_button_text: Some(tr_key(app_language, "room_screen.modal.invite.accept").into()),
-                            on_accept_clicked: Some(Box::new(move |_cx| {
+                            on_accept_clicked: Some(Box::new(move |cx| {
+                                // Record pending ownership in every RoomScreen of this
+                                // room BEFORE the result arrives (see InviteUserRequested).
+                                cx.action(InviteAction::InviteUserRequested {
+                                    room_id: room_id.clone(),
+                                    user_id: user_id.clone(),
+                                });
                                 submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
                             })),
                             ..Default::default()
@@ -6453,22 +6725,6 @@ impl Widget for RoomScreen {
                     RoomTopBarAction::None => {}
                 }
 
-                if let Some(RoomsListAction::Selected(selected_room)) = action.downcast_ref() {
-                    if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
-                        self.close_report_room_modal(cx);
-                        self.close_leave_room_confirm_modal(cx);
-                    }
-                }
-                if let Some(AppStateAction::RoomFocused(selected_room)) = action.downcast_ref() {
-                    if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
-                        self.close_report_room_modal(cx);
-                        self.close_leave_room_confirm_modal(cx);
-                    }
-                }
-                if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
-                    self.close_report_room_modal(cx);
-                    self.close_leave_room_confirm_modal(cx);
-                }
                 if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
                     if room_info_sliding_pane.is_currently_shown(cx) {
                         self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
@@ -6491,10 +6747,44 @@ impl Widget for RoomScreen {
                     }
                 }
 
+                // Handle a bot picked in the `/invitebot` picker: dispatch the invite.
+                // The action is widget-addressed to exactly this RoomScreen (see
+                // on_bot_invite_selected), so even when the same room is shown by
+                // multiple RoomScreens (main timeline + thread tab) only one
+                // instance dispatches. Success/failure feedback arrives via the
+                // InviteResultAction pipeline below.
+                if let Some(widget_action) = action.as_widget_action() {
+                    if widget_action.widget_uid == self.widget_uid() {
+                        if let MentionableTextInputAction::InviteBotSelected { room_id, user_id } =
+                            widget_action.cast()
+                        {
+                            // Optimistically record the pending invite so a
+                            // reopened picker can't offer the same bot again
+                            // during the network round-trip; the
+                            // InviteResultAction::Failed handler rolls it back.
+                            self.pending_invited_users.insert(user_id.clone());
+                            submit_async_request(MatrixRequest::InviteUser { room_id, user_id });
+                        }
+                    }
+                }
+
+                // An invite was just submitted from a closure-based initiator
+                // (knock-approve, Retry) or the invite modal: record pending
+                // ownership so the InviteResultAction feedback below fires.
+                if let Some(InviteAction::InviteUserRequested { room_id, user_id }) =
+                    action.downcast_ref()
+                {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pending_invited_users.insert(user_id.clone());
+                    }
+                }
+
                 // Handle InviteResultAction to show popup notifications.
                 if let Some(InviteResultAction::Sent { room_id, user_id }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                    // Only the RoomScreen that originated the invite owns its UI feedback.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id)
+                        && invite_result_belongs_to_room_screen(&self.pending_invited_users, user_id)
+                    {
                         self.pending_invited_users.insert(user_id.clone());
                         enqueue_popup_notification(
                             "Invite sent. Waiting for acceptance.",
@@ -6526,8 +6816,10 @@ impl Widget for RoomScreen {
                     }
                 }
                 if let Some(InviteResultAction::Failed { room_id, user_id, error }) = action.downcast_ref() {
-                    // Only handle if this is for the current room.
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                    // Only the RoomScreen that originated the invite owns its UI feedback.
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id)
+                        && invite_result_belongs_to_room_screen(&self.pending_invited_users, user_id)
+                    {
                         self.pending_invited_users.remove(user_id);
                         let error_text = error.to_string();
                         let error_display = error_text.clone();
@@ -6540,7 +6832,13 @@ impl Widget for RoomScreen {
                                 ("error", error_text.as_str()),
                             ]).into(),
                             actions: vec![
-                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                                NotificationAction::new("Retry", NotifActionStyle::Primary, move |cx| {
+                                    // Re-establish pending ownership (the Failed handler
+                                    // just removed it) so the retry's result shows feedback.
+                                    cx.action(InviteAction::InviteUserRequested {
+                                        room_id: room_id_retry.clone(),
+                                        user_id: user_id_retry.clone(),
+                                    });
                                     submit_async_request(MatrixRequest::InviteUser {
                                         room_id: room_id_retry.clone(),
                                         user_id: user_id_retry.clone(),
@@ -6551,32 +6849,6 @@ impl Widget for RoomScreen {
                                 }),
                             ],
                             auto_dismissal_duration: None,
-                            ..Default::default()
-                        });
-                    }
-                }
-                if let Some(ReportRoomResultAction::Sent { room_id }) = action.downcast_ref() {
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
-                        enqueue_popup_notification(
-                            "Room reported successfully.",
-                            PopupKind::Success,
-                            Some(4.0),
-                        );
-                    }
-                }
-                if let Some(ReportRoomResultAction::Failed { room_id, error }) = action.downcast_ref() {
-                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
-                        let error_display = error.to_string();
-                        enqueue_notification(NotificationItem {
-                            kind: PopupKind::Error,
-                            title: Some("Report failed".into()),
-                            message: format!("Failed to report room.\n\nError: {error}").into(),
-                            actions: vec![
-                                NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
-                                    cx.copy_to_clipboard(&error_display);
-                                }),
-                            ],
-                            auto_dismissal_duration: Some(5.0),
                             ..Default::default()
                         });
                     }
@@ -6687,10 +6959,37 @@ impl Widget for RoomScreen {
                         );
                     }
                     RoomInfoPaneAction::ReportRoom => {
-                        self.open_report_room_modal(cx);
+                        // Open the GLOBAL report modal (app root) so it survives
+                        // mobile<->desktop AdaptiveView rebuilds. Carry the room.
+                        if let Some(room_name_id) = self.room_name_id.clone() {
+                            cx.action(ReportRoomModalAction::Open {
+                                room_id: room_name_id.room_id().clone(),
+                                room_name_id,
+                            });
+                        }
                     }
                     RoomInfoPaneAction::LeaveRoom => {
-                        self.open_leave_room_confirm_modal(cx);
+                        // Route to the GLOBAL delete-confirmation modal (app root)
+                        // so it survives mobile<->desktop AdaptiveView rebuilds.
+                        // The room_id is captured in the accept callback.
+                        if let Some(room_id) = self.room_id().cloned() {
+                            let room_name = self
+                                .room_name_id
+                                .as_ref()
+                                .map(|r| r.to_string())
+                                .unwrap_or_default();
+                            let content = ConfirmationModalContent {
+                                title_text: String::from("Leave Room").into(),
+                                body_text: format!("Are you sure you want to leave {room_name}?").into(),
+                                accept_button_text: Some(String::from("Leave").into()),
+                                cancel_button_text: Some(String::from("Cancel").into()),
+                                on_accept_clicked: Some(Box::new(move |_cx| {
+                                    submit_async_request(MatrixRequest::LeaveRoom { room_id });
+                                })),
+                                ..Default::default()
+                            };
+                            cx.action(ConfirmDeleteAction::Show(RefCell::new(Some(content))));
+                        }
                     }
                     // Bubbled by the pane itself into `OpenPeopleProfile`
                     // (handled above); nothing to do here.
@@ -6842,9 +7141,9 @@ impl Widget for RoomScreen {
         // We check which overlay views are visible in the order of those views' z-ordering,
         // such that the top-most views get a chance to handle the event first.
         //
-        let room_info_action_modal_open =
-            self.view.modal(cx, ids!(report_room_modal)).is_open()
-            || self.view.modal(cx, ids!(leave_room_confirm_modal)).is_open();
+        // Report / leave-confirm are now GLOBAL modals (app root); the flag is
+        // maintained by app.rs. Read it so the pane still yields correctly.
+        let room_info_action_modal_open = is_room_info_action_modal_open();
         let is_interactive_hit = utils::is_interactive_hit_event(event);
         let is_pane_shown: bool;
         if room_info_action_modal_open {
@@ -6896,9 +7195,6 @@ impl Widget for RoomScreen {
             } else {
                 Scope::with_props(&room_props)
             };
-            let leave_room_confirm_modal_uid = self
-                .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
-                .widget_uid();
 
 
             // Forward the event to the inner timeline view, but capture any actions it produces
@@ -7099,42 +7395,6 @@ impl Widget for RoomScreen {
                         return false;
                     }
                     None => {}
-                }
-
-                match action.downcast_ref::<ReportRoomModalAction>() {
-                    Some(ReportRoomModalAction::Close) => {
-                        self.close_report_room_modal(cx);
-                        return false;
-                    }
-                    Some(ReportRoomModalAction::Submit(reason)) => {
-                        let Some(room_id) = self.room_id().cloned() else {
-                            self.close_report_room_modal(cx);
-                            return false;
-                        };
-                        submit_async_request(MatrixRequest::ReportRoom {
-                            room_id,
-                            reason: reason.clone(),
-                        });
-                        self.close_report_room_modal(cx);
-                        return false;
-                    }
-                    None => {}
-                }
-
-                if let ConfirmationModalAction::Close(accepted) = action
-                    .as_widget_action()
-                    .widget_uid_eq(leave_room_confirm_modal_uid)
-                    .cast()
-                {
-                    self.close_leave_room_confirm_modal(cx);
-                    if accepted {
-                        if let Some(room_id) = self.room_id().cloned() {
-                            submit_async_request(MatrixRequest::LeaveRoom {
-                                room_id,
-                            });
-                        }
-                    }
-                    return false;
                 }
 
                 if let MessageAction::ToggleAppServiceActions = action
@@ -7642,6 +7902,7 @@ impl Widget for RoomScreen {
                 });
             }
         }
+        self.schedule_approval_expiry(cx);
         DrawStep::done()
     }
 }
@@ -7868,6 +8129,8 @@ impl RoomScreen {
                 resolved_parent_bot_user_id,
                 persisted_bound_bot_user_ids,
                 known_bot_user_ids,
+                can_invite: tl.user_power.can_invite(),
+                pending_invited_users: self.pending_invited_users.iter().cloned().collect(),
             })
         } else {
             self.room_name_id.as_ref().map(|room_name| RoomScreenProps {
@@ -7889,6 +8152,8 @@ impl RoomScreen {
                 resolved_parent_bot_user_id: None,
                 persisted_bound_bot_user_ids: Vec::new(),
                 known_bot_user_ids: Vec::new(),
+                can_invite: false,
+                pending_invited_users: Vec::new(),
             })
         }
     }
@@ -7969,6 +8234,18 @@ impl RoomScreen {
         .unwrap_or_else(Timer::empty);
     }
 
+    fn schedule_approval_expiry(&mut self, cx: &mut Cx) {
+        cx.stop_timer(self.approval_expiry_timer);
+        self.approval_expiry_timer = next_approval_expiry_timeout(
+            self.octos_action_button_contexts
+                .values()
+                .map(|context| &context.request),
+            current_unix_time_millis(),
+        )
+        .map(|duration| cx.start_timeout(duration.as_secs_f64()))
+        .unwrap_or_else(Timer::empty);
+    }
+
     fn set_app_service_actions_visible(&mut self, cx: &mut Cx, visible: bool) {
         self.show_app_service_actions = visible;
         self.redraw(cx);
@@ -7984,14 +8261,6 @@ impl RoomScreen {
 
     fn close_delete_bot_modal(&self, cx: &mut Cx) {
         self.view.modal(cx, ids!(delete_bot_modal)).close(cx);
-    }
-
-    fn close_report_room_modal(&self, cx: &mut Cx) {
-        self.view.modal(cx, ids!(report_room_modal)).close(cx);
-    }
-
-    fn close_leave_room_confirm_modal(&self, cx: &mut Cx) {
-        self.view.modal(cx, ids!(leave_room_confirm_modal)).close(cx);
     }
 
     fn open_create_bot_modal(&mut self, cx: &mut Cx) {
@@ -8016,38 +8285,10 @@ impl RoomScreen {
         self.view.modal(cx, ids!(delete_bot_modal)).open(cx);
     }
 
-    fn open_report_room_modal(&mut self, cx: &mut Cx) {
-        let Some(room_name_id) = self.room_name_id.as_ref() else {
-            return;
-        };
-        self.view
-            .report_room_modal(cx, ids!(report_room_modal_inner))
-            .show(cx, room_name_id);
-        self.view.modal(cx, ids!(report_room_modal)).open(cx);
-    }
-
-    fn open_leave_room_confirm_modal(&mut self, cx: &mut Cx) {
-        let Some(room_name_id) = self.room_name_id.as_ref() else {
-            return;
-        };
-        self.view
-            .confirmation_modal(cx, ids!(leave_room_confirm_modal_inner))
-            .show(cx, ConfirmationModalContent {
-                title_text: String::from("Leave Room").into(),
-                body_text: format!("Are you sure you want to leave {}?", room_name_id).into(),
-                accept_button_text: Some(String::from("Leave").into()),
-                cancel_button_text: Some(String::from("Cancel").into()),
-                ..Default::default()
-            });
-        self.view.modal(cx, ids!(leave_room_confirm_modal)).open(cx);
-    }
-
     fn reset_app_service_ui(&mut self, cx: &mut Cx) {
         self.set_app_service_actions_visible(cx, false);
         self.close_create_bot_modal(cx);
         self.close_delete_bot_modal(cx);
-        self.close_report_room_modal(cx);
-        self.close_leave_room_confirm_modal(cx);
     }
 
     fn resolved_app_service_bot_user_id(
@@ -9177,6 +9418,19 @@ impl RoomScreen {
                     .and_then(|item| matches!(item.cast(), ButtonAction::Clicked(_)).then(|| context.clone()))
             })
         {
+            if clicked_context.request.is_expired(current_unix_time_millis()) {
+                mark_action_buttons_disabled(
+                    &mut self.disabled_octos_action_source_event_ids,
+                    &clicked_context.source_event_id,
+                );
+                self.redraw_timeline_list(cx);
+                enqueue_popup_notification(
+                    tr_key(self.app_language, "room_screen.popup.approval_expired"),
+                    PopupKind::Error,
+                    Some(5.0),
+                );
+                return;
+            }
             if !are_action_buttons_disabled(
                 &self.disabled_octos_action_source_event_ids,
                 clicked_context.source_event_id.as_ref(),
@@ -9190,15 +9444,33 @@ impl RoomScreen {
                         clicked_context.source_event_id.as_ref(),
                         clicked_context.original_sender.as_ref(),
                     ),
-                    OctosActionButtonRequest::Approval { request_id, title, decision, tool_args_digest, .. } => build_octos_approval_response_request(
-                        &tl.kind,
-                        title,
-                        request_id,
-                        decision,
-                        tool_args_digest,
-                        clicked_context.source_event_id.as_ref(),
-                        clicked_context.original_sender.as_ref(),
-                    ),
+                    OctosActionButtonRequest::Approval { protocol, request_id, title, decision, label, tool_args_digest, .. } => {
+                        match protocol {
+                            ApprovalProtocol::Octos => build_octos_approval_response_request(
+                                &tl.kind,
+                                title,
+                                request_id,
+                                decision,
+                                tool_args_digest,
+                                clicked_context.source_event_id.as_ref(),
+                                clicked_context.original_sender.as_ref(),
+                            ),
+                            ApprovalProtocol::AgentChat { agent, project, project_room_id } => {
+                                build_agentchat_approval_verdict_request(
+                                    &tl.kind,
+                                    label,
+                                    request_id,
+                                    decision,
+                                    tool_args_digest,
+                                    agent,
+                                    project,
+                                    project_room_id,
+                                    clicked_context.source_event_id.as_ref(),
+                                    clicked_context.original_sender.as_ref(),
+                                )
+                            }
+                        }
+                    }
                 };
                 mark_action_buttons_disabled(
                     &mut self.disabled_octos_action_source_event_ids,
@@ -9348,7 +9620,41 @@ impl RoomScreen {
                 MessageAction::CopyText(details) => {
                     let Some(tl) = self.tl_state.as_ref() else { return };
                     if let Some(event_tl_item) = Self::find_event_in_timeline(&tl.items, details, has_encryption_notice) {
-                        cx.copy_to_clipboard(&plaintext_body_of_timeline_item(event_tl_item));
+                        // Mirror the timeline's bot detection so the clipboard
+                        // matches what the bubble displays (scaffolding stripped).
+                        let (resolved_parent_bot_user_id, room_bot_user_ids, known_bot_user_ids) =
+                            compute_timeline_bot_context(
+                                scope.data.get::<AppState>(),
+                                tl.kind.room_id(),
+                                tl.room_members.as_ref(),
+                            );
+                        let sender_is_bot = is_timeline_sender_bot(
+                            event_tl_item.sender(),
+                            resolved_parent_bot_user_id.as_deref(),
+                            &room_bot_user_ids,
+                            &known_bot_user_ids,
+                        );
+                        let copy_text = clipboard_text_for_message_body(
+                            plaintext_body_of_timeline_item(event_tl_item),
+                            sender_is_bot,
+                        );
+                        // A bot message can be pure scaffolding (e.g. a progress/
+                        // metrics-only update) whose stripped body is empty —
+                        // don't overwrite the clipboard or claim success then.
+                        if copy_text.is_empty() {
+                            enqueue_popup_notification(
+                                tr_key(self.app_language, "room_screen.popup.message.copy_empty"),
+                                PopupKind::Info,
+                                Some(2.0),
+                            );
+                        } else {
+                            cx.copy_to_clipboard(&copy_text);
+                            enqueue_popup_notification(
+                                tr_key(self.app_language, "room_screen.popup.message.copied"),
+                                PopupKind::Success,
+                                Some(2.0),
+                            );
+                        }
                     }
                     else {
                         enqueue_popup_notification(
@@ -10536,6 +10842,7 @@ impl RoomScreen {
     fn hide_timeline(&mut self) {
         let Some(timeline_kind) = self.timeline_kind.clone() else { return };
         self.streaming_timeout_timer = Timer::empty();
+        self.approval_expiry_timer = Timer::empty();
 
         self.save_state();
 
@@ -10878,6 +11185,13 @@ pub struct RoomScreenProps {
     pub resolved_parent_bot_user_id: Option<OwnedUserId>,
     pub persisted_bound_bot_user_ids: Vec<OwnedUserId>,
     pub known_bot_user_ids: Vec<OwnedUserId>,
+    /// Whether the current user has permission to invite users to this room.
+    /// Gates the `/invitebot` slash command.
+    pub can_invite: bool,
+    /// Invites this client has sent that are still awaiting acceptance —
+    /// consumed by the `/invitebot` picker (at open time) to keep its
+    /// candidate filtering idempotent during the invite round-trip.
+    pub pending_invited_users: Vec<OwnedUserId>,
 }
 
 
@@ -11638,6 +11952,13 @@ fn populate_message_view(
         room_bot_user_ids,
         known_bot_user_ids,
     );
+    // Security-sensitive agent-chat approval fields are always read from the
+    // original event, never from an m.replace edit.
+    let original_structured_content = original_event_content_json(event_tl_item);
+    let agentchat_custom_body = original_structured_content
+        .as_ref()
+        .and_then(agentchat_custom_message_body_from_content)
+        .map(str::to_owned);
 
     let mut is_notice = false; // whether this message is a Notice (automated bot message)
     let mut is_server_notice = false; // whether this message is a Server Notice
@@ -11668,6 +11989,9 @@ fn populate_message_view(
         &msg_like_content.kind,
         MsgLikeKind::Message(msg) if msg.mentions().is_some_and(|m| m.room)
     );
+    // Model/provider metadata for the meta band below the message content,
+    // produced by the bot populate path; None for everything else.
+    let mut band_metadata: Option<String> = None;
     let (item, used_cached_item) = match &msg_like_content.kind {
         MsgLikeKind::Message(msg) => {
             let room_mention_room_id = if msg.mentions().is_some_and(|m| m.room) {
@@ -11710,7 +12034,7 @@ fn populate_message_view(
                                 state.fill_display_buffer();
                                 (state.display_buffer.as_str(), None)
                             };
-                            let _ = populate_bot_text_message_content(
+                            let (_, stream_meta) = populate_bot_text_message_content(
                                 cx,
                                 &item,
                                 app_language,
@@ -11722,6 +12046,7 @@ fn populate_message_view(
                                 Some(link_preview_cache),
                                 sender_is_bot,
                             );
+                            band_metadata = stream_meta;
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
                             // Check for Splash card in custom event field
@@ -11743,7 +12068,7 @@ fn populate_message_view(
                                 // NORMAL MODE: existing logic
                                 let mut link_preview_ref =
                                     item.link_preview(cx, ids!(content.link_preview_view));
-                                new_drawn_status.content_drawn = populate_bot_text_message_content(
+                                let (bot_drawn, bot_meta) = populate_bot_text_message_content(
                                     cx,
                                     &item,
                                     app_language,
@@ -11755,6 +12080,8 @@ fn populate_message_view(
                                     Some(link_preview_cache),
                                     sender_is_bot,
                                 );
+                                new_drawn_status.content_drawn = bot_drawn;
+                                band_metadata = bot_meta;
                             }
                         }
                         (item, false)
@@ -11796,7 +12123,7 @@ fn populate_message_view(
                         }
                         let mut link_preview_ref =
                             item.link_preview(cx, ids!(content.link_preview_view));
-                        new_drawn_status.content_drawn = populate_bot_text_message_content(
+                        let (bot_drawn, bot_meta) = populate_bot_text_message_content(
                             cx,
                             &item,
                             app_language,
@@ -11808,6 +12135,8 @@ fn populate_message_view(
                             Some(link_preview_cache),
                             sender_is_bot,
                         );
+                        new_drawn_status.content_drawn = bot_drawn;
+                        band_metadata = bot_meta;
                         (item, false)
                     }
                 }
@@ -12099,6 +12428,33 @@ fn populate_message_view(
                         (item, false)
                     }
                 }
+                _ if agentchat_custom_body.is_some() => {
+                    has_html_body = false;
+                    let template = if use_compact_view {
+                        id!(CondensedMessage)
+                    } else {
+                        id!(Message)
+                    };
+                    let (item, existed) = list.item_with_existed(cx, item_id, template);
+                    if existed && item_drawn_status.content_drawn {
+                        (item, true)
+                    } else {
+                        let html_or_plaintext_ref = item.html_or_plaintext(cx, ids!(content.message));
+                        let mut link_preview_ref = item.link_preview(cx, ids!(content.link_preview_view));
+                        new_drawn_status.content_drawn = populate_text_message_content(
+                            cx,
+                            &html_or_plaintext_ref,
+                            app_language,
+                            agentchat_custom_body.as_deref().unwrap_or_default(),
+                            None,
+                            None,
+                            Some(&mut link_preview_ref),
+                            Some(media_cache),
+                            Some(link_preview_cache),
+                        );
+                        (item, false)
+                    }
+                }
                 _ => {
                     has_html_body = false;
                     let (item, existed) = list.item_with_existed(cx, item_id, id!(Message));
@@ -12264,7 +12620,27 @@ fn populate_message_view(
         )
         .map(|entry| entry.state.display())
         .unwrap_or_default();
-    item.as_message().set_data(cx, message_details, download_info, download_state);
+    // The copy button only applies to copyable conversational messages;
+    // media/sticker/redacted/UTD items keep it hidden (the band itself stays,
+    // hosting the read receipts and, for bot messages, the model metadata).
+    // Notices only get it from bot senders: agents replying via m.notice are
+    // real replies, while human-sent notices are management-plane feedback
+    // (e.g. the client's own "[App Service] ..." echoes).
+    let show_copy_button = matches!(
+        &msg_like_content.kind,
+        MsgLikeKind::Message(msg) if match msg.msgtype() {
+            MessageType::Text(_) | MessageType::Emote(_) => true,
+            MessageType::Notice(_) => sender_is_bot,
+            _ => false,
+        }
+    );
+    item.as_message().set_data(cx, message_details, download_info, download_state, show_copy_button);
+    // Fill the band's metadata line alongside the other freshly-drawn content.
+    // Cached items keep their previously-populated text (same semantics as the
+    // message body itself), so this must NOT run on the cached path.
+    if !used_cached_item {
+        item.as_message().set_band_metadata(cx, band_metadata);
+    }
 
 
     // If `used_cached_item` is false, we should always redraw the profile, even if profile_drawn is true.
@@ -12321,6 +12697,7 @@ fn populate_message_view(
     let source_event_id = event_tl_item.event_id().map(|event_id| event_id.to_owned());
     populate_octos_action_buttons(
         cx,
+        app_language,
         &item,
         action_button_content.as_ref(),
         original_action_button_content.as_ref(),
@@ -12338,7 +12715,11 @@ fn populate_message_view(
 
     // Set the timestamp.
     if let Some(dt) = unix_time_millis_to_datetime(ts_millis) {
-        item.timestamp(cx, ids!(profile.timestamp)).set_date_time(cx, dt);
+        // Name-only lookup: resolves `username_view.timestamp` on the full
+        // Message template and `profile.timestamp` (gutter) on CondensedMessage.
+        // INVARIANT: each Message-derived template must contain exactly ONE
+        // widget named `timestamp`, or this lookup silently binds to the wrong one.
+        item.timestamp(cx, ids!(timestamp)).set_date_time(cx, dt);
     }
 
     // Suppress "edited" indicator for actively streaming messages.
@@ -12474,7 +12855,7 @@ fn populate_bot_text_message_content(
     media_cache: Option<&mut MediaCache>,
     link_preview_cache: Option<&mut LinkPreviewCache>,
     is_bot_sender: bool,
-) -> bool {
+) -> (bool, Option<String>) {
     let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
     let bot_card_view = item.view(cx, ids!(content.bot_message_card));
     let message_view = item.html_or_plaintext(cx, ids!(content.message));
@@ -12483,7 +12864,7 @@ fn populate_bot_text_message_content(
     message_view.set_visible(cx, !render_state.show_card);
 
     if !render_state.show_card {
-        return populate_text_message_content(
+        let drawn = populate_text_message_content(
             cx,
             &message_view,
             app_language,
@@ -12494,6 +12875,7 @@ fn populate_bot_text_message_content(
             media_cache,
             link_preview_cache,
         );
+        return (drawn, None);
     }
 
     let status_strip = item.view(cx, ids!(content.bot_message_card.bot_status_strip));
@@ -12503,23 +12885,19 @@ fn populate_bot_text_message_content(
             .set_text(cx, status);
     }
 
-    let provider_label = item.label(cx, ids!(content.bot_message_card.bot_metadata_footer.bot_provider_label));
-    if let Some(provider) = render_state.provider.as_ref() {
-        provider_label.set_text(cx, provider);
-        provider_label.set_visible(cx, true);
+    // The provider/footer metadata is rendered by the meta band below the card
+    // (content.message_action_bar.metadata_label), joined into a single line.
+    let band_metadata = if render_state.show_metadata_footer {
+        match (render_state.provider.as_ref(), render_state.footer.as_ref()) {
+            (Some(provider), Some(footer)) =>
+                Some(format!("{provider} · {}", display_bot_footer_text(footer))),
+            (Some(provider), None) => Some(provider.clone()),
+            (None, Some(footer)) => Some(display_bot_footer_text(footer).to_string()),
+            (None, None) => None,
+        }
     } else {
-        provider_label.set_visible(cx, false);
-    }
-
-    let footer_label = item.label(cx, ids!(content.bot_message_card.bot_metadata_footer.bot_footer_label));
-    if let Some(footer) = render_state.footer.as_ref() {
-        footer_label.set_text(cx, display_bot_footer_text(footer));
-        footer_label.set_visible(cx, true);
-    } else {
-        footer_label.set_visible(cx, false);
-    }
-    item.view(cx, ids!(content.bot_message_card.bot_metadata_footer))
-        .set_visible(cx, render_state.show_metadata_footer);
+        None
+    };
 
     let body_card = item.view(cx, ids!(content.bot_message_card.bot_body_card));
     body_card.set_visible(cx, render_state.show_body_card);
@@ -12531,7 +12909,7 @@ fn populate_bot_text_message_content(
     markdown_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Highlighted);
     markdown_plain_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Plain);
 
-    if render_state.show_body_card {
+    let drawn = if render_state.show_body_card {
         if code_block_mode != BotTimelineCodeBlockMode::None {
             match code_block_mode {
                 BotTimelineCodeBlockMode::Highlighted => markdown_widget.set_text(cx, &render_state.body),
@@ -12582,11 +12960,13 @@ fn populate_bot_text_message_content(
         }
     } else {
         true
-    }
+    };
+    (drawn, band_metadata)
 }
 
 fn populate_octos_action_buttons(
     cx: &mut Cx,
+    app_language: AppLanguage,
     item: &WidgetRef,
     content: Option<&serde_json::Value>,
     original_content: Option<&serde_json::Value>,
@@ -12599,6 +12979,7 @@ fn populate_octos_action_buttons(
     let container = item.view(cx, ids!(content.action_buttons));
     let approval_request_view = item.view(cx, ids!(content.action_buttons.approval_request_view));
     let button_row = item.view(cx, ids!(content.action_buttons.action_button_row));
+    let approval_button_row = item.view(cx, ids!(content.action_buttons.approval_request_view.approval_action_button_row));
     let Some(source_event_id) = source_event_id else {
         container.set_visible(cx, false);
         return;
@@ -12607,7 +12988,7 @@ fn populate_octos_action_buttons(
     let parsed_payload = parse_octos_action_payload_for_render(content, original_content);
 
     if parsed_payload.malformed_approval_request {
-        warning!("org.octos.approval_request: skipping malformed approval request");
+        warning!("approval request: skipping malformed structured payload");
     }
 
     let render_state = compute_action_button_render_state(
@@ -12619,15 +13000,26 @@ fn populate_octos_action_buttons(
         || !render_state.buttons_enabled;
     let selected_action = selected_actions.get(source_event_id);
     let visible_slots = action_button_render_slots_for_display(&render_state, selected_action);
+    let is_approval = render_state.approval_card.is_some();
 
     container.set_visible(cx, render_state.show_container);
-    button_row.set_visible(cx, render_state.show_button_row && !visible_slots.is_empty());
-    approval_request_view.set_visible(cx, render_state.approval_card.is_some());
+    button_row.set_visible(cx, !is_approval && render_state.show_button_row && !visible_slots.is_empty());
+    approval_button_row.set_visible(cx, is_approval && render_state.show_button_row && !visible_slots.is_empty());
+    approval_request_view.set_visible(cx, is_approval);
     if let Some(approval_card) = render_state.approval_card.as_ref() {
-        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_title_label))
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_header.approval_title_label))
             .set_text(cx, &approval_card.title);
         item.label(cx, ids!(content.action_buttons.approval_request_view.approval_summary_label))
             .set_text(cx, &approval_card.summary);
+        item.label(cx, ids!(content.action_buttons.approval_request_view.approval_header.pending_badge.pending_label))
+            .set_text(cx, tr_key(
+                app_language,
+                if approval_card.expired {
+                    "room_screen.approval.expired"
+                } else {
+                    "room_screen.approval.pending"
+                },
+            ));
     }
 
     for index in 0..MAX_OCTOS_ACTION_BUTTONS {
@@ -12649,13 +13041,40 @@ fn populate_octos_action_buttons(
         danger_button.set_visible(cx, false);
         danger_button.set_enabled(cx, !is_disabled);
 
-        let Some(render_slot) = visible_slots.get(index) else { continue };
-        item.view(cx, slot_path).set_visible(cx, true);
+        let (approval_slot_path, approval_primary_path, approval_secondary_path, approval_danger_path) =
+            approval_action_button_paths(index);
+        item.view(cx, approval_slot_path).set_visible(cx, false);
 
-        let active_button = match render_slot.style {
-            OctosActionStyle::Primary => primary_button,
-            OctosActionStyle::Secondary => secondary_button,
-            OctosActionStyle::Danger => danger_button,
+        let approval_primary_button = item.button(cx, approval_primary_path);
+        action_button_contexts.remove(&approval_primary_button.widget_uid());
+        approval_primary_button.set_visible(cx, false);
+        approval_primary_button.set_enabled(cx, !is_disabled);
+
+        let approval_secondary_button = item.button(cx, approval_secondary_path);
+        action_button_contexts.remove(&approval_secondary_button.widget_uid());
+        approval_secondary_button.set_visible(cx, false);
+        approval_secondary_button.set_enabled(cx, !is_disabled);
+
+        let approval_danger_button = item.button(cx, approval_danger_path);
+        action_button_contexts.remove(&approval_danger_button.widget_uid());
+        approval_danger_button.set_visible(cx, false);
+        approval_danger_button.set_enabled(cx, !is_disabled);
+
+        let Some(render_slot) = visible_slots.get(index) else { continue };
+        let active_button = if is_approval {
+            item.view(cx, approval_slot_path).set_visible(cx, true);
+            match render_slot.style {
+                OctosActionStyle::Primary => approval_primary_button,
+                OctosActionStyle::Secondary => approval_secondary_button,
+                OctosActionStyle::Danger => approval_danger_button,
+            }
+        } else {
+            item.view(cx, slot_path).set_visible(cx, true);
+            match render_slot.style {
+                OctosActionStyle::Primary => primary_button,
+                OctosActionStyle::Secondary => secondary_button,
+                OctosActionStyle::Danger => danger_button,
+            }
         };
         active_button.set_visible(cx, true);
         active_button.set_enabled(cx, !is_disabled);
@@ -12664,11 +13083,13 @@ fn populate_octos_action_buttons(
         if !is_disabled {
             let request = if let Some(approval_request) = parsed_payload.approval_request.as_ref() {
                 OctosActionButtonRequest::Approval {
+                    protocol: approval_request.protocol.clone(),
                     request_id: approval_request.request_id.clone(),
                     title: approval_request.title.clone(),
                     decision: render_slot.id.clone(),
                     label: render_slot.label.clone(),
                     tool_args_digest: approval_request.tool_args_digest.clone(),
+                    expires_at: approval_request.expires_at.clone(),
                     style: render_slot.style,
                 }
             } else {
@@ -13744,6 +14165,17 @@ pub enum InviteAction {
     /// and that that one entity can take ownership of the content object,
     /// which avoids having to clone it.
     ShowInviteConfirmationModal(RefCell<Option<ConfirmationModalContent>>),
+    /// Announces that an invite request was just submitted for `user_id` in
+    /// `room_id`, so every RoomScreen showing that room records it in
+    /// `pending_invited_users` and thus owns the resulting
+    /// [`InviteResultAction`] feedback. Emitted by invite initiators that run
+    /// in closures (knock-approve modal, failed-invite Retry) and by the
+    /// invite modal; the `/invitebot` picker instead records pending directly
+    /// in its widget-addressed handler.
+    InviteUserRequested {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
 }
 
 /// Actions related to RTC (Real-Time Communication) calls.
@@ -14089,6 +14521,14 @@ pub struct Message {
     /// Cached so `set_data` can reset_hover only on the button that just
     /// transitioned into visibility, not on every redraw.
     #[rust] download_state: DownloadDisplayState,
+    /// Whether the meta band's copy button is currently shown. Tracked so
+    /// `set_data` only touches the widget when the value flips, and so
+    /// `handle_event` can skip the per-Actions `clicked()` lookup entirely
+    /// while the button is hidden.
+    #[rust] show_copy_button: bool,
+    /// The meta band's model-metadata line currently displayed (None = hidden).
+    /// Tracked so recycled items only touch the label when the text changes.
+    #[rust] band_metadata: Option<String>,
 }
 
 impl Widget for Message {
@@ -14254,6 +14694,14 @@ impl Widget for Message {
                     MessageAction::CancelDownload(media_source_mxc(&info.media_source).clone()),
                 );
             }
+            if self.show_copy_button
+                && self.view.button(cx, ids!(content.message_action_bar.copy_button)).clicked(actions)
+            {
+                cx.widget_action(
+                    details.room_screen_widget_uid,
+                    MessageAction::CopyText(details.clone()),
+                );
+            }
             for action in actions {
                 match action.as_widget_action().widget_uid_eq(details.room_screen_widget_uid).cast_ref() {
                     MessageAction::HighlightMessage(id) if id == &details.item_id => {
@@ -14287,6 +14735,7 @@ impl Message {
         details: MessageDetails,
         download_info: Option<DownloadableAttachment>,
         download_state: DownloadDisplayState,
+        show_copy_button: bool,
     ) {
         let prev_section_visible = self.download_info.is_some();
         let prev_state = self.download_state;
@@ -14296,6 +14745,14 @@ impl Message {
         let section_visible = self.download_info.is_some();
         self.view.view(cx, ids!(content.download_section))
             .set_visible(cx, section_visible);
+        if self.show_copy_button != show_copy_button {
+            let copy_button = self.view.button(cx, ids!(content.message_action_bar.copy_button));
+            copy_button.set_visible(cx, show_copy_button);
+            if show_copy_button {
+                copy_button.reset_hover(cx);
+            }
+            self.show_copy_button = show_copy_button;
+        }
         if let Some(info) = self.download_info.as_ref() {
             let download_button = self.view.button(cx, ids!(content.download_section.download_button));
             let downloading_view = self.view.view(cx, ids!(content.download_section.downloading_view));
@@ -14319,6 +14776,21 @@ impl Message {
         }
         self.download_state = download_state;
     }
+
+    /// Sets the meta band's model-metadata line (None hides it).
+    ///
+    /// Only touches the label widget when the value actually changes, so
+    /// recycled PortalList items and the timeline-majority case (human
+    /// messages, metadata None → None) cost nothing beyond the comparison.
+    fn set_band_metadata(&mut self, cx: &mut Cx, band_metadata: Option<String>) {
+        if self.band_metadata == band_metadata {
+            return;
+        }
+        let label = self.view.label(cx, ids!(content.message_action_bar.metadata_label));
+        label.set_visible(cx, band_metadata.is_some());
+        label.set_text(cx, band_metadata.as_deref().unwrap_or(""));
+        self.band_metadata = band_metadata;
+    }
 }
 
 impl MessageRef {
@@ -14328,9 +14800,15 @@ impl MessageRef {
         details: MessageDetails,
         download_info: Option<DownloadableAttachment>,
         download_state: DownloadDisplayState,
+        show_copy_button: bool,
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.set_data(cx, details, download_info, download_state);
+        inner.set_data(cx, details, download_info, download_state, show_copy_button);
+    }
+
+    fn set_band_metadata(&self, cx: &mut Cx, band_metadata: Option<String>) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_band_metadata(cx, band_metadata);
     }
 }
 
@@ -14354,6 +14832,17 @@ mod tests {
 
     fn make_state(text: &str) -> StreamingAnimState {
         StreamingAnimState::new(text, true)
+    }
+
+    #[test]
+    fn test_invite_result_belongs_only_to_pending_screen() {
+        let invited_user = OwnedUserId::try_from("@octos:example.org").unwrap();
+        let other_user = OwnedUserId::try_from("@hermes:example.org").unwrap();
+        let pending = HashSet::from([invited_user.clone()]);
+
+        assert!(invite_result_belongs_to_room_screen(&pending, &invited_user));
+        assert!(!invite_result_belongs_to_room_screen(&pending, &other_user));
+        assert!(!invite_result_belongs_to_room_screen(&HashSet::new(), &invited_user));
     }
 
     #[test]
@@ -14797,6 +15286,26 @@ mod tests {
     }
 
     #[test]
+    fn test_detected_bot_binding_uses_registry_augmented_known_bots() {
+        let src = include_str!("room_screen.rs");
+        let fn_pos = src
+            .find("fn detected_bot_binding_for_members")
+            .expect("detected_bot_binding_for_members should exist");
+        let fn_src = &src[fn_pos..src[fn_pos..].find("fn is_likely_bot_user_id")
+            .map(|end| fn_pos + end)
+            .unwrap_or(src.len())];
+
+        assert!(
+            fn_src.contains("timeline_known_bot_user_ids(app_state)"),
+            "DM bot binding detection should include AgentRegistry agents such as OctosDirect",
+        );
+        assert!(
+            !fn_src.contains("app_state.bot_settings.known_bot_user_ids()"),
+            "DM bot binding detection must not read only raw AppService known-bots",
+        );
+    }
+
+    #[test]
     fn test_room_info_title_bot_pill_shown_when_member_is_registered_agent() {
         let room_id: OwnedRoomId = "!group:example.org".try_into().unwrap();
         let agent_id: OwnedUserId = "@octos_mac:example.org".try_into().unwrap();
@@ -14930,6 +15439,23 @@ mod tests {
     }
 
     #[test]
+    fn test_listbots_parser_ignores_octos_service_urls_and_ports() {
+        let parsed = extract_bot_user_ids_from_listbots_reply(
+            "Octos service: http://127.0.0.1:8787\nKnown bots: @octosbot:example.org",
+            None,
+        );
+
+        assert_eq!(
+            parsed,
+            vec!["@octosbot:example.org".parse::<OwnedUserId>().unwrap()],
+        );
+        assert!(
+            parsed.iter().all(|user_id| user_id.localpart() != ""),
+            "service URL port fragments must not become Matrix user IDs",
+        );
+    }
+
+    #[test]
     fn test_parse_bot_timeline_layers_extracts_status_provider_body_and_footer() {
         let body = "施法中\nvia moonshot@api (kimi-k2.5)\n\n你好！我是 **Alex**\n\n_moonshot@api/kimi-k2.5 · 5.3K in · 330 out · 6s_";
 
@@ -14994,6 +15520,205 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0].id, "confirm");
         assert_eq!(actions[1].id, "cancel");
+    }
+
+    const TEST_AGENTCHAT_AGENT: &str = "test_agent";
+    const TEST_AGENTCHAT_PROJECT: &str = "test_project";
+    const TEST_AGENTCHAT_PROJECT_ROOM_ID: &str = "!project:example.test";
+
+    fn valid_agentchat_approval_content() -> serde_json::Value {
+        serde_json::json!({
+            "msgtype": "com.agentchat.approval.request.v1",
+            "body": format!("Approval required for {TEST_AGENTCHAT_AGENT}"),
+            "com.agentchat.approval": {
+                "version": 1,
+                "kind": "request",
+                "agent": TEST_AGENTCHAT_AGENT,
+                "project": TEST_AGENTCHAT_PROJECT,
+                "project_room_id": TEST_AGENTCHAT_PROJECT_ROOM_ID,
+                "request_id": "approval_0123456789abcdef0123456789abcdef",
+                "upstream_request_id": "turn-1:Bash",
+                "input_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "runtime": "codex",
+                "tool_name": "Bash",
+                "description": "Create a GitHub issue",
+                "input_preview": "gh issue create --title test",
+                "expires_at": 1784745600000u64,
+                "actions": [
+                    { "id": "approve_once", "label": "Approve once", "style": "primary" },
+                    { "id": "deny", "label": "Deny", "style": "danger" }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn test_parse_agentchat_owner_approval_request() {
+        let content = valid_agentchat_approval_content();
+        let payload = parse_octos_action_payload_for_render(Some(&content), Some(&content));
+        let approval = payload.approval_request.expect("agent-chat approval should parse");
+
+        assert_eq!(approval.request_id, "approval_0123456789abcdef0123456789abcdef");
+        assert_eq!(approval.tool_args_digest, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!(payload.actions.iter().map(|action| action.id.as_str()).collect::<Vec<_>>(), vec!["approve_once", "deny"]);
+        assert!(!payload.malformed_approval_request);
+        assert!(matches!(
+            approval.protocol,
+            ApprovalProtocol::AgentChat { ref agent, ref project, ref project_room_id }
+                if agent == TEST_AGENTCHAT_AGENT
+                    && project == TEST_AGENTCHAT_PROJECT
+                    && project_room_id == TEST_AGENTCHAT_PROJECT_ROOM_ID
+        ));
+    }
+
+    #[test]
+    fn test_agentchat_approval_buttons_expire_at_deadline() {
+        let content = valid_agentchat_approval_content();
+        let payload = parse_octos_action_payload_for_render(Some(&content), Some(&content));
+        let approval = payload.approval_request.as_ref().expect("agent-chat approval should parse");
+        let expires_at = approval.expires_at.parse::<u64>().unwrap();
+        let current_user_id = UserId::parse("@owner:example.test").unwrap();
+
+        let live = compute_action_button_render_state_at(
+            &payload.actions,
+            Some(approval),
+            Some(current_user_id.as_ref()),
+            expires_at - 1,
+        );
+        assert!(live.buttons_enabled);
+        assert_eq!(live.approval_card.as_ref().map(|card| card.expired), Some(false));
+
+        let expired = compute_action_button_render_state_at(
+            &payload.actions,
+            Some(approval),
+            Some(current_user_id.as_ref()),
+            expires_at,
+        );
+        assert!(!expired.buttons_enabled);
+        assert_eq!(expired.approval_card.as_ref().map(|card| card.expired), Some(true));
+    }
+
+    fn agentchat_approval_button_request(expires_at: &str) -> OctosActionButtonRequest {
+        OctosActionButtonRequest::Approval {
+            protocol: ApprovalProtocol::AgentChat {
+                agent: TEST_AGENTCHAT_AGENT.into(),
+                project: TEST_AGENTCHAT_PROJECT.into(),
+                project_room_id: TEST_AGENTCHAT_PROJECT_ROOM_ID.into(),
+            },
+            request_id: "approval_0123456789abcdef0123456789abcdef".into(),
+            title: "Run command".into(),
+            decision: "approve_once".into(),
+            label: "Approve once".into(),
+            tool_args_digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            expires_at: expires_at.into(),
+            style: OctosActionStyle::Primary,
+        }
+    }
+
+    #[test]
+    fn test_approval_expiry_timer_uses_earliest_visible_deadline() {
+        let generic = OctosActionButtonRequest::Generic {
+            action_id: "retry".into(),
+            label: "Retry".into(),
+            style: OctosActionStyle::Secondary,
+        };
+        let later = agentchat_approval_button_request("1500");
+        let sooner = agentchat_approval_button_request("1250");
+
+        assert_eq!(
+            next_approval_expiry_timeout([&generic, &later, &sooner], 1000),
+            Some(Duration::from_millis(250)),
+        );
+        assert_eq!(
+            next_approval_expiry_timeout([&sooner], 1250),
+            Some(Duration::from_millis(1)),
+        );
+        assert_eq!(
+            next_approval_expiry_timeout([&generic], 1000),
+            None,
+        );
+    }
+
+    #[test]
+    fn test_agentchat_public_status_has_no_actions() {
+        let body = format!("Agent {TEST_AGENTCHAT_AGENT} is waiting for approval from its owner.");
+        let content = serde_json::json!({
+            "msgtype": "com.agentchat.approval.status.v1",
+            "body": body.clone(),
+            "com.agentchat.approval": {
+                "version": 1,
+                "kind": "status",
+                "agent": TEST_AGENTCHAT_AGENT,
+                "project": TEST_AGENTCHAT_PROJECT,
+                "state": "waiting_for_owner"
+            }
+        });
+        let payload = parse_octos_action_payload_for_render(Some(&content), Some(&content));
+
+        assert_eq!(
+            agentchat_custom_message_body_from_content(&content),
+            Some(body.as_str()),
+        );
+        assert!(payload.approval_request.is_none());
+        assert!(payload.actions.is_empty());
+        assert!(!payload.malformed_approval_request);
+    }
+
+    #[test]
+    fn test_malformed_agentchat_owner_approval_request_hides_buttons() {
+        let mut content = valid_agentchat_approval_content();
+        content["com.agentchat.approval"]["input_digest"] = serde_json::json!("not-a-digest");
+        let payload = parse_octos_action_payload_for_render(Some(&content), Some(&content));
+        let state = compute_action_button_render_state(&payload.actions, payload.approval_request.as_ref(), None);
+
+        assert!(payload.malformed_approval_request);
+        assert!(payload.actions.is_empty());
+        assert!(!state.show_container);
+    }
+
+    #[test]
+    fn test_build_agentchat_approval_verdict() {
+        let timeline_kind = TimelineKind::MainRoom {
+            room_id: "!approval:example.test".try_into().unwrap(),
+        };
+        let source_event_id: OwnedEventId = "$approval-request".try_into().unwrap();
+        let original_sender: OwnedUserId = "@agent-bridge:example.test".try_into().unwrap();
+        let request = build_agentchat_approval_verdict_request(
+            &timeline_kind,
+            "Approve once",
+            "approval_0123456789abcdef0123456789abcdef",
+            "approve_once",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            TEST_AGENTCHAT_AGENT,
+            TEST_AGENTCHAT_PROJECT,
+            TEST_AGENTCHAT_PROJECT_ROOM_ID,
+            source_event_id.as_ref(),
+            original_sender.as_ref(),
+        );
+
+        let verdict = &request.content["com.agentchat.approval"];
+        assert_eq!(request.content["msgtype"], AGENTCHAT_APPROVAL_VERDICT_MSGTYPE);
+        assert_eq!(verdict["kind"], "verdict");
+        assert_eq!(verdict["action"], "approve_once");
+        assert_eq!(verdict["agent"], TEST_AGENTCHAT_AGENT);
+        assert_eq!(verdict["project"], TEST_AGENTCHAT_PROJECT);
+        assert_eq!(verdict["project_room_id"], TEST_AGENTCHAT_PROJECT_ROOM_ID);
+        assert_eq!(verdict["request_id"], "approval_0123456789abcdef0123456789abcdef");
+        assert_eq!(verdict["input_digest"], "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!(request.target_user_id, original_sender);
+    }
+
+    #[test]
+    fn test_agentchat_approval_uses_original_content() {
+        let original = valid_agentchat_approval_content();
+        let mut edited = original.clone();
+        edited["com.agentchat.approval"]["request_id"] = serde_json::json!("approval_ffffffffffffffffffffffffffffffff");
+        edited["com.agentchat.approval"]["input_digest"] = serde_json::json!("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+
+        let payload = parse_octos_action_payload_for_render(Some(&edited), Some(&original));
+        let approval = payload.approval_request.expect("original approval should parse");
+        assert_eq!(approval.request_id, "approval_0123456789abcdef0123456789abcdef");
+        assert_eq!(approval.tool_args_digest, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     }
 
     #[test]
@@ -15140,6 +15865,7 @@ mod tests {
     #[test]
     fn test_approval_buttons_disabled_for_unauthorized_user() {
         let approval_request = OctosApprovalRequest {
+            protocol: ApprovalProtocol::Octos,
             request_id: "req_abc123".into(),
             tool_name: "shell".into(),
             tool_args_digest: "sha256:4bf5".into(),
@@ -15292,10 +16018,11 @@ mod tests {
             })),
         );
         let current_user_id = UserId::parse("@alice:example.org").unwrap();
-        let state = compute_action_button_render_state(
+        let state = compute_action_button_render_state_at(
             &payload.actions,
             payload.approval_request.as_ref(),
             Some(current_user_id.as_ref()),
+            0,
         );
 
         assert_eq!(
@@ -15522,7 +16249,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bot_metadata_footer_renders_below_body() {
+    fn test_bot_metadata_extracted_for_meta_band() {
         let state = compute_bot_timeline_render_state(
             "via moonshot@api (kimi-k2.5)\n\n你好！我是 Alex。\n\n_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_",
             true,
@@ -15534,6 +16261,23 @@ mod tests {
             state.footer.as_deref(),
             Some("_moonshot@api/kimi-k2.5 · 1.2K in · 88 out · 2s_"),
         );
+    }
+
+    #[test]
+    fn test_clipboard_text_strips_bot_scaffolding() {
+        let raw = "via deepseek@api (deepseek-chat)\n\n我运行在 OctOS 平台上。\n\n_deepseek@api/deepseek-chat · 13.3K in · 162 out · 3s_";
+        let cleaned = clipboard_text_for_message_body(raw.to_string(), true);
+
+        assert!(cleaned.contains("我运行在 OctOS 平台上。"));
+        assert!(!cleaned.contains("deepseek@api/deepseek-chat"));
+    }
+
+    #[test]
+    fn test_clipboard_text_verbatim_for_human() {
+        let raw = "via someone@api (model)\nhello there";
+        let unchanged = clipboard_text_for_message_body(raw.to_string(), false);
+
+        assert_eq!(unchanged, raw);
     }
 
     #[test]

@@ -3,6 +3,10 @@
 分三层:**A 自动**(跑 `preflight.sh` 一键验)、**B 一次性安装**(按序执行)、**C 运行期人工**(脚本测不了的行为)。
 你的三个担忧已尽量自动化:① Palpo :8128 登录/MXID 域 → A;② `!mkgroup` 成功 → A(API 层) + C(房间层);③ approve 只认发起人 → C。
 
+> 本文件只证明 demo 可运行，不构成首个完整版本的发布许可。正式版本还必须通过
+> [`robrix-agentchat-v1-security-release-gates-zh.md`](../robrix-agentchat-v1-security-release-gates-zh.md)
+> 中 S-01 至 S-12 的全部 P0 安全测试，包括 owner 私有审批、公共房间防绕过和 agent-chat 默认沙箱。
+
 ---
 
 ## A. 自动检查 —— 跑一条命令

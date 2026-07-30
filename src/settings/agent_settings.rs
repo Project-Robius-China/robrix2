@@ -28,9 +28,10 @@ use crate::{
 
 /// The frameworks a user can pick when registering an agent from search.
 /// `Unknown` is reserved for migrated legacy bots and is not user-selectable.
-pub fn framework_options() -> [AgentFramework; 3] {
+pub fn framework_options() -> [AgentFramework; 4] {
     [
         AgentFramework::Octos,
+        AgentFramework::OctosDirect,
         AgentFramework::Hermes,
         AgentFramework::OpenClaw,
     ]
@@ -40,6 +41,7 @@ pub fn framework_options() -> [AgentFramework; 3] {
 pub fn framework_label(framework: AgentFramework) -> &'static str {
     match framework {
         AgentFramework::Octos => "Octos",
+        AgentFramework::OctosDirect => "Octos (Direct)",
         AgentFramework::Hermes => "Hermes",
         AgentFramework::OpenClaw => "OpenClaw",
         AgentFramework::Unknown => "Unknown",
@@ -50,6 +52,7 @@ pub fn framework_label(framework: AgentFramework) -> &'static str {
 pub fn framework_mono(framework: AgentFramework) -> &'static str {
     match framework {
         AgentFramework::Octos => "Oc",
+        AgentFramework::OctosDirect => "OD",
         AgentFramework::Hermes => "He",
         AgentFramework::OpenClaw => "Cl",
         AgentFramework::Unknown => "Ag",
@@ -122,7 +125,9 @@ fn agent_registry_summary(app_state: &AppState) -> AgentRegistrySummary {
             .unwrap_or_default()
         {
             AgentFramework::Octos => summary.octos += 1,
-            AgentFramework::Hermes | AgentFramework::OpenClaw => summary.direct += 1,
+            AgentFramework::OctosDirect
+            | AgentFramework::Hermes
+            | AgentFramework::OpenClaw => summary.direct += 1,
             AgentFramework::Unknown => summary.unknown += 1,
         }
     }
@@ -184,13 +189,33 @@ script_mod! {
                 show_bg: true
                 draw_bg +: {
                     color: (RBX_BG_SURFACE_SUBTLE)
-                    border_radius: (RBX_RADIUS_XXS)
+                    border_radius: (RBX_RADIUS_PILL)
+                    border_size: 1.0
+                    border_color: (RBX_STROKE_SOFT)
+                }
+                agent_logo_octos := Image {
+                    visible: false
+                    width: 22, height: 22
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_OCTOS)
+                }
+                agent_logo_hermes := Image {
+                    visible: false
+                    width: 22, height: 22
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_HERMES)
+                }
+                agent_logo_openclaw := Image {
+                    visible: false
+                    width: 22, height: 22
+                    fit: ImageFit.Stretch
+                    src: (IMG_FW_OPENCLAW)
                 }
                 agent_tile_mono := Label {
                     width: Fit
                     height: Fit
                     draw_text +: {
-                        color: (RBX_FG_PRIMARY)
+                        color: (RBX_FG_SECONDARY)
                         text_style: TITLE_TEXT { font_size: 13.0 }
                     }
                     text: ""
@@ -420,7 +445,7 @@ script_mod! {
                 stat_label.text: "Direct"
             }
             octos_agents_stat := AgentStatTile {
-                stat_label.text: "Octos"
+                stat_label.text: "AppService"
             }
         }
 
@@ -495,7 +520,7 @@ script_mod! {
                     color: (RBX_FG_SECONDARY)
                     text_style: RBX_TEXT_META {}
                 }
-                text: "Robrix stays a normal Matrix client. It binds local Octos services and runs the matching slash commands."
+                text: "Robrix stays a normal Matrix client. It binds an Octos AppService and runs the matching slash commands."
             }
 
             appservice_config_row := View {
@@ -601,6 +626,10 @@ script_mod! {
                 height: Fit
                 flow: Right
                 align: Align{y: 0.5}
+                // Right-inset the header so the "AgentRegistry" badge lines up
+                // with each agent row's framework badge (rows are cards with a
+                // 12px content padding, so their badges sit 12px in).
+                padding: Inset{right: 12}
 
                 registry_title := Label {
                     width: Fill
@@ -747,12 +776,10 @@ impl Widget for AgentRegistryRow {
                 .label(cx, ids!(agent_top_row.agent_text_col.agent_mxid_label))
                 .set_text(cx, props.user_id.as_str());
             self.view
-                .label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono))
-                .set_text(cx, framework_mono(framework));
-            self.view
                 .label(cx, ids!(agent_top_row.agent_framework_badge.agent_framework_label))
                 .set_text(cx, framework_label(framework));
 
+            self.apply_framework_tile(cx, framework);
             self.apply_framework_colors(cx, framework);
 
             // Health dot: Octos rows only, colored by the probed health status.
@@ -793,35 +820,52 @@ impl Widget for AgentRegistryRow {
 }
 
 impl AgentRegistryRow {
-    /// Colors this row's framework tile + badge by framework (literal tokens per
-    /// branch, since `script_apply_eval!` cannot take runtime token values).
+    /// Shows the brand logo matching this row's framework in the identity tile
+    /// and hides the others. `Unknown` (migrated legacy bots) has no logo, so it
+    /// falls back to the two-letter monogram. Each logo is a fixed, pre-declared
+    /// `Image`, so we only toggle visibility here — no runtime image loading —
+    /// mirroring how the row already resolves colors per framework.
+    fn apply_framework_tile(&mut self, cx: &mut Cx, framework: AgentFramework) {
+        // OctosDirect shares the Octos octopus logo (it is Octos in direct mode).
+        self.view
+            .image(cx, ids!(agent_top_row.agent_tile.agent_logo_octos))
+            .set_visible(cx, matches!(framework, AgentFramework::Octos | AgentFramework::OctosDirect));
+        self.view
+            .image(cx, ids!(agent_top_row.agent_tile.agent_logo_hermes))
+            .set_visible(cx, framework == AgentFramework::Hermes);
+        self.view
+            .image(cx, ids!(agent_top_row.agent_tile.agent_logo_openclaw))
+            .set_visible(cx, framework == AgentFramework::OpenClaw);
+
+        let is_unknown = framework == AgentFramework::Unknown;
+        let mono = self.view.label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono));
+        mono.set_visible(cx, is_unknown);
+        if is_unknown {
+            mono.set_text(cx, framework_mono(framework));
+        }
+    }
+
+    /// Colors this row's framework badge by framework (literal tokens per branch,
+    /// since `script_apply_eval!` cannot take runtime token values). The identity
+    /// tile stays neutral now that it carries a full-color brand logo, so the
+    /// framework color lives only on the badge.
     fn apply_framework_colors(&mut self, cx: &mut Cx, framework: AgentFramework) {
-        let mut tile = self.view.view(cx, ids!(agent_top_row.agent_tile));
-        let mut mono = self.view.label(cx, ids!(agent_top_row.agent_tile.agent_tile_mono));
         let mut badge = self.view.view(cx, ids!(agent_top_row.agent_framework_badge));
         let mut label = self.view.label(cx, ids!(agent_top_row.agent_framework_badge.agent_framework_label));
         match framework {
-            AgentFramework::Octos => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
+            AgentFramework::Octos | AgentFramework::OctosDirect => {
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OCTOS_BG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OCTOS_FG } });
             }
             AgentFramework::Hermes => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_HERMES_BG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_HERMES_FG } });
             }
             AgentFramework::OpenClaw => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_FW_OPENCLAW_BG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_FW_OPENCLAW_FG } });
             }
             AgentFramework::Unknown => {
-                script_apply_eval!(cx, tile, { draw_bg +: { color: mod.widgets.RBX_BG_SURFACE_SUBTLE } });
-                script_apply_eval!(cx, mono, { draw_text +: { color: mod.widgets.RBX_FG_SECONDARY } });
                 script_apply_eval!(cx, badge, { draw_bg +: { color: mod.widgets.RBX_NEUTRAL_BG } });
                 script_apply_eval!(cx, label, { draw_text +: { color: mod.widgets.RBX_NEUTRAL_FG } });
             }
@@ -1103,14 +1147,15 @@ impl AgentSettings {
             }
             OctosHealthStatus::Unreachable if octos_count > 0 => format!("0/{octos_count} online"),
             _ if app_state.bot_settings.enabled && octos_count == 0 => "No Octos bound".to_string(),
-            _ => format!("{octos_count} Octos"),
+            // Just the count; the card title already says "Octos AppService".
+            _ => octos_count.to_string(),
         };
         self.view.label(cx, ids!(appservice_summary_card.appservice_summary_header.appservice_online_pill.appservice_online_label))
             .set_text(cx, &label);
         let body = if app_state.bot_settings.enabled && octos_count == 0 {
             "AppService URL is saved. Bind an Octos Matrix ID to make it usable in Agent Access."
         } else {
-            "Robrix stays a normal Matrix client. It binds local Octos services and runs the matching slash commands."
+            "Robrix stays a normal Matrix client. It binds an Octos AppService and runs the matching slash commands."
         };
         self.view.label(cx, ids!(appservice_summary_card.appservice_summary_body))
             .set_text(cx, body);
@@ -1133,6 +1178,15 @@ impl AgentSettings {
             .set_visible(cx, app_state.bot_settings.enabled);
 
         let mut dot = self.view.view(cx, ids!(appservice_summary_card.appservice_summary_header.appservice_online_pill.appservice_online_dot));
+        // Hide the status dot in the bare-count / no-agents states so the number
+        // sits centered in the pill; show it only when it carries a real online
+        // status (checking / reachable / unreachable with agents bound).
+        let show_dot = octos_count > 0 && match self.octos_health.status {
+            OctosHealthStatus::Reachable => app_state.bot_settings.enabled,
+            OctosHealthStatus::Checking | OctosHealthStatus::Unreachable => true,
+            OctosHealthStatus::Unknown => false,
+        };
+        dot.set_visible(cx, show_dot);
         let mut config_pill = self.view.view(cx, ids!(appservice_summary_card.appservice_config_row.appservice_config_state_pill));
         let mut config_pill_label = self.view.label(cx, ids!(appservice_summary_card.appservice_config_row.appservice_config_state_pill.appservice_config_state_label));
         if app_state.bot_settings.enabled {
@@ -1307,6 +1361,87 @@ mod tests {
     }
 
     #[test]
+    fn test_register_agent_octos_direct() {
+        let mut app_state = AppState::default();
+        let id: OwnedUserId = "@myagent:example.org".try_into().unwrap();
+
+        let added = register_agent_from_search(
+            &mut app_state,
+            id.clone(),
+            Some("MyAgent".to_string()),
+            AgentFramework::OctosDirect,
+        );
+
+        assert!(added);
+        assert!(app_state.agent_registry.contains(id.as_ref()));
+        let entry = app_state.agent_registry.get(id.as_ref()).unwrap();
+        assert_eq!(entry.framework, AgentFramework::OctosDirect);
+        assert_eq!(entry.display_name.as_deref(), Some("MyAgent"));
+    }
+
+    #[test]
+    fn test_framework_options_include_octos_direct() {
+        let options = framework_options();
+        assert!(options.contains(&AgentFramework::OctosDirect));
+        assert!(options.contains(&AgentFramework::Octos));
+    }
+
+    #[test]
+    fn test_framework_label_octos_direct_distinct() {
+        let direct = framework_label(AgentFramework::OctosDirect);
+        assert_ne!(direct, framework_label(AgentFramework::Octos));
+        assert!(!direct.is_empty());
+    }
+
+    #[test]
+    fn test_octos_direct_counts_as_direct() {
+        let mut app_state = AppState::default();
+        register_agent_from_search(
+            &mut app_state,
+            "@myagent:example.org".try_into().unwrap(),
+            None,
+            AgentFramework::OctosDirect,
+        );
+
+        let summary = agent_registry_summary(&app_state);
+        assert_eq!(summary.direct, 1);
+        assert_eq!(summary.octos, 0);
+    }
+
+    #[test]
+    fn test_octos_direct_no_appservice_recheck() {
+        assert!(!agent_row_shows_recheck(AgentFramework::OctosDirect));
+        assert!(agent_row_shows_recheck(AgentFramework::Octos));
+    }
+
+    #[test]
+    fn test_register_octos_direct_idempotent() {
+        let mut app_state = AppState::default();
+        let id: OwnedUserId = "@myagent:example.org".try_into().unwrap();
+        assert!(register_agent_from_search(&mut app_state, id.clone(), None, AgentFramework::OctosDirect));
+
+        let added_again =
+            register_agent_from_search(&mut app_state, id.clone(), None, AgentFramework::OctosDirect);
+
+        assert!(!added_again);
+        assert_eq!(app_state.agent_registry.len(), 1);
+        assert_eq!(
+            app_state.agent_registry.get(id.as_ref()).unwrap().framework,
+            AgentFramework::OctosDirect,
+        );
+    }
+
+    #[test]
+    fn test_octos_direct_binding_rejects_localpart() {
+        let app_state = AppState::default();
+        let error = parse_agent_user_id("myagent").unwrap_err();
+
+        assert!(error.contains("Matrix user ID"));
+        // An invalid identifier never reaches registration, so nothing is added.
+        assert_eq!(app_state.agent_registry.len(), 0);
+    }
+
+    #[test]
     fn test_recheck_action_is_octos_only() {
         assert!(agent_row_shows_recheck(AgentFramework::Octos));
         assert!(!agent_row_shows_recheck(AgentFramework::Hermes));
@@ -1352,12 +1487,16 @@ mod tests {
     }
 
     #[test]
-    fn test_add_modal_offers_three_framework_cards() {
-        // The framework selector lives in the add-agent modal as selectable cards.
+    fn test_add_modal_offers_framework_cards() {
+        // The framework selector lives in the add-agent modal as a PortalList of
+        // selectable cards — one reusable template drawn once per
+        // framework_options() entry (Octos AppService, Octos Direct, Hermes,
+        // OpenClaw), styled per-item. Driving it from framework_options() keeps
+        // "add a new framework" a one-line change here.
         let src = include_str!("agent_add_modal.rs");
-        assert!(src.contains("octos_card"));
-        assert!(src.contains("hermes_card"));
-        assert!(src.contains("openclaw_card"));
+        assert!(src.contains("framework_list := PortalList"));
+        assert!(src.contains("framework_card := FrameworkCard"));
+        assert!(src.contains("framework_options()"));
     }
 
     #[test]

@@ -17,12 +17,14 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
-        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
+        account_menu::{AccountMenuAction, AccountMenuWidgetRefExt},
+        add_menu::{AddMenuAction, AddMenuWidgetRefExt},
+        add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, JoinRoomModalAction, JoinRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
+        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, set_room_info_action_modal_open}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender, end_account_switch_guard}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop},
@@ -87,6 +89,8 @@ script_mod! {
                         }
                         join_leave_modal := Modal {
                             content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
                                 join_leave_modal_inner := JoinLeaveRoomModal {}
                             }
                         }
@@ -129,6 +133,15 @@ script_mod! {
                         new_message_context_menu := NewMessageContextMenu { }
                         room_context_menu := RoomContextMenu { }
 
+                        // The "add" popup menu (New room / DM / Join / Explore),
+                        // anchored next to the "+" button. Like the context menus,
+                        // it is a self-positioning overlay in front of the content.
+                        add_menu := AddMenu { }
+
+                        // The account switcher popup, anchored at the desktop rail's
+                        // bottom-left avatar. Same self-positioning overlay pattern.
+                        account_menu := AccountMenu { }
+
                         // A modal to confirm sending out an invite to a room.
                         invite_confirmation_modal := Modal {
                             content +: {
@@ -145,6 +158,8 @@ script_mod! {
                         // A modal to invite a user to a room.
                         invite_modal := Modal {
                             content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
                                 invite_modal_inner := InviteModal {}
                             }
                         }
@@ -297,19 +312,33 @@ script_mod! {
 
                         create_room_modal := Modal {
                             content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
                                 create_room_modal_inner := CreateRoomModal {}
                             }
                         }
 
                         start_chat_modal := Modal {
                             content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
                                 start_chat_modal_inner := StartChatModal {}
+                            }
+                        }
+
+                        join_room_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
+                                join_room_modal_inner := JoinRoomModal {}
                             }
                         }
 
                         // Show the logout confirmation modal.
                         logout_confirm_modal := Modal {
                             content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
                                 logout_confirm_modal_inner := LogoutConfirmModal {}
                             }
                         }
@@ -361,6 +390,15 @@ script_mod! {
                             content +: {
                                 width: Fill, height: Fill, align: Align{x: 0.5, y: 0.5},
                                 delete_confirmation_modal_inner := NegativeConfirmationModal { }
+                            }
+                        }
+
+                        // Report-a-room modal. Hosted globally (not per-RoomScreen)
+                        // so it survives mobile<->desktop AdaptiveView rebuilds.
+                        report_room_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill, align: Align{x: 0.5, y: 0.5},
+                                report_room_modal_inner := mod.widgets.ReportRoomModal {}
                             }
                         }
 
@@ -494,6 +532,9 @@ pub struct App {
     /// handler can confirm the load event matches the room we're
     /// waiting on before firing the scroll.
     #[rust] pending_jump_to_event: Option<(OwnedRoomId, OwnedEventId)>,
+    /// The room a globally-hosted report modal is currently collecting a reason
+    /// for, so `ReportRoomModalAction::Submit` can target the right room.
+    #[rust] pending_report_room_id: Option<OwnedRoomId>,
     /// A stack of previously-selected rooms for mobile navigation.
     /// When a view is popped off the stack, the previous `selected_room` is restored from here.
     #[rust] mobile_room_nav_stack: Vec<SelectedRoom>,
@@ -546,6 +587,7 @@ fn is_packaged_build() -> bool {
     let Ok(exe_path) = std::env::current_exe() else {
         return false;
     };
+    #[cfg_attr(target_env = "ohos", allow(unused_variables))]
     let exe_path_str = exe_path.to_string_lossy();
 
     #[cfg(target_os = "macos")]
@@ -563,7 +605,7 @@ fn is_packaged_build() -> bool {
             || exe_lower.contains("appdata\\local\\programs")
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         // Check if running from system directories or AppImage
         exe_path_str.starts_with("/usr/")
@@ -572,7 +614,7 @@ fn is_packaged_build() -> bool {
             || std::env::var("APPIMAGE").is_ok()
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")))))]
     {
         false
     }
@@ -640,6 +682,7 @@ fn write_to_log_file(message: &str) {
 /// - Linux: `~/.local/share/robrix/logs/` (or `$XDG_DATA_HOME/robrix/logs/`)
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn logs_dir() -> std::path::PathBuf {
+    #[cfg_attr(target_env = "ohos", allow(unused_imports))]
     use std::path::PathBuf;
 
     #[cfg(target_os = "macos")]
@@ -661,7 +704,7 @@ pub fn logs_dir() -> std::path::PathBuf {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         // Linux: Use XDG_DATA_HOME if set, otherwise ~/.local/share/
         if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
@@ -1176,6 +1219,16 @@ impl MatchEvent for App {
             match action.downcast_ref() {
                 Some(AccountSwitchAction::Starting(user_id)) => {
                     log!("Account switch starting to: {}", user_id);
+                    // Show a loading toast so the heavy client teardown + rebuild + resync
+                    // doesn't look frozen. The popup list is append-only (no dismiss-by-key),
+                    // so this Info toast just auto-dismisses on its own timer; the Switched
+                    // success toast then confirms completion. A short duration keeps the two
+                    // from overlapping for long on a fast switch.
+                    enqueue_popup_notification(
+                        tr_key(self.app_state.app_language, "account_menu.switching"),
+                        PopupKind::Info,
+                        Some(4.0),
+                    );
                     // Clear UI state during account switch
                     clear_all_app_state(cx);
                     self.app_state.selected_room = None;
@@ -1189,8 +1242,14 @@ impl MatchEvent for App {
                 }
                 Some(AccountSwitchAction::Switched(user_id)) => {
                     log!("Account switch completed to: {}", user_id);
+                    // Release the UI-thread switch guard so the next switch can proceed.
+                    end_account_switch_guard();
                     enqueue_popup_notification(
-                        format!("Switched to account {}", user_id),
+                        tr_fmt(
+                            self.app_state.app_language,
+                            "account_menu.switched",
+                            &[("user", user_id.as_str())],
+                        ),
                         PopupKind::Success,
                         Some(3.0),
                     );
@@ -1199,6 +1258,8 @@ impl MatchEvent for App {
                 }
                 Some(AccountSwitchAction::Failed(error)) => {
                     log!("Account switch failed: {}", error);
+                    // Release the UI-thread switch guard so the user can retry.
+                    end_account_switch_guard();
                     let error_text = error.to_string();
                     let error_for_copy = error_text.clone();
                     enqueue_notification(NotificationItem {
@@ -1488,6 +1549,45 @@ impl MatchEvent for App {
                     bottom: 0.0,
                 };
                 let mut main_content_view = room_context_menu.view(cx, ids!(main_content));
+                script_apply_eval!(cx, main_content_view, {
+                    margin: #(margin)
+                });
+                self.ui.redraw(cx);
+                continue;
+            }
+
+            // Handle an action requesting to open the "+" add menu, anchored at the
+            // absolute position `pos` (already right-aligned by the emitter as needed).
+            if let Some(AddMenuAction::Open { pos }) = action.downcast_ref::<AddMenuAction>() {
+                self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
+                let add_menu = self.ui.add_menu(cx, ids!(add_menu));
+                let expected_dimensions = add_menu.show(cx, self.app_state.app_language);
+                let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);
+                let pos_x = (pos.x - rect.pos.x).min(rect.size.x - expected_dimensions.x).max(0.0);
+                let pos_y = (pos.y - rect.pos.y).min(rect.size.y - expected_dimensions.y).max(0.0);
+                let margin = Inset { left: pos_x, top: pos_y, right: 0.0, bottom: 0.0 };
+                let mut main_content_view = add_menu.view(cx, ids!(main_content));
+                script_apply_eval!(cx, main_content_view, {
+                    margin: #(margin)
+                });
+                self.ui.redraw(cx);
+                continue;
+            }
+
+            // Handle an action requesting to open the account switcher menu. Unlike the
+            // add menu, `pos` is the desired BOTTOM-left corner of the card (the avatar
+            // sits low in the rail), so we subtract the card height to grow it upward.
+            if let Some(AccountMenuAction::Open { pos }) = action.downcast_ref::<AccountMenuAction>() {
+                self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
+                let account_menu = self.ui.account_menu(cx, ids!(account_menu));
+                let expected_dimensions = account_menu.show(cx, self.app_state.app_language);
+                let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);
+                let pos_x = (pos.x - rect.pos.x).min(rect.size.x - expected_dimensions.x).max(0.0);
+                let pos_y = (pos.y - expected_dimensions.y - rect.pos.y)
+                    .min(rect.size.y - expected_dimensions.y)
+                    .max(0.0);
+                let margin = Inset { left: pos_x, top: pos_y, right: 0.0, bottom: 0.0 };
+                let mut main_content_view = account_menu.view(cx, ids!(main_content));
                 script_apply_eval!(cx, main_content_view, {
                     margin: #(margin)
                 });
@@ -1893,6 +1993,59 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            // Handle the GLOBAL report-room modal (moved out of RoomScreen so it
+            // survives mobile<->desktop AdaptiveView rebuilds). RoomScreen emits
+            // Open{room_id,...}; the modal widget emits Close/Submit.
+            match action.downcast_ref::<ReportRoomModalAction>() {
+                Some(ReportRoomModalAction::Open { room_id, room_name_id }) => {
+                    self.pending_report_room_id = Some(room_id.clone());
+                    self.ui.report_room_modal(cx, ids!(report_room_modal_inner))
+                        .show(cx, room_name_id);
+                    self.ui.modal(cx, ids!(report_room_modal)).open(cx);
+                    continue;
+                }
+                Some(ReportRoomModalAction::Close) => {
+                    self.pending_report_room_id = None;
+                    self.ui.modal(cx, ids!(report_room_modal)).close(cx);
+                    continue;
+                }
+                Some(ReportRoomModalAction::Submit(reason)) => {
+                    if let Some(room_id) = self.pending_report_room_id.take() {
+                        submit_async_request(MatrixRequest::ReportRoom {
+                            room_id,
+                            reason: reason.clone(),
+                        });
+                    }
+                    self.ui.modal(cx, ids!(report_room_modal)).close(cx);
+                    continue;
+                }
+                None => {}
+            }
+            if let Some(ReportRoomResultAction::Sent { .. }) = action.downcast_ref() {
+                enqueue_popup_notification(
+                    "Room reported successfully.",
+                    PopupKind::Success,
+                    Some(4.0),
+                );
+                continue;
+            }
+            if let Some(ReportRoomResultAction::Failed { error, .. }) = action.downcast_ref() {
+                let error_display = error.to_string();
+                enqueue_notification(NotificationItem {
+                    kind: PopupKind::Error,
+                    title: Some("Report failed".into()),
+                    message: format!("Failed to report room.\n\nError: {error}").into(),
+                    actions: vec![
+                        NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                            cx.copy_to_clipboard(&error_display);
+                        }),
+                    ],
+                    auto_dismissal_duration: Some(5.0),
+                    ..Default::default()
+                });
+                continue;
+            }
+
             // Handle RoomSettingsAction.
             match action.downcast_ref::<RoomSettingsAction>() {
                 Some(RoomSettingsAction::Open { room_id }) => {
@@ -2027,6 +2180,19 @@ impl MatchEvent for App {
                 }
                 Some(StartChatModalAction::Close) => {
                     self.ui.modal(cx, ids!(start_chat_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
+            match action.downcast_ref() {
+                Some(JoinRoomModalAction::Open) => {
+                    self.ui.join_room_modal(cx, ids!(join_room_modal_inner)).show(cx);
+                    self.ui.modal(cx, ids!(join_room_modal)).open(cx);
+                    continue;
+                }
+                Some(JoinRoomModalAction::Close) => {
+                    self.ui.modal(cx, ids!(join_room_modal)).close(cx);
                     continue;
                 }
                 _ => {}
@@ -2269,6 +2435,16 @@ impl AppMain for App {
 
         // Forward events to the MatchEvent trait implementation.
         self.match_event(cx, event);
+        // Keep the room-info-action-modal flag in sync from the GLOBAL modals
+        // (report / leave-confirm) so the room info pane doesn't self-close on
+        // Escape / tap-outside while one is open over it. Only on Actions events
+        // (when open/close happens) to avoid per-frame widget lookups.
+        if matches!(event, Event::Actions(_)) {
+            set_room_info_action_modal_open(
+                self.ui.modal(cx, ids!(report_room_modal)).is_open()
+                    || self.ui.modal(cx, ids!(delete_confirmation_modal)).is_open()
+            );
+        }
         let scope = &mut Scope::with_data(&mut self.app_state);
         self.ui.handle_event(cx, event, scope);
         self.handle_lifecycle_event(cx, event);
@@ -2853,6 +3029,10 @@ pub enum AgentFramework {
     Unknown,
     /// Octos app-service backed agent.
     Octos,
+    /// Octos added as a direct agent (user-account mode; NOT App Service /
+    /// BotFather). robrix only interacts with it over Matrix via its MXID; its
+    /// deployment location is invisible to robrix.
+    OctosDirect,
     /// Hermes external client integration.
     Hermes,
     /// OpenClaw external client integration.
@@ -2958,6 +3138,12 @@ impl AgentRegistry {
     pub fn agent_user_ids(&self) -> Vec<OwnedUserId> {
         self.agents.keys().cloned().collect()
     }
+
+    /// Iterates all registered agents with their entries, in deterministic
+    /// (sorted) order — one O(n) pass, no per-id lookups.
+    pub fn agents(&self) -> impl Iterator<Item = (&OwnedUserId, &AgentEntry)> {
+        self.agents.iter()
+    }
 }
 
 impl AppState {
@@ -2967,6 +3153,7 @@ impl AppState {
     /// Existing registry entries are never overwritten, and the legacy
     /// `known_bot_user_ids` list is left intact (other flows still rely on it).
     pub fn seed_agent_registry_from_known_bots(&mut self) {
+        self.bot_settings.prune_malformed_known_bot_user_ids();
         if self.agent_registry.is_empty() {
             for bot_user_id in self.bot_settings.known_bot_user_ids() {
                 self.agent_registry.register(
@@ -3049,6 +3236,33 @@ impl Default for BotSettingsState {
 impl BotSettingsState {
     pub const DEFAULT_BOTFATHER_LOCALPART: &'static str = "bot";
     pub const DEFAULT_OCTOS_SERVICE_URL: &'static str = "http://127.0.0.1:8010";
+
+    fn is_numeric_host_fragment(value: &str) -> bool {
+        value.contains('.')
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch == '.')
+    }
+
+    fn is_port_only_server_name(value: &str) -> bool {
+        !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())
+    }
+
+    pub(crate) fn is_valid_known_bot_user_id(bot_user_id: &UserId) -> bool {
+        let localpart = bot_user_id.localpart();
+        if localpart.is_empty() || Self::is_numeric_host_fragment(localpart) {
+            return false;
+        }
+
+        !Self::is_port_only_server_name(bot_user_id.server_name().as_str())
+    }
+
+    fn prune_malformed_known_bot_user_ids(&mut self) -> bool {
+        let original_len = self.known_bot_user_ids.len();
+        self.known_bot_user_ids
+            .retain(|bot_user_id| Self::is_valid_known_bot_user_id(bot_user_id.as_ref()));
+        original_len != self.known_bot_user_ids.len()
+    }
 
     pub fn resolved_octos_service_url(&self) -> &str {
         let raw = self.octos_service_url.trim();
@@ -3179,8 +3393,11 @@ impl BotSettingsState {
         &mut self,
         discovered_bot_user_ids: impl IntoIterator<Item = OwnedUserId>,
     ) -> bool {
-        let mut changed = false;
+        let mut changed = self.prune_malformed_known_bot_user_ids();
         for bot_user_id in discovered_bot_user_ids {
+            if !Self::is_valid_known_bot_user_id(bot_user_id.as_ref()) {
+                continue;
+            }
             if !self
                 .known_bot_user_ids
                 .iter()
@@ -3689,6 +3906,27 @@ mod tests {
         let known = app_state.bot_settings.known_bot_user_ids();
         assert!(known.iter().any(|id| id.as_str() == "@botA:example.org"));
         assert!(!known.is_empty());
+    }
+
+    #[test]
+    fn test_seed_agent_registry_skips_malformed_known_bot_user_ids() {
+        let malformed: OwnedUserId = "@:8787".try_into().unwrap();
+        let valid: OwnedUserId = "@octosbot:example.org".try_into().unwrap();
+        let mut app_state = AppState::default();
+        app_state.bot_settings.known_bot_user_ids = vec![malformed.clone(), valid.clone()];
+
+        app_state.seed_agent_registry_from_known_bots();
+
+        assert!(!app_state.agent_registry.contains(malformed.as_ref()));
+        assert!(app_state.agent_registry.contains(valid.as_ref()));
+        assert!(
+            app_state
+                .bot_settings
+                .known_bot_user_ids()
+                .iter()
+                .all(|user_id| user_id.localpart() != ""),
+            "stale parser garbage should be pruned from known bots during load-time migration",
+        );
     }
 
     #[test]

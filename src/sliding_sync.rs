@@ -24,16 +24,16 @@ use matrix_sdk::{
             direct::DirectUserIdentifier,
             relation::RelationType,
             room::{
-                encryption::RoomEncryptionEventContent, member::MembershipState, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
+                encryption::RoomEncryptionEventContent, member::{MembershipState, StrippedRoomMemberEvent}, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
             },
             space::{child::SpaceChildEventContent, parent::SpaceParentEventContent},
-            AnyMessageLikeEventContent, AnyTimelineEvent, sticker::StickerEventContent,
+            AnyMessageLikeEventContent, AnySyncTimelineEvent, AnyTimelineEvent, sticker::StickerEventContent,
             room::ImageInfo, InitialStateEvent, MessageLikeEventType, StateEventType
         }, EventId, MatrixToUri, MatrixUri, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomOrAliasId, UserId, int, uint
     }, reqwest::{Client as ReqwestClient, Response as ReqwestResponse, StatusCode as ReqwestStatusCode, header::HeaderValue}, sliding_sync::VersionBuilder, Client, Error, OwnedServerName, Room, RoomDisplayName, RoomMemberships, RoomState, SessionChange, SuccessorRoom
 };
 use matrix_sdk_ui::{
-    RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails}
+    RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails, default_event_filter}
 };
 use robius_open::Uri;
 use ruma::{
@@ -797,6 +797,10 @@ pub struct DeviceInfo {
     pub last_seen_ip: Option<String>,
     /// Unix-millisecond timestamp of the last server-side activity.
     pub last_seen_ts_ms: Option<i64>,
+    /// `true` if this entry is the session Robrix is currently running as
+    /// (matched against `client.device_id()`). Used to render the "This device"
+    /// badge and to sort the current session to the top of the list.
+    pub is_current: bool,
 }
 
 /// Outcome of attempting to delete a single device.
@@ -986,6 +990,122 @@ impl std::fmt::Display for TimelineKind {
             }
         }
     }
+}
+
+const AGENT_CHAT_APPROVAL_REQUEST_MSGTYPE: &str = "com.agentchat.approval.request.v1";
+const AGENT_CHAT_APPROVAL_STATUS_MSGTYPE: &str = "com.agentchat.approval.status.v1";
+const AGENT_CHAT_APPROVAL_VERDICT_MSGTYPE: &str = "com.agentchat.approval.verdict.v1";
+
+fn is_agent_chat_approval_timeline_event(event: &AnySyncTimelineEvent) -> bool {
+    let AnySyncTimelineEvent::MessageLike(message) = event else {
+        return false;
+    };
+    message.original_content().is_some_and(|content| {
+        matches!(
+            content,
+            AnyMessageLikeEventContent::RoomMessage(message)
+                if matches!(
+                    message.msgtype.msgtype(),
+                    AGENT_CHAT_APPROVAL_REQUEST_MSGTYPE
+                        | AGENT_CHAT_APPROVAL_STATUS_MSGTYPE
+                        | AGENT_CHAT_APPROVAL_VERDICT_MSGTYPE
+                )
+        )
+    })
+}
+
+fn robrix_timeline_event_filter(
+    event: &AnySyncTimelineEvent,
+    rules: &matrix_sdk::ruma::room_version_rules::RoomVersionRules,
+) -> bool {
+    default_event_filter(event, rules) || is_agent_chat_approval_timeline_event(event)
+}
+
+#[cfg(feature = "agent_chat")]
+const AGENT_CHAT_AGENT_LOCALPART_PREFIX: &str = "ac_";
+#[cfg(feature = "agent_chat")]
+const AGENT_CHAT_BRIDGE_BOT_LOCALPART: &str = "agent-bridge";
+
+#[cfg(feature = "agent_chat")]
+/// Role suffixes of agent-chat team agents. `_final_reviewer` MUST come before
+/// `_reviewer` — the latter is a suffix of the former.
+const AGENT_CHAT_ROLE_SUFFIXES: [&str; 4] =
+    ["_final_reviewer", "_coordinator", "_implementer", "_reviewer"];
+
+/// Companion bridge bots to auto-invite alongside an agent-chat agent.
+/// Multi-instance topology: each member's bridge bot is `agent-bridge-<team>`,
+/// derived from the invitee's `ac_<team>_<role>` localpart. The legacy shared
+/// `agent-bridge` name is kept as a best-effort fallback so single-instance
+/// deployments keep working; a failed invite to a nonexistent account is
+/// harmless (invites here are already best-effort).
+#[cfg(feature = "agent_chat")]
+fn agent_chat_bridge_bot_user_ids_for_invited_user(user_id: &UserId) -> Vec<OwnedUserId> {
+    if !user_id.localpart().starts_with(AGENT_CHAT_AGENT_LOCALPART_PREFIX) {
+        return Vec::new();
+    }
+
+    let mut plan = Vec::new();
+    let rest = &user_id.localpart()[AGENT_CHAT_AGENT_LOCALPART_PREFIX.len()..];
+    if let Some(team) = AGENT_CHAT_ROLE_SUFFIXES
+        .iter()
+        .find_map(|suffix| rest.strip_suffix(suffix))
+        .filter(|team| !team.is_empty())
+    {
+        let derived = format!(
+            "@{}-{}:{}",
+            AGENT_CHAT_BRIDGE_BOT_LOCALPART,
+            team,
+            user_id.server_name(),
+        );
+        if let Ok(user) = OwnedUserId::try_from(derived) {
+            plan.push(user);
+        }
+    }
+    let legacy = format!(
+        "@{}:{}",
+        AGENT_CHAT_BRIDGE_BOT_LOCALPART,
+        user_id.server_name(),
+    );
+    if let Ok(user) = OwnedUserId::try_from(legacy) {
+        plan.push(user);
+    }
+    plan
+}
+
+#[cfg(feature = "agent_chat")]
+fn build_agent_chat_invite_plan<I>(invitees: I) -> Vec<OwnedUserId>
+where
+    I: IntoIterator<Item = OwnedUserId>,
+{
+    let mut seen = HashSet::new();
+    let mut plan = Vec::new();
+
+    for invitee in invitees {
+        if !seen.insert(invitee.clone()) {
+            continue;
+        }
+        plan.push(invitee.clone());
+
+        #[cfg(feature = "agent_chat")]
+        for bridge_bot_user_id in agent_chat_bridge_bot_user_ids_for_invited_user(&invitee) {
+            if seen.insert(bridge_bot_user_id.clone()) {
+                plan.push(bridge_bot_user_id);
+            }
+        }
+    }
+
+    plan
+}
+
+/// Without the `agent_chat` feature there are no companion bots to derive —
+/// the plan is just the deduplicated invitee list.
+#[cfg(not(feature = "agent_chat"))]
+fn build_agent_chat_invite_plan<I>(invitees: I) -> Vec<OwnedUserId>
+where
+    I: IntoIterator<Item = OwnedUserId>,
+{
+    let mut seen = std::collections::HashSet::new();
+    invitees.into_iter().filter(|invitee| seen.insert(invitee.clone())).collect()
 }
 
 /// How the worker should deliver the result of a [`MatrixRequest::GetRoomPreview`].
@@ -1675,6 +1795,34 @@ fn add_octos_routing_metadata(
     add_octos_broadcast_targets(content, broadcast_target_user_ids)
 }
 
+const AGENTCHAT_APPROVAL_VERDICT_MSGTYPE: &str = "com.agentchat.approval.verdict.v1";
+
+fn should_rotate_room_key_before_action_response(content: &serde_json::Value) -> bool {
+    content.get("msgtype").and_then(serde_json::Value::as_str)
+        == Some(AGENTCHAT_APPROVAL_VERDICT_MSGTYPE)
+}
+
+fn should_ensure_action_response_target_joined(content: &serde_json::Value) -> bool {
+    !should_rotate_room_key_before_action_response(content)
+}
+
+fn prepare_action_response_content(
+    content: serde_json::Value,
+    target_user_id: &UserId,
+    explicit_room: bool,
+) -> serde_json::Value {
+    if should_rotate_room_key_before_action_response(&content) {
+        content
+    } else {
+        add_octos_routing_metadata(
+            content,
+            Some(target_user_id),
+            explicit_room,
+            None,
+        )
+    }
+}
+
 async fn ensure_target_user_joined_room(
     room: &Room,
     target_user_id: &UserId,
@@ -1845,6 +1993,33 @@ mod matrix_request_tests {
             forward_failure_feedback_text("network error"),
             "Failed to forward message: network error",
         );
+    }
+
+    #[test]
+    fn stripped_invite_matches_only_the_current_user() {
+        let current_user = UserId::parse("@alice:example.org").unwrap();
+        let other_user = UserId::parse("@bob:example.org").unwrap();
+
+        assert!(is_invite_for_current_user(
+            current_user.as_ref(),
+            &MembershipState::Invite,
+            Some(current_user.as_ref()),
+        ));
+        assert!(!is_invite_for_current_user(
+            other_user.as_ref(),
+            &MembershipState::Invite,
+            Some(current_user.as_ref()),
+        ));
+        assert!(!is_invite_for_current_user(
+            current_user.as_ref(),
+            &MembershipState::Join,
+            Some(current_user.as_ref()),
+        ));
+        assert!(!is_invite_for_current_user(
+            current_user.as_ref(),
+            &MembershipState::Invite,
+            None,
+        ));
     }
 
     #[test]
@@ -2134,6 +2309,30 @@ mod matrix_request_tests {
         assert!(
             should_restore_loaded_app_state(&app_state),
             "selected_room is persisted state and must restore even when dock state is empty",
+        );
+    }
+
+    #[test]
+    fn test_should_restore_loaded_app_state_with_registered_agents_and_empty_dock() {
+        // Regression for the issue #94 class: a user who only registered agents
+        // (e.g. a direct Hermes / OpenClaw / OctosDirect agent, which does NOT
+        // touch bot_settings) and never opened a room must still have the
+        // registry restored on relaunch. The gate previously ignored
+        // agent_registry, so the whole registry was silently dropped on mobile
+        // force-quit + relaunch while the Matrix session (a separate file)
+        // restored — leaving the user logged in with an empty Agent Lab.
+        let mut app_state = crate::app::AppState::default();
+        app_state.agent_registry.register(
+            "@helper:example.org".try_into().unwrap(),
+            crate::app::AgentEntry {
+                framework: crate::app::AgentFramework::Hermes,
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            should_restore_loaded_app_state(&app_state),
+            "registered agents are persisted state and must restore even when dock is empty and bot_settings are default",
         );
     }
 
@@ -2641,6 +2840,12 @@ async fn matrix_worker_task(
             }
 
             MatrixRequest::SwitchAccount { user_id } => {
+                // Switching to the account that is already active is a no-op: don't tear
+                // down and rebuild the client/sync service for nothing.
+                if account_manager::get_active_user_id().as_ref() == Some(&user_id) {
+                    log!("Ignoring SwitchAccount request: {} is already the active account", user_id);
+                    continue;
+                }
                 // Check if the account exists in AccountManager
                 if account_manager::get_client_for_user(&user_id).is_some() {
                     // Set the target account for switch
@@ -2960,6 +3165,7 @@ async fn matrix_worker_task(
                         .with_focus(TimelineFocus::Thread {
                             root_event_id: thread_root_event_id.clone(),
                         })
+                        .event_filter(robrix_timeline_event_filter)
                         .track_read_marker_and_receipts(TimelineReadReceiptTracking::AllEvents)
                         .build()
                         .await;
@@ -3058,7 +3264,17 @@ async fn matrix_worker_task(
                     // not just a joined room.
                     if let Some(room) = client.get_room(&room_id) {
                         log!("Sending request to invite user {user_id} to room {room_id}...");
-                        match room.invite_user_by_id(&user_id).await {
+                        let invite_plan = build_agent_chat_invite_plan([user_id.clone()]);
+                        let requested_user_invite_result =
+                            room.invite_user_by_id(&user_id).await;
+                        for invitee in invite_plan.into_iter().skip(1) {
+                            if let Err(error) = room.invite_user_by_id(&invitee).await {
+                                warning!(
+                                    "Failed to invite companion agent-chat user {invitee} to room {room_id}: {error}"
+                                );
+                            }
+                        }
+                        match requested_user_invite_result {
                             Ok(_) => Cx::post_action(InviteResultAction::Sent {
                                 room_id,
                                 user_id,
@@ -4195,18 +4411,29 @@ async fn matrix_worker_task(
             MatrixRequest::GetDeviceList => {
                 let Some(client) = get_client() else { continue };
                 let _get_device_list_task = Handle::current().spawn(async move {
+                    // The device id of the session we're currently running as, so the
+                    // UI can flag it. Convert to an owned String before the await so we
+                    // don't hold a borrow of `client` across it.
+                    let current_device_id = client.device_id().map(|id| id.to_string());
                     match client.devices().await {
                         Ok(resp) => {
                             let devices = resp
                                 .devices
                                 .into_iter()
-                                .map(|d| DeviceInfo {
-                                    device_id: d.device_id.to_string(),
-                                    display_name: d.display_name,
-                                    last_seen_ip: d.last_seen_ip,
-                                    last_seen_ts_ms: d
-                                        .last_seen_ts
-                                        .map(|ts| ts.get().into()),
+                                .map(|d| {
+                                    let device_id = d.device_id.to_string();
+                                    let is_current = current_device_id
+                                        .as_deref()
+                                        == Some(device_id.as_str());
+                                    DeviceInfo {
+                                        device_id,
+                                        display_name: d.display_name,
+                                        last_seen_ip: d.last_seen_ip,
+                                        last_seen_ts_ms: d
+                                            .last_seen_ts
+                                            .map(|ts| ts.get().into()),
+                                        is_current,
+                                    }
                                 })
                                 .collect::<Vec<_>>();
                             log!("Fetched {} device(s)", devices.len());
@@ -5181,26 +5408,59 @@ async fn matrix_worker_task(
                 let room_id = timeline_kind.room_id().to_owned();
 
                 let _send_action_response_task = Handle::current().spawn(async move {
-                    if let Err(error) = ensure_target_user_joined_room(
-                        timeline.room(),
-                        target_user_id.as_ref(),
-                    )
-                    .await
-                    {
-                        error!("Failed to ensure targeted bot {target_user_id} joined {timeline_kind}: {error:?}");
-                        Cx::post_action(ActionResponseResultAction::Failed {
-                            room_id,
-                            source_event_id,
-                            error: error.to_string(),
-                        });
-                        return;
+                    if should_ensure_action_response_target_joined(&content) {
+                        if let Err(error) = ensure_target_user_joined_room(
+                            timeline.room(),
+                            target_user_id.as_ref(),
+                        )
+                        .await
+                        {
+                            error!("Failed to ensure targeted bot {target_user_id} joined {timeline_kind}: {error:?}");
+                            Cx::post_action(ActionResponseResultAction::Failed {
+                                room_id,
+                                source_event_id,
+                                error: error.to_string(),
+                            });
+                            return;
+                        }
                     }
 
-                    let raw_content = add_octos_routing_metadata(
+                    if should_rotate_room_key_before_action_response(&content) {
+                        if let Err(error) = timeline
+                            .room()
+                            .client()
+                            .encryption()
+                            .request_user_identity(target_user_id.as_ref())
+                            .await
+                        {
+                            error!(
+                                "Failed to refresh the targeted bot's Matrix device keys before sending an agent-chat approval verdict to {timeline_kind}: {error:?}"
+                            );
+                            Cx::post_action(ActionResponseResultAction::Failed {
+                                room_id,
+                                source_event_id,
+                                error: error.to_string(),
+                            });
+                            return;
+                        }
+
+                        if let Err(error) = timeline.room().discard_room_key().await {
+                            error!(
+                                "Failed to rotate the encrypted room key before sending an agent-chat approval verdict to {timeline_kind}: {error:?}"
+                            );
+                            Cx::post_action(ActionResponseResultAction::Failed {
+                                room_id,
+                                source_event_id,
+                                error: error.to_string(),
+                            });
+                            return;
+                        }
+                    }
+
+                    let raw_content = prepare_action_response_content(
                         content,
-                        Some(target_user_id.as_ref()),
+                        target_user_id.as_ref(),
                         explicit_room,
-                        None,
                     );
                     match timeline.room().send_raw("m.room.message", raw_content).await {
                         Ok(_response) => {
@@ -6399,6 +6659,46 @@ fn clear_account_switch_target() {
     }
 }
 
+/// UI-thread guard preventing more than one account switch from being submitted at a
+/// time. Set synchronously in [`request_switch_account`] (so a second click in the same
+/// input frame is ignored) and cleared in [`end_account_switch_guard`] once the switch
+/// resolves. This is deliberately separate from [`ACCOUNT_SWITCH_TARGET`], whose
+/// "pending" state the async monitoring loop reads to classify worker shutdowns — we
+/// must not flip that early from the UI thread.
+static ACCOUNT_SWITCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Requests a switch to `user_id` from the UI thread, guarded so that a second request
+/// submitted while a switch is already in flight is ignored. Without this, a fast
+/// double-click on two different accounts (now possible from the Settings multi-account
+/// list) would enqueue two `SwitchAccount` requests: the worker handles the first, then
+/// `return`s and drops its request receiver, silently discarding the second (stranding
+/// the user on the wrong account) — or, in a tight window, panicking on the send to a
+/// dropped receiver. Returns `true` if the request was submitted.
+pub fn request_switch_account(user_id: OwnedUserId) -> bool {
+    // Already the active account → nothing to do. (Returning here also avoids stranding
+    // the in-flight guard, since a no-op switch posts neither Switched nor Failed.)
+    if account_manager::get_active_user_id().as_ref() == Some(&user_id) {
+        log!("Ignoring account switch to {user_id}: already the active account");
+        return false;
+    }
+    // Reserve the in-flight slot synchronously; if one is already in flight, ignore.
+    if ACCOUNT_SWITCH_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        log!("Ignoring account switch to {user_id}: a switch is already in flight");
+        return false;
+    }
+    submit_async_request(MatrixRequest::SwitchAccount { user_id });
+    true
+}
+
+/// Clears the guard set by [`request_switch_account`]. Called when a switch resolves
+/// (either `AccountSwitchAction::Switched` or `Failed`) so the next switch can proceed.
+pub fn end_account_switch_guard() {
+    ACCOUNT_SWITCH_IN_FLIGHT.store(false, Ordering::Release);
+}
+
 /// Set to `true` when the access token has been rejected by the homeserver,
 /// signaling the main task to tear down the current session and wait for re-login.
 static TOKEN_EXPIRED: AtomicBool = AtomicBool::new(false);
@@ -6613,6 +6913,64 @@ impl RoomListServiceRoomInfo {
     async fn from_room_ref(room: &matrix_sdk::Room, current_user_id: &Option<OwnedUserId>) -> Self {
         Self::from_room(room.clone(), current_user_id).await
     }
+}
+
+fn is_invite_for_current_user(
+    state_key: &UserId,
+    membership: &MembershipState,
+    current_user_id: Option<&UserId>,
+) -> bool {
+    current_user_id.is_some_and(|user_id| user_id == state_key)
+        && membership == &MembershipState::Invite
+}
+
+static ENQUEUED_INVITE_FALLBACK_ROOMS: LazyLock<Mutex<HashSet<OwnedRoomId>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Adds a direct Matrix invite-event listener as a reliability fallback for the
+/// sorted RoomListService diff stream. Some homeserver/session combinations can
+/// deliver the stripped invite state without promptly producing the room-list
+/// insertion that normally drives the sidebar.
+///
+/// The regular room-list path remains authoritative. The UI-side invited-room
+/// insertion is idempotent so both paths may safely observe the same invite.
+fn add_room_invite_event_handler(client: Client) {
+    ENQUEUED_INVITE_FALLBACK_ROOMS.lock().unwrap().clear();
+    client.add_event_handler(
+        |event: StrippedRoomMemberEvent, client: Client, room: Room| async move {
+            if !is_invite_for_current_user(
+                event.state_key.as_ref(),
+                &event.content.membership,
+                client.user_id(),
+            ) {
+                return;
+            }
+
+            if room.state() != RoomState::Invited {
+                log!(
+                    "Ignoring stripped invite event for room {} because its current state is {:?}.",
+                    room.room_id(),
+                    room.state(),
+                );
+                return;
+            }
+
+            if !ENQUEUED_INVITE_FALLBACK_ROOMS
+                .lock()
+                .unwrap()
+                .insert(room.room_id().to_owned())
+            {
+                return;
+            }
+
+            log!(
+                "Received stripped invite event for room {}; enqueueing invited room fallback.",
+                room.room_id(),
+            );
+            let room_info = RoomListServiceRoomInfo::from_room(room, &None).await;
+            enqueue_invited_room(&room_info).await;
+        },
+    );
 }
 
 /// Performs the Matrix client login or session restore, and starts the main sync service.
@@ -6855,6 +7213,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
         handle_sync_service_state_subscriber(sync_service.state());
 
         let room_list_service = sync_service.room_list_service();
+        add_room_invite_event_handler(client.clone());
         let sync_service = Arc::new(sync_service);
 
         if let Some(_existing) = SYNC_SERVICE.lock().unwrap().replace(sync_service) {
@@ -6968,7 +7327,16 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             enqueue_rooms_list_update(RoomsListUpdate::ClearRooms);
             enqueue_rooms_list_update(RoomsListUpdate::RoomOrderUpdate(VecDiff::Clear));
 
-            // Post action to clear UI state
+            // Post Starting a second time. This is NOT redundant with the one the
+            // MatrixRequest::SwitchAccount handler posts: that one fires *before*
+            // `sync_service.stop()`, while the old client and its subscribers are still
+            // live, whereas this one fires after CLIENT/SYNC_SERVICE have been dropped.
+            // The App's Starting handler is the only caller of `clear_all_app_state()`
+            // (which clears TIMELINE_STATES), and MainDesktopUi resets the dock on the
+            // same action — closing the room tabs drops each RoomScreen, whose Drop impl
+            // saves its TimelineUiState back into TIMELINE_STATES. Without this second
+            // post, the old account's timeline state is re-inserted *after* the clear and
+            // the next account sees a stale, frozen timeline for that room.
             Cx::post_action(AccountSwitchAction::Starting(switch_user_id.clone()));
 
             // Update active account
@@ -6996,6 +7364,13 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                         Ok(ss) => ss,
                         Err(e) => {
                             error!("Failed to create SyncService: {e:?}");
+                            // We installed a fresh REQUEST_SENDER above, but bail out here
+                            // before `matrix_worker_task` is spawned, so its receiver is
+                            // dropped. Drop the now-orphaned sender too: `submit_async_request`
+                            // no-ops on a `None` sender but panics on a send to a dead
+                            // receiver, which would take down the app on the user's next
+                            // action (including retrying the switch).
+                            REQUEST_SENDER.lock().unwrap().take();
                             Cx::post_action(AccountSwitchAction::Failed(format!("Failed to create sync service: {e}")));
                             return;
                         }
@@ -7006,6 +7381,7 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                     handle_sync_indicator_subscriber(&sync_service);
                     handle_sync_service_state_subscriber(sync_service.state());
                     let room_list_service = sync_service.room_list_service();
+                    add_room_invite_event_handler(client.clone());
                     let sync_service = Arc::new(sync_service);
 
                     SYNC_SERVICE.lock().unwrap().replace(sync_service);
@@ -7088,6 +7464,11 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
                 }
                 Err(e) => {
                     error!("Failed to restore session for account switch: {e:?}");
+                    // Same as the sync-service failure above: the freshly installed
+                    // REQUEST_SENDER's receiver is dropped without a worker ever being
+                    // spawned, so drop the sender rather than leaving a live handle to a
+                    // dead receiver for `submit_async_request` to panic on.
+                    REQUEST_SENDER.lock().unwrap().take();
                     apply_restore_session_failure_policy(&e).await;
                     Cx::post_action(AccountSwitchAction::Failed(format!("Failed to restore session: {e}")));
                     enqueue_popup_notification(
@@ -7603,6 +7984,7 @@ async fn update_room(
 
 /// Invoked when the room list service has received an update to remove an existing room.
 fn remove_room(room: &RoomListServiceRoomInfo) {
+    ENQUEUED_INVITE_FALLBACK_ROOMS.lock().unwrap().remove(&room.room_id);
     ALL_JOINED_ROOMS.lock().unwrap().remove(&room.room_id);
     enqueue_rooms_list_update(
         RoomsListUpdate::RemoveRoom {
@@ -7610,6 +7992,49 @@ fn remove_room(room: &RoomListServiceRoomInfo) {
             new_state: room.state,
         }
     );
+}
+
+async fn enqueue_invited_room(new_room: &RoomListServiceRoomInfo) {
+    let invite_details = new_room.room.invite_details().await.ok();
+    let room_name_id = RoomNameId::from((new_room.display_name.clone(), new_room.room_id.clone()));
+    // Start with a basic text avatar; the avatar image will be fetched asynchronously below.
+    let room_avatar = avatar_from_room_name(room_name_id.name_for_avatar());
+    let inviter_info = if let Some(inviter) = invite_details.and_then(|d| d.inviter) {
+        Some(InviterInfo {
+            user_id: inviter.user_id().to_owned(),
+            display_name: inviter.display_name().map(|n| n.to_string()),
+            avatar: inviter
+                .avatar(AVATAR_THUMBNAIL_FORMAT.into())
+                .await
+                .ok()
+                .flatten()
+                .map(Into::into),
+        })
+    } else {
+        None
+    };
+    rooms_list::enqueue_rooms_list_update(RoomsListUpdate::AddInvitedRoom(InvitedRoomInfo {
+        room_name_id: room_name_id.clone(),
+        search_text: build_room_search_text(
+            &room_name_id,
+            &new_room.room.canonical_alias(),
+            &new_room.room.alt_aliases(),
+        ),
+        inviter_info,
+        room_avatar,
+        canonical_alias: new_room.room.canonical_alias(),
+        alt_aliases: new_room.room.alt_aliases(),
+        // we don't actually display the latest event for Invited rooms, so don't bother.
+        latest: None,
+        invite_state: Default::default(),
+        is_selected: false,
+        is_direct: new_room.is_direct,
+    }));
+    Cx::post_action(AppStateAction::RoomLoadedSuccessfully {
+        room_name_id,
+        is_invite: true,
+    });
+    spawn_fetch_room_avatar(new_room);
 }
 
 
@@ -7639,46 +8064,7 @@ async fn add_new_room(
             return Ok(());
         }
         RoomState::Invited => {
-            let invite_details = new_room.room.invite_details().await.ok();
-            let room_name_id = RoomNameId::from((new_room.display_name.clone(), new_room.room_id.clone()));
-            // Start with a basic text avatar; the avatar image will be fetched asynchronously below.
-            let room_avatar = avatar_from_room_name(room_name_id.name_for_avatar());
-            let inviter_info = if let Some(inviter) = invite_details.and_then(|d| d.inviter) {
-                Some(InviterInfo {
-                    user_id: inviter.user_id().to_owned(),
-                    display_name: inviter.display_name().map(|n| n.to_string()),
-                    avatar: inviter
-                        .avatar(AVATAR_THUMBNAIL_FORMAT.into())
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(Into::into),
-                })
-            } else {
-                None
-            };
-            rooms_list::enqueue_rooms_list_update(RoomsListUpdate::AddInvitedRoom(InvitedRoomInfo {
-                room_name_id: room_name_id.clone(),
-                search_text: build_room_search_text(
-                    &room_name_id,
-                    &new_room.room.canonical_alias(),
-                    &new_room.room.alt_aliases(),
-                ),
-                inviter_info,
-                room_avatar,
-                canonical_alias: new_room.room.canonical_alias(),
-                alt_aliases: new_room.room.alt_aliases(),
-                // we don't actually display the latest event for Invited rooms, so don't bother.
-                latest: None,
-                invite_state: Default::default(),
-                is_selected: false,
-                is_direct: new_room.is_direct,
-            }));
-            Cx::post_action(AppStateAction::RoomLoadedSuccessfully {
-                room_name_id,
-                is_invite: true,
-            });
-            spawn_fetch_room_avatar(new_room);
+            enqueue_invited_room(new_room).await;
             return Ok(());
         }
         RoomState::Joined => { } // Fall through to adding the joined room below.
@@ -7695,6 +8081,7 @@ async fn add_new_room(
                 // we show threads as separate timelines in their own RoomScreen
                 hide_threaded_events: true,
             })
+            .event_filter(robrix_timeline_event_filter)
             .track_read_marker_and_receipts(TimelineReadReceiptTracking::AllEvents)
             .build()
             .await
@@ -7917,6 +8304,11 @@ fn should_restore_loaded_app_state(app_state: &crate::app::AppState) -> bool {
             .values()
             .any(saved_dock_state_has_content)
         || app_state.bot_settings != crate::app::BotSettingsState::default()
+        // Registered agents are persisted state too. Direct agents (Hermes /
+        // OpenClaw / OctosDirect) populate only the registry — not bot_settings —
+        // so without this the whole Agent Lab registry is dropped on mobile
+        // force-quit + relaunch (issue #94 class).
+        || !app_state.agent_registry.is_empty()
         || app_state.app_language != crate::i18n::AppLanguage::default()
         || app_state.app_prefs != crate::settings::app_preferences::AppPreferences::default()
         || app_state.translation != crate::room::translation::TranslationConfig::default()
@@ -9309,7 +9701,7 @@ async fn discover_homeserver_capabilities(
 
 #[cfg(test)]
 mod tests {
-    use matrix_sdk::ruma::user_id;
+    use matrix_sdk::ruma::{events::AnySyncTimelineEvent, user_id};
 
     use super::{
         OidcFlowSlot, RestoreSessionFailureAction, build_discovery_http_client,
@@ -9318,6 +9710,39 @@ mod tests {
         worker_shutdown_is_unexpected,
     };
     use crate::persistence::RestoreSessionError;
+
+    fn message_event_with_msgtype(msgtype: &str) -> AnySyncTimelineEvent {
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": msgtype,
+                "body": "test",
+            },
+            "event_id": "$agent-chat-approval:matrix.test",
+            "sender": "@agent-bridge:matrix.test",
+            "origin_server_ts": 1,
+        })).unwrap()
+    }
+
+    #[test]
+    fn agent_chat_approval_message_types_bypass_the_default_timeline_filter() {
+        for msgtype in [
+            super::AGENT_CHAT_APPROVAL_REQUEST_MSGTYPE,
+            super::AGENT_CHAT_APPROVAL_STATUS_MSGTYPE,
+            super::AGENT_CHAT_APPROVAL_VERDICT_MSGTYPE,
+        ] {
+            assert!(super::is_agent_chat_approval_timeline_event(
+                &message_event_with_msgtype(msgtype),
+            ));
+        }
+
+        assert!(!super::is_agent_chat_approval_timeline_event(
+            &message_event_with_msgtype("com.agentchat.unrelated.v1"),
+        ));
+        assert!(!super::is_agent_chat_approval_timeline_event(
+            &message_event_with_msgtype("m.text"),
+        ));
+    }
 
     #[test]
     fn worker_shutdown_is_not_unexpected_during_logout() {
@@ -9332,6 +9757,216 @@ mod tests {
     #[test]
     fn worker_shutdown_is_unexpected_without_controlled_teardown() {
         assert!(worker_shutdown_is_unexpected(false, false));
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_chat_agent_invite_derives_companion_bridge_bot() {
+        let agent = user_id!("@ac_wf_coordinator:127.0.0.1:8128");
+
+        assert_eq!(
+            super::agent_chat_bridge_bot_user_ids_for_invited_user(agent),
+            vec![
+                user_id!("@agent-bridge-wf:127.0.0.1:8128").to_owned(),
+                user_id!("@agent-bridge:127.0.0.1:8128").to_owned(),
+            ],
+        );
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn non_agent_chat_invites_do_not_derive_bridge_bot() {
+        assert!(
+            super::agent_chat_bridge_bot_user_ids_for_invited_user(user_id!(
+                "@alice:127.0.0.1:8128"
+            ))
+            .is_empty()
+        );
+        assert!(
+            super::agent_chat_bridge_bot_user_ids_for_invited_user(user_id!(
+                "@agent-bridge:127.0.0.1:8128"
+            ))
+            .is_empty()
+        );
+        assert!(
+            super::agent_chat_bridge_bot_user_ids_for_invited_user(user_id!(
+                "@octosbot:127.0.0.1:8128"
+            ))
+            .is_empty()
+        );
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_auto_invites_observer() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@ac_wf_reviewer:matrix.test").to_owned(),
+        ]);
+        assert_eq!(plan, vec![
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@agent-bridge-wf:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+            user_id!("@ac_wf_reviewer:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_derives_per_team_observer_bot() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_bob_final_reviewer:matrix.test").to_owned(),
+        ]);
+        assert_eq!(plan, vec![
+            user_id!("@ac_bob_final_reviewer:matrix.test").to_owned(),
+            user_id!("@agent-bridge-bob:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_bare_role_agent_gets_legacy_observer_only() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_implementer:matrix.test").to_owned(),
+        ]);
+        assert_eq!(plan, vec![
+            user_id!("@ac_implementer:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_does_not_derive_observer_for_humans() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@alice:matrix.test").to_owned(),
+            user_id!("@bob:matrix.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![
+            user_id!("@alice:matrix.test").to_owned(),
+            user_id!("@bob:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_does_not_derive_observer_for_octos() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@octosbot:matrix.test").to_owned(),
+            user_id!("@octosbot_weather:matrix.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![
+            user_id!("@octosbot:matrix.test").to_owned(),
+            user_id!("@octosbot_weather:matrix.test").to_owned(),
+        ]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_does_not_derive_observer_for_observer() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![user_id!("@agent-bridge:matrix.test").to_owned()]);
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_stably_deduplicates_agents_and_observers() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+            user_id!("@ac_wf_reviewer:matrix.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![
+            user_id!("@ac_wf_coordinator:matrix.test").to_owned(),
+            user_id!("@agent-bridge-wf:matrix.test").to_owned(),
+            user_id!("@agent-bridge:matrix.test").to_owned(),
+            user_id!("@ac_wf_reviewer:matrix.test").to_owned(),
+        ]);
+    }
+
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn agent_invite_plan_keeps_observers_on_two_homeservers() {
+        let plan = super::build_agent_chat_invite_plan([
+            user_id!("@ac_wf_coordinator:one.test").to_owned(),
+            user_id!("@ac_wf_reviewer:two.test").to_owned(),
+        ]);
+
+        assert_eq!(plan, vec![
+            user_id!("@ac_wf_coordinator:one.test").to_owned(),
+            user_id!("@agent-bridge-wf:one.test").to_owned(),
+            user_id!("@agent-bridge:one.test").to_owned(),
+            user_id!("@ac_wf_reviewer:two.test").to_owned(),
+            user_id!("@agent-bridge-wf:two.test").to_owned(),
+            user_id!("@agent-bridge:two.test").to_owned(),
+        ]);
+    }
+
+    #[test]
+    fn agent_chat_approval_verdict_rotates_the_outbound_room_key() {
+        let verdict = serde_json::json!({
+            "msgtype": "com.agentchat.approval.verdict.v1",
+            "body": "Approve once",
+            "com.agentchat.approval": {
+                "request_id": "approval_0123456789abcdef0123456789abcdef",
+            },
+        });
+        assert!(super::should_rotate_room_key_before_action_response(&verdict));
+        assert!(!super::should_ensure_action_response_target_joined(&verdict));
+
+        let prepared = super::prepare_action_response_content(
+            verdict.clone(),
+            user_id!("@agent-bridge:matrix.test"),
+            true,
+        );
+        assert_eq!(prepared, verdict);
+        assert!(prepared.get("org.octos.target_user_id").is_none());
+        assert!(prepared.get("org.octos.explicit_room").is_none());
+
+        assert!(!super::should_rotate_room_key_before_action_response(
+            &serde_json::json!({
+                "msgtype": "m.text",
+                "body": "ordinary room message",
+            }),
+        ));
+        assert!(!super::should_rotate_room_key_before_action_response(
+            &serde_json::json!({
+                "msgtype": "com.agentchat.approval.status.v1",
+                "body": "waiting for owner approval",
+            }),
+        ));
+    }
+
+    #[test]
+    fn octos_action_response_keeps_target_routing_and_membership_guard() {
+        let content = serde_json::json!({
+            "msgtype": "m.text",
+            "body": "Approve",
+        });
+        assert!(super::should_ensure_action_response_target_joined(&content));
+
+        let prepared = super::prepare_action_response_content(
+            content,
+            user_id!("@octosbot:matrix.test"),
+            true,
+        );
+        assert_eq!(
+            prepared.get("org.octos.target_user_id").and_then(serde_json::Value::as_str),
+            Some("@octosbot:matrix.test"),
+        );
+        assert_eq!(
+            prepared.get("org.octos.explicit_room").and_then(serde_json::Value::as_bool),
+            Some(true),
+        );
     }
 
     #[test]

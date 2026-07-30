@@ -1,5 +1,7 @@
 use makepad_widgets::{ScriptVm, event::{DigitId, FingerDownEvent, FingerLongPressEvent, FingerUpEvent}};
 
+pub mod account_menu;
+pub mod add_menu;
 pub mod add_room;
 pub mod bot_binding_modal;
 pub mod create_bot_modal;
@@ -94,6 +96,12 @@ pub fn script_mod(vm: &mut ScriptVm) {
     location_preview::script_mod(vm);
     create_room::script_mod(vm);
     add_room::script_mod(vm);
+    // `add_menu` only depends on base widgets (RobrixIconButton, SolidView,
+    // RoundedShadowView) so its order among the home widgets is not sensitive.
+    add_menu::script_mod(vm);
+    // `account_menu` likewise only depends on base + shared widgets (RobrixIconButton,
+    // SolidView, RoundedView, Avatar, LineH), so its order here is not sensitive.
+    account_menu::script_mod(vm);
     bot_binding_modal::script_mod(vm);
     create_bot_modal::script_mod(vm);
     delete_bot_modal::script_mod(vm);

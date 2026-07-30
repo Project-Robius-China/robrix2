@@ -1,0 +1,37 @@
+{
+  "id": "myagent",
+  "name": "My Personal Agent",
+  "enabled": true,
+  "config": {
+    "llm": {
+      "primary": {
+        "family_id": "deepseek",
+        "model_id": "deepseek-chat",
+        "route": {
+          "api_key_env": "DEEPSEEK_API_KEY"
+        }
+      }
+    },
+    "admin_mode": false,
+    "channels": [
+      {
+        "type": "matrix",
+        "mode": "user",
+        "homeserver": "https://matrix.example.org",
+        "user_id": "@myagent:example.org",
+        "password": "REPLACE_WITH_YOUR_BOT_ACCOUNT_PASSWORD",
+        "device_name": "octos-personal",
+        "auto_join": "always",
+        "group_policy": "open",
+        "require_mention": false,
+        "allowed_senders": ["@you:example.org"]
+      }
+    ],
+    "gateway": {
+      "max_history": 50,
+      "max_output_tokens": 8000
+    }
+  },
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z"
+}

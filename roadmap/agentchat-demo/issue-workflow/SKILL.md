@@ -314,3 +314,163 @@ PATH and the cowork CLI works runtime-agnostically.)
 - For demo visibility, prefer `post(group=GROUP, mentions=[...])` over private
   `send_message` so the human sees the coordinator↔implementer↔reviewer loop.
 - Persist `state.json` after every transition so `/status` and restarts are sane.
+
+---
+
+## GitHub integration convention (gh) — optional mirror, NEVER a blocker
+
+Mirrors each room issue to a GitHub issue and delivers completed work as a PR,
+using the `gh` CLI that every worker already has. The room + local files stay
+the source of truth; GitHub is a mirror. **No GitHub failure may ever block,
+fail, or delay the local workflow** — on any error, record it, post one room
+note, and continue exactly as before.
+
+### Activation check (coordinator runs once per issue, cache in state.json)
+GitHub steps activate only when ALL of these hold in the shared workspace:
+1. `gh repo view --json nameWithOwner -q .nameWithOwner` succeeds (a GitHub remote exists);
+2. `gh auth status` succeeds;
+3. `state.json` does not contain `"github": "off"` (operator kill-switch).
+
+If any check fails: write `- **GitHub:** none (<short reason>)` into the issue
+file, post ONE room note, and never retry within this issue. Attribution note:
+`gh` acts as the local operator's account (or a `GH_TOKEN` the operator set in
+the agent env). Never read, store, or echo tokens.
+
+### Coordinator hooks
+- **At `/create-issue` step 1**, right after writing `issues/NNN-<slug>.md`:
+  idempotency first — `gh issue list --search "\"[<TEAM>-NNN]\" in:title" --json number`
+  (safe on retries/429s); only if empty:
+  ```bash
+  gh issue create --title "[<TEAM>-NNN] <title>" --body-file issues/NNN-<slug>.md
+  ```
+  Then add `- **GitHub:** #<num>` as a metadata line directly under the
+  `- **Type:**` line, mirror `"github_issue": <num>` into this issue's
+  `state.json` object, and include `GH#<num>` in the step-5 approval `post`.
+- **At `/go` step 6 on final APPROVE** (after the Codex gate — never before):
+  delegate PR opening to the implementer (it owns the working tree):
+  ```
+  send_message(to="<TEAM>_implementer", type="request",
+    summary="Open PR for issue NNN",
+    full="Final gate approved. Push branch and open the PR per the gh convention; reply with PR number + URL.")
+  ```
+  On the implementer's PR reply: `gh issue comment <num> --body "Delivered in PR #<pr>"`,
+  add `- **PR:** #<pr>` to the issue file, and make the completion post
+  `"Issue NNN complete ✅ → PR #<pr> <url>"`.
+- **On escalation** (3 failed rounds → human): if a GH issue exists, mirror the
+  escalation note with `gh issue comment`.
+
+### Implementer hooks
+- **Before the first edit** for issue NNN (github active): create/switch to
+  branch `agent/<TEAM>-NNN-<slug>` from current HEAD. Exception: if the shared
+  workspace already has UNRELATED uncommitted work, do NOT branch and do NOT
+  stash anyone's work — report `pr: blocked-dirty-worktree` in your reply and
+  let the human decide; the issue still completes locally as usual.
+- **On the coordinator's "Open PR" request**: commit the issue-scoped changes
+  with an explicit file list (message `<type>(NNN): <title>`), then:
+  ```bash
+  git push -u origin agent/<TEAM>-NNN-<slug>
+  gh pr create --title "[<TEAM>-NNN] <title>" --body "<template below>"
+  ```
+  PR body template: Spec + Plan paths; one-line verdict summaries from BOTH
+  reviewers; test evidence line (commands + counts); `Closes #<gh-issue>`;
+  footer `🤖 via agent-chat issue-workflow`. Reply PR number + URL to the
+  coordinator.
+- **Hard limits:** NEVER `gh pr merge` (merging is the human's decision or repo
+  policy — not yours), never force-push, never edit PRs you didn't open, no
+  `gh` mutations beyond issue/PR create + comment.
+
+### Reviewer / final-reviewer hooks (cheap, optional)
+When github is active and a PR already exists (re-review of a delivered issue),
+mirror your verdict with `gh pr comment <pr> --body "<verdict + top findings>"`.
+The room verdict remains authoritative; the GH comment is a mirror.
+
+### Bookkeeping invariants
+- Every GH artifact title starts with `[<TEAM>-NNN]` — that prefix is what makes the
+  idempotency searches safe.
+- The issue file carries `- **GitHub:** #N` and `- **PR:** #N` metadata lines
+  (parseable by the Workflow Board later); `state.json` mirrors both numbers.
+- One GH issue and at most one open PR per room issue; a re-run after `reject`
+  pushes to the SAME branch/PR, never opens a second one.
+
+---
+
+## Multi-member collaboration convention (one member, one room, one worktree)
+
+Multiple humans can collaborate on ONE project with THEIR OWN agent teams —
+without sharing a workspace or a room. The integration point is git (PRs), not
+a shared directory.
+
+### Topology
+
+```text
+Project P (GitHub repo = integration source of truth)
+ ├─ Room A (Alex) → team wf   → worktree P-wf   (branch team/wf)   → PRs
+ ├─ Room B (Bob)  → team bob  → worktree P-bob  (branch team/bob)  → PRs
+ └─ Optional main room: humans only — discussion + PR notifications, NO group binding
+```
+
+Rules:
+- **One room ↔ one team ↔ one worktree.** Never bind two teams to one room, and
+  never point two teams at the same working directory. Cross-team integration
+  happens ONLY through PRs on the shared GitHub repo.
+- **Always provision the full 4-role team** (coordinator/implementer/reviewer/
+  final_reviewer). Partial teams hit the single-member default-wake edge case
+  and break the review chain.
+- Issue ids are per-worktree (each team scans its own `issues/`), and all GitHub
+  artifacts are team-namespaced (`[<TEAM>-NNN]` titles, `agent/<TEAM>-NNN-<slug>`
+  branches — see the gh convention above), so nothing collides across teams.
+- Never message or peek another team's agents (the existing TEAM-prefix rule).
+
+### Member onboarding (provision-team)
+
+One command creates the worktree and the four agent homes with the worktree
+symlink-mounted into each agent's `workdir/projects/`:
+
+```bash
+node scripts/provision-team.mjs --team bob --project /path/to/project
+# options: --branch team/bob  --worktree <path>  --final-type codex  --dry-run
+```
+
+It deliberately does NOT touch secrets or the backend. The printed next steps
+are explicit operator actions:
+1. Register the Matrix accounts for the new agents (register-accounts.mjs).
+2. Mint agent tokens (hard mode) BEFORE backend registration.
+3. `POST /api/agents` + `POST /api/agents/<name>/start` for each agent.
+4. In the member's room: invite `<team>_coordinator` (the observer bot follows
+   automatically), then `!mkgroup <group> <team>_coordinator <team>_implementer
+   <team>_reviewer <team>_final_reviewer`.
+
+### Keeping the worktree healthy
+
+- The team branch (`team/<team>`) is the member's integration line; per-issue
+  branches (`agent/<TEAM>-NNN-<slug>`) fork from it and PR back to the shared
+  default branch per the gh convention.
+- Rebase/sync of `team/<team>` onto upstream default is a HUMAN decision — the
+  coordinator may post a reminder when the branch falls behind, but agents never
+  rebase or force-push on their own.
+- If the worktree is deleted, re-provisioning is NOT automatic recovery: check
+  `git -C <project> worktree list` and prune stale entries first.
+
+### Shared-room variant (all members' coordinators in ONE room)
+
+When the whole team prefers a single shared Matrix room instead of one room per
+member (agent-chat instances stay one-per-member on each member's machine;
+Palpo is the shared cloud homeserver):
+
+1. **Every member's bridge sets `MATRIX_DEFAULT_WAKE=off`** for this deployment.
+   Without it, each instance sees "exactly one of my agents in the room" and
+   wakes its own coordinator on every unaddressed message — four coordinators
+   answering every line of chatter.
+2. Commands are therefore ALWAYS mention-addressed: `@ac_<team>_coordinator
+   /create-issue …`. Unaddressed messages are stored for the room but wake
+   nobody.
+3. Each member binds the SAME room to their OWN group with `!bindroom <team>`
+   (tier-2 command; the room must already exist — `!mkgroup` would create a new
+   one). Each bridge keeps its own local binding; they do not conflict.
+4. Each member's `MATRIX_IGNORED_SENDER_MXIDS` lists the OTHER members' bridge
+   bots and agents (prevents cross-instance routing loops). Bridge bots are
+   per-member: `MATRIX_BOT_USERNAME=agent-bridge-<team>`; Robrix auto-invites
+   `agent-bridge-<team>` (derived from the invited agent's name) plus the
+   legacy `agent-bridge` as best-effort fallback.
+5. Everything else (worktree-or-clone per member, `[<TEAM>-NNN]` GitHub
+   namespacing, PR integration) is identical to the one-room-per-member form.

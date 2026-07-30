@@ -11,6 +11,7 @@ use matrix_sdk_ui::sync_service::State;
 use crate::{
     app::AppState,
     avatar_cache,
+    home::add_menu::{AddMenuAction, ADD_MENU_WIDTH},
     home::navigation_tab_bar::{NavigationBarAction, SelectedTab},
     i18n::{AppLanguage, tr_key},
     profile::user_profile_cache,
@@ -97,6 +98,51 @@ script_mod! {
 
         // (The mobile "spaces" toggle icon was removed: switching to spaces is now
         // the `Workspace` tab in the home screen's tab row — see `RoomsSideBar`.)
+
+        // Mobile-only "+" that opens the add menu (New room / DM / Join / Explore).
+        // Hidden by default; the mobile `RoomsSideBar` turns it on (this header is
+        // shared with the desktop sidebar, where the "+" lives in the rail instead).
+        open_add_room_button := View {
+            visible: false,
+            width: Fit,
+            height: Fit
+            margin: Inset{right: 1}
+            flow: Overlay,
+
+            Icon {
+                draw_icon +: {
+                    svg: (ICON_ADD)
+                    color: (RBX_FG_SECONDARY)
+                }
+                icon_walk: Walk{width: 20, height: Fit, margin: Inset{bottom: 2}}
+            }
+
+            add_click_area := Button {
+                width: Fill,
+                height: Fill
+                padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
+                spacing: 0,
+                text: ""
+                draw_bg +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    border_color: #0000
+                    border_color_hover: #0000
+                    border_color_down: #0000
+                    border_color_focus: #0000
+                    border_size: 0.0
+                    border_radius: 0.0
+                }
+                draw_text +: {
+                    color: #0000
+                    color_hover: #0000
+                    color_down: #0000
+                    color_focus: #0000
+                }
+                icon_walk: Walk{width: 0, height: 0}
+            }
+        }
 
         open_directory_button := View {
             width: Fit,
@@ -243,6 +289,16 @@ impl Widget for RoomsListHeader {
             if self.view.button(cx, ids!(back_button.back_click_area)).clicked(actions) {
                 // Leave the currently-selected space and return to the full rooms list.
                 cx.action(NavigationBarAction::GoToHome);
+            }
+            if self.view.button(cx, ids!(open_add_room_button.add_click_area)).clicked(actions) {
+                // Anchor the add menu below the "+" button, right-aligned to it.
+                let rect = self.view.view(cx, ids!(open_add_room_button)).area().rect(cx);
+                cx.action(AddMenuAction::Open {
+                    pos: dvec2(
+                        rect.pos.x + rect.size.x - ADD_MENU_WIDTH,
+                        rect.pos.y + rect.size.y + 4.0,
+                    ),
+                });
             }
             if self.view.button(cx, ids!(open_directory_button.directory_click_area)).clicked(actions) {
                 cx.action(NavigationBarAction::GoToDirectory);

@@ -514,7 +514,13 @@ script_mod! {
                     }
                 }
 
-                devices_settings_page := ScrollXYView {
+                // Not a ScrollXYView: DevicesScreen owns a PortalList that scrolls
+                // itself, so the page is a plain Fill container. Wrapping it in an
+                // outer scroll view would give the PortalList an unbounded height
+                // and defeat its virtualization. The page inherits the settings
+                // canvas background; the white device cards separate via their own
+                // border + inter-card spacing.
+                devices_settings_page := View {
                     width: Fill, height: Fill
                     flow: Down
 

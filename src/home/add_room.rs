@@ -569,11 +569,12 @@ script_mod! {
     }
 
     mod.widgets.CreateRoomModal = #(CreateRoomModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 400 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 400
+        RoundedShadowView {
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -581,8 +582,13 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: #fff
-                border_radius: 4.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title_view := View {
@@ -598,7 +604,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 15}
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                     text: "Create New Room"
                 }
@@ -648,11 +654,12 @@ script_mod! {
     }
 
     mod.widgets.StartChatModal = #(StartChatModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 400 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 400
+        RoundedShadowView {
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -660,8 +667,13 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: #fff
-                border_radius: 4.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title_view := View {
@@ -677,7 +689,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 15}
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                     text: "Direct Messages"
                 }
@@ -746,6 +758,263 @@ script_mod! {
                     draw_icon.svg: (ICON_FORBIDDEN)
                     icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
                     text: "Cancel"
+                }
+            }
+        }
+    }
+
+    // A modal that lets the user join (or knock on) an existing room/space by
+    // entering an alias, ID, or matrix link, then previewing it before joining.
+    // Reuses the same preview + join/knock flow as the AddRoomScreen page.
+    mod.widgets.JoinRoomModal = #(JoinRoomModal::register_widget(vm)) {
+        width: Fill { max: 460 }
+        height: Fit
+        margin: Inset{left: 12, right: 12}
+
+        RoundedShadowView {
+            width: Fill
+            height: Fit
+            align: Align{x: 0.5}
+            flow: Down
+            padding: Inset{top: 14, right: 14, bottom: 14, left: 14}
+
+            show_bg: true
+            draw_bg +: {
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
+            }
+
+            title_view := View {
+                width: Fill
+                height: Fit
+                padding: Inset{top: 4, bottom: 6}
+                align: Align{y: 0.5}
+                flow: Right
+
+                title := Label {
+                    width: Fill
+                    height: Fit
+                    flow: Flow.Right{wrap: true}
+                    draw_text +: {
+                        text_style: TITLE_TEXT {font_size: 15}
+                        color: (RBX_FG_PRIMARY)
+                    }
+                    text: "Join a room or space"
+                }
+            }
+
+            subtitle := Label {
+                width: Fill
+                height: Fit
+                margin: Inset{bottom: 10}
+                flow: Flow.Right{wrap: true}
+                draw_text +: {
+                    color: (MESSAGE_TEXT_COLOR)
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 11 }
+                }
+                text: "Enter a room/space alias, ID, or a matrix link."
+            }
+
+            join_input_row := View {
+                width: Fill
+                height: Fit
+                margin: Inset{bottom: 4}
+                align: Align{y: 0.5}
+                spacing: 8
+                flow: Right
+
+                room_alias_id_input := RobrixTextInput {
+                    align: Align{y: 0.5}
+                    padding: Inset{left: 12, right: 12, top: 11, bottom: 0}
+                    width: Fill
+                    height: 40
+                    empty_text: "Enter alias, ID, or Matrix link..."
+                }
+
+                search_for_room_button := RobrixIconButton {
+                    padding: Inset{top: 10, bottom: 10, left: 12, right: 14}
+                    height: 40
+                    draw_icon.svg: (ICON_SEARCH)
+                    icon_walk: Walk{width: 16, height: 16}
+                    text: "Go"
+                }
+            }
+
+            loading_room_view := View {
+                visible: false
+                spacing: 5,
+                padding: 10,
+                width: Fill
+                height: Fit
+                align: Align{y: 0.5}
+                flow: Right
+
+                loading_spinner := LoadingSpinner {
+                    width: 22,
+                    height: 22,
+                    draw_bg +: {
+                        color: (RBX_ACCENT)
+                        border_size: 3.0
+                    }
+                }
+
+                loading_text := Label {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true},
+                    margin: Inset { top: 4 }
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                    }
+                }
+            }
+
+            error_view := View {
+                visible: false
+                width: Fill, height: Fit
+                padding: Inset{top: 6, bottom: 6}
+                error_text := Label {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true},
+                    draw_text +: {
+                        color: (RBX_DANGER_FG),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                    }
+                }
+            }
+
+            fetched_room_summary := RoundedView {
+                visible: false
+                width: Fill, height: Fit
+                flow: Down
+                padding: 14
+                margin: Inset{top: 8, bottom: 4}
+
+                show_bg: true
+                draw_bg +: {
+                    color: (RBX_BG_SURFACE_SUBTLE)
+                    border_radius: (RBX_RADIUS_SM)
+                    border_size: 1.0
+                    border_color: (RBX_STROKE_SOFT)
+                }
+
+                room_name_avatar_view := View {
+                    width: Fill, height: Fit
+                    spacing: 10
+                    align: Align{y: 0.5}
+                    flow: Right,
+
+                    room_avatar := Avatar {
+                        width: 45, height: 45,
+                        cursor: MouseCursor.Default,
+                        text_view +: {
+                            text +: {
+                                draw_text +: {
+                                    text_style: TITLE_TEXT { font_size: 16.0 }
+                                }
+                            }
+                        }
+                    }
+
+                    room_name := Label {
+                        width: Fill, height: Fit,
+                        margin: Inset{top: 3}
+                        flow: Flow.Right{wrap: true},
+                        draw_text +: {
+                            text_style: TITLE_TEXT { font_size: 16 }
+                            color: (RBX_FG_PRIMARY)
+                        }
+                    }
+                }
+
+                room_summary := Label {
+                    width: Fill, height: Fit
+                    flow: Flow.Right{wrap: true},
+                    margin: Inset{top: 10}
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR),
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                    }
+                }
+
+                subsection_alias_id := SubsectionLabel {
+                    draw_text +: { text_style: theme.font_regular { font_size: 12 } }
+                }
+
+                room_alias_and_id_view := View {
+                    padding: Inset{left: 15}
+                    width: Fill, height: Fit
+                    spacing: 8.4
+                    align: Align{y: 0.5}
+                    flow: Flow.Right{wrap: true},
+
+                    room_alias := Label {
+                        width: Fit, height: Fit
+                        flow: Flow.Right{wrap: true},
+                        draw_text +: {
+                            color: (MESSAGE_TEXT_COLOR),
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                        }
+                    }
+
+                    room_id := Label {
+                        width: Fit, height: Fit
+                        flow: Flow.Right{wrap: true},
+                        draw_text +: {
+                            color: (SMALL_STATE_TEXT_COLOR),
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 11 },
+                        }
+                    }
+                }
+
+                subsection_topic := SubsectionLabel {
+                    draw_text +: { text_style: theme.font_regular { font_size: 12 } }
+                }
+
+                room_topic := MessageHtml {
+                    padding: Inset{left: 20, top: 5, right: 10, bottom: 10}
+                    width: Fill,
+                    height: Fit,
+                    font_size: 11
+                    font_color: (MESSAGE_TEXT_COLOR)
+                }
+
+                buttons_view := View {
+                    width: Fill
+                    height: Fit,
+                    flow: Flow.Right{wrap: true},
+                    align: Align{x: 1.0, y: 0.5}
+                    spacing: 12
+                    margin: Inset{top: 14}
+
+                    join_room_button := RobrixPositiveIconButton {
+                        padding: 13,
+                        draw_icon.svg: (ICON_JOIN_ROOM)
+                        icon_walk: Walk{width: 17, height: 17, margin: Inset{left: -2, right: -1} }
+                    }
+                }
+            }
+
+            modal_buttons_view := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                padding: Inset{top: 12, bottom: 2}
+                align: Align{x: 1.0, y: 0.5}
+                spacing: 10
+
+                close_button := RobrixNeutralIconButton {
+                    width: 120
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 12
+                    draw_icon.svg: (ICON_FORBIDDEN)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
+                    text: "Close"
                 }
             }
         }
@@ -1519,6 +1788,330 @@ impl StartChatModalRef {
     }
 }
 
+#[derive(Script, ScriptHook, Widget)]
+pub struct JoinRoomModal {
+    #[deref] view: View,
+    #[rust] state: AddRoomState,
+    /// The function to perform when the user clicks the `join_room_button`.
+    #[rust(JoinButtonFunction::None)] join_function: JoinButtonFunction,
+    #[rust] app_language: AppLanguage,
+}
+
+impl Widget for JoinRoomModal {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+        self.view.handle_event(cx, event, scope);
+        self.widget_match_event(cx, event, scope);
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+
+        let loading_room_view = self.view.view(cx, ids!(loading_room_view));
+        let fetched_room_summary = self.view.view(cx, ids!(fetched_room_summary));
+        let error_view = self.view.view(cx, ids!(error_view));
+
+        match &self.state {
+            AddRoomState::WaitingOnUserInput => {
+                loading_room_view.set_visible(cx, false);
+                fetched_room_summary.set_visible(cx, false);
+                error_view.set_visible(cx, false);
+            }
+            AddRoomState::ParseError(err_str) | AddRoomState::FetchError(err_str) => {
+                loading_room_view.set_visible(cx, false);
+                fetched_room_summary.set_visible(cx, false);
+                error_view.set_visible(cx, true);
+                error_view.label(cx, ids!(error_text)).set_text(cx, err_str);
+            }
+            AddRoomState::Parsed { room_or_alias_id, .. } => {
+                loading_room_view.set_visible(cx, true);
+                loading_room_view.label(cx, ids!(loading_text)).set_text(
+                    cx,
+                    &tr_fmt(self.app_language, "add_room.loading.fetching", &[
+                        ("target", room_or_alias_id.as_str()),
+                    ]),
+                );
+                fetched_room_summary.set_visible(cx, false);
+                error_view.set_visible(cx, false);
+            }
+            ars @ AddRoomState::FetchedRoomPreview { .. }
+            | ars @ AddRoomState::Knocked { .. }
+            | ars @ AddRoomState::Joined { .. }
+            | ars @ AddRoomState::Loaded { .. } => {
+                loading_room_view.set_visible(cx, false);
+                fetched_room_summary.set_visible(cx, true);
+                error_view.set_visible(cx, false);
+                if let Some(join_function) = populate_room_preview(cx, self.app_language, ars, &fetched_room_summary) {
+                    self.join_function = join_function;
+                }
+            }
+        }
+
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl WidgetMatchEvent for JoinRoomModal {
+    fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        let room_alias_id_input = self.view.text_input(cx, ids!(room_alias_id_input));
+        let search_for_room_button = self.view.button(cx, ids!(search_for_room_button));
+        let close_button = self.view.button(cx, ids!(close_button));
+        let join_room_button = self.view.button(cx, ids!(fetched_room_summary.buttons_view.join_room_button));
+
+        // Close via the modal's Close button or an external (backdrop / Escape)
+        // dismissal. Only re-emit `Close` on a real button click — never on an
+        // external dismissal, or the App would loop (see ConfirmationModal).
+        let close_clicked = close_button.clicked(actions);
+        if close_clicked
+            || actions.iter().any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed)))
+        {
+            self.state = AddRoomState::WaitingOnUserInput;
+            if close_clicked {
+                cx.action(JoinRoomModalAction::Close);
+            }
+            return;
+        }
+
+        // Enable/disable the "Go" button based on whether the input has text.
+        if let Some(text) = room_alias_id_input.changed(actions) {
+            search_for_room_button.set_enabled(cx, !text.trim().is_empty());
+        }
+
+        // Handle the join/knock button in the fetched preview.
+        if join_room_button.clicked(actions) {
+            match (&self.join_function, &self.state) {
+                (
+                    JoinButtonFunction::NavigateOrJoin,
+                    AddRoomState::FetchedRoomPreview { frp, .. } | AddRoomState::Loaded { frp, .. }
+                ) => {
+                    cx.action(AppStateAction::NavigateToRoom {
+                        room_to_close: None,
+                        destination_room: frp.clone().into(),
+                    });
+                    // Navigating away means we're done — close the modal.
+                    self.state = AddRoomState::WaitingOnUserInput;
+                    cx.action(JoinRoomModalAction::Close);
+                    return;
+                }
+                (
+                    JoinButtonFunction::Knock,
+                    AddRoomState::FetchedRoomPreview { frp, room_or_alias_id, via }
+                ) => {
+                    submit_async_request(MatrixRequest::Knock {
+                        room_or_alias_id: frp.canonical_alias.clone().map_or_else(
+                            || room_or_alias_id.clone(),
+                            Into::into
+                        ),
+                        reason: None,
+                        server_names: via.clone(),
+                    });
+                }
+                _ => { }
+            }
+        }
+
+        // Search: parse the address and request a preview.
+        let new_room_query = search_for_room_button.clicked(actions)
+            .then(|| room_alias_id_input.text())
+            .or_else(|| room_alias_id_input.returned(actions).map(|(t, _)| t));
+        if let Some(t) = new_room_query {
+            match parse_address(t.trim()) {
+                Ok((room_or_alias_id, via)) => {
+                    self.state = AddRoomState::Parsed {
+                        room_or_alias_id: room_or_alias_id.clone(),
+                        via: via.clone(),
+                    };
+                    submit_async_request(MatrixRequest::GetRoomPreview {
+                        room_or_alias_id,
+                        via,
+                        response_mode: RoomPreviewResponseMode::Action,
+                    });
+                }
+                Err(e) => {
+                    let error_text = e.to_string();
+                    let err_str = tr_fmt(self.app_language, "add_room.popup.parse_error", &[
+                        ("error", error_text.as_str()),
+                    ]);
+                    enqueue_popup_notification(err_str.clone(), PopupKind::Error, None);
+                    self.state = AddRoomState::ParseError(err_str);
+                    room_alias_id_input.set_key_focus(cx);
+                }
+            }
+            self.redraw(cx);
+        }
+
+        // Handle the room preview being fetched (or failing) while in Parsed state.
+        if let AddRoomState::Parsed { room_or_alias_id, via } = &self.state {
+            for action in actions {
+                match action.downcast_ref() {
+                    Some(RoomPreviewAction::Fetched(Ok(frp))) => {
+                        let room_or_alias_id = room_or_alias_id.clone();
+                        let via = via.clone();
+                        self.state = AddRoomState::FetchedRoomPreview {
+                            frp: frp.clone(),
+                            room_or_alias_id,
+                            via,
+                        };
+                        join_room_button.reset_hover(cx);
+                        self.redraw(cx);
+                        break;
+                    }
+                    Some(RoomPreviewAction::Fetched(Err(e))) => {
+                        let error_text = e.to_string();
+                        let err_str = tr_fmt(self.app_language, "add_room.popup.fetch_error", &[
+                            ("error", error_text.as_str()),
+                        ]);
+                        enqueue_popup_notification(err_str.clone(), PopupKind::Error, None);
+                        self.state = AddRoomState::FetchError(err_str);
+                        self.redraw(cx);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Handle responses to knocking on / joining the previewed room.
+        let mut transition_to_knocked = false;
+        let mut transition_to_joined = false;
+        if let AddRoomState::FetchedRoomPreview { frp, room_or_alias_id, .. } = &self.state {
+            for action in actions {
+                match action.downcast_ref() {
+                    Some(KnockResultAction::Knocked { room, .. }) if room.room_id() == frp.room_name_id.room_id() => {
+                        let room_type = match room.room_type() {
+                            Some(RoomType::Space) => tr_key(self.app_language, "add_room.word.space_lc"),
+                            _ => tr_key(self.app_language, "add_room.word.room_lc"),
+                        };
+                        let room_name_text = frp.room_name_id.to_string();
+                        enqueue_popup_notification(
+                            tr_fmt(self.app_language, "add_room.popup.knock_success", &[
+                                ("room_type", room_type),
+                                ("room_name", room_name_text.as_str()),
+                            ]),
+                            PopupKind::Success,
+                            Some(4.0),
+                        );
+                        transition_to_knocked = true;
+                        break;
+                    }
+                    Some(KnockResultAction::Failed { error, room_or_alias_id: roai }) if room_or_alias_id == roai => {
+                        let error_text = error.to_string();
+                        enqueue_popup_notification(
+                            tr_fmt(self.app_language, "add_room.popup.knock_failed", &[
+                                ("error", error_text.as_str()),
+                            ]),
+                            PopupKind::Error,
+                            None,
+                        );
+                        break;
+                    }
+                    _ => { }
+                }
+
+                match action.downcast_ref() {
+                    Some(JoinRoomResultAction::Joined { room_id }) if room_id == frp.room_name_id.room_id() => {
+                        let room_type = match &frp.room_type {
+                            Some(RoomType::Space) => tr_key(self.app_language, "add_room.word.space_lc"),
+                            _ => tr_key(self.app_language, "add_room.word.room_lc"),
+                        };
+                        let room_name_text = frp.room_name_id.to_string();
+                        enqueue_popup_notification(
+                            tr_fmt(self.app_language, "add_room.popup.join_success", &[
+                                ("room_type", room_type),
+                                ("room_name", room_name_text.as_str()),
+                            ]),
+                            PopupKind::Success,
+                            Some(4.0),
+                        );
+                        transition_to_joined = true;
+                        break;
+                    }
+                    Some(JoinRoomResultAction::Failed { room_id, error }) if room_id == frp.room_name_id.room_id() => {
+                        let error_text = error.to_string();
+                        enqueue_popup_notification(
+                            tr_fmt(self.app_language, "add_room.popup.join_failed", &[
+                                ("error", error_text.as_str()),
+                            ]),
+                            PopupKind::Error,
+                            None,
+                        );
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if transition_to_knocked {
+            self.state.transition_to_knocked();
+            self.redraw(cx);
+        }
+        if transition_to_joined {
+            self.state.transition_to_joined();
+            self.redraw(cx);
+        }
+
+        // If the previewed room finished loading from the homeserver, allow the
+        // user to jump to it (enable the join button as a "go to" button).
+        for action in actions {
+            if let Some(AppStateAction::RoomLoadedSuccessfully { room_name_id, is_invite }) = action.downcast_ref()
+                && self.state.fetched_room_preview().is_some_and(|frp| frp.room_name_id.room_id() == room_name_id.room_id())
+            {
+                self.state.transition_to_loaded(*is_invite);
+                self.redraw(cx);
+            }
+        }
+    }
+}
+
+impl JoinRoomModal {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.view.label(cx, ids!(title))
+            .set_text(cx, tr_key(self.app_language, "add_room.join.modal.title"));
+        self.view.label(cx, ids!(subtitle))
+            .set_text(cx, tr_key(self.app_language, "add_room.join.modal.subtitle"));
+        self.view.text_input(cx, ids!(room_alias_id_input))
+            .set_empty_text(cx, tr_key(self.app_language, "add_room.join.input.placeholder").to_string());
+        self.view.button(cx, ids!(search_for_room_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.join.button.go"));
+        self.view.button(cx, ids!(close_button))
+            .set_text(cx, tr_key(self.app_language, "add_room.button.cancel"));
+        self.view.redraw(cx);
+    }
+
+    pub fn show(&mut self, cx: &mut Cx) {
+        self.state = AddRoomState::WaitingOnUserInput;
+        self.join_function = JoinButtonFunction::None;
+        self.set_app_language(cx, self.app_language);
+        let room_alias_id_input = self.view.text_input(cx, ids!(room_alias_id_input));
+        room_alias_id_input.set_text(cx, "");
+        let search_for_room_button = self.view.button(cx, ids!(search_for_room_button));
+        search_for_room_button.set_enabled(cx, false);
+        search_for_room_button.reset_hover(cx);
+        self.view.button(cx, ids!(close_button)).reset_hover(cx);
+        self.view.button(cx, ids!(fetched_room_summary.buttons_view.join_room_button)).reset_hover(cx);
+        room_alias_id_input.set_key_focus(cx);
+        self.view.redraw(cx);
+    }
+}
+
+impl JoinRoomModalRef {
+    pub fn show(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.show(cx);
+    }
+}
+
 impl AddRoomScreen {
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
@@ -1844,245 +2437,269 @@ impl Widget for AddRoomScreen {
                 fetched_room_summary.set_visible(cx, false); 
                 error_view.set_visible(cx, false);
             }
-            ars @ AddRoomState::FetchedRoomPreview { frp, .. } 
-            | ars @ AddRoomState::Knocked { frp }
-            | ars @ AddRoomState::Joined { frp } 
-            | ars @ AddRoomState::Loaded { frp, .. } => {
+            ars @ AddRoomState::FetchedRoomPreview { .. }
+            | ars @ AddRoomState::Knocked { .. }
+            | ars @ AddRoomState::Joined { .. }
+            | ars @ AddRoomState::Loaded { .. } => {
                 loading_room_view.set_visible(cx, false);
                 fetched_room_summary.set_visible(cx, true);
                 error_view.set_visible(cx, false);
-
-                // Populate the content of the fetched room preview.
-                let room_avatar = fetched_room_summary.avatar(cx, ids!(room_avatar));
-                match &frp.room_avatar {
-                    FetchedRoomAvatar::Text(text) => {
-                        room_avatar.show_text(cx, None, None, text);
-                    }
-                    FetchedRoomAvatar::Image(image_data) => {
-                        let res = room_avatar.show_image(
-                            cx,
-                            None,
-                            |cx, img_ref| utils::load_png_or_jpg(&img_ref, cx, image_data),
-                        );
-                        if res.is_err() {
-                            room_avatar.show_text(
-                                cx,
-                                None,
-                                None,
-                                frp.room_name_id.name_for_avatar().unwrap_or("?"),
-                            );
-                        }
-                    }
-                }
-
-                let (room_or_space_lc, room_or_space_uc) = match &frp.room_type {
-                    Some(RoomType::Space) => (
-                        tr_key(self.app_language, "add_room.word.space_lc"),
-                        tr_key(self.app_language, "add_room.word.space_uc"),
-                    ),
-                    _ => (
-                        tr_key(self.app_language, "add_room.word.room_lc"),
-                        tr_key(self.app_language, "add_room.word.room_uc"),
-                    ),
-                };
-                let room_name = fetched_room_summary.label(cx, ids!(room_name));
-                match frp.room_name_id.name_for_avatar() {
-                    Some(n) => room_name.set_text(cx, n),
-                    _ => room_name.set_text(cx, &tr_fmt(self.app_language, "add_room.fetched.room_name.unnamed", &[
-                        ("room_or_space_uc", room_or_space_uc),
-                        ("room_id", frp.room_name_id.room_id().as_str()),
-                    ])),
-                }
-
-                fetched_room_summary.label(cx, ids!(subsection_alias_id)).set_text(
-                    cx,
-                    &tr_fmt(self.app_language, "add_room.fetched.main_alias_and_id", &[
-                        ("room_or_space_uc", room_or_space_uc),
-                    ]),
-                );
-                fetched_room_summary.label(cx, ids!(room_alias)).set_text(
-                    cx,
-                    &tr_fmt(self.app_language, "add_room.fetched.alias", &[
-                        ("alias", frp.canonical_alias.as_ref().map_or(
-                            tr_key(self.app_language, "add_room.fetched.alias.not_set"),
-                            |a| a.as_str()
-                        )),
-                    ]),
-                );
-                fetched_room_summary.label(cx, ids!(room_id)).set_text(
-                    cx,
-                    &tr_fmt(self.app_language, "add_room.fetched.id", &[
-                        ("room_id", frp.room_name_id.room_id().as_str()),
-                    ]),
-                );
-                fetched_room_summary.label(cx, ids!(subsection_topic)).set_text(
-                    cx,
-                    &tr_fmt(self.app_language, "add_room.fetched.topic_title", &[
-                        ("room_or_space_uc", room_or_space_uc),
-                    ]),
-                );
-                fetched_room_summary.html(cx, ids!(room_topic)).set_text(
-                    cx,
-                    frp.topic.as_deref().unwrap_or(tr_key(self.app_language, "add_room.fetched.topic.not_set_html")),
-                );
-
-                let room_summary = fetched_room_summary.label(cx, ids!(room_summary));
-                let join_room_button = fetched_room_summary.button(cx, ids!(join_room_button));
-                let join_function = match (&frp.state, &frp.join_rule) {
-                    (Some(RoomState::Joined), _) => {
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.already_joined", &[
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        join_room_button.set_text(cx, &tr_fmt(self.app_language, "add_room.button.go_to", &[
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        JoinButtonFunction::NavigateOrJoin
-                    }
-                    (Some(RoomState::Banned), _) => {
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.banned", &[
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        join_room_button.set_text(cx, tr_key(self.app_language, "add_room.button.cannot_join_until_unbanned"));
-                        JoinButtonFunction::None
-                    }
-                    (Some(RoomState::Invited), _) => {
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.already_invited", &[
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        join_room_button.set_text(cx, tr_key(self.app_language, "add_room.button.go_to_invitation"));
-                        JoinButtonFunction::NavigateOrJoin
-                    }
-                    (Some(RoomState::Knocked), _) => {
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.already_knocked", &[
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        join_room_button.set_text(cx, tr_key(self.app_language, "add_room.button.knock_again"));
-                        JoinButtonFunction::Knock
-                    }
-                    (Some(RoomState::Left), join_rule) => {
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.previously_left", &[
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        let (join_room_text, join_function) = match join_rule {
-                            Some(JoinRuleSummary::Public) => (
-                                tr_fmt(self.app_language, "add_room.button.rejoin", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::NavigateOrJoin,
-                            ),
-                            Some(JoinRuleSummary::Invite) => (
-                                tr_fmt(self.app_language, "add_room.button.rejoin_requires_invite", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::None,
-                            ),
-                            Some(JoinRuleSummary::Knock | JoinRuleSummary::KnockRestricted(_)) => (
-                                tr_fmt(self.app_language, "add_room.button.knock_to_rejoin", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::Knock,
-                            ),
-                            // TODO: handle this after we update matrix-sdk to the new `JoinRule` enum.
-                            Some(JoinRuleSummary::Restricted(_)) => (
-                                tr_fmt(self.app_language, "add_room.button.rejoin_requires_other_membership", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::None,
-                            ),
-                            _ => (
-                                tr_fmt(self.app_language, "add_room.button.not_allowed_to_rejoin", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::None,
-                            ),
-                        };
-                        join_room_button.set_text(cx, &join_room_text);
-                        join_function
-                    }
-                    // This room is not yet known to the user.
-                    (None, join_rule) => {
-                        let directness = if frp.is_direct == Some(true) {
-                            tr_key(self.app_language, "add_room.word.direct")
-                        } else {
-                            tr_key(self.app_language, "add_room.word.regular")
-                        };
-                        let num_members = frp.num_joined_members.to_string();
-                        let member_word = match frp.num_joined_members {
-                            1 => tr_key(self.app_language, "add_room.word.member"),
-                            _ => tr_key(self.app_language, "add_room.word.members"),
-                        };
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.member_count", &[
-                            ("directness", directness),
-                            ("room_or_space_lc", room_or_space_lc),
-                            ("num_members", num_members.as_str()),
-                            ("member_word", member_word),
-                        ]));
-
-                        let (join_room_text, join_function) = match join_rule {
-                            Some(JoinRuleSummary::Public) => (
-                                tr_fmt(self.app_language, "add_room.button.join", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::NavigateOrJoin,
-                            ),
-                            Some(JoinRuleSummary::Invite) => (
-                                tr_fmt(self.app_language, "add_room.button.join_requires_invite", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::None,
-                            ),
-                            Some(JoinRuleSummary::Knock | JoinRuleSummary::KnockRestricted(_)) => (
-                                tr_fmt(self.app_language, "add_room.button.knock_to_join", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::Knock,
-                            ),
-                            // TODO: handle this after we update matrix-sdk to the new `JoinRule` enum.
-                            Some(JoinRuleSummary::Restricted(_)) => (
-                                tr_fmt(self.app_language, "add_room.button.join_requires_other_membership", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::None,
-                            ),
-                            _ => ( 
-                                tr_fmt(self.app_language, "add_room.button.not_allowed_to_join", &[("room_or_space_lc", room_or_space_lc)]),
-                                JoinButtonFunction::None,
-                            ),
-                        };
-                        join_room_button.set_text(cx, &join_room_text);
-                        join_function
-                    }
-                };
-
-                match ars {
-                    AddRoomState::FetchedRoomPreview { .. } => {
-                        join_room_button.set_enabled(cx, !matches!(join_function, JoinButtonFunction::None));
-                        self.join_function = join_function;
-                    }
-                    AddRoomState::Knocked { .. } => {
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.knocked_waiting", &[
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        join_room_button.set_text(cx, tr_key(self.app_language, "add_room.button.successfully_knocked"));
-                        join_room_button.set_enabled(cx, false);
-                    }
-                    AddRoomState::Joined { .. } => {
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.joined_loading", &[
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        join_room_button.set_text(cx, tr_key(self.app_language, "add_room.button.successfully_joined"));
-                        join_room_button.set_enabled(cx, false);
-                    }
-                    AddRoomState::Loaded { is_invite, .. } => {
-                        let verb = if *is_invite {
-                            tr_key(self.app_language, "add_room.word.verb.invited")
-                        } else {
-                            tr_key(self.app_language, "add_room.word.verb.joined")
-                        };
-                        room_summary.set_text(cx, &tr_fmt(self.app_language, "add_room.summary.loaded", &[
-                            ("verb", verb),
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        let adj = if *is_invite {
-                            tr_key(self.app_language, "add_room.word.adj.invited")
-                        } else {
-                            tr_key(self.app_language, "add_room.word.adj.joined")
-                        };
-                        join_room_button.set_text(cx, &tr_fmt(self.app_language, "add_room.button.go_to_loaded", &[
-                            ("adj", adj),
-                            ("room_or_space_lc", room_or_space_lc),
-                        ]));
-                        join_room_button.set_enabled(cx, true);
-                        self.join_function = JoinButtonFunction::NavigateOrJoin;
-                    }
-                    _ => {}
+                // Preview population + join-button state is shared with JoinRoomModal.
+                if let Some(join_function) = populate_room_preview(cx, self.app_language, ars, &fetched_room_summary) {
+                    self.join_function = join_function;
                 }
             }
         }
 
         self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+/// Populates a fetched-room preview card (identified by `summary`, which must
+/// contain the standard preview child ids: `room_avatar`, `room_name`,
+/// `room_summary`, `subsection_alias_id`, `room_alias`, `room_id`,
+/// `subsection_topic`, `room_topic`, and a descendant `join_room_button`) from the
+/// preview inside `ars`, sets the join button's label/enabled state, and returns
+/// which action that button performs.
+///
+/// Returns `Some(fun)` when the caller should store `fun` as the current join
+/// function (fetched / loaded states), or `None` when it must be left unchanged
+/// (knocked / joined states, where the button is disabled).
+///
+/// Used by [`JoinRoomModal`]. (The `AddRoomScreen` page inlines an equivalent
+/// copy of this logic; unifying the two is a follow-up.)
+fn populate_room_preview(
+    cx: &mut Cx,
+    app_language: AppLanguage,
+    ars: &AddRoomState,
+    summary: &ViewRef,
+) -> Option<JoinButtonFunction> {
+    let frp = ars.fetched_room_preview()?;
+
+    let room_avatar = summary.avatar(cx, ids!(room_avatar));
+    match &frp.room_avatar {
+        FetchedRoomAvatar::Text(text) => {
+            room_avatar.show_text(cx, None, None, text);
+        }
+        FetchedRoomAvatar::Image(image_data) => {
+            let res = room_avatar.show_image(
+                cx,
+                None,
+                |cx, img_ref| utils::load_png_or_jpg(&img_ref, cx, image_data),
+            );
+            if res.is_err() {
+                room_avatar.show_text(
+                    cx,
+                    None,
+                    None,
+                    frp.room_name_id.name_for_avatar().unwrap_or("?"),
+                );
+            }
+        }
+    }
+
+    let (room_or_space_lc, room_or_space_uc) = match &frp.room_type {
+        Some(RoomType::Space) => (
+            tr_key(app_language, "add_room.word.space_lc"),
+            tr_key(app_language, "add_room.word.space_uc"),
+        ),
+        _ => (
+            tr_key(app_language, "add_room.word.room_lc"),
+            tr_key(app_language, "add_room.word.room_uc"),
+        ),
+    };
+    let room_name = summary.label(cx, ids!(room_name));
+    match frp.room_name_id.name_for_avatar() {
+        Some(n) => room_name.set_text(cx, n),
+        _ => room_name.set_text(cx, &tr_fmt(app_language, "add_room.fetched.room_name.unnamed", &[
+            ("room_or_space_uc", room_or_space_uc),
+            ("room_id", frp.room_name_id.room_id().as_str()),
+        ])),
+    }
+
+    summary.label(cx, ids!(subsection_alias_id)).set_text(
+        cx,
+        &tr_fmt(app_language, "add_room.fetched.main_alias_and_id", &[
+            ("room_or_space_uc", room_or_space_uc),
+        ]),
+    );
+    summary.label(cx, ids!(room_alias)).set_text(
+        cx,
+        &tr_fmt(app_language, "add_room.fetched.alias", &[
+            ("alias", frp.canonical_alias.as_ref().map_or(
+                tr_key(app_language, "add_room.fetched.alias.not_set"),
+                |a| a.as_str()
+            )),
+        ]),
+    );
+    summary.label(cx, ids!(room_id)).set_text(
+        cx,
+        &tr_fmt(app_language, "add_room.fetched.id", &[
+            ("room_id", frp.room_name_id.room_id().as_str()),
+        ]),
+    );
+    summary.label(cx, ids!(subsection_topic)).set_text(
+        cx,
+        &tr_fmt(app_language, "add_room.fetched.topic_title", &[
+            ("room_or_space_uc", room_or_space_uc),
+        ]),
+    );
+    summary.html(cx, ids!(room_topic)).set_text(
+        cx,
+        frp.topic.as_deref().unwrap_or(tr_key(app_language, "add_room.fetched.topic.not_set_html")),
+    );
+
+    let room_summary = summary.label(cx, ids!(room_summary));
+    let join_room_button = summary.button(cx, ids!(join_room_button));
+    let join_function = match (&frp.state, &frp.join_rule) {
+        (Some(RoomState::Joined), _) => {
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.already_joined", &[
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            join_room_button.set_text(cx, &tr_fmt(app_language, "add_room.button.go_to", &[
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            JoinButtonFunction::NavigateOrJoin
+        }
+        (Some(RoomState::Banned), _) => {
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.banned", &[
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            join_room_button.set_text(cx, tr_key(app_language, "add_room.button.cannot_join_until_unbanned"));
+            JoinButtonFunction::None
+        }
+        (Some(RoomState::Invited), _) => {
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.already_invited", &[
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            join_room_button.set_text(cx, tr_key(app_language, "add_room.button.go_to_invitation"));
+            JoinButtonFunction::NavigateOrJoin
+        }
+        (Some(RoomState::Knocked), _) => {
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.already_knocked", &[
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            join_room_button.set_text(cx, tr_key(app_language, "add_room.button.knock_again"));
+            JoinButtonFunction::Knock
+        }
+        (Some(RoomState::Left), join_rule) => {
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.previously_left", &[
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            let (join_room_text, join_function) = match join_rule {
+                Some(JoinRuleSummary::Public) => (
+                    tr_fmt(app_language, "add_room.button.rejoin", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::NavigateOrJoin,
+                ),
+                Some(JoinRuleSummary::Invite) => (
+                    tr_fmt(app_language, "add_room.button.rejoin_requires_invite", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::None,
+                ),
+                Some(JoinRuleSummary::Knock | JoinRuleSummary::KnockRestricted(_)) => (
+                    tr_fmt(app_language, "add_room.button.knock_to_rejoin", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::Knock,
+                ),
+                Some(JoinRuleSummary::Restricted(_)) => (
+                    tr_fmt(app_language, "add_room.button.rejoin_requires_other_membership", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::None,
+                ),
+                _ => (
+                    tr_fmt(app_language, "add_room.button.not_allowed_to_rejoin", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::None,
+                ),
+            };
+            join_room_button.set_text(cx, &join_room_text);
+            join_function
+        }
+        (None, join_rule) => {
+            let directness = if frp.is_direct == Some(true) {
+                tr_key(app_language, "add_room.word.direct")
+            } else {
+                tr_key(app_language, "add_room.word.regular")
+            };
+            let num_members = frp.num_joined_members.to_string();
+            let member_word = match frp.num_joined_members {
+                1 => tr_key(app_language, "add_room.word.member"),
+                _ => tr_key(app_language, "add_room.word.members"),
+            };
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.member_count", &[
+                ("directness", directness),
+                ("room_or_space_lc", room_or_space_lc),
+                ("num_members", num_members.as_str()),
+                ("member_word", member_word),
+            ]));
+
+            let (join_room_text, join_function) = match join_rule {
+                Some(JoinRuleSummary::Public) => (
+                    tr_fmt(app_language, "add_room.button.join", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::NavigateOrJoin,
+                ),
+                Some(JoinRuleSummary::Invite) => (
+                    tr_fmt(app_language, "add_room.button.join_requires_invite", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::None,
+                ),
+                Some(JoinRuleSummary::Knock | JoinRuleSummary::KnockRestricted(_)) => (
+                    tr_fmt(app_language, "add_room.button.knock_to_join", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::Knock,
+                ),
+                Some(JoinRuleSummary::Restricted(_)) => (
+                    tr_fmt(app_language, "add_room.button.join_requires_other_membership", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::None,
+                ),
+                _ => (
+                    tr_fmt(app_language, "add_room.button.not_allowed_to_join", &[("room_or_space_lc", room_or_space_lc)]),
+                    JoinButtonFunction::None,
+                ),
+            };
+            join_room_button.set_text(cx, &join_room_text);
+            join_function
+        }
+    };
+
+    match ars {
+        AddRoomState::FetchedRoomPreview { .. } => {
+            join_room_button.set_enabled(cx, !matches!(join_function, JoinButtonFunction::None));
+            Some(join_function)
+        }
+        AddRoomState::Knocked { .. } => {
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.knocked_waiting", &[
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            join_room_button.set_text(cx, tr_key(app_language, "add_room.button.successfully_knocked"));
+            join_room_button.set_enabled(cx, false);
+            None
+        }
+        AddRoomState::Joined { .. } => {
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.joined_loading", &[
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            join_room_button.set_text(cx, tr_key(app_language, "add_room.button.successfully_joined"));
+            join_room_button.set_enabled(cx, false);
+            None
+        }
+        AddRoomState::Loaded { is_invite, .. } => {
+            let verb = if *is_invite {
+                tr_key(app_language, "add_room.word.verb.invited")
+            } else {
+                tr_key(app_language, "add_room.word.verb.joined")
+            };
+            room_summary.set_text(cx, &tr_fmt(app_language, "add_room.summary.loaded", &[
+                ("verb", verb),
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            let adj = if *is_invite {
+                tr_key(app_language, "add_room.word.adj.invited")
+            } else {
+                tr_key(app_language, "add_room.word.adj.joined")
+            };
+            join_room_button.set_text(cx, &tr_fmt(app_language, "add_room.button.go_to_loaded", &[
+                ("adj", adj),
+                ("room_or_space_lc", room_or_space_lc),
+            ]));
+            join_room_button.set_enabled(cx, true);
+            Some(JoinButtonFunction::NavigateOrJoin)
+        }
+        _ => None,
     }
 }
 
@@ -2174,6 +2791,13 @@ pub enum CreateRoomModalAction {
 /// Actions emitted by other widgets to show or hide the start-chat modal.
 #[derive(Debug)]
 pub enum StartChatModalAction {
+    Open,
+    Close,
+}
+
+/// Actions emitted by other widgets to show or hide the join-a-room modal.
+#[derive(Debug)]
+pub enum JoinRoomModalAction {
     Open,
     Close,
 }

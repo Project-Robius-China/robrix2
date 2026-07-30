@@ -34,7 +34,7 @@ use crate::{
     app::AppState, avatar_cache::{self, AvatarCacheEntry}, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
         user_profile::UserProfile,
         user_profile_cache::{self, UserProfileUpdate},
-    }, home::spaces_bar::SpacesBarWidgetExt, shared::{
+    }, home::{spaces_bar::SpacesBarWidgetExt, add_menu::AddMenuAction, account_menu::AccountMenuAction}, shared::{
         avatar::{AvatarState, AvatarWidgetExt}, styles::*, verification_badge::VerificationBadgeWidgetExt
     }, settings::app_preferences::{effective_is_desktop, AppPreferencesGlobal, AppPreferencesAction, ViewModeOverride}, sliding_sync::{current_user_id, AccountDataAction, AccountSwitchAction}, utils::{self, RoomNameId}
 };
@@ -55,10 +55,13 @@ script_mod! {
         flow: Down,
         text: "",
 
+        // Match the app-wide icon scale (RBX_ICON_LG) so the rail's Tabler icons carry the
+        // same visual stroke weight as icons everywhere else. Rendering them at ~34px made
+        // the 24px-viewBox / stroke-2 glyphs look noticeably heavier than the rest of the UI.
         icon_walk: Walk{
             margin: 0,
-            width: (NAVIGATION_TAB_BAR_SIZE / 2.2),
-            height: (NAVIGATION_TAB_BAR_SIZE / 2.2)
+            width: (RBX_ICON_LG),
+            height: (RBX_ICON_LG)
         }
         // Fully hide the text with zero size, zero margin, and zero spacing
         label_walk: Walk{margin: 0, width: 0, height: 0}
@@ -278,6 +281,36 @@ script_mod! {
         }
     }
 
+    // The bottom rail item that opens the account switcher. A plain icon button (NOT a
+    // second ProfileIcon): the switcher is an action, not the user's avatar, and this
+    // keeps the rail's icon language consistent with Home / "+". It also avoids the
+    // runtime show/hide juggling that a shared avatar template needed.
+    mod.widgets.AccountSwitcherButton = RobrixIconButton {
+        width: Fill,
+        height: (NAVIGATION_TAB_BAR_SIZE - 5),
+        margin: (SPACE_XS),
+        padding: (SPACE_XS),
+        align: Align{x: 0.5, y: 0.5}
+        spacing: 0,
+        text: "",
+        // Hide the label entirely so only the icon shows (mirrors NavigationTabButton).
+        label_walk: Walk{margin: 0, width: 0, height: 0}
+        icon_walk: Walk{margin: 0, width: (RBX_ICON_LG), height: (RBX_ICON_LG)}
+
+        draw_bg +: {
+            color: #0000
+            color_hover: (RBX_NAV_ITEM_HOVER_BG)
+            color_down: (RBX_NAV_ITEM_HOVER_BG)
+            color_disabled: #0000
+            border_size: 0.0
+            border_radius: (RBX_RADIUS_SM)
+            border_color: #0000
+            border_color_hover: #0000
+            border_color_down: #0000
+        }
+        draw_icon +: { svg: (ICON_PEOPLE), color: (RBX_NAV_FG) }
+    }
+
     mod.widgets.HomeButton = mod.widgets.NavigationTabButton {
         draw_icon +: { svg: (ICON_HOME) }
     }
@@ -303,6 +336,7 @@ script_mod! {
             // stray hairline gap on either side.
             draw_bg.color: (RBX_NAV_BG)
 
+            // Top profile avatar — clicking it opens Settings (unchanged).
             CachedWidget {
                 profile_icon := mod.widgets.ProfileIcon {}
             }
@@ -315,8 +349,18 @@ script_mod! {
 
             mod.widgets.Separator {}
 
+            // The spaces bar takes the flexible middle (height: Fill), which pins the
+            // account switcher below it to the very bottom of the rail (Feishu-style).
             CachedWidget {
                 root_spaces_bar := mod.widgets.SpacesBar {}
+            }
+
+            mod.widgets.Separator {}
+
+            // Bottom-left account switcher: an icon button that opens the AccountMenu
+            // (quick account switcher / add account), leaving the top avatar for Settings.
+            CachedWidget {
+                account_switcher_button := mod.widgets.AccountSwitcherButton {}
             }
 
         }
@@ -357,13 +401,12 @@ script_mod! {
 
                 // Labels are set in the DSL (English) so they always render; the
                 // runtime i18n pass in handle_event localizes them when possible.
+                // "Add Room" moved out of the bottom bar to the rooms header's
+                // top-right "+" (which opens the add menu). The bottom bar now
+                // carries just Home and Settings.
                 home_button := mod.widgets.MobileTabButton {
                     text: "Home"
                     draw_icon +: { svg: (ICON_HOME) }
-                }
-                add_room_button := mod.widgets.MobileTabButton {
-                    text: "Add Room"
-                    draw_icon +: { svg: (ICON_ADD) }
                 }
                 settings_button := mod.widgets.MobileTabButton {
                     text: "Settings"
@@ -378,9 +421,10 @@ script_mod! {
     }
 }
 
-/// The icon in the NavigationTabBar that show the user's avatar.
+/// The icon in the NavigationTabBar that shows the user's avatar.
 ///
-/// Clicking on this icon will open the settings screen.
+/// Clicking it opens the settings screen. (The account switcher is a separate
+/// `AccountSwitcherButton` at the bottom of the rail — it is an action, not an avatar.)
 #[derive(Script, Widget)]
 pub struct ProfileIcon {
     #[deref] view: View,
@@ -720,20 +764,51 @@ impl Widget for NavigationTabBar {
             // Handle a tab being clicked (selected).
             // Note: `settings_button` only exists in the Mobile variant; on
             // Desktop the avatar `profile_icon` opens Settings instead (below).
-            let radio_button_set = self.view.radio_button_set(cx, ids_array!(
-                home_button,
-                add_room_button,
-                settings_button,
-            ));
-            match radio_button_set.selected(cx, actions) {
-                Some(0) => cx.action(NavigationBarAction::GoToHome),
-                Some(1) => cx.action(NavigationBarAction::GoToAddRoom),
-                Some(2) => cx.action(NavigationBarAction::OpenSettings),
-                _ => { }
+            // The desktop rail and the mobile bar carry DIFFERENT buttons
+            // (desktop: Home + "+"; mobile: Home + Settings). `RadioButtonSet::selected`
+            // compacts to the buttons that actually exist, so a single 3-id set would
+            // shift Settings into the "+" slot on mobile (index 1). Index a per-layout
+            // set instead.
+            if effective_is_desktop(cx) {
+                let rail_set = self.view.radio_button_set(cx, ids_array!(home_button, add_room_button));
+                match rail_set.selected(cx, actions) {
+                    Some(0) => cx.action(NavigationBarAction::GoToHome),
+                    Some(1) => {
+                        // The desktop rail "+" opens the add menu (anchored to its
+                        // right) instead of navigating to a page.
+                        let rect = self.view.widget(cx, ids!(add_room_button)).area().rect(cx);
+                        cx.action(AddMenuAction::Open {
+                            pos: dvec2(rect.pos.x + rect.size.x + 4.0, rect.pos.y),
+                        });
+                        // Don't leave "+" visually selected: re-project the real
+                        // selected tab's highlight on the next sync.
+                        self.applied_selected_tab = None;
+                    }
+                    _ => { }
+                }
+            } else {
+                let bar_set = self.view.radio_button_set(cx, ids_array!(home_button, settings_button));
+                match bar_set.selected(cx, actions) {
+                    Some(0) => cx.action(NavigationBarAction::GoToHome),
+                    Some(1) => cx.action(NavigationBarAction::OpenSettings),
+                    _ => { }
+                }
+            }
+
+            // The bottom account-switcher button opens the AccountMenu, anchored so the
+            // card's BOTTOM-left sits at the button's bottom-right (the App grows it upward).
+            // Same recipe as the desktop rail "+" opening the AddMenu above.
+            if effective_is_desktop(cx)
+                && self.view.button(cx, ids!(account_switcher_button)).clicked(actions)
+            {
+                let rect = self.view.widget(cx, ids!(account_switcher_button)).area().rect(cx);
+                cx.action(AccountMenuAction::Open {
+                    pos: dvec2(rect.pos.x + rect.size.x + 4.0, rect.pos.y + rect.size.y),
+                });
             }
 
             for action in actions {
-                // On Desktop, clicking the profile avatar opens Settings.
+                // The top profile avatar opens Settings.
                 if let ProfileIconAction::Clicked = action.as_widget_action().cast() {
                     cx.action(NavigationBarAction::OpenSettings);
                     continue;

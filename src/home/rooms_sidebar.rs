@@ -89,6 +89,9 @@ script_mod! {
 
                 rooms_list_header := RoomsListHeader {
                     spacing: 10
+                    open_add_room_button +: {
+                        visible: true
+                    }
                     open_room_filter_modal_button +: {
                         visible: true
                     }
@@ -120,7 +123,7 @@ script_mod! {
                 draw_bg.color: (RBX_BG_SURFACE)
 
                 rooms_tab := mod.widgets.HomeTopBarTab { text: "Rooms" }
-                workspace_tab := mod.widgets.HomeTopBarTab { text: "Workspace" }
+                workspace_tab := mod.widgets.HomeTopBarTab { text: "Spaces" }
             }
 
             // Bottom divider under the tab row — clear line for depth.

@@ -7,7 +7,7 @@ use ruma::OwnedUserId;
 use crate::app::{AppState, RoomFilterRemoteSearchAction};
 use crate::avatar_cache::{self, AvatarCacheEntry};
 use crate::i18n::{AppLanguage, tr_fmt, tr_key};
-use crate::home::room_screen::InviteResultAction;
+use crate::home::room_screen::{InviteAction, InviteResultAction};
 use crate::profile::{user_profile::UserProfile, user_profile_cache};
 use crate::shared::avatar::AvatarWidgetRefExt;
 use crate::sliding_sync::{MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, submit_async_request};
@@ -95,11 +95,12 @@ script_mod! {
 
 
     mod.widgets.InviteModal = #(InviteModal::register_widget(vm)) {
-        width: Fit
+        width: Fill { max: 400 }
         height: Fit
+        margin: Inset{left: 12, right: 12}
 
-        RoundedView {
-            width: 400
+        RoundedShadowView {
+            width: Fill
             height: Fit
             align: Align{x: 0.5}
             flow: Down
@@ -107,8 +108,13 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: (COLOR_PRIMARY)
-                border_radius: 4.0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
+                shadow_color: (RBX_SHADOW_STRONG)
+                shadow_radius: 10.0
+                shadow_offset: vec2(0.0, 3.0)
             }
 
             title_view := View {
@@ -124,7 +130,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true},
                     draw_text +: {
                         text_style: TITLE_TEXT {font_size: 13},
-                        color: #000
+                        color: (RBX_FG_PRIMARY)
                     }
                     text: ""
                 }
@@ -618,6 +624,13 @@ impl InviteModal {
         status_label: &mut LabelRef,
     ) {
         if let Some(room_name_id) = &self.room_name_id {
+            // Let the room's screens record pending ownership so the accepted-
+            // join notification (pending_invited_users-based) keeps working for
+            // modal-initiated invites; the modal itself shows send feedback.
+            cx.action(InviteAction::InviteUserRequested {
+                room_id: room_name_id.room_id().clone(),
+                user_id: user_id.clone(),
+            });
             submit_async_request(MatrixRequest::InviteUser {
                 room_id: room_name_id.room_id().clone(),
                 user_id: user_id.clone(),

@@ -87,6 +87,9 @@ script_mod! {
             width: Fill
             height: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.75}}
             margin: Inset{ bottom: 5, top: 5 }
+            // Message-editing context: never offer the client-side /invitebot
+            // command here (selecting it would wipe the in-progress edit).
+            disable_invite_commands: true
         }
     }
 
