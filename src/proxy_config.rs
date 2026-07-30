@@ -256,17 +256,17 @@ pub fn apply_policy_to_reqwest_builder(
 /// sidesteps the platform verifier entirely, with identical behavior on desktop
 /// and Android.
 ///
-/// `ring` is selected explicitly because both `ring` and `aws-lc-rs` are present
+/// `aws_lc_rs` is selected explicitly because both `ring` and `aws-lc-rs` are present
 /// in the dependency graph; relying on a process-default `CryptoProvider` would
 /// otherwise risk a "no process-level CryptoProvider available" runtime panic.
 fn webpki_rustls_config() -> rustls::ClientConfig {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     rustls::ClientConfig::builder_with_provider(
-        std::sync::Arc::new(rustls::crypto::ring::default_provider()),
+        std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
     )
     .with_safe_default_protocol_versions()
-    .expect("ring provider supports TLS 1.2 + 1.3 safe defaults")
+    .expect("aws_lc_rs provider supports TLS 1.2 + 1.3 safe defaults")
     .with_root_certificates(roots)
     .with_no_client_auth()
 }
