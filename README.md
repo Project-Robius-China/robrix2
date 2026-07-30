@@ -41,6 +41,61 @@ The following table shows which host systems can currently be used to build Robr
 | iOS             | macOS           | ✅      | ✅    |
 | OpenHarmony     | *Any*           | ✅      | 🚧    |
 
+## Installing Robrix
+
+Prebuilt desktop releases do not require a Rust toolchain. Every generated
+installer is pinned to a release and verifies the native package's SHA-256
+digest before running it.
+
+> [!NOTE]
+> The generated shell and PowerShell installers become available with the first
+> complete desktop release created after this distribution automation is merged.
+> Earlier releases, including `v1.1.0`, remain available through the direct
+> [GitHub release downloads](https://github.com/Project-Robius-China/robrix2/releases).
+
+### Shell installer (macOS and Debian/Ubuntu)
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Project-Robius-China/robrix2/releases/latest/download/robrix-installer.sh | sh
+```
+
+### PowerShell installer (Windows)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/Project-Robius-China/robrix2/releases/latest/download/robrix-installer.ps1 | iex"
+```
+
+### Homebrew (macOS)
+
+This repository is its own Homebrew tap.
+
+```sh
+brew tap project-robius-china/robrix2 https://github.com/Project-Robius-China/robrix2
+brew install --cask project-robius-china/robrix2/robrix
+```
+
+### npm
+
+The npm package is a small wrapper around the same checksum-pinned native
+installers; it does not bundle Robrix inside JavaScript.
+
+```sh
+npm install --global robrix
+```
+
+### Winget (Windows)
+
+```powershell
+winget install --id ProjectRobiusChina.Robrix --exact
+```
+
+The npm and Winget commands become available after their initial registry
+submissions. Until then, use the shell, PowerShell, Homebrew, or direct
+[GitHub release downloads](https://github.com/Project-Robius-China/robrix2/releases).
+Release maintainers can find the bootstrap and automation details in
+[docs/DISTRIBUTION.md](docs/DISTRIBUTION.md).
+
 
 ## Known issues
  - Matrix-specific links (`https://matrix.to/...`) aren't fully handled in-app yet.
@@ -233,7 +288,7 @@ These are generally sorted in order of priority. If you're interested in helping
 ## Packaging Robrix for Distribution on Desktop Platforms
 
 > [!TIP]
-> We already have [pre-built releases of Robrix](https://github.com/project-robius/robrix/releases) available for download.
+> We already have [pre-built releases of Robrix](https://github.com/Project-Robius-China/robrix2/releases) available for download.
 
 
 1. Install `cargo-packager`:

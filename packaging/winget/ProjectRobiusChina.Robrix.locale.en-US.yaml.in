@@ -1,0 +1,27 @@
+# Created by the Robrix release workflow.
+PackageIdentifier: ProjectRobiusChina.Robrix
+PackageVersion: @VERSION@
+PackageLocale: en-US
+Publisher: GOSIM Foundation
+PublisherUrl: https://github.com/Project-Robius-China
+PublisherSupportUrl: https://github.com/@REPOSITORY@/issues
+Author: Project Robius
+PackageName: Robrix
+PackageUrl: https://github.com/@REPOSITORY@
+License: MIT
+LicenseUrl: https://github.com/@REPOSITORY@/blob/@TAG@/LICENSE-MIT
+Copyright: Copyright 2023-2026, Project Robius
+ShortDescription: Multi-platform Matrix chat client built with Rust and Makepad.
+Description: >-
+  Robrix is a Matrix chat client written in Rust using the Makepad UI toolkit
+  and Project Robius application development framework.
+Moniker: robrix
+Tags:
+  - chat
+  - makepad
+  - matrix
+  - messaging
+  - rust
+ReleaseNotesUrl: https://github.com/@REPOSITORY@/releases/tag/@TAG@
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0

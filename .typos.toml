@@ -1,5 +1,6 @@
 [default.extend-words]
 PN = "PN"
+sur = "sur"
 
 [files]
 # Minified vendor JS (mdbook-mermaid assets) is full of short mangled

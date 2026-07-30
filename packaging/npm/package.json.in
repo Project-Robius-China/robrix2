@@ -1,0 +1,40 @@
+{
+  "name": "robrix",
+  "version": "@VERSION@",
+  "description": "Native installer wrapper for the Robrix Matrix client",
+  "license": "MIT",
+  "homepage": "https://github.com/@REPOSITORY@",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/@REPOSITORY@.git"
+  },
+  "bugs": {
+    "url": "https://github.com/@REPOSITORY@/issues"
+  },
+  "bin": {
+    "robrix-install": "install.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "install.js",
+    "robrix-installer.sh",
+    "robrix-installer.ps1",
+    "README.md",
+    "LICENSE-MIT"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "preferGlobal": true
+}

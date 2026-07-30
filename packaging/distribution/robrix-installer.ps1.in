@@ -1,0 +1,123 @@
+[CmdletBinding()]
+param(
+    [switch]$DryRun,
+    [string]$DownloadDirectory,
+    [switch]$Quiet,
+    [switch]$Help
+)
+
+$ErrorActionPreference = "Stop"
+$AppName = "Robrix"
+$AppVersion = "@VERSION@"
+$ReleaseTag = "@TAG@"
+$Repository = "@REPOSITORY@"
+$ReleaseBaseUrl = if ($env:ROBRIX_DOWNLOAD_BASE_URL) {
+    $env:ROBRIX_DOWNLOAD_BASE_URL.TrimEnd("/")
+} else {
+    "https://github.com/$Repository/releases/download/$ReleaseTag"
+}
+
+if ($Help) {
+    @"
+robrix-installer.ps1
+
+Install Robrix $AppVersion from the official GitHub release.
+
+OPTIONS:
+    -DownloadDirectory DIR  Verify and save the installer without running it
+    -DryRun                Print the selected artifact without downloading it
+    -Quiet                 Suppress progress messages
+    -Help                  Print this help
+
+ENVIRONMENT:
+    ROBRIX_DOWNLOAD_BASE_URL    Override the release download base URL
+    ROBRIX_GITHUB_TOKEN         Token for a private or draft GitHub release
+    ROBRIX_INSTALLER_DRY_RUN=1  Same as -DryRun
+"@
+    exit 0
+}
+
+if ($env:ROBRIX_INSTALLER_DRY_RUN -eq "1") {
+    $DryRun = $true
+}
+
+function Write-ProgressMessage([string]$Message) {
+    if (-not $Quiet) {
+        Write-Host $Message
+    }
+}
+
+$RawArchitecture = if ($env:ROBRIX_INSTALLER_ARCH) {
+    $env:ROBRIX_INSTALLER_ARCH
+} elseif ($env:PROCESSOR_ARCHITEW6432) {
+    $env:PROCESSOR_ARCHITEW6432
+} else {
+    $env:PROCESSOR_ARCHITECTURE
+}
+
+switch -Regex ($RawArchitecture) {
+    "^(AMD64|x86_64|x64)$" {
+        $Architecture = "x86_64"
+        break
+    }
+    "^(ARM64|aarch64|arm64)$" {
+        # The x64 NSIS package runs under Windows ARM64 emulation.
+        $Architecture = "x86_64"
+        break
+    }
+    default {
+        throw "Unsupported Windows architecture: $RawArchitecture"
+    }
+}
+
+$Asset = "@WINDOWS_X86_64_ASSET@"
+$ExpectedSha256 = "@WINDOWS_X86_64_SHA256@"
+$DownloadUrl = "$ReleaseBaseUrl/$Asset"
+
+if ($DryRun) {
+    Write-Output "version=$AppVersion"
+    Write-Output "platform=windows"
+    Write-Output "architecture=$Architecture"
+    Write-Output "asset=$Asset"
+    Write-Output "sha256=$ExpectedSha256"
+    Write-Output "url=$DownloadUrl"
+    exit 0
+}
+
+$Headers = @{}
+if ($env:ROBRIX_GITHUB_TOKEN) {
+    $Headers["Authorization"] = "Bearer $($env:ROBRIX_GITHUB_TOKEN)"
+}
+
+$TemporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("robrix-installer-" + [Guid]::NewGuid())
+New-Item -ItemType Directory -Path $TemporaryDirectory | Out-Null
+$DownloadedFile = Join-Path $TemporaryDirectory $Asset
+
+try {
+    Write-ProgressMessage "Downloading $AppName $AppVersion (windows/$Architecture)..."
+    Invoke-WebRequest -Uri $DownloadUrl -Headers $Headers -OutFile $DownloadedFile -UseBasicParsing
+
+    $ActualSha256 = (Get-FileHash -Path $DownloadedFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ActualSha256 -ne $ExpectedSha256.ToLowerInvariant()) {
+        throw "Checksum mismatch for $Asset`: expected $ExpectedSha256, got $ActualSha256"
+    }
+    Write-ProgressMessage "Verified SHA-256: $ActualSha256"
+
+    if ($DownloadDirectory) {
+        New-Item -ItemType Directory -Force -Path $DownloadDirectory | Out-Null
+        $Destination = Join-Path $DownloadDirectory $Asset
+        Copy-Item -Force -Path $DownloadedFile -Destination $Destination
+        Write-ProgressMessage "Saved $Destination"
+        exit 0
+    }
+
+    $Process = Start-Process -FilePath $DownloadedFile -ArgumentList "/S" -Wait -PassThru
+    if ($Process.ExitCode -ne 0 -and $Process.ExitCode -ne 3010) {
+        throw "The Robrix installer exited with code $($Process.ExitCode)"
+    }
+    Write-ProgressMessage "Installed $AppName $AppVersion"
+} finally {
+    if (Test-Path $TemporaryDirectory) {
+        Remove-Item -Recurse -Force $TemporaryDirectory
+    }
+}

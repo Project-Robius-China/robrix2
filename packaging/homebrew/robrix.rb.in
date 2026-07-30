@@ -1,0 +1,22 @@
+cask "robrix" do
+  arch arm: "aarch64", intel: "x86_64"
+
+  version "@VERSION@"
+  sha256 arm:   "@MACOS_AARCH64_SHA256@",
+         intel: "@MACOS_X86_64_SHA256@"
+
+  url "https://github.com/@REPOSITORY@/releases/download/@TAG@/robrix-#{version}-macos-#{arch}-release.dmg"
+  name "Robrix"
+  desc "Multi-platform Matrix chat client built with Rust and Makepad"
+  homepage "https://github.com/@REPOSITORY@"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  auto_updates true
+  depends_on macos: :big_sur
+
+  app "Robrix.app"
+end
