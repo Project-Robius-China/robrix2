@@ -1,7 +1,7 @@
 //! The `RoomScreen` widget is the UI view that displays a single room or thread's timeline
 //! of events (messages，state changes, etc.), along with an input bar at the bottom.
 
-use std::{borrow::Cow, cell::{Cell, RefCell}, ops::{DerefMut, Range}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{borrow::Cow, cell::{Cell, RefCell}, collections::VecDeque, ops::{DerefMut, Range}, sync::Arc, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 
 use bytesize::ByteSize;
 use hashbrown::{HashMap, HashSet};
@@ -35,7 +35,7 @@ use crate::{
     shared::{
         attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
-    sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
+    sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelinePaginationStatus, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
@@ -76,6 +76,8 @@ pub(crate) const BLURHASH_IMAGE_MAX_SIZE: u32 = 32;
 /// Use a larger batch when we are trying to fill the initial viewport,
 /// otherwise many short messages can trigger a long chain of tiny paginations.
 const VIEWPORT_FILL_PAGINATION_SIZE: u16 = 150;
+const TIMELINE_UPDATE_TIME_BUDGET: Duration = Duration::from_millis(4);
+const MAX_TIMELINE_UPDATES_PER_PASS: usize = 128;
 const TOPIC_PREVIEW_CHARS: usize = 140;
 const ROOM_INFO_PANE_DESKTOP_WIDTH: f32 = 320.0;
 const ROOM_INFO_PANE_MOBILE_BREAKPOINT: f32 = 700.0;
@@ -524,6 +526,20 @@ fn original_event_content_json(
     event_tl_item.original_json()
         .and_then(|raw| raw.get_field::<serde_json::Value>("content").ok())
         .flatten()
+}
+
+fn event_raw_json_contains_any(
+    event_tl_item: &EventTimelineItem,
+    markers: &[&str],
+) -> bool {
+    event_tl_item
+        .latest_edit_json()
+        .into_iter()
+        .chain(event_tl_item.original_json())
+        .any(|raw| {
+            let json = raw.json().get();
+            markers.iter().any(|marker| json.contains(marker))
+        })
 }
 
 fn forwardable_room_message_content_from_json(
@@ -981,21 +997,30 @@ impl OctosActionButtonRequest {
     }
 }
 
+#[cfg(test)]
 fn next_approval_expiry_timeout<'a>(
     requests: impl IntoIterator<Item = &'a OctosActionButtonRequest>,
     now_millis: u64,
 ) -> Option<Duration> {
-    requests
-        .into_iter()
-        .filter_map(OctosActionButtonRequest::expiry_millis)
-        .min()
+    earliest_approval_expiry_millis(requests)
         .map(|expires_at| Duration::from_millis(
             expires_at.saturating_sub(now_millis).max(1)
         ))
 }
 
+fn earliest_approval_expiry_millis<'a>(
+    requests: impl IntoIterator<Item = &'a OctosActionButtonRequest>,
+) -> Option<u64> {
+    requests
+        .into_iter()
+        .filter_map(OctosActionButtonRequest::expiry_millis)
+        .min()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OctosActionButtonContext {
+    item_id: usize,
+    item_widget_uid: WidgetUid,
     source_event_id: OwnedEventId,
     original_sender: OwnedUserId,
     request: OctosActionButtonRequest,
@@ -1823,22 +1848,19 @@ fn detected_bot_binding_for_members(
     }
 
     let own_user_id = current_user_id();
-    let mut non_self_members = members
-        .iter()
-        .filter(|room_member|
-            own_user_id
-                .as_deref()
-                .is_none_or(|own_user_id| room_member.user_id() != own_user_id)
-        )
-        .collect::<Vec<_>>();
-    non_self_members.sort_by(|lhs, rhs| lhs.user_id().as_str().cmp(rhs.user_id().as_str()));
+    let is_non_self = |room_member: &&RoomMember| {
+        own_user_id
+            .as_deref()
+            .is_none_or(|own_user_id| room_member.user_id() != own_user_id)
+    };
 
     if let Ok(configured_bot_user_id) = app_state
         .bot_settings
         .resolved_bot_user_id(current_user_id().as_deref())
     {
-        if non_self_members
+        if members
             .iter()
+            .filter(is_non_self)
             .any(|room_member| room_member.user_id().as_str() == configured_bot_user_id.as_str())
         {
             return Some(configured_bot_user_id);
@@ -1846,19 +1868,23 @@ fn detected_bot_binding_for_members(
     }
 
     let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
-    if let Some(bot_member) = non_self_members
+    if let Some(bot_member) = members
         .iter()
-        .find(|room_member|
+        .filter(is_non_self)
+        .filter(|room_member|
             known_bot_user_ids
                 .iter()
                 .any(|known_bot_user_id| known_bot_user_id.as_str() == room_member.user_id().as_str())
         )
+        .min_by(|lhs, rhs| lhs.user_id().as_str().cmp(rhs.user_id().as_str()))
     {
         return Some(bot_member.user_id().to_owned());
     }
 
-    if non_self_members.len() == 1 {
-        let dm_counterparty = non_self_members[0];
+    let mut non_self_members = members.iter().filter(is_non_self);
+    if let Some(dm_counterparty) = non_self_members.next()
+        && non_self_members.next().is_none()
+    {
         let localpart = dm_counterparty.user_id().localpart().to_ascii_lowercase();
         let localpart_likely_bot = localpart == "bot"
             || localpart == "botfather"
@@ -1873,16 +1899,12 @@ fn detected_bot_binding_for_members(
         }
     }
 
-    if non_self_members
+    members
         .iter()
-        .any(|room_member| room_member.user_id().localpart().eq_ignore_ascii_case("botfather"))
-    {
-        return non_self_members
-            .iter()
-            .find(|room_member| room_member.user_id().localpart().eq_ignore_ascii_case("botfather"))
-            .map(|room_member| room_member.user_id().to_owned());
-    };
-    None
+        .filter(is_non_self)
+        .filter(|room_member| room_member.user_id().localpart().eq_ignore_ascii_case("botfather"))
+        .min_by(|lhs, rhs| lhs.user_id().as_str().cmp(rhs.user_id().as_str()))
+        .map(|room_member| room_member.user_id().to_owned())
 }
 
 fn is_likely_bot_user_id(
@@ -2015,8 +2037,58 @@ fn timeline_known_bot_user_ids(app_state: &AppState) -> Vec<OwnedUserId> {
     bot_user_ids
 }
 
-fn room_props_known_bot_user_ids(app_state: &AppState) -> Vec<OwnedUserId> {
-    timeline_known_bot_user_ids(app_state)
+#[derive(Clone, Default)]
+struct TimelineBotContext {
+    app_service_enabled: bool,
+    app_service_room_bound: bool,
+    has_persisted_management_binding: bool,
+    bound_bot_user_id: Option<OwnedUserId>,
+    resolved_parent_bot_user_id: Option<OwnedUserId>,
+    persisted_bound_bot_user_ids: Vec<OwnedUserId>,
+    room_bot_user_ids: Vec<OwnedUserId>,
+    known_bot_user_ids: Vec<OwnedUserId>,
+}
+
+struct CachedTimelineBotContext {
+    room_id: OwnedRoomId,
+    room_members: Option<Arc<Vec<RoomMember>>>,
+    app_service_enabled: bool,
+    room_is_bound: bool,
+    persisted_bound_bot_user_id: Option<OwnedUserId>,
+    persisted_bound_bot_user_ids: Vec<OwnedUserId>,
+    resolved_parent_bot_user_id: Option<OwnedUserId>,
+    known_bot_user_ids: Vec<OwnedUserId>,
+    value: TimelineBotContext,
+}
+impl CachedTimelineBotContext {
+    fn has_same_members(&self, room_members: Option<&Arc<Vec<RoomMember>>>) -> bool {
+        match (self.room_members.as_ref(), room_members) {
+            (Some(cached), Some(current)) => Arc::ptr_eq(cached, current),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn matches(
+        &self,
+        room_id: &OwnedRoomId,
+        room_members: Option<&Arc<Vec<RoomMember>>>,
+        app_service_enabled: bool,
+        room_is_bound: bool,
+        persisted_bound_bot_user_id: Option<&OwnedUserId>,
+        persisted_bound_bot_user_ids: &[OwnedUserId],
+        resolved_parent_bot_user_id: Option<&OwnedUserId>,
+        known_bot_user_ids: &[OwnedUserId],
+    ) -> bool {
+        self.room_id == *room_id
+            && self.has_same_members(room_members)
+            && self.app_service_enabled == app_service_enabled
+            && self.room_is_bound == room_is_bound
+            && self.persisted_bound_bot_user_id.as_ref() == persisted_bound_bot_user_id
+            && self.persisted_bound_bot_user_ids.as_slice() == persisted_bound_bot_user_ids
+            && self.resolved_parent_bot_user_id.as_ref() == resolved_parent_bot_user_id
+            && self.known_bot_user_ids.as_slice() == known_bot_user_ids
+    }
 }
 
 fn compute_timeline_bot_context(
@@ -6365,10 +6437,16 @@ pub struct RoomScreen {
     #[rust] timeline_kind: Option<TimelineKind>,
     /// The persistent UI-relevant states for the room that this widget is currently displaying.
     #[rust] tl_state: Option<TimelineUiState>,
+    /// Whether this RoomScreen is currently visible and should consume room-specific signals.
+    #[rust] timeline_updates_enabled: bool,
+    /// Restarts paused streaming timers on the first signal after becoming visible.
+    #[rust] resume_timeline_on_next_signal: bool,
     /// Cached, prebuilt member rows for the room-info People list (see
     /// [`RoomInfoMembersCache`]). Avoids rebuilding/sorting the full member list
     /// on every Signal-driven info refresh.
     #[rust] room_info_members_cache: Option<RoomInfoMembersCache>,
+    /// Derived bot identities for the current immutable room-member snapshot.
+    #[rust] timeline_bot_context_cache: Option<CachedTimelineBotContext>,
     /// The set of pinned events in this room.
     #[rust] pinned_events: Vec<OwnedEventId>,
     /// Whether this room has been successfully loaded (received from the homeserver).
@@ -6384,6 +6462,21 @@ pub struct RoomScreen {
     /// Timeout that redraws visible approval cards when their deadline passes.
     #[rust]
     approval_expiry_timer: Timer,
+    /// Absolute deadline represented by `approval_expiry_timer`.
+    ///
+    /// Keeping this separately avoids stopping and recreating the same timer on
+    /// every draw while a room is being scrolled.
+    #[rust]
+    approval_expiry_deadline_millis: Option<u64>,
+    /// Desktop/mobile layout state already pushed into the widget tree.
+    #[rust]
+    applied_layout_state: Option<AppliedRoomLayoutState>,
+    /// Whether the previous draw included the leading encryption notice row.
+    ///
+    /// A change shifts every PortalList item ID, so the per-timeline drawn
+    /// caches must be invalidated before cached widgets can be reused.
+    #[rust]
+    last_has_encryption_notice: Option<bool>,
     /// Whether the in-room app service quick actions card is currently visible.
     #[rust] show_app_service_actions: bool,
     #[rust] threads_pane_state: ThreadsPaneState,
@@ -6400,6 +6493,12 @@ pub struct RoomScreen {
     /// Which body tab (Chat / Info) is currently shown in the mobile layout.
     /// Reset to `Chat` whenever a new room is displayed. Unused on desktop.
     #[rust] active_room_tab: RoomTab,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AppliedRoomLayoutState {
+    is_desktop: bool,
+    active_room_tab: RoomTab,
 }
 
 /// Tracks the active server-side message search shown in the
@@ -6442,6 +6541,8 @@ impl Drop for RoomScreen {
 impl ScriptHook for RoomScreen {
     fn on_after_reload(&mut self, vm: &mut ScriptVm) {
         vm.with_cx_mut(|cx| {
+            self.applied_layout_state = None;
+            self.last_has_encryption_notice = None;
             if let Some(tl_state) = &mut self.tl_state.as_mut() {
                 // Clear the timeline's drawn items caches and redraw it.
                 tl_state.content_drawn_since_last_update.clear();
@@ -6455,6 +6556,16 @@ impl ScriptHook for RoomScreen {
 impl Widget for RoomScreen {
     // Handle events and actions for the RoomScreen widget and its inner Timeline view.
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        if !self.timeline_updates_enabled
+            && (
+                matches!(event, Event::Signal)
+                    || self.streaming_next_frame.is_event(event).is_some()
+                    || self.streaming_timeout_timer.is_event(event).is_some()
+                    || self.approval_expiry_timer.is_event(event).is_some()
+            )
+        {
+            return;
+        }
         let app_language = scope.data.get::<AppState>()
             .map(|app_state| app_state.app_language)
             .unwrap_or_default();
@@ -6479,6 +6590,7 @@ impl Widget for RoomScreen {
             #[cfg(debug_assertions)]
             #[allow(unused_variables)]
             let frame_start = std::time::Instant::now();
+            let has_encryption_notice = self.current_has_encryption_notice(cx);
 
             if let Some(tl) = self.tl_state.as_mut() {
                 let mut needs_another_frame = false;
@@ -6524,7 +6636,11 @@ impl Widget for RoomScreen {
 
                 if any_timeline_indices_visible(
                     redraw_candidate_indices.iter().copied(),
-                    |idx| portal_list.get_item(idx).is_some(),
+                    |idx| {
+                        portal_list
+                            .get_item(item_id_from_tl_idx(idx, has_encryption_notice))
+                            .is_some()
+                    },
                 ) {
                     self.redraw_timeline_list(cx);
                 }
@@ -6545,6 +6661,7 @@ impl Widget for RoomScreen {
         }
 
         if self.streaming_timeout_timer.is_event(event).is_some() {
+            let has_encryption_notice = self.current_has_encryption_notice(cx);
             if let Some(tl) = self.tl_state.as_mut() {
                 let timed_out_entries: Vec<(OwnedEventId, Option<usize>)> = tl
                     .streaming_messages
@@ -6564,7 +6681,11 @@ impl Widget for RoomScreen {
 
                 if any_timeline_indices_visible(
                     timed_out_entries.iter().map(|(_, idx)| *idx),
-                    |idx| portal_list.get_item(idx).is_some(),
+                    |idx| {
+                        portal_list
+                            .get_item(item_id_from_tl_idx(idx, has_encryption_notice))
+                            .is_some()
+                    },
                 ) {
                     self.redraw_timeline_list(cx);
                 }
@@ -6575,7 +6696,14 @@ impl Widget for RoomScreen {
 
         if self.approval_expiry_timer.is_event(event).is_some() {
             self.approval_expiry_timer = Timer::empty();
-            self.redraw_timeline_list(cx);
+            self.approval_expiry_deadline_millis = None;
+            if self.expire_approval_contexts(current_unix_time_millis()) {
+                self.redraw_timeline_list(cx);
+            }
+            // A timeout can fire marginally before its wall-clock deadline.
+            // Re-arm the next still-pending request after expired contexts
+            // have been removed.
+            self.schedule_approval_expiry(cx);
         }
 
         // Handle actions here before processing timeline updates.
@@ -6762,6 +6890,7 @@ impl Widget for RoomScreen {
                 }
 
                 if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
+                    self.invalidate_timeline_bot_context();
                     if room_info_sliding_pane.is_currently_shown(cx) {
                         self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
                     }
@@ -6899,6 +7028,7 @@ impl Widget for RoomScreen {
                             &mut self.selected_octos_action_by_source_event_id,
                             source_event_id.as_ref(),
                         );
+                        self.invalidate_timeline_event_content(source_event_id.as_ref());
                         self.redraw_timeline_list(cx);
                         enqueue_popup_notification(
                             tr_fmt(
@@ -7127,6 +7257,21 @@ impl Widget for RoomScreen {
         // 1. to check if the room has been loaded from the homeserver yet, or
         // 2. that its timeline events have been updated in the background.
         if let Event::Signal = event {
+            if std::mem::take(&mut self.resume_timeline_on_next_signal) {
+                let needs_streaming_frame = self.tl_state
+                    .as_ref()
+                    .is_some_and(|tl|
+                        tl.streaming_messages.values().any(|state| state.needs_frame())
+                    );
+                if needs_streaming_frame {
+                    self.streaming_next_frame = cx.new_next_frame();
+                }
+                self.schedule_stream_timeout(cx);
+                if self.expire_approval_contexts(current_unix_time_millis()) {
+                    self.redraw_timeline_list(cx);
+                }
+                self.schedule_approval_expiry(cx);
+            }
             if let (false, Some(room_name_id), true) = (self.is_loaded, self.room_name_id.as_ref(), cx.has_global::<RoomsListRef>()) {
                 let rooms_list_ref = cx.get_global::<RoomsListRef>();
                 if rooms_list_ref.is_room_loaded(room_name_id.room_id()) {
@@ -7567,17 +7712,12 @@ impl Widget for RoomScreen {
         // are custom widgets, so toggle via `.widget()` — `.view()` returns an
         // empty ref for non-View widgets and `set_visible` would no-op.
         let is_desktop = effective_is_desktop(cx);
-        self.view.widget(cx, ids!(timeline.search_messages_button)).set_visible(cx, is_desktop);
-        self.view.widget(cx, ids!(timeline.threads_button)).set_visible(cx, is_desktop);
-        self.view.widget(cx, ids!(timeline.info_button)).set_visible(cx, is_desktop);
-
-        // Drive the Robrix-owned mobile room header (RoomTopBar) and the
-        // Chat/Info body switch. The top bar is mobile-only; desktop keeps its
-        // dock chrome and always shows the chat body.
         let show_top_bar = !is_desktop;
+
+        // Drive the Robrix-owned mobile room header (RoomTopBar). Its room
+        // details can change independently of layout, so refresh them whenever
+        // the mobile header is active.
         if show_top_bar {
-            // Gather the header's room data with read-only borrows first, then
-            // push it to the widget (which needs `&mut`).
             let room_name = self.room_name_id.as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default();
@@ -7591,33 +7731,51 @@ impl Widget for RoomScreen {
             self.room_top_bar(cx, ids!(room_top_bar))
                 .set_room(cx, &room_name, &member_count_text, is_encrypted);
         }
-        self.room_top_bar(cx, ids!(room_top_bar)).set_visible(cx, show_top_bar);
 
-        // Push the top "loading earlier" status bar below the mobile header +
-        // tab row so it doesn't overlap them. RoomTopBar height = header(56) +
-        // tabs(40) + divider(1). No offset on desktop (no mobile header).
-        let top_space_offset = if show_top_bar { 97.0 } else { 0.0 };
-        let mut top_space = self.view(cx, ids!(top_space));
-        script_apply_eval!(cx, top_space, {
-            margin.top: #(top_space_offset)
-        });
+        // Layout setters and `script_apply_eval!` mutate the widget tree. They
+        // only need to run when the responsive mode or selected mobile tab
+        // changes, not for every frame emitted by a scroll gesture.
+        let layout_state = AppliedRoomLayoutState {
+            is_desktop,
+            active_room_tab: self.active_room_tab,
+        };
+        if self.applied_layout_state != Some(layout_state) {
+            self.view.widget(cx, ids!(timeline.search_messages_button)).set_visible(cx, is_desktop);
+            self.view.widget(cx, ids!(timeline.threads_button)).set_visible(cx, is_desktop);
+            self.view.widget(cx, ids!(timeline.info_button)).set_visible(cx, is_desktop);
+            self.room_top_bar(cx, ids!(room_top_bar)).set_visible(cx, show_top_bar);
 
-        // Show the timeline ("Chat") or the inline room-info ("Info") body.
-        // Desktop always shows the chat body (info lives in its sliding pane).
-        let on_info_tab = show_top_bar && matches!(self.active_room_tab, RoomTab::Info);
-        // Ensure the inline info pane stays in docked (non-sliding) mode.
-        self.room_info_sliding_pane(cx, ids!(info_content)).set_inline(true);
-        // Toggle the PLAIN-View wrappers (set_visible is a no-op on the custom
-        // RoomInfoSlidingPane, so we toggle its wrapper instead).
-        self.view.view(cx, ids!(chat_content)).set_visible(cx, !on_info_tab);
-        self.view.view(cx, ids!(info_tab_body)).set_visible(cx, on_info_tab);
+            // RoomTopBar height = header(56) + tabs(40) + divider(1).
+            let top_space_offset = if show_top_bar { 97.0 } else { 0.0 };
+            let mut top_space = self.view(cx, ids!(top_space));
+            script_apply_eval!(cx, top_space, {
+                margin.top: #(top_space_offset)
+            });
+
+            let on_info_tab = show_top_bar && matches!(self.active_room_tab, RoomTab::Info);
+            self.room_info_sliding_pane(cx, ids!(info_content)).set_inline(true);
+            self.view.view(cx, ids!(chat_content)).set_visible(cx, !on_info_tab);
+            self.view.view(cx, ids!(info_tab_body)).set_visible(cx, on_info_tab);
+            self.applied_layout_state = Some(layout_state);
+        }
+
+        let has_encryption_notice = room_props.is_encrypted.is_some();
+        if self.last_has_encryption_notice
+            .is_some_and(|previous| previous != has_encryption_notice)
+            && let Some(tl_state) = self.tl_state.as_mut()
+        {
+            tl_state.content_drawn_since_last_update.clear();
+            tl_state.profile_drawn_since_last_update.clear();
+            tl_state.small_state_event_group_index = None;
+        }
+        self.last_has_encryption_notice = Some(has_encryption_notice);
 
         let mut room_scope = if let Some(app_state) = scope.data.get_mut::<AppState>() {
             Scope::with_data_props(app_state, &room_props)
         } else {
             Scope::with_props(&room_props)
         };
-        self.octos_action_button_contexts.clear();
+        let mut action_contexts_changed = false;
         while let Some(subview) = self.view.draw_walk(cx, &mut room_scope, walk).step() {
             // Here, we only need to handle drawing the portal list.
             let portal_list_ref = subview.as_portal_list();
@@ -7627,40 +7785,27 @@ impl Widget for RoomScreen {
             };
 
             // Set the portal list's range based on the number of timeline items.
+            if tl_state.small_state_event_group_index.is_none() {
+                tl_state.small_state_event_group_index = Some(
+                    build_small_state_event_group_index(
+                        &tl_state.items,
+                        &tl_state.kind,
+                        &tl_state.expanded_small_state_group_event_ids,
+                        self.app_language,
+                    ),
+                );
+            }
+            let small_state_event_group_index = tl_state
+                .small_state_event_group_index
+                .as_ref()
+                .expect("small-state group index was initialized above");
             let tl_items = &tl_state.items;
-            let has_encryption_notice = room_props.is_encrypted.is_some();
             let last_item_id = tl_items.len()
                 + usize::from(self.show_app_service_actions)
                 + usize::from(has_encryption_notice);
 
             let list = list_ref.deref_mut();
             list.set_item_range(cx, 0, last_item_id);
-
-            let (
-                resolved_parent_bot_user_id,
-                room_bot_user_ids,
-                known_bot_user_ids,
-            ) = compute_timeline_bot_context(
-                room_scope.data.get::<AppState>(),
-                tl_state.kind.room_id(),
-                tl_state.room_members.as_ref(),
-            );
-
-            let small_state_event_groups = compute_small_state_event_groups(
-                tl_items,
-                &tl_state.kind,
-                &tl_state.expanded_small_state_group_event_ids,
-            );
-            let mut small_state_event_group_by_start = HashMap::new();
-            let mut collapsed_small_state_hidden_indices = HashSet::new();
-            for group in small_state_event_groups {
-                if group.collapsed {
-                    for hidden_idx in group.start + 1 .. group.end {
-                        collapsed_small_state_hidden_indices.insert(hidden_idx);
-                    }
-                }
-                small_state_event_group_by_start.insert(group.start, group);
-            }
 
             while let Some(item_id) = list.next_visible_item(cx) {
                 let item = {
@@ -7699,31 +7844,32 @@ impl Widget for RoomScreen {
                         content_drawn: tl_state.content_drawn_since_last_update.contains(&tl_idx),
                         profile_drawn: tl_state.profile_drawn_since_last_update.contains(&tl_idx),
                     };
-                    let collapse_button_text_for_expanded_group = small_state_event_group_by_start
+                    let collapse_button_text_for_expanded_group = small_state_event_group_index
+                        .by_start
                         .get(&tl_idx)
                         .and_then(|group|
                             (!group.collapsed).then_some(
                                 tr_key(self.app_language, "room_screen.small_state_group.collapse"),
                             )
                         );
-                    let (item, item_new_draw_status) = if let Some(group) = small_state_event_group_by_start.get(&tl_idx)
+                    let (item, item_new_draw_status) = if let Some(group) = small_state_event_group_index.by_start.get(&tl_idx)
                         && group.collapsed
                     {
                         let item = list.item(cx, item_id, id!(SmallStateEventsSummary));
                         item.label(cx, ids!(summary_label)).set_text(
                             cx,
-                            &format_small_state_group_summary_text(
-                                self.app_language,
-                                tl_items,
-                                group,
-                            ),
+                            small_state_event_group_index
+                                .summary_by_start
+                                .get(&tl_idx)
+                                .map(String::as_str)
+                                .unwrap_or_default(),
                         );
                         item.button(cx, ids!(state_group_toggle_button)).set_text(
                             cx,
                             tr_key(self.app_language, "room_screen.small_state_group.expand"),
                         );
                         (item, ItemDrawnStatus::both_drawn())
-                    } else if collapsed_small_state_hidden_indices.contains(&tl_idx) {
+                    } else if small_state_event_group_index.collapsed_hidden_indices.contains(&tl_idx) {
                         (list.item(cx, item_id, id!(Empty)), ItemDrawnStatus::both_drawn())
                     } else {
                     match timeline_item.kind() {
@@ -7740,7 +7886,7 @@ impl Widget for RoomScreen {
                                         | MsgLikeKind::Sticker(_)
                                         | MsgLikeKind::Redacted => {
                                             let prev_event = tl_idx.checked_sub(1).and_then(|i| tl_items.get(i));
-                                            populate_message_view(
+                                            let (item, drawn_status, contexts_rebound) = populate_message_view(
                                                 cx,
                                                 list,
                                                 item_id,
@@ -7758,15 +7904,17 @@ impl Widget for RoomScreen {
                                                 &tl_state.pending_downloads,
                                                 item_drawn_status,
                                                 room_screen_widget_uid,
-                                                resolved_parent_bot_user_id.as_deref(),
-                                                &room_bot_user_ids,
-                                                &known_bot_user_ids,
+                                                room_props.resolved_parent_bot_user_id.as_deref(),
+                                                &room_props.room_bot_user_ids,
+                                                &room_props.known_bot_user_ids,
                                                 &mut tl_state.streaming_messages,
                                                 &mut self.octos_action_button_contexts,
                                                 &self.disabled_octos_action_source_event_ids,
                                                 &self.selected_octos_action_by_source_event_id,
                                                 &tl_state.expanded_bot_body_event_ids,
-                                            )
+                                            );
+                                            action_contexts_changed |= contexts_rebound;
+                                            (item, drawn_status)
                                         },
                                         // TODO: properly implement `Poll` as a regular Message-like timeline item.
                                         MsgLikeKind::Poll(poll_state) => populate_small_state_event(
@@ -7918,7 +8066,19 @@ impl Widget for RoomScreen {
                 });
             }
         }
-        self.schedule_approval_expiry(cx);
+        let previous_context_count = self.octos_action_button_contexts.len();
+        let timeline_list = self.portal_list(cx, ids!(timeline.list));
+        self.octos_action_button_contexts
+            .retain(|_, context| {
+                timeline_list
+                    .get_item(context.item_id)
+                    .is_some_and(|(_, item)| item.widget_uid() == context.item_widget_uid)
+            });
+        action_contexts_changed |=
+            previous_context_count != self.octos_action_button_contexts.len();
+        if action_contexts_changed {
+            self.schedule_approval_expiry(cx);
+        }
         DrawStep::done()
     }
 }
@@ -7927,6 +8087,11 @@ impl RoomScreen {
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.app_language_initialized = true;
+        if let Some(tl_state) = self.tl_state.as_mut() {
+            tl_state.content_drawn_since_last_update.clear();
+            tl_state.profile_drawn_since_last_update.clear();
+            tl_state.small_state_event_group_index = None;
+        }
         self.sync_app_language(cx);
     }
 
@@ -7946,6 +8111,19 @@ impl RoomScreen {
         if let Some(mut list) = portal_list.borrow_mut() {
             list.redraw(cx);
         }
+    }
+
+    fn invalidate_timeline_event_content(&mut self, event_id: &EventId) -> bool {
+        let Some(tl_state) = self.tl_state.as_mut() else { return false };
+        let Some(index) = tl_state.items.iter().position(|item| {
+            item.as_event()
+                .and_then(EventTimelineItem::event_id)
+                .is_some_and(|candidate| candidate == event_id)
+        }) else {
+            return false;
+        };
+        tl_state.content_drawn_since_last_update.remove(index .. index + 1);
+        true
     }
 
     fn toggle_small_state_event_group(&mut self, cx: &mut Cx, group_start_index: usize) {
@@ -7975,6 +8153,7 @@ impl RoomScreen {
         } else {
             tl_state.expanded_small_state_group_event_ids.remove(&group.first_event_id);
         }
+        tl_state.small_state_event_group_index = None;
         tl_state.content_drawn_since_last_update.remove(group.start .. group.end);
         tl_state.profile_drawn_since_last_update.remove(group.start .. group.end);
         self.redraw_timeline_list(cx);
@@ -8058,117 +8237,163 @@ impl RoomScreen {
             .set_text(cx, &translation::language_popup_label("hi"));
     }
 
+    fn timeline_bot_context(
+        &mut self,
+        app_state: Option<&AppState>,
+        room_id: &OwnedRoomId,
+        room_members: Option<&Arc<Vec<RoomMember>>>,
+    ) -> TimelineBotContext {
+        let Some(app_state) = app_state else {
+            return TimelineBotContext::default();
+        };
+
+        let app_service_enabled = app_state.bot_settings.enabled;
+        let room_is_bound = app_state.bot_settings.is_room_bound(room_id);
+        let persisted_bound_bot_user_id = if app_service_enabled {
+            app_state.bot_settings.bound_bot_user_id(room_id).map(ToOwned::to_owned)
+        } else {
+            None
+        };
+        let persisted_bound_bot_user_ids = if app_service_enabled {
+            app_state.bot_settings.bound_bot_user_ids(room_id)
+        } else {
+            Vec::new()
+        };
+        let resolved_parent_bot_user_id = if app_service_enabled {
+            app_state
+                .bot_settings
+                .resolved_bot_user_id(current_user_id().as_deref())
+                .ok()
+        } else {
+            None
+        };
+        let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
+
+        if let Some(cached) = self.timeline_bot_context_cache.as_ref()
+            && cached.matches(
+                room_id,
+                room_members,
+                app_service_enabled,
+                room_is_bound,
+                persisted_bound_bot_user_id.as_ref(),
+                &persisted_bound_bot_user_ids,
+                resolved_parent_bot_user_id.as_ref(),
+                &known_bot_user_ids,
+            )
+        {
+            return cached.value.clone();
+        }
+        if self.timeline_bot_context_cache.is_some() {
+            self.invalidate_timeline_bot_context();
+        }
+
+        let has_persisted_management_binding = resolved_parent_bot_user_id
+            .as_ref()
+            .is_some_and(|resolved_parent_bot_user_id|
+                persisted_bound_bot_user_ids
+                    .iter()
+                    .any(|bot_user_id| bot_user_id == resolved_parent_bot_user_id)
+            );
+        let room_bot_user_ids = room_members
+            .map(|members|
+                collect_room_bot_user_ids(
+                    members.as_ref(),
+                    resolved_parent_bot_user_id.as_deref(),
+                    &known_bot_user_ids,
+                    &persisted_bound_bot_user_ids,
+                )
+            )
+            .unwrap_or_else(|| persisted_bound_bot_user_ids.clone());
+        let detected_bound_bot_user_id = if app_service_enabled {
+            room_members.and_then(|members|
+                detected_bot_binding_for_members(
+                    app_state,
+                    room_id,
+                    members.as_ref(),
+                )
+            )
+        } else {
+            None
+        };
+        let bound_bot_user_id = persisted_bound_bot_user_id
+            .clone()
+            .or(detected_bound_bot_user_id);
+        let value = TimelineBotContext {
+            app_service_enabled,
+            app_service_room_bound: bound_bot_user_id.is_some(),
+            has_persisted_management_binding,
+            bound_bot_user_id,
+            resolved_parent_bot_user_id: resolved_parent_bot_user_id.clone(),
+            persisted_bound_bot_user_ids: persisted_bound_bot_user_ids.clone(),
+            room_bot_user_ids,
+            known_bot_user_ids: known_bot_user_ids.clone(),
+        };
+        self.timeline_bot_context_cache = Some(CachedTimelineBotContext {
+            room_id: room_id.clone(),
+            room_members: room_members.cloned(),
+            app_service_enabled,
+            room_is_bound,
+            persisted_bound_bot_user_id,
+            persisted_bound_bot_user_ids,
+            resolved_parent_bot_user_id,
+            known_bot_user_ids,
+            value: value.clone(),
+        });
+        value
+    }
+
+    fn invalidate_timeline_bot_context(&mut self) {
+        self.timeline_bot_context_cache = None;
+        if let Some(tl) = self.tl_state.as_mut() {
+            tl.content_drawn_since_last_update.clear();
+            tl.profile_drawn_since_last_update.clear();
+        }
+    }
+
     fn build_room_screen_props(
-        &self,
+        &mut self,
         cx: &mut Cx,
         scope: &mut Scope,
         room_screen_widget_uid: WidgetUid,
     ) -> Option<RoomScreenProps> {
         if let Some(tl) = self.tl_state.as_ref() {
             let room_id = tl.kind.room_id().clone();
+            let timeline_kind = tl.kind.clone();
             let room_members = tl.room_members.clone();
+            let room_members_sync_pending = tl.room_members_sync_pending;
+            let room_members_sort = tl.room_members_sort.clone();
+            let can_invite = tl.user_power.can_invite();
             let is_direct_room = cx.get_global::<RoomsListRef>()
                 .is_direct_room(&room_id)
                 .unwrap_or(false);
             let is_encrypted = cx.get_global::<RoomsListRef>()
                 .joined_room_is_encrypted(&room_id)
                 .flatten();
-            let (
-                app_service_enabled,
-                app_service_room_bound,
-                has_persisted_management_binding,
-                bound_bot_user_id,
-                resolved_parent_bot_user_id,
-                persisted_bound_bot_user_ids,
-                room_bot_user_ids,
-                known_bot_user_ids,
-            ) = scope
-                .data
-                .get::<AppState>()
-                .map(|app_state| {
-                    let app_service_enabled = app_state.bot_settings.enabled;
-                    let persisted_bound_bot_user_id =
-                        app_state.bot_settings.bound_bot_user_id(&room_id).map(ToOwned::to_owned);
-                    let persisted_room_bot_user_ids = if app_service_enabled {
-                        app_state.bot_settings.bound_bot_user_ids(&room_id)
-                    } else {
-                        Vec::new()
-                    };
-                    let persisted_bound_bot_user_ids = persisted_room_bot_user_ids.clone();
-                    let resolved_parent_bot_user_id = if app_service_enabled {
-                        app_state
-                            .bot_settings
-                            .resolved_bot_user_id(current_user_id().as_deref())
-                            .ok()
-                    } else {
-                        None
-                    };
-                    let known_bot_user_ids = room_props_known_bot_user_ids(app_state);
-                    let has_persisted_management_binding = resolved_parent_bot_user_id
-                        .as_ref()
-                        .is_some_and(|resolved_parent_bot_user_id|
-                            persisted_room_bot_user_ids
-                                .iter()
-                                .any(|bot_user_id| bot_user_id == resolved_parent_bot_user_id)
-                        );
-                    let room_bot_user_ids = room_members
-                        .as_ref()
-                        .map(|members|
-                            collect_room_bot_user_ids(
-                                members.as_ref(),
-                                resolved_parent_bot_user_id.as_deref(),
-                                &known_bot_user_ids,
-                                &persisted_room_bot_user_ids,
-                            )
-                        )
-                        .unwrap_or(persisted_room_bot_user_ids);
-                    let detected_bound_bot_user_id = room_members
-                        .as_ref()
-                        .and_then(|members|
-                            detected_bot_binding_for_members(
-                                app_state,
-                                &room_id,
-                                members.as_ref(),
-                            )
-                        );
-                    let bound_bot_user_id = if app_service_enabled {
-                        persisted_bound_bot_user_id.or(detected_bound_bot_user_id)
-                    } else {
-                        None
-                    };
-                    let app_service_room_bound = bound_bot_user_id.is_some();
-                    (
-                        app_service_enabled,
-                        app_service_room_bound,
-                        has_persisted_management_binding,
-                        bound_bot_user_id,
-                        resolved_parent_bot_user_id,
-                        persisted_bound_bot_user_ids,
-                        room_bot_user_ids,
-                        known_bot_user_ids,
-                    )
-                })
-                .unwrap_or((false, false, false, None, None, Vec::new(), Vec::new(), Vec::new()));
+            let bot_context = self.timeline_bot_context(
+                scope.data.get::<AppState>(),
+                &room_id,
+                room_members.as_ref(),
+            );
 
             Some(RoomScreenProps {
                 room_screen_widget_uid,
                 room_name_id: self.room_name_id.clone().unwrap_or_else(|| RoomNameId::empty(room_id.clone())),
-                timeline_kind: tl.kind.clone(),
+                timeline_kind,
                 room_members,
                 is_encrypted,
                 is_direct_room,
-                room_bot_user_ids,
-                room_members_sync_pending: tl.room_members_sync_pending,
-                room_members_sort: tl.room_members_sort.clone(),
+                room_bot_user_ids: bot_context.room_bot_user_ids,
+                room_members_sync_pending,
+                room_members_sort,
                 room_avatar_url: self.room_avatar_url.clone(),
-                app_service_enabled,
-                app_service_room_bound,
-                has_persisted_management_binding,
-                bound_bot_user_id,
-                resolved_parent_bot_user_id,
-                persisted_bound_bot_user_ids,
-                known_bot_user_ids,
-                can_invite: tl.user_power.can_invite(),
+                app_service_enabled: bot_context.app_service_enabled,
+                app_service_room_bound: bot_context.app_service_room_bound,
+                has_persisted_management_binding: bot_context.has_persisted_management_binding,
+                bound_bot_user_id: bot_context.bound_bot_user_id,
+                resolved_parent_bot_user_id: bot_context.resolved_parent_bot_user_id,
+                persisted_bound_bot_user_ids: bot_context.persisted_bound_bot_user_ids,
+                known_bot_user_ids: bot_context.known_bot_user_ids,
+                can_invite,
                 pending_invited_users: self.pending_invited_users.iter().cloned().collect(),
             })
         } else {
@@ -8274,15 +8499,47 @@ impl RoomScreen {
     }
 
     fn schedule_approval_expiry(&mut self, cx: &mut Cx) {
-        cx.stop_timer(self.approval_expiry_timer);
-        self.approval_expiry_timer = next_approval_expiry_timeout(
+        let next_deadline_millis = earliest_approval_expiry_millis(
             self.octos_action_button_contexts
                 .values()
                 .map(|context| &context.request),
-            current_unix_time_millis(),
-        )
-        .map(|duration| cx.start_timeout(duration.as_secs_f64()))
-        .unwrap_or_else(Timer::empty);
+        );
+        if next_deadline_millis == self.approval_expiry_deadline_millis {
+            return;
+        }
+
+        cx.stop_timer(self.approval_expiry_timer);
+        self.approval_expiry_deadline_millis = next_deadline_millis;
+        self.approval_expiry_timer = next_deadline_millis
+            .map(|deadline| {
+                let timeout = Duration::from_millis(
+                    deadline
+                        .saturating_sub(current_unix_time_millis())
+                        .max(1),
+                );
+                cx.start_timeout(timeout.as_secs_f64())
+            })
+            .unwrap_or_else(Timer::empty);
+    }
+
+    fn expire_approval_contexts(&mut self, now_millis: u64) -> bool {
+        let expired_source_event_ids: HashSet<OwnedEventId> =
+            self.octos_action_button_contexts
+                .values()
+                .filter(|context| context.request.is_expired(now_millis))
+                .map(|context| context.source_event_id.clone())
+                .collect();
+        if expired_source_event_ids.is_empty() {
+            return false;
+        }
+
+        self.octos_action_button_contexts.retain(|_, context| {
+            !expired_source_event_ids.contains(&context.source_event_id)
+        });
+        for source_event_id in expired_source_event_ids {
+            self.invalidate_timeline_event_content(source_event_id.as_ref());
+        }
+        true
     }
 
     fn set_app_service_actions_visible(&mut self, cx: &mut Cx, visible: bool) {
@@ -8503,6 +8760,32 @@ impl RoomScreen {
         portal_list: &PortalListRef,
         app_state: Option<&AppState>,
     ) {
+        let update_pass_started = Instant::now();
+        let (room_id, room_members, has_pending_updates) = {
+            let Some(tl) = self.tl_state.as_mut() else { return };
+            let available_slots =
+                MAX_TIMELINE_UPDATES_PER_PASS.saturating_sub(tl.pending_updates.len());
+            for _ in 0..available_slots {
+                if update_pass_started.elapsed() >= TIMELINE_UPDATE_TIME_BUDGET {
+                    break;
+                }
+                let Ok(update) = tl.update_receiver.try_recv() else {
+                    break;
+                };
+                enqueue_timeline_update(&mut tl.pending_updates, update);
+            }
+            (
+                tl.kind.room_id().clone(),
+                tl.room_members.clone(),
+                !tl.pending_updates.is_empty(),
+            )
+        };
+        if !has_pending_updates {
+            return;
+        }
+
+        let bot_context =
+            self.timeline_bot_context(app_state, &room_id, room_members.as_ref());
         let top_space = self.view(cx, ids!(top_space));
         let jump_to_bottom_button = self.jump_to_bottom_button(cx, ids!(jump_to_bottom_button));
         let has_encryption_notice = self.current_has_encryption_notice(cx);
@@ -8514,17 +8797,18 @@ impl RoomScreen {
             resolved_parent_bot_user_id,
             room_bot_user_ids,
             known_bot_user_ids,
-        ) = compute_timeline_bot_context(
-            app_state,
-            tl.kind.room_id(),
-            tl.room_members.as_ref(),
+        ) = (
+            bot_context.resolved_parent_bot_user_id,
+            bot_context.room_bot_user_ids,
+            bot_context.known_bot_user_ids,
         );
 
         let mut done_loading = false;
         let mut should_continue_backwards_pagination = false;
         let mut typing_users = None;
         let mut num_updates = 0;
-        while let Ok(update) = tl.update_receiver.try_recv() {
+        while let Some(update) = tl.pending_updates.pop_front() {
+            let update_is_new_items = matches!(&update, TimelineUpdate::NewItems { .. });
             num_updates += 1;
             match update {
                 TimelineUpdate::FirstUpdate { initial_items } => {
@@ -8564,6 +8848,7 @@ impl RoomScreen {
                         &tl.kind,
                         &mut tl.expanded_small_state_group_event_ids,
                     );
+                    tl.small_state_event_group_index = None;
                     tl.streaming_messages = rebuilt_streaming_messages;
                     refresh_stream_indices(
                         tl.items.iter().map(item_event_id),
@@ -8574,7 +8859,12 @@ impl RoomScreen {
                     }
                     done_loading = true;
                 }
-                TimelineUpdate::NewItems { new_items, changed_indices, is_append, clear_cache } => {
+                TimelineUpdate::NewItems {
+                    new_items,
+                    changed_indices,
+                    is_append,
+                    clear_cache,
+                } => {
                     if let Some(app_state) = app_state {
                         let discovered_bot_user_ids =
                             Self::discover_known_bot_user_ids_from_timeline_items(
@@ -8844,6 +9134,7 @@ impl RoomScreen {
                         &tl.kind,
                         &mut tl.expanded_small_state_group_event_ids,
                     );
+                    tl.small_state_event_group_index = None;
                     refresh_stream_indices(
                         tl.items.iter().map(item_event_id),
                         &mut tl.streaming_messages,
@@ -8859,8 +9150,8 @@ impl RoomScreen {
                 }
                 TimelineUpdate::TargetEventFound { target_event_id, index } => {
                     // log!("Target event found in room {}: {target_event_id}, index: {index}", tl.kind.room_id());
-                    tl.request_sender.send_if_modified(|requests| {
-                        requests.retain(|r| &r.room_id != tl.kind.room_id());
+                    tl.request_sender.send_if_modified(|request| {
+                        request.backwards_paginate.retain(|r| &r.room_id != tl.kind.room_id());
                         // no need to notify/wake-up all receivers for a completed request
                         false
                     });
@@ -8917,7 +9208,8 @@ impl RoomScreen {
                 }
                 TimelineUpdate::PaginationError { error, direction } => {
                     if direction == PaginationDirection::Backwards {
-                        tl.backwards_pagination_in_flight = false;
+                        tl.backwards_pagination_in_flight =
+                            tl.pagination_status.backwards_is_in_flight();
                     }
                     error!("Pagination error ({direction}) in {:?}: {error:?}", self.room_name_id);
                     let room_name = self.room_name_id.as_ref().map(|r| r.to_string());
@@ -8948,16 +9240,27 @@ impl RoomScreen {
                         auto_dismissal_duration: Some(10.0),
                         ..Default::default()
                     });
-                    done_loading = true;
+                    done_loading = !tl.backwards_pagination_in_flight;
                 }
                 TimelineUpdate::PaginationIdle { fully_paginated, direction } => {
                     if direction == PaginationDirection::Backwards {
-                        tl.backwards_pagination_in_flight = false;
+                        tl.backwards_pagination_in_flight =
+                            tl.pagination_status.backwards_is_in_flight();
                         // Don't set `done_loading` to `true` here, because we want to keep the top space visible
                         // (with the "loading" message) until the corresponding `NewItems` update is received.
                         tl.fully_paginated = fully_paginated;
-                        if fully_paginated {
+                        if fully_paginated && !tl.backwards_pagination_in_flight {
                             done_loading = true;
+                        } else {
+                            let loading_pane = self.view.loading_pane(cx, ids!(loading_pane));
+                            let loading_pane_state = loading_pane.take_state();
+                            if matches!(
+                                loading_pane_state,
+                                LoadingPaneState::BackwardsPaginateUntilEvent { .. }
+                            ) {
+                                should_continue_backwards_pagination = true;
+                            }
+                            loading_pane.set_state(cx, loading_pane_state);
                         }
                     } else {
                         error!("Unexpected PaginationIdle update in the Forwards direction");
@@ -9161,9 +9464,23 @@ impl RoomScreen {
                         .hide_upload_progress(cx);
                 }
             }
+            let target_event_follows_snapshot = update_is_new_items
+                && matches!(
+                    tl.pending_updates.front(),
+                    Some(TimelineUpdate::TargetEventFound { .. })
+                );
+            if update_pass_started.elapsed() >= TIMELINE_UPDATE_TIME_BUDGET
+                && !target_event_follows_snapshot
+            {
+                break;
+            }
         }
 
+        let has_more_updates =
+            !tl.pending_updates.is_empty() || !tl.update_receiver.is_empty();
+
         if should_continue_backwards_pagination {
+            done_loading = false;
             tl.backwards_pagination_in_flight = true;
             submit_async_request(MatrixRequest::PaginateTimeline {
                 timeline_kind: tl.kind.clone(),
@@ -9186,6 +9503,9 @@ impl RoomScreen {
             self.schedule_stream_timeout(cx);
             // log!("Applied {} timeline updates for room {}, redrawing with {} items...", num_updates, tl.kind.room_id(), tl.items.len());
             self.redraw(cx);
+        }
+        if has_more_updates {
+            SignalToUI::set_ui_signal();
         }
     }
 
@@ -9462,6 +9782,9 @@ impl RoomScreen {
                     &mut self.disabled_octos_action_source_event_ids,
                     &clicked_context.source_event_id,
                 );
+                self.invalidate_timeline_event_content(
+                    clicked_context.source_event_id.as_ref(),
+                );
                 self.redraw_timeline_list(cx);
                 enqueue_popup_notification(
                     tr_key(self.app_language, "room_screen.popup.approval_expired"),
@@ -9521,6 +9844,9 @@ impl RoomScreen {
                     clicked_context.request.action_id(),
                     clicked_context.request.label(),
                     clicked_context.request.style(),
+                );
+                self.invalidate_timeline_event_content(
+                    clicked_context.source_event_id.as_ref(),
                 );
                 self.redraw_timeline_list(cx);
                 submit_async_request(MatrixRequest::SendActionResponse {
@@ -9890,6 +10216,7 @@ impl RoomScreen {
                         mxc: mxc_uri,
                         state: PendingDownloadState::InProgress,
                     });
+                    tl.content_drawn_since_last_update.clear();
                     portal_list.redraw(cx);
                     let update_sender = tl.media_cache.timeline_update_sender().cloned();
                     start_attachment_download(info.clone(), update_sender);
@@ -10039,13 +10366,13 @@ impl RoomScreen {
             );
             loading_pane.show(cx);
 
-            tl.request_sender.send_if_modified(|requests| {
-                if let Some(existing) = requests.iter_mut().find(|r| &r.room_id == tl.kind.room_id()) {
+            tl.request_sender.send_if_modified(|request| {
+                if let Some(existing) = request.backwards_paginate.iter_mut().find(|r| &r.room_id == tl.kind.room_id()) {
                     warning!("Unexpected: room {} already had an existing timeline request in progress, event: {:?}", tl.kind.room_id(), existing.target_event_id);
                     // We might as well re-use this existing request...
                     existing.target_event_id = target_event_id.clone();
                 } else {
-                    requests.push(BackwardsPaginateUntilEventRequest {
+                    request.backwards_paginate.push(BackwardsPaginateUntilEventRequest {
                         room_id: tl.kind.room_id().clone(),
                         target_event_id: target_event_id.clone(),
                         // avoid re-searching through items we already searched through.
@@ -10355,7 +10682,9 @@ impl RoomScreen {
 
     fn hide_threads_pane(&mut self, cx: &mut Cx) {
         self.threads_sliding_pane(cx, ids!(threads_sliding_pane)).hide(cx);
-        self.threads_button(cx, ids!(timeline.threads_button)).set_visible(cx, true);
+        let show_threads_button = effective_is_desktop(cx);
+        self.threads_button(cx, ids!(timeline.threads_button))
+            .set_visible(cx, show_threads_button);
     }
 
     /// Build the room-info payload from current state, or `None` if no room is
@@ -10715,18 +11044,21 @@ impl RoomScreen {
                         room_id: room_id.clone(),
                         thread_root_event_id: thread_root_event_id.clone(),
                     });
+                    self.set_timeline_updates_enabled(true);
                     return;
                 }
                 if !self.is_loaded && self.all_rooms_loaded {
                     panic!("BUG: timeline {kind} is not loaded, but its RoomScreen \
                     was not waiting for its timeline to be loaded either.");
                 }
+                self.set_timeline_updates_enabled(true);
                 return;
             };
             let TimelineEndpoints {
                 update_receiver,
                 update_sender,
                 request_sender,
+                pagination_status,
                 successor_room,
             } = timeline_endpoints;
 
@@ -10758,11 +11090,14 @@ impl RoomScreen {
                 backwards_pagination_in_flight: false,
                 items: Vector::new(),
                 expanded_small_state_group_event_ids: HashSet::new(),
+                small_state_event_group_index: None,
                 expanded_bot_body_event_ids: HashSet::new(),
                 content_drawn_since_last_update: RangeSet::new(),
                 profile_drawn_since_last_update: RangeSet::new(),
                 update_receiver,
                 request_sender,
+                pagination_status,
+                pending_updates: VecDeque::new(),
                 media_cache: MediaCache::new(Some(update_sender.clone())),
                 link_preview_cache: LinkPreviewCache::new(Some(update_sender)),
                 fetched_thread_summaries: HashMap::new(),
@@ -10806,7 +11141,9 @@ impl RoomScreen {
         // because we want to show the user some messages as soon as possible
         // when they first open the room, and there might not be any messages yet.
         if is_first_time_being_loaded {
-            if !tl_state.fully_paginated {
+            if !tl_state.fully_paginated
+                && !tl_state.pagination_status.backwards_has_started()
+            {
                 tl_state.backwards_pagination_in_flight = true;
                 log!("Sending a first-time backwards pagination request for {}", tl_state.kind);
                 submit_async_request(MatrixRequest::PaginateTimeline {
@@ -10814,6 +11151,9 @@ impl RoomScreen {
                     num_events: VIEWPORT_FILL_PAGINATION_SIZE,
                     direction: PaginationDirection::Backwards,
                 });
+            } else {
+                tl_state.backwards_pagination_in_flight =
+                    tl_state.pagination_status.backwards_is_in_flight();
             }
 
             // Even though we specify that room member profiles should be lazy-loaded,
@@ -10832,9 +11172,7 @@ impl RoomScreen {
         // 1. Get the current user's power levels for this room so that we can
         //    show/hide UI elements based on the user's permissions.
         // 2. Get the list of members in this room (from the SDK's local cache).
-        // 3. Subscribe to our own user's read receipts so that we can update the
-        //    read marker and properly send read receipts while scrolling through the timeline.
-        // 4. Subscribe to typing notices again, now that the room is being shown.
+        // Room-specific subscriptions are enabled below, after `tl_state` is stored.
         if self.is_loaded {
             submit_async_request(MatrixRequest::GetRoomPowerLevels {
                 timeline_kind: tl_state.kind.clone(),
@@ -10846,29 +11184,26 @@ impl RoomScreen {
                 // the room members from the homeserver above.
                 local_only: true,
             });
-            submit_async_request(MatrixRequest::SubscribeToOwnUserReadReceiptsChanged {
-                timeline_kind: tl_state.kind.clone(),
-                subscribe: true,
-            });
-            // Only main room timelines can subscribe to typing notices and pinned events.
-            if matches!(tl_state.kind, TimelineKind::MainRoom { .. }) {
-                submit_async_request(MatrixRequest::SubscribeToTypingNotices {
-                    room_id: room_id.clone(),
-                    subscribe: true,
-                });
-                submit_async_request(MatrixRequest::SubscribeToPinnedEvents {
-                    room_id: room_id.clone(),
-                    subscribe: true,
-                });
-            }
         }
 
         // Now, restore the visual state of this timeline from its previously-saved state.
         self.restore_state(cx, &mut tl_state);
 
+        // Drawn-status ranges belong to the PortalList widget that populated
+        // them. A shared RoomScreen (the mobile layout) can restore a
+        // different room into the same widget pool, so force the restored
+        // timeline's visible rows to bind to this pool once.
+        tl_state.content_drawn_since_last_update.clear();
+        tl_state.profile_drawn_since_last_update.clear();
+        tl_state.small_state_event_group_index = None;
+
         // Store the tl_state for this room into this RoomScreen widget,
         // such that it can be accessed in future functions like event/draw handlers.
         self.tl_state = Some(tl_state);
+        // A pending timeline can be marked visible before its endpoints exist.
+        // Force the first real initialization through the subscription path.
+        self.timeline_updates_enabled = false;
+        self.set_timeline_updates_enabled(true);
         self.schedule_stream_timeout(cx);
 
         // Now that we have restored the TimelineUiState into this RoomScreen widget,
@@ -10883,7 +11218,12 @@ impl RoomScreen {
         let Some(timeline_kind) = self.timeline_kind.clone() else { return };
         self.streaming_timeout_timer = Timer::empty();
         self.approval_expiry_timer = Timer::empty();
+        self.approval_expiry_deadline_millis = None;
+        self.octos_action_button_contexts.clear();
+        self.disabled_octos_action_source_event_ids.clear();
+        self.selected_octos_action_by_source_event_id.clear();
 
+        self.set_timeline_updates_enabled(false);
         self.save_state();
 
         // When closing a room view, we do the following with non-persistent states.
@@ -10908,6 +11248,53 @@ impl RoomScreen {
         });
         self.room_avatar_url = None;
         self.pending_invited_users.clear();
+    }
+
+    fn set_timeline_updates_enabled(&mut self, enabled: bool) {
+        if self.timeline_updates_enabled == enabled {
+            return;
+        }
+        self.timeline_updates_enabled = enabled;
+        if enabled {
+            self.resume_timeline_on_next_signal = true;
+            SignalToUI::set_ui_signal();
+        } else {
+            // We cannot stop a timer without `Cx` here, but replacing its ID
+            // makes the old event inert. The resume signal re-arms pending
+            // approvals using their absolute wall-clock deadlines.
+            self.approval_expiry_timer = Timer::empty();
+            self.approval_expiry_deadline_millis = None;
+        }
+
+        let Some(tl) = self.tl_state.as_ref() else {
+            return;
+        };
+        tl.request_sender.send_if_modified(|request| {
+            if request.is_timeline_open == enabled {
+                false
+            } else {
+                request.is_timeline_open = enabled;
+                true
+            }
+        });
+        if !self.is_loaded {
+            return;
+        }
+
+        submit_async_request(MatrixRequest::SubscribeToOwnUserReadReceiptsChanged {
+            timeline_kind: tl.kind.clone(),
+            subscribe: enabled,
+        });
+        if matches!(tl.kind, TimelineKind::MainRoom { .. }) {
+            submit_async_request(MatrixRequest::SubscribeToTypingNotices {
+                room_id: tl.kind.room_id().clone(),
+                subscribe: enabled,
+            });
+            submit_async_request(MatrixRequest::SubscribeToPinnedEvents {
+                room_id: tl.kind.room_id().clone(),
+                subscribe: enabled,
+            });
+        }
     }
 
     /// Removes the current room's visual UI state from this widget
@@ -10936,6 +11323,7 @@ impl RoomScreen {
         // (potentially huge) member Arc, which would otherwise survive this
         // memory reclaim until the next room's info pane is built.
         self.room_info_members_cache = None;
+        self.timeline_bot_context_cache = None;
         // Store this Timeline's `TimelineUiState` in the global map of states.
         TIMELINE_STATES.with_borrow_mut(|ts| ts.insert(tl.kind.clone(), tl));
     }
@@ -11015,6 +11403,10 @@ impl RoomScreen {
             self.room_avatar_url = get_client()
                 .and_then(|client| client.get_room(room_name_id.room_id()))
                 .and_then(|room| room.avatar_url());
+            self.set_timeline_updates_enabled(true);
+            if self.tl_state.is_none() {
+                self.show_timeline(cx);
+            }
             return;
         }
 
@@ -11164,6 +11556,12 @@ impl RoomScreenRef {
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.set_displayed_room(cx, room_name_id, thread_root_event_id);
+    }
+
+    /// Enables or pauses background updates for this timeline without discarding its UI state.
+    pub fn set_timeline_updates_enabled(&self, enabled: bool) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_timeline_updates_enabled(enabled);
     }
 }
 
@@ -11351,6 +11749,49 @@ pub enum TimelineUpdate {
     AttachmentDownloadReset(OwnedMxcUri),
 }
 
+fn enqueue_timeline_update(
+    pending_updates: &mut VecDeque<TimelineUpdate>,
+    update: TimelineUpdate,
+) {
+    match update {
+        TimelineUpdate::NewItems {
+            new_items,
+            changed_indices,
+            clear_cache,
+            is_append,
+        } => {
+            if let Some(TimelineUpdate::NewItems {
+                changed_indices: previous_changed_indices,
+                clear_cache: previous_clear_cache,
+                is_append: previous_is_append,
+                ..
+            }) = pending_updates.back()
+            {
+                let changed_indices = previous_changed_indices.start.min(changed_indices.start)
+                    ..previous_changed_indices.end.max(changed_indices.end);
+                let clear_cache = *previous_clear_cache || clear_cache;
+                let is_append = *previous_is_append || is_append;
+                *pending_updates.back_mut().expect("checked above") = TimelineUpdate::NewItems {
+                    new_items,
+                    changed_indices,
+                    clear_cache,
+                    is_append,
+                };
+            } else {
+                pending_updates.push_back(TimelineUpdate::NewItems {
+                    new_items,
+                    changed_indices,
+                    clear_cache,
+                    is_append,
+                });
+            }
+        }
+        update => {
+            pending_updates.push_back(update);
+        }
+    }
+}
+
 thread_local! {
     /// The global set of all timeline states, one entry per room.
     ///
@@ -11403,6 +11844,12 @@ struct TimelineUiState {
     /// By default, groups are collapsed unless their first event ID appears in this set.
     expanded_small_state_group_event_ids: HashSet<OwnedEventId>,
 
+    /// Derived lookup used by the draw path to fold small state-event groups.
+    ///
+    /// This is invalidated only when timeline items or group expansion state
+    /// changes, instead of rebuilding an O(timeline length) index every frame.
+    small_state_event_group_index: Option<SmallStateEventGroupIndex>,
+
     /// Event IDs of long bot messages the user chose to unfold.
     ///
     /// Long agent replies are folded to a short preview by default; an ID lands
@@ -11436,9 +11883,15 @@ struct TimelineUiState {
     /// which is okay because a sender on an unbounded channel never needs to block.
     update_receiver: crossbeam_channel::Receiver<TimelineUpdate>,
 
+    /// Updates already pulled from the channel but deferred to a later UI pass.
+    pending_updates: VecDeque<TimelineUpdate>,
+
     /// The sender for timeline requests from a RoomScreen showing this room
     /// to the background async task that handles this room's timeline updates.
     request_sender: TimelineRequestSender,
+
+    /// Coordinates pagination requests sent by the room list and this timeline UI.
+    pagination_status: Arc<TimelinePaginationStatus>,
 
     /// The cache of media items (images, videos, etc.) that appear in this timeline.
     ///
@@ -11533,6 +11986,13 @@ struct SmallStateEventGroup {
 }
 
 #[derive(Default)]
+struct SmallStateEventGroupIndex {
+    by_start: HashMap<usize, SmallStateEventGroup>,
+    collapsed_hidden_indices: RangeSet<usize>,
+    summary_by_start: HashMap<usize, String>,
+}
+
+#[derive(Default)]
 struct SmallStateSummaryStats {
     joined_users: Vec<String>,
     left_users: Vec<String>,
@@ -11619,6 +12079,45 @@ fn compute_small_state_event_groups(
         });
     }
     groups
+}
+
+fn index_small_state_event_groups(
+    groups: impl IntoIterator<Item = SmallStateEventGroup>,
+) -> SmallStateEventGroupIndex {
+    let mut index = SmallStateEventGroupIndex::default();
+    for group in groups {
+        if group.collapsed {
+            index
+                .collapsed_hidden_indices
+                .insert(group.start + 1 .. group.end);
+        }
+        index.by_start.insert(group.start, group);
+    }
+    index
+}
+
+fn build_small_state_event_group_index(
+    items: &Vector<Arc<TimelineItem>>,
+    timeline_kind: &TimelineKind,
+    expanded_group_event_ids: &HashSet<OwnedEventId>,
+    app_language: AppLanguage,
+) -> SmallStateEventGroupIndex {
+    let mut index = index_small_state_event_groups(compute_small_state_event_groups(
+        items,
+        timeline_kind,
+        expanded_group_event_ids,
+    ));
+    index.summary_by_start = index
+        .by_start
+        .iter()
+        .map(|(&start, group)| {
+            (
+                start,
+                format_small_state_group_summary_text(app_language, items, group),
+            )
+        })
+        .collect();
+    index
 }
 
 fn prune_expanded_small_state_group_ids(
@@ -11955,26 +12454,27 @@ fn populate_message_view(
     disabled_action_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
     expanded_bot_body_event_ids: &HashSet<OwnedEventId>,
-) -> (WidgetRef, ItemDrawnStatus) {
+) -> (WidgetRef, ItemDrawnStatus, bool) {
     let mut new_drawn_status = item_drawn_status;
     let ts_millis = event_tl_item.timestamp();
     // Whether the user unfolded this (long) bot reply; folded is the default.
     let bot_body_expanded = event_tl_item
         .event_id()
         .is_some_and(|id| expanded_bot_body_event_ids.contains(id));
-    let sender_is_bot = is_timeline_sender_bot(
-        event_tl_item.sender(),
-        resolved_parent_bot_user_id,
-        room_bot_user_ids,
-        known_bot_user_ids,
-    );
-    // Security-sensitive agent-chat approval fields are always read from the
-    // original event, never from an m.replace edit.
-    let original_structured_content = original_event_content_json(event_tl_item);
-    let agentchat_custom_body = original_structured_content
-        .as_ref()
-        .and_then(agentchat_custom_message_body_from_content)
-        .map(str::to_owned);
+    let sender_is_bot_cache = Cell::new(None);
+    let sender_is_bot = || {
+        if let Some(is_bot) = sender_is_bot_cache.get() {
+            return is_bot;
+        }
+        let is_bot = is_timeline_sender_bot(
+            event_tl_item.sender(),
+            resolved_parent_bot_user_id,
+            room_bot_user_ids,
+            known_bot_user_ids,
+        );
+        sender_is_bot_cache.set(Some(is_bot));
+        is_bot
+    };
 
     let mut is_notice = false; // whether this message is a Notice (automated bot message)
     let mut is_server_notice = false; // whether this message is a Server Notice
@@ -12000,11 +12500,6 @@ fn populate_message_view(
     // Sometimes we need to call this up-front, so we save the result in this variable
     // to avoid having to call it twice.
     let mut set_username_and_get_avatar_retval = None;
-    let mut download_info: Option<DownloadableAttachment> = None;
-    let has_room_mention = matches!(
-        &msg_like_content.kind,
-        MsgLikeKind::Message(msg) if msg.mentions().is_some_and(|m| m.room)
-    );
     // Model/provider metadata for the meta band below the message content,
     // produced by the bot populate path; None for everything else.
     let mut band_metadata: Option<String> = None;
@@ -12035,7 +12530,7 @@ fn populate_message_view(
                             let render_full_snapshot = should_render_streaming_full_snapshot(
                                 body,
                                 formatted.as_ref(),
-                                sender_is_bot,
+                                sender_is_bot(),
                             );
                             state.set_render_full_target(render_full_snapshot);
 
@@ -12060,19 +12555,24 @@ fn populate_message_view(
                                 Some(&mut link_preview_ref),
                                 Some(media_cache),
                                 Some(link_preview_cache),
-                                sender_is_bot,
+                                sender_is_bot(),
                                 bot_body_expanded,
                             );
                             band_metadata = stream_meta;
                             new_drawn_status.content_drawn = false; // force re-render
                         } else {
                             // Check for Splash card in custom event field
-                            let splash_code = latest_effective_event_content_json(event_tl_item)
-                                .and_then(|content|
-                                    content
-                                        .get("org.octos.splash_card")
-                                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                                );
+                            let splash_code = event_raw_json_contains_any(
+                                event_tl_item,
+                                &["\"org.octos.splash_card\""],
+                            )
+                            .then(|| latest_effective_event_content_json(event_tl_item))
+                            .flatten()
+                            .and_then(|content|
+                                content
+                                    .get("org.octos.splash_card")
+                                    .and_then(|v| v.as_str().map(ToOwned::to_owned))
+                            );
 
                             if let Some(ref splash) = splash_code {
                                 // SPLASH CARD MODE: render native Makepad card
@@ -12095,7 +12595,7 @@ fn populate_message_view(
                                     Some(&mut link_preview_ref),
                                     Some(media_cache),
                                     Some(link_preview_cache),
-                                    sender_is_bot,
+                                    sender_is_bot(),
                                     bot_body_expanded,
                                 );
                                 new_drawn_status.content_drawn = bot_drawn;
@@ -12119,7 +12619,7 @@ fn populate_message_view(
                     if existed && item_drawn_status.content_drawn {
                         (item, true)
                     } else {
-                        if !sender_is_bot {
+                        if !sender_is_bot() {
                             let html_or_plaintext_ref = item.html_or_plaintext(cx, ids!(content.message));
                             // Apply gray color to all text styles for notice messages.
                             // This covers both rendering paths in HtmlOrPlaintext: the rich
@@ -12151,7 +12651,7 @@ fn populate_message_view(
                             Some(&mut link_preview_ref),
                             Some(media_cache),
                             Some(link_preview_cache),
-                            sender_is_bot,
+                            sender_is_bot(),
                             bot_body_expanded,
                         );
                         new_drawn_status.content_drawn = bot_drawn;
@@ -12318,12 +12818,6 @@ fn populate_message_view(
                 }
                 MessageType::File(file_content) => {
                     has_html_body = file_content.formatted.as_ref().is_some_and(|f| f.format == MessageFormat::Html);
-                    download_info = Some(DownloadableAttachment {
-                        media_source: file_content.source.clone(),
-                        filename: file_content.filename().to_owned(),
-                        size: file_content.info.as_ref().and_then(|i| i.size).map(u64::from),
-                        kind: DownloadKind::File,
-                    });
                     let template = if use_compact_view {
                         id!(CondensedMessage)
                     } else {
@@ -12347,12 +12841,6 @@ fn populate_message_view(
                 }
                 MessageType::Audio(audio) => {
                     has_html_body = audio.formatted.as_ref().is_some_and(|f| f.format == MessageFormat::Html);
-                    download_info = Some(DownloadableAttachment {
-                        media_source: audio.source.clone(),
-                        filename: audio.filename().to_owned(),
-                        size: audio.info.as_ref().and_then(|i| i.size).map(u64::from),
-                        kind: DownloadKind::Audio,
-                    });
                     let template = if use_compact_view {
                         id!(CondensedMessage)
                     } else {
@@ -12377,12 +12865,6 @@ fn populate_message_view(
                 }
                 MessageType::Video(video) => {
                     has_html_body = video.formatted.as_ref().is_some_and(|f| f.format == MessageFormat::Html);
-                    download_info = Some(DownloadableAttachment {
-                        media_source: video.source.clone(),
-                        filename: video.filename().to_owned(),
-                        size: video.info.as_ref().and_then(|i| i.size).map(u64::from),
-                        kind: DownloadKind::Video,
-                    });
                     let template = if use_compact_view {
                         id!(CondensedMessage)
                     } else {
@@ -12447,9 +12929,17 @@ fn populate_message_view(
                         (item, false)
                     }
                 }
-                _ if agentchat_custom_body.is_some() => {
+                _ => {
                     has_html_body = false;
-                    let template = if use_compact_view {
+                    // Security-sensitive agent-chat fields come from the
+                    // original event, never from an m.replace edit. Parsing is
+                    // deferred to this rare custom-msgtype branch so ordinary
+                    // messages do not deserialize JSON on every draw.
+                    let agentchat_custom_body = original_event_content_json(event_tl_item)
+                        .as_ref()
+                        .and_then(agentchat_custom_message_body_from_content)
+                        .map(str::to_owned);
+                    let template = if agentchat_custom_body.is_some() && use_compact_view {
                         id!(CondensedMessage)
                     } else {
                         id!(Message)
@@ -12457,14 +12947,14 @@ fn populate_message_view(
                     let (item, existed) = list.item_with_existed(cx, item_id, template);
                     if existed && item_drawn_status.content_drawn {
                         (item, true)
-                    } else {
+                    } else if let Some(agentchat_custom_body) = agentchat_custom_body {
                         let html_or_plaintext_ref = item.html_or_plaintext(cx, ids!(content.message));
                         let mut link_preview_ref = item.link_preview(cx, ids!(content.link_preview_view));
                         new_drawn_status.content_drawn = populate_text_message_content(
                             cx,
                             &html_or_plaintext_ref,
                             app_language,
-                            agentchat_custom_body.as_deref().unwrap_or_default(),
+                            &agentchat_custom_body,
                             None,
                             None,
                             Some(&mut link_preview_ref),
@@ -12472,13 +12962,6 @@ fn populate_message_view(
                             Some(link_preview_cache),
                         );
                         (item, false)
-                    }
-                }
-                _ => {
-                    has_html_body = false;
-                    let (item, existed) = list.item_with_existed(cx, item_id, id!(Message));
-                    if existed && item_drawn_status.content_drawn {
-                        (item, true)
                     } else {
                         item.label(cx, ids!(content.message)).set_text(
                             cx,
@@ -12570,11 +13053,10 @@ fn populate_message_view(
         }
     };
 
-    let timeline_event_id = event_tl_item.identifier();
-
     // If we didn't use a cached item, we need to draw all other message content:
-    // the reactions, the read receipts avatar row, the reply preview.
+    // reactions, read receipts, reply preview, metadata, and action controls.
     if !used_cached_item {
+        let timeline_event_id = event_tl_item.identifier();
         item.reaction_list(cx, ids!(content.reaction_list)).set_list(
             cx,
             event_tl_item.content().reactions(),
@@ -12608,57 +13090,108 @@ fn populate_message_view(
         // *and* if the thread root summary (if applicable) was also fully drawn.
         new_drawn_status.content_drawn &= is_reply_fully_drawn;
         new_drawn_status.content_drawn &= is_thread_summary_fully_drawn;
-    }
 
-
-    // We must always re-set the message details, even when re-using a cached portallist item,
-    // because the item type might be the same but for a different message entirely.
-    let message_details = MessageDetails {
-        thread_root_event_id: msg_like_content.thread_root.clone().or_else(|| {
-            msg_like_content.thread_summary.as_ref()
-                .and_then(|_| event_tl_item.event_id().map(|id| id.to_owned()))
-        }),
-        timeline_event_id,
-        item_id,
-        related_event_id: msg_like_content.in_reply_to.as_ref().map(|r| r.event_id.clone()),
-        room_screen_widget_uid,
-        is_thread_timeline: timeline_kind.thread_root_event_id().is_some(),
-        abilities: MessageAbilities::from_user_power_and_event(
-            user_power_levels,
-            event_tl_item,
-            msg_like_content,
-            pinned_events,
-            has_html_body,
-        ),
-        should_be_highlighted: event_tl_item.is_highlighted() || has_room_mention,
-    };
-    let download_state = download_info.as_ref()
-        .and_then(|info|
-            pending_downloads.iter()
-                .find(|pending| pending.mxc == *media_source_mxc(&info.media_source))
-        )
-        .map(|entry| entry.state.display())
-        .unwrap_or_default();
-    // The copy button only applies to copyable conversational messages;
-    // media/sticker/redacted/UTD items keep it hidden (the band itself stays,
-    // hosting the read receipts and, for bot messages, the model metadata).
-    // Notices only get it from bot senders: agents replying via m.notice are
-    // real replies, while human-sent notices are management-plane feedback
-    // (e.g. the client's own "[App Service] ..." echoes).
-    let show_copy_button = matches!(
-        &msg_like_content.kind,
-        MsgLikeKind::Message(msg) if match msg.msgtype() {
-            MessageType::Text(_) | MessageType::Emote(_) => true,
-            MessageType::Notice(_) => sender_is_bot,
-            _ => false,
-        }
-    );
-    item.as_message().set_data(cx, message_details, download_info, download_state, show_copy_button);
-    // Fill the band's metadata line alongside the other freshly-drawn content.
-    // Cached items keep their previously-populated text (same semantics as the
-    // message body itself), so this must NOT run on the cached path.
-    if !used_cached_item {
+        let has_room_mention = matches!(
+            &msg_like_content.kind,
+            MsgLikeKind::Message(msg) if msg.mentions().is_some_and(|m| m.room)
+        );
+        let message_details = MessageDetails {
+            thread_root_event_id: msg_like_content.thread_root.clone().or_else(|| {
+                msg_like_content.thread_summary.as_ref()
+                    .and_then(|_| event_tl_item.event_id().map(|id| id.to_owned()))
+            }),
+            timeline_event_id,
+            item_id,
+            related_event_id: msg_like_content.in_reply_to.as_ref().map(|r| r.event_id.clone()),
+            room_screen_widget_uid,
+            is_thread_timeline: timeline_kind.thread_root_event_id().is_some(),
+            abilities: MessageAbilities::from_user_power_and_event(
+                user_power_levels,
+                event_tl_item,
+                msg_like_content,
+                pinned_events,
+                has_html_body,
+            ),
+            should_be_highlighted: event_tl_item.is_highlighted() || has_room_mention,
+        };
+        let download_info = match &msg_like_content.kind {
+            MsgLikeKind::Message(message) => match message.msgtype() {
+                MessageType::File(file) => Some(DownloadableAttachment {
+                    media_source: file.source.clone(),
+                    filename: file.filename().to_owned(),
+                    size: file.info.as_ref().and_then(|info| info.size).map(u64::from),
+                    kind: DownloadKind::File,
+                }),
+                MessageType::Audio(audio) => Some(DownloadableAttachment {
+                    media_source: audio.source.clone(),
+                    filename: audio.filename().to_owned(),
+                    size: audio.info.as_ref().and_then(|info| info.size).map(u64::from),
+                    kind: DownloadKind::Audio,
+                }),
+                MessageType::Video(video) => Some(DownloadableAttachment {
+                    media_source: video.source.clone(),
+                    filename: video.filename().to_owned(),
+                    size: video.info.as_ref().and_then(|info| info.size).map(u64::from),
+                    kind: DownloadKind::Video,
+                }),
+                _ => None,
+            },
+            _ => None,
+        };
+        let download_state = download_info.as_ref()
+            .and_then(|info|
+                pending_downloads.iter()
+                    .find(|pending| pending.mxc == *media_source_mxc(&info.media_source))
+            )
+            .map(|entry| entry.state.display())
+            .unwrap_or_default();
+        // Notices only get a copy button from bot senders: agents replying via
+        // m.notice are conversational, while human notices are management feedback.
+        let show_copy_button = matches!(
+            &msg_like_content.kind,
+            MsgLikeKind::Message(msg) if match msg.msgtype() {
+                MessageType::Text(_) | MessageType::Emote(_) => true,
+                MessageType::Notice(_) => sender_is_bot(),
+                _ => false,
+            }
+        );
+        item.as_message().set_data(
+            cx,
+            message_details,
+            download_info,
+            download_state,
+            show_copy_button,
+        );
         item.as_message().set_band_metadata(cx, band_metadata);
+
+        let has_action_payload = event_raw_json_contains_any(
+            event_tl_item,
+            &[
+                "\"org.octos.actions\"",
+                "\"org.octos.approval_request\"",
+                "\"com.agentchat.approval\"",
+            ],
+        );
+        let action_button_content = has_action_payload
+            .then(|| latest_effective_event_content_json(event_tl_item))
+            .flatten();
+        let original_action_button_content = has_action_payload
+            .then(|| original_event_content_json(event_tl_item))
+            .flatten();
+        let source_event_id = event_tl_item.event_id().map(|event_id| event_id.to_owned());
+        populate_octos_action_buttons(
+            cx,
+            app_language,
+            &item,
+            item_id,
+            action_button_content.as_ref(),
+            original_action_button_content.as_ref(),
+            source_event_id.as_ref(),
+            event_tl_item.sender(),
+            action_button_contexts,
+            disabled_action_source_event_ids,
+            selected_actions,
+        );
     }
 
 
@@ -12694,8 +13227,8 @@ fn populate_message_view(
             new_drawn_status.profile_drawn = profile_drawn;
 
             // Show/hide the bot badge based on sender's user ID
-            item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, sender_is_bot);
-            if sender_is_bot {
+            item.view(cx, ids!(content.username_view.bot_badge)).set_visible(cx, sender_is_bot());
+            if sender_is_bot() {
                 populate_bot_badge_identity(cx, &item, event_tl_item.sender().localpart());
             }
         }
@@ -12714,25 +13247,9 @@ fn populate_message_view(
         }
     }
 
-    let action_button_content = latest_effective_event_content_json(event_tl_item);
-    let original_action_button_content = original_event_content_json(event_tl_item);
-    let source_event_id = event_tl_item.event_id().map(|event_id| event_id.to_owned());
-    populate_octos_action_buttons(
-        cx,
-        app_language,
-        &item,
-        action_button_content.as_ref(),
-        original_action_button_content.as_ref(),
-        source_event_id.as_ref(),
-        event_tl_item.sender(),
-        action_button_contexts,
-        disabled_action_source_event_ids,
-        selected_actions,
-    );
-
     // If we've previously drawn the item content, skip all other steps.
     if used_cached_item && item_drawn_status.content_drawn && item_drawn_status.profile_drawn {
-        return (item, new_drawn_status);
+        return (item, new_drawn_status, false);
     }
 
     // Set the timestamp.
@@ -12785,7 +13302,7 @@ fn populate_message_view(
         }
     }
 
-    (item, new_drawn_status)
+    (item, new_drawn_status, !used_cached_item)
 }
 
 /// Draws the Html or plaintext body of the given Text or Notice message into the `message_content_widget`.
@@ -13116,6 +13633,7 @@ fn populate_octos_action_buttons(
     cx: &mut Cx,
     app_language: AppLanguage,
     item: &WidgetRef,
+    item_id: usize,
     content: Option<&serde_json::Value>,
     original_content: Option<&serde_json::Value>,
     source_event_id: Option<&OwnedEventId>,
@@ -13125,10 +13643,13 @@ fn populate_octos_action_buttons(
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
 ) {
     let container = item.view(cx, ids!(content.action_buttons));
-    let approval_request_view = item.view(cx, ids!(content.action_buttons.approval_request_view));
-    let button_row = item.view(cx, ids!(content.action_buttons.action_button_row));
-    let approval_button_row = item.view(cx, ids!(content.action_buttons.approval_request_view.approval_action_button_row));
+    if content.is_none() && original_content.is_none() {
+        action_button_contexts.retain(|_, context| context.item_id != item_id);
+        container.set_visible(cx, false);
+        return;
+    }
     let Some(source_event_id) = source_event_id else {
+        action_button_contexts.retain(|_, context| context.item_id != item_id);
         container.set_visible(cx, false);
         return;
     };
@@ -13151,6 +13672,14 @@ fn populate_octos_action_buttons(
     let is_approval = render_state.approval_card.is_some();
 
     container.set_visible(cx, render_state.show_container);
+    if !render_state.show_container {
+        action_button_contexts.retain(|_, context| context.item_id != item_id);
+        return;
+    }
+
+    let approval_request_view = item.view(cx, ids!(content.action_buttons.approval_request_view));
+    let button_row = item.view(cx, ids!(content.action_buttons.action_button_row));
+    let approval_button_row = item.view(cx, ids!(content.action_buttons.approval_request_view.approval_action_button_row));
     button_row.set_visible(cx, !is_approval && render_state.show_button_row && !visible_slots.is_empty());
     approval_button_row.set_visible(cx, is_approval && render_state.show_button_row && !visible_slots.is_empty());
     approval_request_view.set_visible(cx, is_approval);
@@ -13249,6 +13778,8 @@ fn populate_octos_action_buttons(
             };
 
             action_button_contexts.insert(active_button.widget_uid(), OctosActionButtonContext {
+                item_id,
+                item_widget_uid: item.widget_uid(),
                 source_event_id: source_event_id.clone(),
                 original_sender: original_sender.to_owned(),
                 request,
@@ -14913,6 +15444,72 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_timeline_snapshots_coalesce_without_crossing_control_updates() {
+        let mut pending = VecDeque::new();
+        enqueue_timeline_update(
+            &mut pending,
+            TimelineUpdate::NewItems {
+                new_items: Vector::new(),
+                changed_indices: 4..8,
+                clear_cache: false,
+                is_append: true,
+            },
+        );
+        match pending.back().unwrap() {
+            TimelineUpdate::NewItems {
+                changed_indices,
+                clear_cache,
+                is_append,
+                ..
+            } => {
+                assert_eq!(changed_indices, &(4..8));
+                assert!(!*clear_cache);
+                assert!(*is_append);
+            }
+            _ => panic!("expected timeline snapshot"),
+        }
+
+        enqueue_timeline_update(
+            &mut pending,
+            TimelineUpdate::NewItems {
+                new_items: Vector::new(),
+                changed_indices: 9..12,
+                clear_cache: false,
+                is_append: true,
+            },
+        );
+        assert_eq!(pending.len(), 1);
+        match pending.back().unwrap() {
+            TimelineUpdate::NewItems {
+                changed_indices,
+                clear_cache,
+                is_append,
+                ..
+            } => {
+                assert_eq!(changed_indices, &(4..12));
+                assert!(!*clear_cache);
+                assert!(*is_append);
+            }
+            _ => panic!("expected coalesced timeline snapshot"),
+        }
+
+        enqueue_timeline_update(
+            &mut pending,
+            TimelineUpdate::PaginationRunning(PaginationDirection::Backwards),
+        );
+        enqueue_timeline_update(
+            &mut pending,
+            TimelineUpdate::NewItems {
+                new_items: Vector::new(),
+                changed_indices: 1..2,
+                clear_cache: false,
+                is_append: true,
+            },
+        );
+        assert_eq!(pending.len(), 3);
+    }
+
+    #[test]
     fn test_invite_result_belongs_only_to_pending_screen() {
         let invited_user = OwnedUserId::try_from("@octos:example.org").unwrap();
         let other_user = OwnedUserId::try_from("@hermes:example.org").unwrap();
@@ -14921,6 +15518,45 @@ mod tests {
         assert!(invite_result_belongs_to_room_screen(&pending, &invited_user));
         assert!(!invite_result_belongs_to_room_screen(&pending, &other_user));
         assert!(!invite_result_belongs_to_room_screen(&HashSet::new(), &invited_user));
+    }
+
+    #[test]
+    fn small_state_group_index_stores_group_starts_and_collapsed_ranges() {
+        let collapsed_event_id =
+            OwnedEventId::try_from("$collapsed:example.org").unwrap();
+        let expanded_event_id =
+            OwnedEventId::try_from("$expanded:example.org").unwrap();
+        let index = index_small_state_event_groups([
+            SmallStateEventGroup {
+                start: 2,
+                end: 6,
+                count: 4,
+                first_event_id: collapsed_event_id.clone(),
+                collapsed: true,
+            },
+            SmallStateEventGroup {
+                start: 10,
+                end: 12,
+                count: 2,
+                first_event_id: expanded_event_id.clone(),
+                collapsed: false,
+            },
+        ]);
+
+        assert_eq!(index.by_start.len(), 2);
+        assert_eq!(
+            index.by_start.get(&2).map(|group| (&group.first_event_id, group.count)),
+            Some((&collapsed_event_id, 4)),
+        );
+        assert_eq!(
+            index.by_start.get(&10).map(|group| (&group.first_event_id, group.count)),
+            Some((&expanded_event_id, 2)),
+        );
+        assert!(!index.collapsed_hidden_indices.contains(&2));
+        assert!(index.collapsed_hidden_indices.contains(&3));
+        assert!(index.collapsed_hidden_indices.contains(&5));
+        assert!(!index.collapsed_hidden_indices.contains(&6));
+        assert!(!index.collapsed_hidden_indices.contains(&11));
     }
 
     #[test]
@@ -15225,6 +15861,44 @@ mod tests {
     }
 
     #[test]
+    fn test_timeline_bot_context_cache_matches_its_full_identity_fingerprint() {
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let known_bot_user_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let cached = CachedTimelineBotContext {
+            room_id: room_id.clone(),
+            room_members: None,
+            app_service_enabled: false,
+            room_is_bound: false,
+            persisted_bound_bot_user_id: None,
+            persisted_bound_bot_user_ids: Vec::new(),
+            resolved_parent_bot_user_id: None,
+            known_bot_user_ids: vec![known_bot_user_id.clone()],
+            value: TimelineBotContext::default(),
+        };
+
+        assert!(cached.matches(
+            &room_id,
+            None,
+            false,
+            false,
+            None,
+            &[],
+            None,
+            &[known_bot_user_id],
+        ));
+        assert!(!cached.matches(
+            &room_id,
+            None,
+            false,
+            false,
+            None,
+            &[],
+            None,
+            &[],
+        ));
+    }
+
+    #[test]
     fn test_registry_agent_detected_as_bot_sender() {
         // An agent known only via the global AgentRegistry (not the app-service
         // known-bot list, and with a non-bot-like localpart) is still detected.
@@ -15246,7 +15920,7 @@ mod tests {
             .agent_registry
             .register(agent_id.clone(), crate::app::AgentEntry::default());
 
-        let known_bot_user_ids = room_props_known_bot_user_ids(&app_state);
+        let known_bot_user_ids = timeline_known_bot_user_ids(&app_state);
 
         assert!(known_bot_user_ids.iter().any(|id| id == &agent_id));
     }

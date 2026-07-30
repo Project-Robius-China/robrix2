@@ -1576,6 +1576,14 @@ impl MatchEvent for App {
                 // Don't `continue` — let StackNavigation also process this Pop.
             }
 
+            // A released static mobile room slot is no longer drawn, so pause
+            // its room-specific subscriptions even if the breakpoint changed mid-transition.
+            if let StackNavigationTransitionAction::ViewReleased(view_id) =
+                action.as_widget_action().cast()
+            {
+                self.set_mobile_room_view_updates_enabled(cx, view_id, false);
+            }
+
             // Handle actions that instruct us to update the top-level app state.
             if let Some(LeaveRoomResultAction::Left { room_id }) = action.downcast_ref() {
                 enqueue_rooms_list_update(RoomsListUpdate::HideRoom { room_id: room_id.clone() });
@@ -2785,6 +2793,27 @@ impl App {
         (Self::ROOM_VIEW_IDS[index], Self::ROOM_SCREEN_IDS[index])
     }
 
+    fn room_screen_id_for_view(view_id: LiveId) -> Option<LiveId> {
+        Self::ROOM_VIEW_IDS
+            .iter()
+            .position(|candidate| *candidate == view_id)
+            .map(|index| Self::ROOM_SCREEN_IDS[index])
+    }
+
+    fn set_mobile_room_view_updates_enabled(
+        &mut self,
+        cx: &mut Cx,
+        view_id: LiveId,
+        enabled: bool,
+    ) {
+        let Some(room_screen_id) = Self::room_screen_id_for_view(view_id) else {
+            return;
+        };
+        self.ui
+            .room_screen(cx, &[room_screen_id])
+            .set_timeline_updates_enabled(enabled);
+    }
+
     /// Pushes the appropriate StackNavigationView for the given `SelectedRoom`,
     /// configuring the view's content widget and header title.
     ///
@@ -2795,8 +2824,12 @@ impl App {
     /// screen configuration are effectively no-ops — MainDesktopUI handles
     /// room display via dock tabs instead.
     fn push_selected_room_view(&mut self, cx: &mut Cx, selected_room: SelectedRoom) {
+        let view_stack = self.ui.stack_navigation(cx, ids!(view_stack));
+        if !effective_is_desktop(cx) && view_stack.is_transitioning() {
+            return;
+        }
         // Use the actual StackNavigation depth to pick the next room view slot.
-        let new_depth = self.ui.stack_navigation(cx, ids!(view_stack)).depth();
+        let new_depth = view_stack.depth();
         let same_selected_room = self.app_state.selected_room.as_ref()
             .is_some_and(|current| current == &selected_room);
         if same_selected_room && new_depth > 0 {
@@ -3687,11 +3720,27 @@ impl Eq for SelectedRoom {}
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentCapability, AgentEntry, AgentFramework, AgentRegistry, AppState, BotSettingsState,
-        RoomBotBindingState, SavedDockState, SelectedRoom, TrustTier,
+        AgentCapability, AgentEntry, AgentFramework, AgentRegistry, App, AppState,
+        BotSettingsState, RoomBotBindingState, SavedDockState, SelectedRoom, TrustTier,
     };
     use crate::utils::RoomNameId;
     use matrix_sdk::{RoomDisplayName, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, UserId}};
+
+    #[test]
+    fn mobile_room_view_ids_map_to_their_room_screens() {
+        assert_eq!(
+            App::room_screen_id_for_view(App::ROOM_VIEW_IDS[0]),
+            Some(App::ROOM_SCREEN_IDS[0]),
+        );
+        assert_eq!(
+            App::room_screen_id_for_view(App::ROOM_VIEW_IDS[1]),
+            Some(App::ROOM_SCREEN_IDS[1]),
+        );
+        assert_eq!(
+            App::room_screen_id_for_view(App::ROOM_SCREEN_IDS[0]),
+            None,
+        );
+    }
 
     #[test]
     fn test_agent_registry_serde_roundtrip() {
