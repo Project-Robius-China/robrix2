@@ -1,0 +1,298 @@
+#!/bin/sh
+
+set -eu
+
+APP_NAME="Robrix"
+APP_VERSION="@VERSION@"
+RELEASE_TAG="@TAG@"
+REPOSITORY="@REPOSITORY@"
+RELEASE_BASE_URL="${ROBRIX_DOWNLOAD_BASE_URL:-https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}}"
+DRY_RUN="${ROBRIX_INSTALLER_DRY_RUN:-0}"
+QUIET=0
+DOWNLOAD_ONLY=""
+TEMP_DIR=""
+MOUNT_DIR=""
+MOUNTED=0
+
+usage() {
+    cat <<EOF
+robrix-installer.sh
+
+Install Robrix ${APP_VERSION} from the official GitHub release.
+
+USAGE:
+    robrix-installer.sh [OPTIONS]
+
+OPTIONS:
+    --download-only DIR  Verify and save the native installer without running it
+    --dry-run            Print the selected artifact without downloading it
+    -q, --quiet          Suppress progress messages
+    -h, --help           Print this help
+
+ENVIRONMENT:
+    ROBRIX_INSTALL_DIR          macOS destination (default: /Applications or ~/Applications)
+    ROBRIX_DOWNLOAD_BASE_URL    Override the release download base URL
+    ROBRIX_GITHUB_TOKEN         Token for a private or draft GitHub release
+    ROBRIX_INSTALLER_DRY_RUN=1  Same as --dry-run
+    ROBRIX_ACCEPT_LICENSE=1     Accept the DMG license in noninteractive installs
+EOF
+}
+
+say() {
+    if [ "$QUIET" -ne 1 ]; then
+        printf '%s\n' "$*"
+    fi
+}
+
+die() {
+    printf 'robrix-installer: %s\n' "$*" >&2
+    exit 1
+}
+
+cleanup() {
+    if [ "$MOUNTED" -eq 1 ] && [ -n "$MOUNT_DIR" ]; then
+        hdiutil detach "$MOUNT_DIR" -quiet >/dev/null 2>&1 || true
+    fi
+    if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
+        rm -rf "$TEMP_DIR"
+    fi
+}
+
+trap cleanup 0
+trap 'exit 1' 1 2 15
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --download-only)
+            [ "$#" -ge 2 ] || die "--download-only requires a directory"
+            DOWNLOAD_ONLY=$2
+            shift 2
+            ;;
+        --dry-run)
+            DRY_RUN=1
+            shift
+            ;;
+        -q|--quiet)
+            QUIET=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "unknown option: $1"
+            ;;
+    esac
+done
+
+raw_os="${ROBRIX_INSTALLER_OS:-$(uname -s)}"
+case "$raw_os" in
+    Darwin|darwin|macOS|macos)
+        target_os="macos"
+        ;;
+    Linux|linux)
+        target_os="linux"
+        ;;
+    *)
+        die "unsupported operating system: $raw_os"
+        ;;
+esac
+
+raw_arch="${ROBRIX_INSTALLER_ARCH:-$(uname -m)}"
+case "$raw_arch" in
+    arm64|aarch64)
+        target_arch="aarch64"
+        ;;
+    x86_64|amd64)
+        target_arch="x86_64"
+        ;;
+    *)
+        die "unsupported architecture: $raw_arch"
+        ;;
+esac
+
+linux_release="22.04"
+if [ "$target_os" = "linux" ] && [ -r /etc/os-release ]; then
+    linux_id=$(awk -F= '$1 == "ID" { gsub(/^"|"$/, "", $2); print $2; exit }' /etc/os-release)
+    linux_version=$(awk -F= '$1 == "VERSION_ID" { gsub(/^"|"$/, "", $2); print $2; exit }' /etc/os-release)
+    case "${linux_id}:${linux_version}" in
+        ubuntu:24.*)
+            linux_release="24.04"
+            ;;
+    esac
+fi
+if [ -n "${ROBRIX_LINUX_RELEASE:-}" ]; then
+    linux_release=$ROBRIX_LINUX_RELEASE
+fi
+
+case "${target_os}/${target_arch}/${linux_release}" in
+    macos/aarch64/*)
+        asset="@MACOS_AARCH64_ASSET@"
+        expected_sha256="@MACOS_AARCH64_SHA256@"
+        ;;
+    macos/x86_64/*)
+        asset="@MACOS_X86_64_ASSET@"
+        expected_sha256="@MACOS_X86_64_SHA256@"
+        ;;
+    linux/aarch64/24.04)
+        asset="@LINUX_24_AARCH64_ASSET@"
+        expected_sha256="@LINUX_24_AARCH64_SHA256@"
+        ;;
+    linux/x86_64/24.04)
+        asset="@LINUX_24_X86_64_ASSET@"
+        expected_sha256="@LINUX_24_X86_64_SHA256@"
+        ;;
+    linux/aarch64/*)
+        asset="@LINUX_22_AARCH64_ASSET@"
+        expected_sha256="@LINUX_22_AARCH64_SHA256@"
+        ;;
+    linux/x86_64/*)
+        asset="@LINUX_22_X86_64_ASSET@"
+        expected_sha256="@LINUX_22_X86_64_SHA256@"
+        ;;
+esac
+
+download_url="${RELEASE_BASE_URL}/${asset}"
+
+if [ "$DRY_RUN" = "1" ]; then
+    printf 'version=%s\n' "$APP_VERSION"
+    printf 'platform=%s\n' "$target_os"
+    printf 'architecture=%s\n' "$target_arch"
+    if [ "$target_os" = "linux" ]; then
+        printf 'linux_release=%s\n' "$linux_release"
+    fi
+    printf 'asset=%s\n' "$asset"
+    printf 'sha256=%s\n' "$expected_sha256"
+    printf 'url=%s\n' "$download_url"
+    exit 0
+fi
+
+download() {
+    source_url=$1
+    destination=$2
+
+    if command -v curl >/dev/null 2>&1; then
+        if [ -n "${ROBRIX_GITHUB_TOKEN:-}" ]; then
+            curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+                --header "Authorization: Bearer ${ROBRIX_GITHUB_TOKEN}" \
+                --output "$destination" "$source_url"
+        else
+            curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+                --output "$destination" "$source_url"
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if [ -n "${ROBRIX_GITHUB_TOKEN:-}" ]; then
+            wget --quiet --header="Authorization: Bearer ${ROBRIX_GITHUB_TOKEN}" \
+                --output-document="$destination" "$source_url"
+        else
+            wget --quiet --output-document="$destination" "$source_url"
+        fi
+    else
+        die "curl or wget is required"
+    fi
+}
+
+sha256_file() {
+    file=$1
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        die "sha256sum, shasum, or openssl is required to verify the download"
+    fi
+}
+
+TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/robrix-installer.XXXXXX")
+downloaded_file="${TEMP_DIR}/${asset}"
+say "Downloading ${APP_NAME} ${APP_VERSION} (${target_os}/${target_arch})..."
+download "$download_url" "$downloaded_file"
+
+actual_sha256=$(sha256_file "$downloaded_file")
+if [ "$actual_sha256" != "$expected_sha256" ]; then
+    die "checksum mismatch for ${asset}: expected ${expected_sha256}, got ${actual_sha256}"
+fi
+say "Verified SHA-256: ${actual_sha256}"
+
+if [ -n "$DOWNLOAD_ONLY" ]; then
+    mkdir -p "$DOWNLOAD_ONLY"
+    destination="${DOWNLOAD_ONLY%/}/${asset}"
+    cp "$downloaded_file" "$destination"
+    say "Saved ${destination}"
+    exit 0
+fi
+
+if [ "$target_os" = "macos" ]; then
+    command -v hdiutil >/dev/null 2>&1 || die "hdiutil is required on macOS"
+    MOUNT_DIR="${TEMP_DIR}/mount"
+    mkdir -p "$MOUNT_DIR"
+    if hdiutil imageinfo "$downloaded_file" |
+        grep -q 'Software License Agreement: true'; then
+        if [ "${ROBRIX_ACCEPT_LICENSE:-0}" = "1" ]; then
+            printf 'Y\n' |
+                hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_DIR" \
+                    "$downloaded_file" >/dev/null
+        elif [ -r /dev/tty ]; then
+            hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_DIR" \
+                "$downloaded_file" </dev/tty >/dev/null
+        else
+            die "the DMG license requires an interactive terminal; review it and set ROBRIX_ACCEPT_LICENSE=1 to accept"
+        fi
+    else
+        hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_DIR" \
+            "$downloaded_file" >/dev/null
+    fi
+    MOUNTED=1
+
+    source_app="${MOUNT_DIR}/Robrix.app"
+    if [ ! -d "$source_app" ]; then
+        source_app=$(find "$MOUNT_DIR" -type d -name 'Robrix.app' -print -quit)
+    fi
+    [ -n "$source_app" ] && [ -d "$source_app" ] || die "Robrix.app was not found in ${asset}"
+
+    if [ -n "${ROBRIX_INSTALL_DIR:-}" ]; then
+        install_dir=$ROBRIX_INSTALL_DIR
+    elif [ -d /Applications ] && [ -w /Applications ]; then
+        install_dir=/Applications
+    else
+        install_dir="${HOME:?HOME is required}/Applications"
+    fi
+
+    mkdir -p "$install_dir"
+    target_app="${install_dir%/}/Robrix.app"
+    staged_app="${install_dir%/}/.Robrix.app.install.$$"
+    backup_app="${install_dir%/}/.Robrix.app.backup.$$"
+
+    rm -rf "$staged_app" "$backup_app"
+    if command -v ditto >/dev/null 2>&1; then
+        ditto "$source_app" "$staged_app"
+    else
+        cp -R "$source_app" "$staged_app"
+    fi
+
+    if [ -e "$target_app" ]; then
+        mv "$target_app" "$backup_app"
+    fi
+    if mv "$staged_app" "$target_app"; then
+        rm -rf "$backup_app"
+    else
+        [ ! -e "$backup_app" ] || mv "$backup_app" "$target_app"
+        die "could not replace ${target_app}"
+    fi
+    say "Installed ${target_app}"
+else
+    command -v apt-get >/dev/null 2>&1 ||
+        die "the current Linux release is a .deb; Debian or Ubuntu with apt-get is required"
+
+    if [ "$(id -u)" -eq 0 ]; then
+        apt-get install -y "$downloaded_file"
+    else
+        command -v sudo >/dev/null 2>&1 ||
+            die "sudo is required to install the .deb package"
+        sudo apt-get install -y "$downloaded_file"
+    fi
+    say "Installed ${APP_NAME} ${APP_VERSION}"
+fi

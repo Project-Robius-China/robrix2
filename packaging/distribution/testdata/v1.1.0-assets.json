@@ -1,0 +1,32 @@
+[
+  {
+    "name": "latest.json",
+    "digest": "sha256:3eb351eaa9ec3dd95f08db966ebc90f1cedac4adebe269ae624c94eb54f36094",
+    "browser_download_url": "https://github.com/Project-Robius-China/robrix2/releases/download/v1.1.0/latest.json"
+  },
+  {
+    "name": "robrix-1.1.0-linux-aarch64-release.deb",
+    "digest": "sha256:6859904c837fac8b177e2c33374e3a797cff0f330727d32e1463ff6c898857b4",
+    "browser_download_url": "https://github.com/Project-Robius-China/robrix2/releases/download/v1.1.0/robrix-1.1.0-linux-aarch64-release.deb"
+  },
+  {
+    "name": "robrix-1.1.0-linux-x86_64-release.deb",
+    "digest": "sha256:8a94580a1b9d2b2e6947248ace9bb2fca51c5f1ab970b18b13cc257851921891",
+    "browser_download_url": "https://github.com/Project-Robius-China/robrix2/releases/download/v1.1.0/robrix-1.1.0-linux-x86_64-release.deb"
+  },
+  {
+    "name": "robrix-1.1.0-macos-aarch64-release.dmg",
+    "digest": "sha256:783375cd75c8fc3ad38ccc3ad70e8368faf83606ad4788b99118cf6af6404e7a",
+    "browser_download_url": "https://github.com/Project-Robius-China/robrix2/releases/download/v1.1.0/robrix-1.1.0-macos-aarch64-release.dmg"
+  },
+  {
+    "name": "robrix-1.1.0-macos-x86_64-release.dmg",
+    "digest": "sha256:cbfb903acbf3ba68cb1549878e0847b5d6d53318fec7d7bc1523808cc63889b2",
+    "browser_download_url": "https://github.com/Project-Robius-China/robrix2/releases/download/v1.1.0/robrix-1.1.0-macos-x86_64-release.dmg"
+  },
+  {
+    "name": "robrix-1.1.0-windows-x86_64-release.exe",
+    "digest": "sha256:82171be7936cc97965f02baf20cef2c820b5bd2890e80c39fe1e034480d047e2",
+    "browser_download_url": "https://github.com/Project-Robius-China/robrix2/releases/download/v1.1.0/robrix-1.1.0-windows-x86_64-release.exe"
+  }
+]

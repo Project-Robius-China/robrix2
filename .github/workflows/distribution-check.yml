@@ -1,0 +1,71 @@
+name: Distribution Check
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/distribution-check.yml"
+      - ".github/workflows/release.yml"
+      - "Casks/**"
+      - "packaging/distribution/**"
+      - "packaging/homebrew/**"
+      - "packaging/npm/**"
+      - "packaging/winget/**"
+      - "scripts/generate-distribution-assets.sh"
+      - "scripts/test-distribution.sh"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/distribution-check.yml"
+      - ".github/workflows/release.yml"
+      - "Casks/**"
+      - "packaging/distribution/**"
+      - "packaging/homebrew/**"
+      - "packaging/npm/**"
+      - "packaging/winget/**"
+      - "scripts/generate-distribution-assets.sh"
+      - "scripts/test-distribution.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Validate installers and package metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run distribution tests
+        run: ./scripts/test-distribution.sh
+      - name: Generate the Windows installer fixture
+        run: |
+          ./scripts/generate-distribution-assets.sh \
+            --repository Project-Robius-China/robrix2 \
+            --tag v1.1.0 \
+            --assets-json packaging/distribution/testdata/v1.1.0-assets.json \
+            --output dist/distribution-check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robrix-powershell-installer
+          path: dist/distribution-check/robrix-installer.ps1
+
+  powershell:
+    name: Validate the PowerShell installer
+    needs: test
+    runs-on: windows-2022
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: robrix-powershell-installer
+          path: distribution-check
+      - name: Exercise Windows artifact selection
+        shell: pwsh
+        run: |
+          $selection = & ./distribution-check/robrix-installer.ps1 -DryRun
+          $selection | Write-Output
+          if ($selection -notcontains "asset=robrix-1.1.0-windows-x86_64-release.exe") {
+            throw "PowerShell installer selected the wrong Windows artifact."
+          }

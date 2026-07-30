@@ -1,0 +1,6 @@
+# Created by the Robrix release workflow.
+PackageIdentifier: ProjectRobiusChina.Robrix
+PackageVersion: @VERSION@
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.12.0
