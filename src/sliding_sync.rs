@@ -42,7 +42,7 @@ use tokio::{
     sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
 };
 use url::Url;
-use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefault, DefaultHasher}, iter::Peekable, ops::{Deref, DerefMut, Not}, path::{ Path, PathBuf }, sync::{Arc, LazyLock, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
+use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefault, DefaultHasher}, iter::Peekable, ops::{Deref, DerefMut, Not, Range}, path::{ Path, PathBuf }, sync::{Arc, LazyLock, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 use std::io;
 use hashbrown::{HashMap, HashSet};
 use crate::{
@@ -8606,6 +8606,53 @@ const LOG_TIMELINE_DIFFS: bool = cfg!(feature = "log_timeline_diffs");
 /// Whether to enable verbose logging of all room list service diff updates.
 const LOG_ROOM_LIST_DIFFS: bool = cfg!(feature = "log_room_list_diffs");
 
+#[derive(Debug, Eq, PartialEq)]
+struct DeferredTimelineSnapshot {
+    changed_indices: Range<usize>,
+    clear_cache: bool,
+    is_append: bool,
+}
+
+#[derive(Default)]
+struct DeferredTimelineChanges {
+    has_changes: bool,
+    had_appends: bool,
+    append_start: Option<usize>,
+    requires_full_snapshot: bool,
+}
+impl DeferredTimelineChanges {
+    fn record_batch(&mut self, is_append: bool, only_appends: bool, first_change: usize) {
+        self.has_changes = true;
+        self.had_appends |= is_append;
+        if only_appends && !self.requires_full_snapshot {
+            self.append_start = Some(
+                self.append_start
+                    .map_or(first_change, |start| start.min(first_change))
+            );
+        } else {
+            self.append_start = None;
+            self.requires_full_snapshot = true;
+        }
+    }
+
+    fn take_snapshot(&mut self, timeline_len: usize) -> Option<DeferredTimelineSnapshot> {
+        if !self.has_changes {
+            return None;
+        }
+        let changes = std::mem::take(self);
+        let incremental_append_start = (!changes.requires_full_snapshot)
+            .then_some(changes.append_start)
+            .flatten()
+            .map(|start| start.min(timeline_len));
+        Some(DeferredTimelineSnapshot {
+            changed_indices: incremental_append_start
+                .map_or(0..timeline_len, |start| start..timeline_len),
+            clear_cache: incremental_append_start.is_none(),
+            is_append: changes.had_appends,
+        })
+    }
+}
+
 /// A per-timeline async task that listens for timeline updates and sends them to the UI thread.
 ///
 /// One instance of this async task is spawned for each room the client knows about,
@@ -8660,7 +8707,7 @@ async fn timeline_subscriber_handler(
     let mut found_target_event_id: Option<(usize, OwnedEventId)> = None;
     // Subscribers are spawned when opened. Once hidden, they retain only their latest local snapshot.
     let mut is_timeline_open = true;
-    let mut has_unsent_changes = false;
+    let mut deferred_changes = DeferredTimelineChanges::default();
 
     loop { tokio::select! {
         // we should check for new requests before handling new timeline updates,
@@ -8686,13 +8733,15 @@ async fn timeline_subscriber_handler(
             };
 
             let mut target_event_resolved_on_reopen = false;
-            if now_open && !is_timeline_open && has_unsent_changes {
-                let len = timeline_items.len();
+            if now_open
+                && !is_timeline_open
+                && let Some(snapshot) = deferred_changes.take_snapshot(timeline_items.len())
+            {
                 let snapshot_sent = timeline_update_sender.send(TimelineUpdate::NewItems {
                     new_items: timeline_items.clone(),
-                    changed_indices: 0..len,
-                    clear_cache: true,
-                    is_append: false,
+                    changed_indices: snapshot.changed_indices,
+                    clear_cache: snapshot.clear_cache,
+                    is_append: snapshot.is_append,
                 }).is_ok();
                 if snapshot_sent {
                     if let Some((_stale_index, found_event_id)) =
@@ -8714,7 +8763,6 @@ async fn timeline_subscriber_handler(
                     }
                     SignalToUI::set_ui_signal();
                 }
-                has_unsent_changes = false;
             }
             is_timeline_open = now_open;
 
@@ -8802,6 +8850,8 @@ async fn timeline_subscriber_handler(
             let mut clear_cache = false;
             // whether the changes include items being appended to the end of the timeline
             let mut is_append = false;
+            // whether every diff in this batch only appends items to the end
+            let mut only_appends = true;
             for diff in batch {
                 num_updates += 1;
                 match diff {
@@ -8814,11 +8864,13 @@ async fn timeline_subscriber_handler(
                         is_append = true;
                     }
                     VectorDiff::Clear => {
+                        only_appends = false;
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Clear"); }
                         clear_cache = true;
                         timeline_items.clear();
                     }
                     VectorDiff::PushFront { value } => {
+                        only_appends = false;
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff PushFront"); }
                         if let Some((index, _ev)) = found_target_event_id.as_mut() {
                             *index += 1; // account for this new `value` being prepended.
@@ -8837,6 +8889,7 @@ async fn timeline_subscriber_handler(
                         is_append = true;
                     }
                     VectorDiff::PopFront => {
+                        only_appends = false;
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff PopFront"); }
                         clear_cache = true;
                         timeline_items.pop_front();
@@ -8846,12 +8899,14 @@ async fn timeline_subscriber_handler(
                         // This doesn't affect whether we should reobtain the latest event.
                     }
                     VectorDiff::PopBack => {
+                        only_appends = false;
                         timeline_items.pop_back();
                         index_of_first_change = min(index_of_first_change, timeline_items.len());
                         index_of_last_change = usize::MAX;
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff PopBack. Changes: {index_of_first_change}..{index_of_last_change}"); }
                     }
                     VectorDiff::Insert { index, value } => {
+                        only_appends &= index >= timeline_items.len();
                         if index == 0 {
                             clear_cache = true;
                         } else {
@@ -8876,12 +8931,14 @@ async fn timeline_subscriber_handler(
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Insert at {index}. Changes: {index_of_first_change}..{index_of_last_change}"); }
                     }
                     VectorDiff::Set { index, value } => {
+                        only_appends = false;
                         index_of_first_change = min(index_of_first_change, index);
                         index_of_last_change  = max(index_of_last_change, index.saturating_add(1));
                         timeline_items.set(index, value);
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Set at {index}. Changes: {index_of_first_change}..{index_of_last_change}"); }
                     }
                     VectorDiff::Remove { index } => {
+                        only_appends = false;
                         if index == 0 {
                             clear_cache = true;
                         } else {
@@ -8898,6 +8955,7 @@ async fn timeline_subscriber_handler(
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Remove at {index}. Changes: {index_of_first_change}..{index_of_last_change}"); }
                     }
                     VectorDiff::Truncate { length } => {
+                        only_appends = false;
                         if length == 0 {
                             clear_cache = true;
                         } else {
@@ -8908,6 +8966,7 @@ async fn timeline_subscriber_handler(
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Truncate to length {length}. Changes: {index_of_first_change}..{index_of_last_change}"); }
                     }
                     VectorDiff::Reset { values } => {
+                        only_appends = false;
                         if LOG_TIMELINE_DIFFS { log!("timeline_subscriber: room {room_id}, thread {thread_root_event_id:?} diff Reset, new length {}", values.len()); }
                         clear_cache = true; // we must assume all items have changed.
                         timeline_items = values;
@@ -8954,7 +9013,11 @@ async fn timeline_subscriber_handler(
 
                     SignalToUI::set_ui_signal();
                 } else {
-                    has_unsent_changes = true;
+                    deferred_changes.record_batch(
+                        is_append,
+                        only_appends && !clear_cache,
+                        changed_indices.start,
+                    );
                 }
             }
         }
@@ -9488,7 +9551,8 @@ mod tests {
     use matrix_sdk::ruma::{events::AnySyncTimelineEvent, user_id};
 
     use super::{
-        OidcFlowSlot, RestoreSessionFailureAction, build_discovery_http_client,
+        DeferredTimelineChanges, DeferredTimelineSnapshot, OidcFlowSlot,
+        RestoreSessionFailureAction, build_discovery_http_client,
         restore_session_failure_action, restore_session_failure_message,
         session_validation_failure_action, should_prebuild_default_sso_client,
         worker_shutdown_is_unexpected,
@@ -9506,6 +9570,49 @@ mod tests {
             "sender": "@agent-bridge:matrix.test",
             "origin_server_ts": 1,
         })).unwrap()
+    }
+
+    #[test]
+    fn deferred_timeline_changes_preserve_incremental_appends_until_reopen() {
+        let mut deferred = DeferredTimelineChanges::default();
+        assert_eq!(deferred.take_snapshot(4), None);
+
+        deferred.record_batch(true, true, 4);
+        deferred.record_batch(true, true, 7);
+        assert_eq!(
+            deferred.take_snapshot(10),
+            Some(DeferredTimelineSnapshot {
+                changed_indices: 4..10,
+                clear_cache: false,
+                is_append: true,
+            }),
+        );
+        assert_eq!(deferred.take_snapshot(10), None);
+    }
+
+    #[test]
+    fn deferred_timeline_changes_use_full_snapshot_for_mixed_changes() {
+        let mut deferred = DeferredTimelineChanges::default();
+        deferred.record_batch(true, true, 4);
+        deferred.record_batch(false, false, 2);
+        assert_eq!(
+            deferred.take_snapshot(8),
+            Some(DeferredTimelineSnapshot {
+                changed_indices: 0..8,
+                clear_cache: true,
+                is_append: true,
+            }),
+        );
+
+        deferred.record_batch(false, false, 3);
+        assert_eq!(
+            deferred.take_snapshot(6),
+            Some(DeferredTimelineSnapshot {
+                changed_indices: 0..6,
+                clear_cache: true,
+                is_append: false,
+            }),
+        );
     }
 
     #[test]

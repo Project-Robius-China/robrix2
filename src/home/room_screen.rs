@@ -2068,6 +2068,27 @@ impl CachedTimelineBotContext {
             _ => false,
         }
     }
+
+    fn matches(
+        &self,
+        room_id: &OwnedRoomId,
+        room_members: Option<&Arc<Vec<RoomMember>>>,
+        app_service_enabled: bool,
+        room_is_bound: bool,
+        persisted_bound_bot_user_id: Option<&OwnedUserId>,
+        persisted_bound_bot_user_ids: &[OwnedUserId],
+        resolved_parent_bot_user_id: Option<&OwnedUserId>,
+        known_bot_user_ids: &[OwnedUserId],
+    ) -> bool {
+        self.room_id == *room_id
+            && self.has_same_members(room_members)
+            && self.app_service_enabled == app_service_enabled
+            && self.room_is_bound == room_is_bound
+            && self.persisted_bound_bot_user_id.as_ref() == persisted_bound_bot_user_id
+            && self.persisted_bound_bot_user_ids.as_slice() == persisted_bound_bot_user_ids
+            && self.resolved_parent_bot_user_id.as_ref() == resolved_parent_bot_user_id
+            && self.known_bot_user_ids.as_slice() == known_bot_user_ids
+    }
 }
 
 fn compute_timeline_bot_context(
@@ -6869,6 +6890,7 @@ impl Widget for RoomScreen {
                 }
 
                 if let Some(AppStateAction::AgentRegistryUpdated) = action.downcast_ref() {
+                    self.invalidate_timeline_bot_context();
                     if room_info_sliding_pane.is_currently_shown(cx) {
                         self.refresh_room_info_pane(cx, scope.data.get::<AppState>());
                     }
@@ -8248,16 +8270,21 @@ impl RoomScreen {
         let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
 
         if let Some(cached) = self.timeline_bot_context_cache.as_ref()
-            && cached.room_id == *room_id
-            && cached.has_same_members(room_members)
-            && cached.app_service_enabled == app_service_enabled
-            && cached.room_is_bound == room_is_bound
-            && cached.persisted_bound_bot_user_id == persisted_bound_bot_user_id
-            && cached.persisted_bound_bot_user_ids == persisted_bound_bot_user_ids
-            && cached.resolved_parent_bot_user_id == resolved_parent_bot_user_id
-            && cached.known_bot_user_ids == known_bot_user_ids
+            && cached.matches(
+                room_id,
+                room_members,
+                app_service_enabled,
+                room_is_bound,
+                persisted_bound_bot_user_id.as_ref(),
+                &persisted_bound_bot_user_ids,
+                resolved_parent_bot_user_id.as_ref(),
+                &known_bot_user_ids,
+            )
         {
             return cached.value.clone();
+        }
+        if self.timeline_bot_context_cache.is_some() {
+            self.invalidate_timeline_bot_context();
         }
 
         let has_persisted_management_binding = resolved_parent_bot_user_id
@@ -8313,6 +8340,14 @@ impl RoomScreen {
             value: value.clone(),
         });
         value
+    }
+
+    fn invalidate_timeline_bot_context(&mut self) {
+        self.timeline_bot_context_cache = None;
+        if let Some(tl) = self.tl_state.as_mut() {
+            tl.content_drawn_since_last_update.clear();
+            tl.profile_drawn_since_last_update.clear();
+        }
     }
 
     fn build_room_screen_props(
@@ -15822,6 +15857,44 @@ mod tests {
             None,
             &room_bot_user_ids,
             &known_bot_user_ids,
+        ));
+    }
+
+    #[test]
+    fn test_timeline_bot_context_cache_matches_its_full_identity_fingerprint() {
+        let room_id: OwnedRoomId = "!room:example.org".try_into().unwrap();
+        let known_bot_user_id: OwnedUserId = "@agent:example.org".try_into().unwrap();
+        let cached = CachedTimelineBotContext {
+            room_id: room_id.clone(),
+            room_members: None,
+            app_service_enabled: false,
+            room_is_bound: false,
+            persisted_bound_bot_user_id: None,
+            persisted_bound_bot_user_ids: Vec::new(),
+            resolved_parent_bot_user_id: None,
+            known_bot_user_ids: vec![known_bot_user_id.clone()],
+            value: TimelineBotContext::default(),
+        };
+
+        assert!(cached.matches(
+            &room_id,
+            None,
+            false,
+            false,
+            None,
+            &[],
+            None,
+            &[known_bot_user_id],
+        ));
+        assert!(!cached.matches(
+            &room_id,
+            None,
+            false,
+            false,
+            None,
+            &[],
+            None,
+            &[],
         ));
     }
 
