@@ -831,7 +831,7 @@ mod truncation_tests {
 
     #[test]
     fn mixed_script_description_does_not_panic() {
-        // The byte offset lands mid-character for this mix — the old code paniced.
+        // The byte offset lands mid-character for this mix — the old code panicked.
         let d = "Robrix 是一个 Matrix 客户端,支持多 agent 协作工作流。".repeat(6);
         assert!(!d.is_char_boundary(MAX_DESCRIPTION_LENGTH - 3));
         let out = truncate(d);
