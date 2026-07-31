@@ -5,7 +5,7 @@ script_mod! {
     use mod.widgets.*
 
     // The base Robrix button widget.
-    // Uses COLOR_ACTIVE_PRIMARY (blue) background with white text by default.
+    // Uses COLOR_ACTIVE_PRIMARY (the accent teal) background with white text by default.
     // See also the preset variants below:
     //   RobrixPositiveIconButton, RobrixNegativeIconButton, RobrixNeutralIconButton.
     mod.widgets.RobrixIconButton = Button {
