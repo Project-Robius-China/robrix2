@@ -83,7 +83,7 @@ script_mod! {
                     flow: Down
                     padding: Inset{top: 12, left: 0, right: 0, bottom: 12}
                     show_bg: true
-                    draw_bg +: { color: #F3F5F8 }
+                    draw_bg +: { color: (RBX_BG_SURFACE_SUBTLE) }
 
                     general_tab_button := RobrixNeutralIconButton {
                         width: Fill
@@ -92,15 +92,15 @@ script_mod! {
                         align: Align{x: 0.0, y: 0.5}
                         icon_walk: Walk{width: 0, height: 0}
                         draw_bg +: {
-                            color: #E8EEF5
-                            color_hover: #DDE6F0
-                            color_down: #D0DBE8
+                            color: (RBX_BG_SUNKEN)
+                            color_hover: (RBX_BG_HOVER)
+                            color_down: (RBX_BG_PRESSED)
                             border_radius: 0.0
                         }
                         draw_text +: {
-                            color: #000
-                            color_hover: #000
-                            color_down: #000
+                            color: (RBX_FG_PRIMARY)
+                            color_hover: (RBX_FG_PRIMARY)
+                            color_down: (RBX_FG_PRIMARY)
                             text_style: REGULAR_TEXT {font_size: 11}
                         }
                         text: "General"
@@ -122,7 +122,7 @@ script_mod! {
                         margin: Inset{bottom: 16}
                         draw_text +: {
                             text_style: TITLE_TEXT {font_size: 13}
-                            color: #000
+                            color: (RBX_FG_PRIMARY)
                         }
                         text: "General"
                     }
@@ -147,7 +147,7 @@ script_mod! {
                                 margin: Inset{bottom: 2}
                                 draw_text +: {
                                     text_style: REGULAR_TEXT {font_size: 10.5}
-                                    color: #333
+                                    color: (RBX_FG_SECONDARY)
                                 }
                                 text: "Room Name"
                             }
@@ -164,7 +164,7 @@ script_mod! {
                                 margin: Inset{top: 10, bottom: 2}
                                 draw_text +: {
                                     text_style: REGULAR_TEXT {font_size: 10.5}
-                                    color: #333
+                                    color: (RBX_FG_SECONDARY)
                                 }
                                 text: "Room Topic"
                             }
@@ -296,7 +296,7 @@ script_mod! {
                         margin: Inset{bottom: 10}
                         draw_text +: {
                             text_style: TITLE_TEXT {font_size: 12}
-                            color: #000
+                            color: (RBX_FG_PRIMARY)
                         }
                         text: "Room Addresses"
                     }
@@ -307,7 +307,7 @@ script_mod! {
                         margin: Inset{bottom: 4}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 11}
-                            color: #333
+                            color: (RBX_FG_SECONDARY)
                         }
                         text: "Published Addresses"
                     }
@@ -319,7 +319,7 @@ script_mod! {
                         margin: Inset{bottom: 8}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 10}
-                            color: #666
+                            color: (RBX_FG_TERTIARY)
                         }
                         text: "These are the addresses that are published on the room directory for others to find this room."
                     }
@@ -337,7 +337,7 @@ script_mod! {
                             height: Fit
                             draw_text +: {
                                 text_style: REGULAR_TEXT {font_size: 10.5}
-                                color: #444
+                                color: (RBX_FG_SECONDARY)
                             }
                             text: "No main address set"
                         }
@@ -371,7 +371,7 @@ script_mod! {
                             flow: Flow.Right{wrap: true}
                             draw_text +: {
                                 text_style: REGULAR_TEXT {font_size: 10}
-                                color: #333
+                                color: (RBX_FG_SECONDARY)
                             }
                             text: "Publish this room to the public in matrix.org's room directory?"
                         }
@@ -383,7 +383,7 @@ script_mod! {
                         margin: Inset{bottom: 8}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 10}
-                            color: #888
+                            color: (RBX_FG_TERTIARY)
                         }
                         text: "No other published addresses yet, add one below"
                     }
@@ -417,7 +417,7 @@ script_mod! {
                         margin: Inset{bottom: 4}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 11}
-                            color: #333
+                            color: (RBX_FG_SECONDARY)
                         }
                         text: "Local Addresses"
                     }
@@ -429,7 +429,7 @@ script_mod! {
                         margin: Inset{bottom: 8}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 10}
-                            color: #666
+                            color: (RBX_FG_TERTIARY)
                         }
                         text: "Set addresses for this room so users can find this room. As an admin, you can set local addresses for this room."
                     }
@@ -450,7 +450,7 @@ script_mod! {
                         margin: Inset{bottom: 10}
                         draw_text +: {
                             text_style: TITLE_TEXT {font_size: 12}
-                            color: #000
+                            color: (RBX_FG_PRIMARY)
                         }
                         text: "Other"
                     }
@@ -461,7 +461,7 @@ script_mod! {
                         margin: Inset{bottom: 6}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 11}
-                            color: #333
+                            color: (RBX_FG_SECONDARY)
                         }
                         text: "Moderation and safety"
                     }
@@ -472,7 +472,7 @@ script_mod! {
                         margin: Inset{bottom: 2}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 10.5}
-                            color: #333
+                            color: (RBX_FG_SECONDARY)
                         }
                         text: "Show media in timeline"
                     }
@@ -484,7 +484,7 @@ script_mod! {
                         margin: Inset{bottom: 6}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 10}
-                            color: #666
+                            color: (RBX_FG_TERTIARY)
                         }
                         text: "A hidden media can always be shown by tapping on it"
                     }
@@ -553,7 +553,7 @@ script_mod! {
                         margin: Inset{bottom: 10}
                         draw_text +: {
                             text_style: REGULAR_TEXT {font_size: 11}
-                            color: #333
+                            color: (RBX_FG_SECONDARY)
                         }
                         text: "Leave room"
                     }

@@ -60,9 +60,10 @@ script_mod! {
         text: "[Room name unknown]"
     }
 
-    // A small blue "bot" pill shown after the room name for agent-bound rooms.
+    // A small "bot" pill shown after the room name for agent-bound rooms.
     // Reproduces the timeline's bot badge look (room_screen.rs) locally so this
-    // file doesn't depend on room_screen's private constants/widgets.
+    // file doesn't depend on room_screen's private constants/widgets — so it
+    // must use the same soft-accent chip, not a solid legacy-blue block.
     mod.widgets.RoomsListBotPill = RoundedView {
         visible: false
         width: Fit
@@ -72,14 +73,14 @@ script_mod! {
         show_bg: true
         new_batch: true
         draw_bg +: {
-            color: (COLOR_ACTIVE_PRIMARY)
+            color: (RBX_ACCENT_SOFT)
             border_radius: 3.0
         }
         Label {
             width: Fit, height: Fit, padding: 0
             draw_text +: {
                 text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
-                color: (RBX_FG_ON_ACCENT)
+                color: (RBX_ACCENT)
             }
             text: "bot"
         }
