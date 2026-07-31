@@ -420,22 +420,35 @@ fn strip_permalink_anchor_from_html(html: &str) -> String {
     head.to_string()
 }
 
-/// Bot bodies longer than this (in lines) are folded to a preview so a long
-/// agent report does not push every neighbouring message off-screen.
+/// Bodies longer than this (in lines) are folded to a preview so one long
+/// message does not push every neighbouring one off-screen.
 const BOT_BODY_FOLD_LINE_THRESHOLD: usize = 8;
 /// How many lines of the body remain visible while folded.
 const BOT_BODY_FOLD_PREVIEW_LINES: usize = 3;
+/// Bodies longer than this (in characters) are folded even when they occupy few
+/// lines. A pasted JSON dump or a minified payload can be one enormous line: it
+/// wraps to fill the viewport while the line count says there is nothing to
+/// fold.
+const BOT_BODY_FOLD_CHAR_THRESHOLD: usize = 1200;
+/// How much of an over-long single line survives in the preview. Chosen to be a
+/// little more than the preview's line budget would show at a typical width, so
+/// the fold still reads as "the start of something", not a hard truncation.
+const BOT_BODY_FOLD_PREVIEW_CHARS: usize = 400;
 
-/// Folds `body` to its first [`BOT_BODY_FOLD_PREVIEW_LINES`] non-empty-prefixed
-/// lines when it exceeds [`BOT_BODY_FOLD_LINE_THRESHOLD`].
+/// Folds `body` to a short preview when it is long enough to crowd the timeline.
 ///
-/// Returns `None` when the body is short enough to show in full — callers treat
-/// that as "not foldable", so the toggle stays hidden.
+/// Length is measured two ways, because a body can be oversized in either
+/// dimension: many lines, or few lines that are individually enormous. Returns
+/// `None` when the body is small on both counts — callers treat that as "not
+/// foldable", so the toggle stays hidden.
 fn fold_bot_body_preview(body: &str) -> Option<String> {
     let lines: Vec<&str> = body.lines().collect();
-    if lines.len() <= BOT_BODY_FOLD_LINE_THRESHOLD {
+    let too_many_lines = lines.len() > BOT_BODY_FOLD_LINE_THRESHOLD;
+    let too_many_chars = body.chars().count() > BOT_BODY_FOLD_CHAR_THRESHOLD;
+    if !too_many_lines && !too_many_chars {
         return None;
     }
+
     let preview: Vec<&str> = lines
         .iter()
         .copied()
@@ -447,6 +460,15 @@ fn fold_bot_body_preview(body: &str) -> Option<String> {
         return None;
     }
     let mut preview = preview.join("\n");
+
+    // Taking whole lines is not enough on its own: three lines of a minified
+    // payload can still be the whole screen. Cap the preview by characters too,
+    // on a char boundary so multi-byte text cannot panic the slice.
+    if preview.chars().count() > BOT_BODY_FOLD_PREVIEW_CHARS {
+        preview = preview.chars().take(BOT_BODY_FOLD_PREVIEW_CHARS).collect();
+        preview.push('…');
+    }
+
     // Cutting mid-body can leave a ``` fence open, which would swallow the rest
     // of the preview into an unterminated code block. Close it.
     if preview.matches("```").count() % 2 == 1 {
@@ -2731,6 +2753,23 @@ script_mod! {
         spacing: (SPACE_XS)
 
         send_state_pill := mod.widgets.SendStatePill {}
+
+        // Fold affordance for an over-long plain message. Bot replies carry
+        // their own toggle inside the card footer; this is the equivalent for
+        // everything else, and it lives in the meta band so no message template
+        // needs a new slot.
+        plain_fold_toggle := mod.widgets.SmallStateGroupToggleButton {
+            visible: false
+            padding: Inset{ left: 0.0, right: 6.0, top: 0.0, bottom: 0.0 }
+            draw_text +: {
+                text_style: RBX_TEXT_META {}
+                color: (RBX_ACCENT)
+                color_hover: (RBX_ACCENT_HOVER)
+                color_down: (RBX_ACCENT_PRESSED)
+                color_focus: (RBX_ACCENT)
+            }
+            text: ""
+        }
 
         // Message-type badge (request / reply / info) for bridge-relayed agent
         // messages, derived from the leading emoji marker the bridge stamps on
@@ -7025,6 +7064,19 @@ impl Widget for RoomScreen {
                 // "Show more" / "Show less" on a folded long bot reply.
                 if wr
                     .button(cx, ids!(content.bot_message_card.bot_body_card.bot_body_fold_toggle))
+                    .clicked(actions)
+                {
+                    if let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) {
+                        self.toggle_bot_body_expanded(cx, tl_idx);
+                    }
+                    continue;
+                }
+
+                // "Show more" / "Show less" on a folded plain message. Shares the
+                // expanded-ids set with the bot-card toggle: both are "this event
+                // is unfolded", and a message is only ever one of the two.
+                if wr
+                    .button(cx, ids!(content.message_action_bar.plain_fold_toggle))
                     .clicked(actions)
                 {
                     if let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) {
@@ -13769,19 +13821,51 @@ fn populate_bot_text_message_content(
         // bot message would otherwise linger on a plain/human message.
         item.view(cx, ids!(content.message_action_bar.kind_badge))
             .set_visible(cx, false);
-        let drawn = populate_text_message_content(
-            cx,
-            &message_view,
-            app_language,
-            body,
-            formatted_body,
-            room_mention_room_id,
-            link_preview_ref,
-            media_cache,
-            link_preview_cache,
-        );
+
+        // A plain message can crowd the timeline just as badly as an agent
+        // report — a pasted log, or one enormous line of JSON. Fold it the same
+        // way, with the toggle in the meta band.
+        let folded = fold_bot_body_preview(body);
+        let is_folded = folded.is_some() && !bot_body_expanded;
+        let toggle = item.button(cx, ids!(content.message_action_bar.plain_fold_toggle));
+        toggle.set_visible(cx, folded.is_some());
+        if folded.is_some() {
+            toggle.set_text(cx, if is_folded { "Show more" } else { "Show less" });
+        }
+
+        let drawn = if is_folded {
+            // The preview is a truncated slice of the plain body, so the
+            // message's `formatted_body` no longer describes it, and link
+            // previews belong to content the user has not asked to see.
+            populate_text_message_content(
+                cx,
+                &message_view,
+                app_language,
+                folded.as_deref().unwrap_or(body),
+                None,
+                room_mention_room_id,
+                None,
+                None,
+                None,
+            )
+        } else {
+            populate_text_message_content(
+                cx,
+                &message_view,
+                app_language,
+                body,
+                formatted_body,
+                room_mention_room_id,
+                link_preview_ref,
+                media_cache,
+                link_preview_cache,
+            )
+        };
         return (drawn, None);
     }
+    // Bot cards own their fold toggle in the card footer.
+    item.button(cx, ids!(content.message_action_bar.plain_fold_toggle))
+        .set_visible(cx, false);
 
     let status_strip = item.view(cx, ids!(content.bot_message_card.bot_status_strip));
     status_strip.set_visible(cx, render_state.show_status_strip);
@@ -17584,6 +17668,41 @@ mod tests {
 #[cfg(test)]
 mod t1_fold_tests {
     use super::*;
+
+    /// A minified payload is one enormous line: the line count says "nothing to
+    /// fold" while it wraps to fill the viewport.
+    #[test]
+    fn single_enormous_line_folds() {
+        let body = "x".repeat(BOT_BODY_FOLD_CHAR_THRESHOLD + 1);
+        assert_eq!(body.lines().count(), 1, "one line, far below the line threshold");
+        let folded = fold_bot_body_preview(&body).expect("folds on characters");
+        assert!(folded.chars().count() <= BOT_BODY_FOLD_PREVIEW_CHARS + 1);
+        assert!(folded.ends_with('\u{2026}'));
+    }
+
+    /// Three lines of a dump can still be a screenful, so the preview is capped
+    /// by characters as well as by lines.
+    #[test]
+    fn preview_is_capped_by_characters_too() {
+        let body = format!("{}\n{}\n{}\nmore\nmore\nmore\nmore\nmore\nmore",
+            "a".repeat(900), "b".repeat(900), "c".repeat(900));
+        let folded = fold_bot_body_preview(&body).expect("folds");
+        assert!(folded.chars().count() <= BOT_BODY_FOLD_PREVIEW_CHARS + 1);
+    }
+
+    /// Multi-byte text must not panic the character cap.
+    #[test]
+    fn character_cap_is_utf8_safe() {
+        let body = "中文内容描述测试".repeat(400);
+        let folded = fold_bot_body_preview(&body).expect("folds on characters");
+        assert!(folded.chars().count() <= BOT_BODY_FOLD_PREVIEW_CHARS + 1);
+    }
+
+    /// A body that is small on both counts still shows no toggle.
+    #[test]
+    fn short_body_still_does_not_fold() {
+        assert!(fold_bot_body_preview("one\ntwo\nthree").is_none());
+    }
 
     #[test]
     fn agent_role_is_derived_from_localpart() {
