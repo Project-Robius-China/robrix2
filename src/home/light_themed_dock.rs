@@ -144,7 +144,7 @@ script_mod! {
         draw_bg +: {
             // Unselected tabs: subtle neutral surface. Selected tab: teal accent
             // (RBX_ACCENT) — the unified UI selection color, replacing the legacy
-            // bright blue COLOR_ACTIVE_PRIMARY.
+            // COLOR_ACTIVE_PRIMARY (the accent teal).
             color: (RBX_BG_SURFACE_SUBTLE)
             color_hover: (RBX_BG_HOVER)
             color_active: (RBX_ACCENT)

@@ -196,7 +196,11 @@ script_mod! {
     mod.widgets.COLOR_BG_DANGER_RED = #FFF0F0
     mod.widgets.COLOR_FG_DISABLED = #B3B3B3
     mod.widgets.COLOR_BG_DISABLED = #E0E0E0
-    mod.widgets.COLOR_INFO_BLUE = #0f88fe
+    // Informational accent — it only ever shared a value with the retired legacy
+    // primary. Now the system's own info blue (literal mirroring RBX_INFO_FG;
+    // see the registration-order note further down), so it stays blue while the
+    // primary moves to teal.
+    mod.widgets.COLOR_INFO_BLUE = #1E6FBF
     mod.widgets.COLOR_WARNING_YELLOW = #fcdb03
     mod.widgets.COLOR_TEXT_WARNING_NOT_FOUND = #953800
 
@@ -222,9 +226,18 @@ script_mod! {
     mod.widgets.COLOR_SECONDARY = #E3E3E3
     mod.widgets.COLOR_SECONDARY_DARKER = #C8C8C8
 
-    mod.widgets.COLOR_ACTIVE_PRIMARY = #0f88fe
+    // The primary/CTA/focus colour. Was the legacy bright blue `#0f88fe`; now the
+    // accent teal, completing the migration design_tokens.rs describes. Every one
+    // of the ~40 call sites means "primary", "active" or "focus", which is
+    // exactly what the accent is defined to be, so they all move together —
+    // migrating a screen at a time would have left blue and teal side by side for
+    // as long as the migration ran.
+    // Literals mirroring RBX_ACCENT / RBX_ACCENT_HOVER: this file is registered
+    // before design_tokens.rs, so `RBX_*` is not resolvable here (see the note on
+    // COLOR_PRIMARY_DARKER above).
+    mod.widgets.COLOR_ACTIVE_PRIMARY = #119FB3
 
-    mod.widgets.COLOR_ACTIVE_PRIMARY_DARKER = #106fcc
+    mod.widgets.COLOR_ACTIVE_PRIMARY_DARKER = #0E8C9E
 
     mod.widgets.COLOR_BG_PREVIEW = #F0F5FF
 
@@ -391,10 +404,11 @@ script_mod! {
 
 /// #FFFFFF
 pub const COLOR_PRIMARY:               Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
-/// #0F88FE
-pub const COLOR_ACTIVE_PRIMARY:        Vec4 = vec4(0.059, 0.533, 0.996, 1.0);
-/// #106FCC
-pub const COLOR_ACTIVE_PRIMARY_DARKER: Vec4 = vec4(0.063, 0.435, 0.682, 1.0);
+/// The primary/CTA/focus colour, now the accent teal (was the legacy `#0F88FE`).
+/// The Rust side has no registration-order constraint, so it names the tokens
+/// directly and stays tied to the DSL literals above by construction.
+pub const COLOR_ACTIVE_PRIMARY:        Vec4 = crate::shared::design_tokens::RBX_ACCENT;
+pub const COLOR_ACTIVE_PRIMARY_DARKER: Vec4 = crate::shared::design_tokens::RBX_ACCENT_HOVER;
 /// #138808
 pub const COLOR_FG_ACCEPT_GREEN:       Vec4 = vec4(0.074, 0.533, 0.031, 1.0);
 /// #F0FFF0

@@ -24,13 +24,15 @@
 //! - `RBX_FOCUS_*`   keyboard-nav focus ring
 //! - `RBX_TEXT_*`    type-scale `TextStyle` presets
 //!
-//! ## Primary color migration
-//! The legacy primary is the bright blue `COLOR_ACTIVE_PRIMARY` (#0F88FE) in
-//! `styles.rs`, used across ~80 existing call sites. The new visual language uses
-//! the teal `RBX_ACCENT` (#119FB3) as the single primary/CTA/focus color. New UI
-//! MUST use `RBX_ACCENT`; legacy blue is deprecated and migrated per surface as
-//! §5 refactors land (see spec §3 "Primary 迁移"). `RBX_LEGACY_BLUE` names the old
-//! value only so migrations can reference it explicitly.
+//! ## Primary color migration — done
+//! The teal `RBX_ACCENT` (#119FB3) is the single primary/CTA/focus color, and
+//! `COLOR_ACTIVE_PRIMARY` in `styles.rs` now resolves to it, so the ~40 remaining
+//! call sites moved together rather than a screen at a time — every one of them
+//! means "primary", "active" or "focus", and staging them would only have grown
+//! the stretch where blue and teal sat side by side. New UI should still name
+//! `RBX_ACCENT` directly; `COLOR_ACTIVE_PRIMARY` survives as a compatibility
+//! alias for the call sites that have not been renamed yet.
+//! `RBX_LEGACY_BLUE` records the retired #0F88FE and now has no users.
 //!
 //! Tokens are registered into the global `mod.widgets.*` namespace (so any other
 //! `script_mod!` block can read them via `(RBX_TOKEN)` after `use mod.widgets.*`).
