@@ -36,7 +36,7 @@ use matrix_sdk_ui::{
     RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails, default_event_filter}
 };
 use robius_open::Uri;
-use ruma::{OwnedRoomOrAliasId, RoomId, events::tag::Tags};
+use ruma::{OwnedRoomOrAliasId, OwnedTransactionId, RoomId, events::tag::Tags};
 use tokio::{
     runtime::Handle,
     sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
@@ -1614,6 +1614,14 @@ pub enum MatrixRequest {
         timeline_kind: TimelineKind,
         timeline_event_id: TimelineEventItemId,
         reason: Option<String>,
+    },
+    /// Retry a message whose send failed and was parked.
+    ///
+    /// Carries the transaction id rather than a `SendHandle`, because the handle
+    /// is not available on the UI thread — the worker looks the item back up.
+    RetrySend {
+        timeline_kind: TimelineKind,
+        transaction_id: OwnedTransactionId,
     },
     /// Pin or unpin the given event in the given room.
     #[doc(alias("unpin"))]
@@ -5643,6 +5651,47 @@ async fn matrix_worker_task(
                     }
                 });
             },
+
+            MatrixRequest::RetrySend { timeline_kind, transaction_id } => {
+                let Some(timeline) = get_timeline(&timeline_kind) else {
+                    log!("BUG: {timeline_kind} not found for retry send request");
+                    continue;
+                };
+
+                let _retry_task = Handle::current().spawn(async move {
+                    // Waking the queue is not enough on its own: the send loop
+                    // re-reads the room's `locally_enabled` flag, which the
+                    // failure switched off, and parks again. Turn it back on
+                    // first, then unwedge this specific message.
+                    timeline.room().client().send_queue().set_enabled(true).await;
+
+                    // `Timeline` has no lookup by transaction id, so find the
+                    // item and take its handle. The list is short and this only
+                    // runs on an explicit click.
+                    let handle = timeline.items().await.iter().find_map(|item| {
+                        let event = item.as_event()?;
+                        (event.transaction_id() == Some(&transaction_id))
+                            .then(|| event.local_echo_send_handle())
+                            .flatten()
+                    });
+                    let Some(handle) = handle else {
+                        log!("Could not find a local echo to retry in {timeline_kind}; \
+                              the send queue was re-enabled anyway.");
+                        return;
+                    };
+                    match handle.unwedge().await {
+                        Ok(()) => log!("Retrying a failed send in {timeline_kind}."),
+                        Err(e) => {
+                            error!("Failed to retry a send in {timeline_kind}; error: {e:?}");
+                            enqueue_popup_notification(
+                                format!("Could not retry sending the message. Error: {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                        }
+                    }
+                });
+            }
 
             MatrixRequest::RedactMessage { timeline_kind, timeline_event_id, reason } => {
                 let Some(timeline) = get_timeline(&timeline_kind) else {
