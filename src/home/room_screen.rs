@@ -21,7 +21,7 @@ use matrix_sdk::{
     }
 };
 use matrix_sdk_ui::timeline::{
-    self, EmbeddedEvent, EncryptedMessage, EventTimelineItem, InReplyToDetails, LiveLocationState, MemberProfileChange, MembershipChange, MsgLikeContent, MsgLikeKind, OtherMessageLike, PollState, RoomMembershipChange, TimelineDetails, TimelineEventItemId, TimelineItem, TimelineItemContent, TimelineItemKind, VirtualTimelineItem
+    self, EmbeddedEvent, EncryptedMessage, EventSendState, EventTimelineItem, InReplyToDetails, LiveLocationState, MemberProfileChange, MembershipChange, MsgLikeContent, MsgLikeKind, OtherMessageLike, PollState, RoomMembershipChange, TimelineDetails, TimelineEventItemId, TimelineItem, TimelineItemContent, TimelineItemKind, VirtualTimelineItem
 };
 use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent}};
 
@@ -250,6 +250,70 @@ impl AgentReplyKind {
             Self::Reply => "reply",
             Self::Inform => "info",
         }
+    }
+}
+
+/// How a message's delivery should be shown in the timeline.
+///
+/// Only messages sent through the send queue have a delivery state at all — a
+/// remote event that arrived over sync has none, and neither do the paths that
+/// bypass the queue (`Room::send_raw`, used for agent-chat/octos routing, and
+/// `send_attachment`). Those all render exactly as before.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MessageDeliveryState {
+    /// In flight. Normally lasts a couple of hundred milliseconds.
+    Sending,
+    /// Failed, but the queue will retry once connectivity returns.
+    FailedRetrying,
+    /// Failed and parked: it will not move again until the user acts.
+    FailedWedged { reason: String },
+}
+
+impl MessageDeliveryState {
+    /// Reads the delivery state of a timeline item, or `None` when the message
+    /// has none to show (already delivered, or never went through the queue).
+    fn from_item(item: &EventTimelineItem) -> Option<Self> {
+        match item.send_state()? {
+            EventSendState::NotSentYet { .. } => Some(Self::Sending),
+            // `Sent` still describes a local echo, but one the server has
+            // accepted — indistinguishable from delivered, so show nothing.
+            EventSendState::Sent { .. } => None,
+            EventSendState::SendingFailed { error, is_recoverable } => {
+                if *is_recoverable {
+                    Some(Self::FailedRetrying)
+                } else {
+                    Some(Self::FailedWedged {
+                        reason: wedge_error_reason(error),
+                    })
+                }
+            }
+        }
+    }
+}
+
+/// A short, human-readable reason for a send that is parked and needs the user.
+///
+/// `matrix_sdk::Error` is `#[non_exhaustive]`, so the outer match keeps a
+/// fallback arm; `QueueWedgeError` is not, and is matched exhaustively so a new
+/// SDK variant becomes a compile error here rather than a silently generic
+/// message.
+fn wedge_error_reason(error: &matrix_sdk::Error) -> String {
+    use matrix_sdk::store::QueueWedgeError;
+    match error {
+        matrix_sdk::Error::SendQueueWedgeError(wedge) => match wedge.as_ref() {
+            QueueWedgeError::InsecureDevices { .. } =>
+                "Some devices in this room are unverified".to_string(),
+            QueueWedgeError::IdentityViolations { .. } =>
+                "A member's verified identity has changed".to_string(),
+            QueueWedgeError::CrossVerificationRequired =>
+                "This session must be verified before sending".to_string(),
+            QueueWedgeError::MissingMediaContent =>
+                "The attachment is no longer available".to_string(),
+            QueueWedgeError::InvalidMimeType { mime_type } =>
+                format!("Unsupported attachment type: {mime_type}"),
+            QueueWedgeError::GenericApiError { msg } => msg.clone(),
+        },
+        other => other.to_string(),
     }
 }
 
@@ -2553,12 +2617,120 @@ script_mod! {
     // its whole `body` subtree with `:=`, so it cannot inherit this from Message.
     // (Named MessageMetaBand to avoid colliding with the retired floating
     // MessageActionBar popup referenced in a commented-out block below.)
+    // Shown under a message whose send is parked and will not move again on its
+    // own: why it failed, and the two ways out. Declared once and instantiated
+    // by both message templates, like MessageDownloadSection.
+    mod.widgets.SendFailureSection = View {
+        visible: false
+        width: Fill,
+        height: Fit
+        flow: Down,
+        spacing: (SPACE_XS)
+        margin: Inset{ top: 4.0, bottom: 2.0 }
+
+        send_failure_reason := Label {
+            width: Fill,
+            height: Fit
+            flow: Flow.Right{wrap: true}
+            draw_text +: {
+                text_style: RBX_TEXT_META {}
+                color: (RBX_DANGER_FG)
+            }
+            text: ""
+        }
+
+        send_failure_actions := View {
+            width: Fill,
+            height: Fit
+            flow: Right,
+            spacing: (SPACE_XS)
+
+            send_retry_button := RobrixIconButton {
+                width: Fit, height: Fit
+                padding: Inset{left: 10.0, right: 10.0, top: 4.0, bottom: 4.0}
+                draw_bg +: {
+                    color: (RBX_ACCENT_SOFT)
+                    color_hover: (RBX_ACCENT_SOFT)
+                    color_down: (RBX_BG_PRESSED)
+                    border_radius: (RBX_RADIUS_MD)
+                    border_size: 1.0
+                    border_color: (RBX_ACCENT)
+                    border_color_hover: (RBX_ACCENT)
+                    border_color_down: (RBX_ACCENT)
+                }
+                draw_text +: {
+                    text_style: (RBX_TEXT_META)
+                    color: (RBX_ACCENT)
+                    color_hover: (RBX_ACCENT)
+                    color_down: (RBX_ACCENT)
+                    color_focus: (RBX_ACCENT)
+                }
+                draw_icon +: { svg: (ICON_SEND), color: (RBX_ACCENT) }
+                icon_walk: Walk{width: 12, height: 12}
+                text: "Retry"
+            }
+
+            send_discard_button := RobrixIconButton {
+                width: Fit, height: Fit
+                padding: Inset{left: 10.0, right: 10.0, top: 4.0, bottom: 4.0}
+                draw_bg +: {
+                    color: (RBX_DANGER_BG)
+                    color_hover: (RBX_DANGER_BG)
+                    color_down: (RBX_BG_PRESSED)
+                    border_radius: (RBX_RADIUS_MD)
+                    border_size: 1.0
+                    border_color: (RBX_DANGER_FG)
+                    border_color_hover: (RBX_DANGER_FG)
+                    border_color_down: (RBX_DANGER_FG)
+                }
+                draw_text +: {
+                    text_style: (RBX_TEXT_META)
+                    color: (RBX_DANGER_FG)
+                    color_hover: (RBX_DANGER_FG)
+                    color_down: (RBX_DANGER_FG)
+                    color_focus: (RBX_DANGER_FG)
+                }
+                draw_icon +: { svg: (ICON_TRASH), color: (RBX_DANGER_FG) }
+                icon_walk: Walk{width: 12, height: 12}
+                text: "Discard"
+            }
+        }
+    }
+
+    // Delivery-state pill for a message still in the send queue. Shares the
+    // meta band so it costs no vertical space, and sits next to the read
+    // receipts — both answer "did this message land?".
+    mod.widgets.SendStatePill = RoundedView {
+        visible: false
+        width: Fit,
+        height: Fit
+        padding: Inset{ left: 6.0, right: 6.0, top: 1.0, bottom: 1.0 }
+        show_bg: true
+        draw_bg +: {
+            color: (RBX_NEUTRAL_BG)
+            border_radius: (RBX_RADIUS_PILL)
+        }
+
+        send_state_label := Label {
+            width: Fit,
+            height: Fit
+            padding: 0
+            draw_text +: {
+                text_style: RBX_TEXT_META {}
+                color: (RBX_NEUTRAL_FG)
+            }
+            text: ""
+        }
+    }
+
     mod.widgets.MessageMetaBand = View {
         width: Fill,
         height: Fit
         flow: Right,
         align: Align{y: 0.5}
         spacing: (SPACE_XS)
+
+        send_state_pill := mod.widgets.SendStatePill {}
 
         // Message-type badge (request / reply / info) for bridge-relayed agent
         // messages, derived from the leading emoji marker the bridge stamps on
@@ -2924,6 +3096,7 @@ script_mod! {
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
                 download_section := mod.widgets.MessageDownloadSection {}
+                send_failure_section := mod.widgets.SendFailureSection {}
                 message_action_bar := mod.widgets.MessageMetaBand {}
                 View {
                     width: Fill,
@@ -3103,6 +3276,7 @@ script_mod! {
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
                 download_section := mod.widgets.MessageDownloadSection {}
+                send_failure_section := mod.widgets.SendFailureSection {}
                 message_action_bar := mod.widgets.MessageMetaBand {}
                 View {
                     width: Fill,
@@ -3195,6 +3369,7 @@ script_mod! {
                     } }
                 }
                 download_section := mod.widgets.MessageDownloadSection {}
+                send_failure_section := mod.widgets.SendFailureSection {}
                 animated_message := mod.widgets.AnimatedImage { visible: false }
                 View {
                     width: Fill,
@@ -3223,6 +3398,7 @@ script_mod! {
                     } }
                 }
                 download_section := mod.widgets.MessageDownloadSection {}
+                send_failure_section := mod.widgets.SendFailureSection {}
                 animated_message := mod.widgets.AnimatedImage { visible: false }
                 View {
                     width: Fill,
@@ -6857,6 +7033,20 @@ impl Widget for RoomScreen {
                     continue;
                 }
 
+                // "Retry" / "Discard" on a message whose send is parked.
+                let retry_clicked = wr
+                    .button(cx, ids!(content.send_failure_section.send_failure_actions.send_retry_button))
+                    .clicked(actions);
+                let discard_clicked = wr
+                    .button(cx, ids!(content.send_failure_section.send_failure_actions.send_discard_button))
+                    .clicked(actions);
+                if retry_clicked || discard_clicked {
+                    if let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) {
+                        self.act_on_failed_send(cx, tl_idx, retry_clicked);
+                    }
+                    continue;
+                }
+
                 // Handle the invite_user_button (in a SmallStateEvent) being clicked.
                 if wr.button(cx, ids!(event_row.invite_user_button)).clicked(actions) {
                     let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) else { continue };
@@ -8198,6 +8388,32 @@ impl RoomScreen {
     /// Folds/unfolds the long bot reply at `tl_idx`, keyed by its event ID so the
     /// choice survives PortalList recycling. Invalidates that item's content-draw
     /// cache so the body re-populates at its new length.
+    /// Retries or discards the parked send at `tl_idx`.
+    ///
+    /// Discard reuses `RedactMessage`: for a local echo the SDK's `redact`
+    /// aborts the queued send rather than sending a redaction, so no separate
+    /// request is needed.
+    fn act_on_failed_send(&mut self, _cx: &mut Cx, tl_idx: usize, retry: bool) {
+        let Some(tl_state) = self.tl_state.as_ref() else { return };
+        let Some(event) = tl_state.items.get(tl_idx).and_then(|item| item.as_event()) else {
+            return;
+        };
+        let timeline_kind = tl_state.kind.clone();
+        if retry {
+            let Some(transaction_id) = event.transaction_id().map(|id| id.to_owned()) else {
+                log!("BUG: retry requested for an item with no transaction id.");
+                return;
+            };
+            submit_async_request(MatrixRequest::RetrySend { timeline_kind, transaction_id });
+        } else {
+            submit_async_request(MatrixRequest::RedactMessage {
+                timeline_kind,
+                timeline_event_id: event.identifier(),
+                reason: None,
+            });
+        }
+    }
+
     fn toggle_bot_body_expanded(&mut self, cx: &mut Cx, tl_idx: usize) {
         let Some(tl_state) = self.tl_state.as_mut() else { return };
         let Some(event_id) = tl_state
@@ -13203,6 +13419,7 @@ fn populate_message_view(
             show_copy_button,
         );
         item.as_message().set_band_metadata(cx, band_metadata);
+        populate_send_state(cx, &item, event_tl_item);
 
         let has_action_payload = event_raw_json_contains_any(
             event_tl_item,
@@ -13452,6 +13669,62 @@ fn populate_bot_badge_identity(cx: &mut Cx, item: &WidgetRef, sender_localpart: 
         script_apply_eval!(cx, label, {
             draw_text +: { color: (mod.widgets.RBX_NEUTRAL_FG) }
         });
+    }
+}
+
+/// Renders a message's delivery state: a pill in the meta band, plus the reason
+/// and the two recovery actions when the send is parked for good.
+///
+/// Every widget is written on every call, never only on the branch that needs
+/// it. These item widgets are recycled by the PortalList, so a pill left visible
+/// would reappear under an unrelated message.
+fn populate_send_state(cx: &mut Cx, item: &WidgetRef, event_tl_item: &EventTimelineItem) {
+    let state = MessageDeliveryState::from_item(event_tl_item);
+
+    let pill = item.view(cx, ids!(content.message_action_bar.send_state_pill));
+    let failure = item.view(cx, ids!(content.send_failure_section));
+
+    let (pill_text, pill_bg, pill_fg) = match &state {
+        Some(MessageDeliveryState::Sending) => (
+            "Sending",
+            crate::shared::design_tokens::RBX_NEUTRAL_BG,
+            crate::shared::design_tokens::RBX_NEUTRAL_FG,
+        ),
+        Some(MessageDeliveryState::FailedRetrying) => (
+            "Waiting to retry",
+            crate::shared::design_tokens::RBX_WARNING_BG,
+            crate::shared::design_tokens::RBX_WARNING_FG,
+        ),
+        Some(MessageDeliveryState::FailedWedged { .. }) => (
+            "Not sent",
+            crate::shared::design_tokens::RBX_DANGER_BG,
+            crate::shared::design_tokens::RBX_DANGER_FG,
+        ),
+        None => ("", crate::shared::design_tokens::RBX_NEUTRAL_BG, crate::shared::design_tokens::RBX_NEUTRAL_FG),
+    };
+
+    pill.set_visible(cx, state.is_some());
+    if state.is_some() {
+        item.label(cx, ids!(content.message_action_bar.send_state_pill.send_state_label))
+            .set_text(cx, pill_text);
+        let mut pill_view = pill;
+        script_apply_eval!(cx, pill_view, {
+            draw_bg +: { color: #(pill_bg) }
+        });
+        let mut pill_label =
+            item.label(cx, ids!(content.message_action_bar.send_state_pill.send_state_label));
+        script_apply_eval!(cx, pill_label, {
+            draw_text +: { color: #(pill_fg) }
+        });
+    }
+
+    match &state {
+        Some(MessageDeliveryState::FailedWedged { reason }) => {
+            failure.set_visible(cx, true);
+            item.label(cx, ids!(content.send_failure_section.send_failure_reason))
+                .set_text(cx, reason);
+        }
+        _ => failure.set_visible(cx, false),
     }
 }
 
