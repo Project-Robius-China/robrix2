@@ -419,8 +419,16 @@ impl LinkPreviewRef {
         if let Some(description) = &link_preview_data.description {
             let mut description = description.clone();
             description = description.replace("\n\n", " ");
-            let truncated_description = if description.len() > MAX_DESCRIPTION_LENGTH {
-                format!("{}...", &description[..(MAX_DESCRIPTION_LENGTH - 3)])
+            // Truncate by characters, not bytes. `MAX_DESCRIPTION_LENGTH` counted
+            // bytes and the slice cut at a fixed byte offset, which panics
+            // whenever that offset lands inside a multi-byte character — routine
+            // for any description mixing CJK with ASCII.
+            let truncated_description = if description.chars().count() > MAX_DESCRIPTION_LENGTH {
+                let head: String = description
+                    .chars()
+                    .take(MAX_DESCRIPTION_LENGTH - 3)
+                    .collect();
+                format!("{head}...")
             } else {
                 description
             };
@@ -803,4 +811,45 @@ fn insert_into_cache(
         let _ = sender.send(TimelineUpdate::LinkPreviewFetched);
     }
     SignalToUI::set_ui_signal();
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::MAX_DESCRIPTION_LENGTH;
+
+    /// Mirrors the truncation in `populate_view`. The previous byte-slice form
+    /// panicked whenever byte `MAX_DESCRIPTION_LENGTH - 3` landed inside a
+    /// multi-byte character.
+    fn truncate(description: String) -> String {
+        if description.chars().count() > MAX_DESCRIPTION_LENGTH {
+            let head: String = description.chars().take(MAX_DESCRIPTION_LENGTH - 3).collect();
+            format!("{head}...")
+        } else {
+            description
+        }
+    }
+
+    #[test]
+    fn mixed_script_description_does_not_panic() {
+        // The byte offset lands mid-character for this mix — the old code panicked.
+        let d = "Robrix 是一个 Matrix 客户端,支持多 agent 协作工作流。".repeat(6);
+        assert!(!d.is_char_boundary(MAX_DESCRIPTION_LENGTH - 3));
+        let out = truncate(d);
+        assert!(out.ends_with("..."));
+        assert_eq!(out.chars().count(), MAX_DESCRIPTION_LENGTH);
+    }
+
+    #[test]
+    fn cjk_and_emoji_truncate_by_characters() {
+        for d in ["中文描述内容测试".repeat(40), "📋 项目说明 mixed ".repeat(30)] {
+            let out = truncate(d);
+            assert_eq!(out.chars().count(), MAX_DESCRIPTION_LENGTH);
+        }
+    }
+
+    #[test]
+    fn short_description_is_untouched() {
+        let d = "短描述".to_string();
+        assert_eq!(truncate(d.clone()), d);
+    }
 }

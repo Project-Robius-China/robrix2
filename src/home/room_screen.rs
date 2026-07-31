@@ -2856,7 +2856,14 @@ script_mod! {
                                 padding: Inset{ left: 0.0, right: 6.0, top: 0.0, bottom: 0.0 }
                                 draw_text +: {
                                     text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                    // The base widget only defines color/hover/down,
+                                    // so an unset focus colour turned the label white
+                                    // the moment a click focused it, until a later
+                                    // redraw happened to reset the state.
                                     color: (mod.widgets.RBX_ACCENT)
+                                    color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+                                    color_down: (mod.widgets.RBX_ACCENT_PRESSED)
+                                    color_focus: (mod.widgets.RBX_ACCENT)
                                 }
                                 text: ""
                             }
@@ -2872,7 +2879,14 @@ script_mod! {
                                 spacing: 0
                                 draw_text +: {
                                     text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                    // The base widget only defines color/hover/down,
+                                    // so an unset focus colour turned the label white
+                                    // the moment a click focused it, until a later
+                                    // redraw happened to reset the state.
                                     color: (mod.widgets.RBX_ACCENT)
+                                    color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+                                    color_down: (mod.widgets.RBX_ACCENT_PRESSED)
+                                    color_focus: (mod.widgets.RBX_ACCENT)
                                 }
                                 text: ""
                             }
@@ -3022,7 +3036,14 @@ script_mod! {
                                 padding: Inset{ left: 0.0, right: 6.0, top: 0.0, bottom: 0.0 }
                                 draw_text +: {
                                     text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                    // The base widget only defines color/hover/down,
+                                    // so an unset focus colour turned the label white
+                                    // the moment a click focused it, until a later
+                                    // redraw happened to reset the state.
                                     color: (mod.widgets.RBX_ACCENT)
+                                    color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+                                    color_down: (mod.widgets.RBX_ACCENT_PRESSED)
+                                    color_focus: (mod.widgets.RBX_ACCENT)
                                 }
                                 text: ""
                             }
@@ -3038,7 +3059,14 @@ script_mod! {
                                 spacing: 0
                                 draw_text +: {
                                     text_style: mod.widgets.MESSAGE_TEXT_STYLE { font_size: 9.5 }
+                                    // The base widget only defines color/hover/down,
+                                    // so an unset focus colour turned the label white
+                                    // the moment a click focused it, until a later
+                                    // redraw happened to reset the state.
                                     color: (mod.widgets.RBX_ACCENT)
+                                    color_hover: (mod.widgets.RBX_ACCENT_HOVER)
+                                    color_down: (mod.widgets.RBX_ACCENT_PRESSED)
+                                    color_focus: (mod.widgets.RBX_ACCENT)
                                 }
                                 text: ""
                             }
@@ -12564,6 +12592,7 @@ fn populate_message_view(
                                 Some(link_preview_cache),
                                 sender_is_bot(),
                                 bot_body_expanded,
+                                true,  // streaming
                             );
                             band_metadata = stream_meta;
                             new_drawn_status.content_drawn = false; // force re-render
@@ -12604,6 +12633,7 @@ fn populate_message_view(
                                     Some(link_preview_cache),
                                     sender_is_bot(),
                                     bot_body_expanded,
+                                    false,
                                 );
                                 new_drawn_status.content_drawn = bot_drawn;
                                 band_metadata = bot_meta;
@@ -12660,6 +12690,7 @@ fn populate_message_view(
                             Some(link_preview_cache),
                             sender_is_bot(),
                             bot_body_expanded,
+                            false,
                         );
                         new_drawn_status.content_drawn = bot_drawn;
                         band_metadata = bot_meta;
@@ -12673,6 +12704,7 @@ fn populate_message_view(
                     if existed && item_drawn_status.content_drawn {
                         (item, true)
                     } else {
+                        reset_bot_message_card(cx, &item);
                         let html_or_plaintext_ref = item.html_or_plaintext(cx, ids!(content.message));
                         // Apply red color to all text styles for server notices.
                         let mut html_widget = html_or_plaintext_ref.html(cx, ids!(html_view.html));
@@ -13050,6 +13082,7 @@ fn populate_message_view(
             if existed && item_drawn_status.content_drawn {
                 (item, true)
             } else {
+                reset_bot_message_card(cx, &item);
                 item.label(cx, ids!(content.message)).set_text(
                     cx,
                     &format!("{} {:?} ", tr_key(app_language, "room_screen.unsupported.prefix"), other),
@@ -13422,6 +13455,19 @@ fn populate_bot_badge_identity(cx: &mut Cx, item: &WidgetRef, sender_localpart: 
     }
 }
 
+/// Puts a `Message` item back into its plain (non-bot-card) state.
+///
+/// `populate_bot_text_message_content` is the only code that flips these two
+/// visibilities, and it only runs on the text/notice path. The PortalList hands
+/// the *same* `Message` widget to the server-notice and unsupported/redacted
+/// paths as well, so a slot that previously held a bot reply would keep drawing
+/// that reply's card while the new content sat hidden underneath it. Every
+/// branch that renders into `content.message` must call this first.
+fn reset_bot_message_card(cx: &mut Cx, item: &WidgetRef) {
+    item.view(cx, ids!(content.bot_message_card)).set_visible(cx, false);
+    item.html_or_plaintext(cx, ids!(content.message)).set_visible(cx, true);
+}
+
 fn populate_bot_text_message_content(
     cx: &mut Cx,
     item: &WidgetRef,
@@ -13434,6 +13480,8 @@ fn populate_bot_text_message_content(
     link_preview_cache: Option<&mut LinkPreviewCache>,
     is_bot_sender: bool,
     bot_body_expanded: bool,
+    // True while the body is still being streamed in; suppresses folding.
+    is_streaming: bool,
 ) -> (bool, Option<String>) {
     let render_state = compute_bot_timeline_render_state(body, is_bot_sender);
     let bot_card_view = item.view(cx, ids!(content.bot_message_card));
@@ -13501,13 +13549,19 @@ fn populate_bot_text_message_content(
     // Fold state: a long body renders its preview until the user expands it.
     // `folded_body` is `None` for short bodies, so the toggle stays hidden and
     // the full text renders exactly as before.
-    let is_folded = render_state.folded_body.is_some() && !bot_body_expanded;
+    //
+    // A streaming reply is never folded. Its body grows on every frame, so the
+    // moment it crosses the threshold the text the user is watching appear would
+    // collapse to three lines and take the typewriter cursor with it — the reply
+    // reads as having stalled. Folding applies once the message has settled.
+    let foldable = render_state.folded_body.is_some() && !is_streaming;
+    let is_folded = foldable && !bot_body_expanded;
     let fold_toggle = item.button(
         cx,
         ids!(content.bot_message_card.bot_body_card.bot_card_footer_row.bot_body_fold_toggle),
     );
-    fold_toggle.set_visible(cx, render_state.folded_body.is_some());
-    if render_state.folded_body.is_some() {
+    fold_toggle.set_visible(cx, foldable);
+    if foldable {
         fold_toggle.set_text(cx, if is_folded { "Show more" } else { "Show less" });
     }
 
