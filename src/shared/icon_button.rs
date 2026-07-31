@@ -15,10 +15,23 @@ script_mod! {
         padding: 10,
         align: Align{x: 0, y: 0.5}
 
-        // Disable focus visual styling entirely so that clicking a button
-        // and hovering away doesn't leave it stuck on the theme's focus color.
-        // This works by keeping the `focus` uniform at 0.0 in both on/off states,
-        // so the shader's `mix(color, color_focus, focus)` always evaluates to just `color`.
+        // A mouse click must not leave the button wearing the focus ring.
+        //
+        // `Button` grabs key focus on `FingerDown` when `grab_key_focus` is set,
+        // which fires the same `Hit::KeyFocus` a Tab press does — so a click used
+        // to light the ring and leave it lit after the pointer moved away. This
+        // was previously worked around by pinning the `focus` uniform to 0.0 in
+        // both animator states, which also meant keyboard users never saw a ring
+        // at all: `RBX_FOCUS_RING` had no readers anywhere in the app.
+        //
+        // Not grabbing focus on click removes the cause instead of the symptom.
+        // The animator can then do its job, and the ring appears only when focus
+        // arrives by keyboard — the behaviour CSS calls `:focus-visible`.
+        grab_key_focus: false
+
+        // Focus ring: a 2px accent outline, drawn on top of whatever border the
+        // variant already has (spec §7.1). Text colour is left alone — the ring
+        // carries the signal.
         animator +: {
             focus: {
                 default: @off
@@ -26,14 +39,12 @@ script_mod! {
                     from: {all: Forward {duration: 0.0}}
                     apply: {
                         draw_bg: {focus: 0.0}
-                        draw_text: {focus: 0.0}
                     }
                 }
                 on: AnimatorState {
                     from: {all: Forward {duration: 0.0}}
                     apply: {
-                        draw_bg: {focus: 0.0}
-                        draw_text: {focus: 0.0}
+                        draw_bg: {focus: 1.0}
                     }
                 }
             }
@@ -48,11 +59,23 @@ script_mod! {
             color_down: #0C5DAA
             color_disabled: (COLOR_BG_DISABLED)
 
+            // Keyboard focus shows as the accent ring on variants that already
+            // draw a border, and as a tinted fill on the ones that do not.
+            //
+            // The ring cannot simply be switched on for every button: the shader
+            // insets its box by `border_size` (`sdf.box(border_size, border_size,
+            // w - 2*border_size, …)`), so giving the flat variants a width just
+            // for focus would shrink every button by 4px. `border_size` is also a
+            // scalar the shader never mixes by `focus`, so it cannot be animated
+            // per-state without overriding the 130-odd call sites that set their
+            // own. Tinting the fill is the part that works everywhere.
             border_color: #0000
             border_color_hover: #0000
             border_color_down: #0000
-            border_color_focus: #0000
+            border_color_focus: (RBX_FOCUS_RING)
             border_color_disabled: #0000
+
+            color_focus: (RBX_FOCUS_TINT)
 
             // Disable gradient (color_2) by default
             color_2: vec4(-1.0, -1.0, -1.0, -1.0)

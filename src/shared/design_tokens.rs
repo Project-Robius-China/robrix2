@@ -203,12 +203,15 @@ script_mod! {
     mod.widgets.RBX_SHADOW_STRONG = #x16233B40
 
     // =========================================================================
-    // 10. FOCUS — keyboard-navigation focus ring (== accent). Robrix currently
-    //     disables button focus visuals; new interactive components should opt
-    //     in to a visible ring for accessibility (spec §7.1).
+    // 10. FOCUS — keyboard-navigation focus indication (== accent), spec §7.1.
+    //     RING/WIDTH are for components that draw their own border and can turn
+    //     it accent on focus. TINT is the fallback for flat controls: the button
+    //     shader insets its box by `border_size`, so switching a border on just
+    //     for focus would resize the control — a tinted fill does not.
     // =========================================================================
     mod.widgets.RBX_FOCUS_RING  = #x119FB3
     mod.widgets.RBX_FOCUS_WIDTH = 2.0
+    mod.widgets.RBX_FOCUS_TINT  = #x0E8C9E
 
     // =========================================================================
     // 11. RADIUS scale — bigger & softer than the legacy RADIUS_* (4/6/8).
