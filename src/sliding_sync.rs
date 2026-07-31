@@ -6490,6 +6490,30 @@ pub fn set_sync_service_desired_running(running: bool, reason: &'static str) {
     rt_handle.spawn(apply_sync_service_desired_state(reason));
 }
 
+/// Re-enables the client's send queue.
+///
+/// The SDK disables a room's send queue after *any* send error — recoverable or
+/// not (`send_queue/mod.rs`: "Disable the queue for this room after any kind of
+/// error happened") — and never re-enables it on its own: there is no
+/// `locally_enabled.store(true)` anywhere in the SDK. The only way back is this
+/// call, so without it a single failed send leaves that room's queue asleep for
+/// the rest of the process. Messages then pile up as local echoes that are never
+/// sent, and the timeline draws them exactly like delivered ones.
+///
+/// `SendQueue::set_enabled(true)` is client-wide: it flips the global flag, wakes
+/// every room the client already knows about, and respawns tasks for rooms that
+/// still hold unsent requests — including ones queued in a previous session.
+///
+/// Called whenever sync (re)starts, which is the app's own signal that it
+/// believes it can talk to the homeserver again.
+async fn reenable_send_queue(reason: &'static str) {
+    let Some(client) = get_client() else { return };
+    if !client.send_queue().is_enabled() {
+        log!("Re-enabling the send queue after it was disabled by a send error ({reason}).");
+    }
+    client.send_queue().set_enabled(true).await;
+}
+
 async fn apply_sync_service_desired_state(reason: &'static str) {
     let _guard = SYNC_SERVICE_LIFECYCLE_LOCK.lock().await;
     loop {
@@ -6506,6 +6530,9 @@ async fn apply_sync_service_desired_state(reason: &'static str) {
         if desired {
             log!("Starting Matrix sync service after lifecycle request ({reason}).");
             sync_service.start().await;
+            // Coming back online is exactly when a queue disabled by an earlier
+            // failure should get another chance.
+            reenable_send_queue(reason).await;
         } else {
             log!("Stopping Matrix sync service after lifecycle request ({reason}).");
             sync_service.stop().await;
@@ -8195,7 +8222,17 @@ fn handle_sync_service_state_subscriber(mut subscriber: Subscriber<sync_service:
                     log!("Ignoring sync service state update after token expiration.");
                     break;
                 }
-                other => Cx::post_action(RoomsListHeaderAction::StateUpdate(other)),
+                other => {
+                    // Reaching `Running` means the client believes it can talk to
+                    // the homeserver again — the moment to revive a send queue an
+                    // earlier failure switched off. The error branch above already
+                    // covers restarts we drive ourselves; this covers the SDK
+                    // recovering on its own.
+                    if matches!(other, sync_service::State::Running) {
+                        reenable_send_queue("sync service running").await;
+                    }
+                    Cx::post_action(RoomsListHeaderAction::StateUpdate(other))
+                }
             }
         }
     });
