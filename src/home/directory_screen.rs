@@ -195,7 +195,7 @@ script_mod! {
             align: Align{y: 0.5}
             spacing: (SPACE_SM)
 
-            back_button := DirectoryGhostIconButton {
+            back_button := mod.widgets.DirectoryGhostIconButton {
                 padding: (SPACE_SM)
                 draw_icon.svg: (ICON_ARROW_BACK)
                 icon_walk: Walk{width: 18, height: 18}
@@ -276,7 +276,7 @@ script_mod! {
                 }
             }
 
-            clear_button := DirectoryGhostIconButton {
+            clear_button := mod.widgets.DirectoryGhostIconButton {
                 visible: false
                 padding: Inset{top: 7, bottom: 7, left: 7, right: 7}
                 draw_icon.svg: (ICON_CLOSE)
