@@ -26,6 +26,30 @@ script_mod! {
         height: 55
         flow: Overlay
 
+        // Keyboard selection highlight. Driven by an Animator over a shader
+        // instance rather than `script_apply_eval!`, which does nothing on
+        // widgets the FlatList builds from a template (pitfall #40).
+        show_bg: true
+        draw_bg +: {
+            selected: instance(0.0)
+            fn pixel(self) -> vec4 {
+                return mix(#0000, (RBX_BG_SELECTED), self.selected)
+            }
+        }
+        animator: Animator {
+            highlight: {
+                default: @off
+                off: AnimatorState {
+                    from: {all: Forward {duration: 0.0}}
+                    apply: { draw_bg: {selected: 0.0} }
+                }
+                on: AnimatorState {
+                    from: {all: Forward {duration: 0.0}}
+                    apply: { draw_bg: {selected: 1.0} }
+                }
+            }
+        }
+
         row := View {
             width: Fill
             height: Fill
@@ -248,10 +272,60 @@ impl RoomFilterSearchResultItem {
 pub struct RoomFilterSearchResultsList {
     #[deref] view: View,
     #[rust] results: Vec<RoomFilterResultTarget>,
+    /// Which result the arrow keys have landed on. Reset whenever the result set
+    /// changes, so a stale index cannot survive into a different query.
+    #[rust] selected_index: usize,
+}
+
+impl RoomFilterSearchResultsList {
+    /// Moves the selection by `delta`, clamped to the ends rather than wrapping:
+    /// holding an arrow key should come to rest at the first or last result, not
+    /// cycle past it.
+    fn move_selection(&mut self, cx: &mut Cx, delta: isize) {
+        if self.results.is_empty() {
+            return;
+        }
+        let last = self.results.len().saturating_sub(1);
+        let next = (self.selected_index as isize + delta).clamp(0, last as isize) as usize;
+        if next != self.selected_index {
+            self.selected_index = next;
+            self.view.redraw(cx);
+        }
+    }
+
+    /// Emits the same action a click on the selected row would.
+    fn activate_selection(&self, cx: &mut Cx) {
+        if let Some(target) = self.results.get(self.selected_index) {
+            cx.action(RoomFilterResultAction::Clicked(target.clone()));
+        }
+    }
 }
 
 impl Widget for RoomFilterSearchResultsList {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        // Arrow keys and Return are handled here rather than through the text
+        // input: focus stays in the query field while typing, so the list never
+        // receives a `Hit` of its own. Only Up/Down/Return are claimed — every
+        // other key still reaches the field.
+        if let Event::KeyDown(key) = event {
+            match key.key_code {
+                KeyCode::ArrowDown => {
+                    self.move_selection(cx, 1);
+                    return;
+                }
+                KeyCode::ArrowUp => {
+                    self.move_selection(cx, -1);
+                    return;
+                }
+                KeyCode::ReturnKey | KeyCode::NumpadEnter => {
+                    if !self.results.is_empty() {
+                        self.activate_selection(cx);
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
         self.view.handle_event(cx, event, scope);
     }
 
@@ -265,6 +339,15 @@ impl Widget for RoomFilterSearchResultsList {
             for (index, target) in self.results.iter().enumerate() {
                 let item_id = LiveId(index as u64);
                 let item = list.item(cx, item_id, id!(result_item)).unwrap();
+                // Both states are written every frame, never only the selected
+                // one: these rows are reused by index, so a row left `on` would
+                // stay highlighted after the selection moved elsewhere.
+                let item_view = item.as_view();
+                if index == self.selected_index {
+                    item_view.animator_cut(cx, ids!(highlight.on));
+                } else {
+                    item_view.animator_cut(cx, ids!(highlight.off));
+                }
                 let mut scope = Scope::with_props(target);
                 item.draw_all(cx, &mut scope);
             }
@@ -277,12 +360,16 @@ impl RoomFilterSearchResultsList {
     /// Set the search results to display.
     pub fn set_results(&mut self, cx: &mut Cx, results: Vec<RoomFilterResultTarget>) {
         self.results = results;
+        // A new result set invalidates the old position: index 3 of the previous
+        // query has nothing to do with index 3 of this one.
+        self.selected_index = 0;
         self.view.redraw(cx);
     }
 
     /// Clear all search results.
     pub fn clear(&mut self, cx: &mut Cx) {
         self.results.clear();
+        self.selected_index = 0;
         self.view.redraw(cx);
     }
 
