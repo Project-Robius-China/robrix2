@@ -385,13 +385,22 @@ impl WidgetMatchEvent for NewMessageContextMenu {
         if reaction_send_button.clicked(actions)
             || reaction_text_input.returned(actions).is_some()
         {
-            cx.widget_action(
-                details.room_screen_widget_uid, 
-                MessageAction::React {
-                    details: details.clone(),
-                    reaction: reaction_text_input.text(),
-                },
-            );
+            // Trim before sending. A reaction key is an opaque string to the
+            // server, so " 👍 " and "👍" aggregate as two separate reactions —
+            // stray whitespace silently splits the tally. An all-whitespace
+            // key is worse still: it is a valid event the server accepts and
+            // every client then has to render as an empty pill, so drop it
+            // here rather than publish it.
+            let reaction = reaction_text_input.text().trim().to_string();
+            if !reaction.is_empty() {
+                cx.widget_action(
+                    details.room_screen_widget_uid,
+                    MessageAction::React {
+                        details: details.clone(),
+                        reaction,
+                    },
+                );
+            }
             close_menu = true;
         }
         else if reaction_text_input.escaped(actions) {
