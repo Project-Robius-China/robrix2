@@ -32,7 +32,15 @@ script_mod! {
         show_bg: true
         draw_bg +: {
             selected: instance(0.0)
-            fn pixel(self) -> vec4 {
+            // Property-style `name: fn()`, not 1.x's `fn name(self) -> vec4`,
+            // which the 2.0 DSL rejects with "cannot push to frozen vec" — the
+            // whole `draw_bg` block then fails to apply and the highlight below
+            // never renders.
+            //
+            // Mixing up from a fully transparent base already yields
+            // premultiplied alpha (rgb and alpha both scale by `selected`), so
+            // this must NOT be wrapped in `Pal.premul` a second time.
+            pixel: fn() {
                 return mix(#0000, (RBX_BG_SELECTED), self.selected)
             }
         }
