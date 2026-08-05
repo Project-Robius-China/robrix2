@@ -98,6 +98,11 @@ script_mod! {
     mod.widgets.RBX_ACCENT_PRESSED = #x0B7484
     // Soft accent tint (selected chip bg, highlighted row, focus ring fill).
     mod.widgets.RBX_ACCENT_SOFT    = #xE4F5F7
+    // Drag-selected text highlight. Painted as a translucent quad OVER the
+    // glyphs (TextFlow draws its selection rects after the text), so the alpha
+    // has to stay low enough to read through — a solid ACCENT_SOFT here would
+    // wash the selected words out.
+    mod.widgets.RBX_SELECTION_BG   = #x119FB33D
     // Hyperlink / inline-link color.
     mod.widgets.RBX_LINK           = #x1887C9
     // Hovered link. Same hue, darkened like ACCENT → ACCENT_HOVER, so a link
@@ -335,6 +340,8 @@ pub const RBX_ACCENT_HOVER:      Vec4 = vec4(0.055, 0.549, 0.620, 1.0);
 pub const RBX_ACCENT_PRESSED:    Vec4 = vec4(0.043, 0.455, 0.518, 1.0);
 /// #E4F5F7 — soft accent tint.
 pub const RBX_ACCENT_SOFT:       Vec4 = vec4(0.894, 0.961, 0.969, 1.0);
+/// #119FB33D — drag-selected text highlight (translucent accent).
+pub const RBX_SELECTION_BG:      Vec4 = vec4(0.067, 0.624, 0.702, 0.239);
 /// #1887C9 — link.
 pub const RBX_LINK:              Vec4 = vec4(0.094, 0.529, 0.788, 1.0);
 /// #1577B1 — hovered link (same hue as `RBX_LINK`, darkened).

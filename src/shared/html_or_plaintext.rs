@@ -283,6 +283,39 @@ script_mod! {
             html := mod.widgets.MessageHtml {}
         }
     }
+
+    // A `HtmlOrPlaintext` whose rich-text body can be drag-selected, for use as
+    // the body of a timeline message.
+    //
+    // Selection is opt-in per instance rather than a property of `MessageHtml`,
+    // because of how the selection API resolves a hit. `View` delegates every
+    // `selection_*` call to the FIRST child that reports text, and it does not
+    // skip hidden children; `TextFlow` in turn only clears its
+    // `SelectionTracker` inside `begin()`, which a hidden widget never reaches.
+    // A body that is merely hidden therefore goes on answering hit tests — and
+    // copy — with whatever it was last drawn with.
+    //
+    // So the invariant a timeline item has to keep is not "one selectable
+    // body": it is that **at most one selectable body reports text at a time**.
+    // A `Message` has several (the plain body plus the bot card's three
+    // renderers) and holds to it by drawing the idle ones EMPTY rather than
+    // hiding them, so their trackers reset to zero length. See
+    // `HtmlOrPlaintext::clear_body` and `populate_bot_text_message_content`.
+    // Reply previews, link previews and the like stay on plain
+    // `HtmlOrPlaintext` — they are never the selection's owner.
+    //
+    // NOTE: a body built this way must be filled via `show_html()`, never
+    // `show_plaintext()` — the plaintext path renders into a `Label`, which has
+    // no selection support at all (and, being `is_interactive()` by default,
+    // would also stop the enclosing PortalList from starting a drag there).
+    mod.widgets.SelectableHtmlOrPlaintext = mod.widgets.HtmlOrPlaintext {
+        html_view +: {
+            html +: {
+                selectable: true
+                draw_selection +: { color: (RBX_SELECTION_BG) }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -808,6 +841,24 @@ pub struct HtmlOrPlaintext {
 }
 
 impl Widget for HtmlOrPlaintext {
+    /// `Widget::is_interactive` defaults to `true`, and the `Widget` derive does
+    /// not forward it to the `#[deref]` field the way it forwards the
+    /// `WidgetNode` methods — so without this a `HtmlOrPlaintext` claims to be a
+    /// click target covering the whole message body.
+    ///
+    /// A selectable `PortalList` asks `find_interactive_widget_from_point` where
+    /// the press landed, and refuses to begin a drag-selection over anything
+    /// interactive (that press belongs to the widget). Claiming the body made
+    /// every drag on message text fall through to drag-to-scroll instead: the
+    /// timeline slid under the pointer and no selection was ever created.
+    ///
+    /// This widget adds no interaction of its own — `handle_event` only forwards
+    /// — so it answers with whatever the inner `View` says, which is "only if I
+    /// was given a cursor or an animator".
+    fn is_interactive(&self) -> bool {
+        self.view.is_interactive()
+    }
+
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         self.view.handle_event(cx, event, scope)
     }
@@ -831,6 +882,29 @@ impl HtmlOrPlaintext {
         self.html(cx, ids!(html_view.html)).set_text(cx, body.as_ref());
         self.view(cx, ids!(html_view)).set_visible(cx, true);
         self.view(cx, ids!(plaintext_view)).set_visible(cx, false);
+    }
+
+    /// Empties the body, leaving the widget drawn — and so zero-height —
+    /// rather than hidden.
+    ///
+    /// Use this instead of hiding a body that is [selectable]: `TextFlow` only
+    /// resets its `SelectionTracker` inside `begin()`, which a hidden widget
+    /// never reaches, so a hidden body keeps answering hit tests and copy
+    /// requests with the text it was last drawn with.
+    ///
+    /// Distinct from `show_html("")` because callers run inside the draw pass:
+    /// `Html::set_text` re-parses and calls `redraw()` unconditionally, so
+    /// clearing an already-empty body would repaint the timeline every frame.
+    ///
+    /// [selectable]: `mod.widgets.SelectableHtmlOrPlaintext`
+    pub fn clear_body(&mut self, cx: &mut Cx) {
+        if self.html(cx, ids!(html_view.html)).text().is_empty() {
+            // `set_visible` is change-guarded, so these are free when already set.
+            self.view(cx, ids!(html_view)).set_visible(cx, true);
+            self.view(cx, ids!(plaintext_view)).set_visible(cx, false);
+            return;
+        }
+        self.show_html(cx, "");
     }
 }
 
@@ -945,6 +1019,13 @@ impl HtmlOrPlaintextRef {
     pub fn show_html<T: AsRef<str>>(&self, cx: &mut Cx, html_body: T) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.show_html(cx, html_body);
+        }
+    }
+
+    /// See [`HtmlOrPlaintext::clear_body()`].
+    pub fn clear_body(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.clear_body(cx);
         }
     }
 
