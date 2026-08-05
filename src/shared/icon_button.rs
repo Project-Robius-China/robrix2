@@ -75,7 +75,14 @@ script_mod! {
             border_color_focus: (RBX_FOCUS_RING)
             border_color_disabled: #0000
 
-            color_focus: (RBX_FOCUS_TINT)
+            // A soft wash, not the saturated accent. The shader replaces the
+            // fill outright — `fill = color_fill.mix(color_fill_focus, focus)` —
+            // so on the ghost variants (composer tools, the message copy button)
+            // a solid tint turned the whole button into an accent block with a
+            // grey icon on it: inverted, not outlined. The token itself must stay
+            // opaque, because a translucent one would let the page show through
+            // the solid variants.
+            color_focus: (RBX_ACCENT_SOFT)
 
             // Disable gradient (color_2) by default
             color_2: vec4(-1.0, -1.0, -1.0, -1.0)
@@ -104,6 +111,9 @@ script_mod! {
             color: (COLOR_BG_ACCEPT_GREEN)
             color_hover: #D4EED4
             color_down: #B8E0B8
+            // Focus must not repaint a semantic fill: the ring on the border
+            // carries the signal for this variant.
+            color_focus: (COLOR_BG_ACCEPT_GREEN)
         }
         draw_icon.color: (COLOR_FG_ACCEPT_GREEN)
         draw_text +: {
@@ -122,6 +132,9 @@ script_mod! {
             color: (COLOR_BG_DANGER_RED)
             color_hover: #F0D4D4
             color_down: #E0B8B8
+            // Focus must not repaint a semantic fill: the ring on the border
+            // carries the signal for this variant.
+            color_focus: (COLOR_BG_DANGER_RED)
         }
         draw_icon.color: (COLOR_FG_DANGER_RED)
         draw_text +: {
@@ -140,6 +153,9 @@ script_mod! {
             color: (COLOR_SECONDARY)
             color_hover: #D0D0D0
             color_down: #C0C0C0
+            // Focus must not repaint a semantic fill: the ring on the border
+            // carries the signal for this variant.
+            color_focus: (COLOR_SECONDARY)
         }
         draw_icon.color: (COLOR_TEXT)
         draw_text +: {
@@ -157,6 +173,8 @@ script_mod! {
             color: (RBX_ACCENT)
             color_hover: (RBX_ACCENT_HOVER)
             color_down: (RBX_ACCENT_PRESSED)
+            // Solid accent CTA: keep the fill, the ring shows focus.
+            color_focus: (RBX_ACCENT)
             color_disabled: (RBX_BG_DISABLED)
             border_color: #0000
             border_color_hover: #0000
