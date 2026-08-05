@@ -22,12 +22,14 @@ use crate::{
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, set_room_info_action_modal_open}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
-        JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
+        report_orphaned_join_leave_results, JoinLeaveModalKind, JoinLeaveRoomModalAction,
+        JoinLeaveRoomModalWidgetRefExt
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender, end_account_switch_guard}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
 };
+use crate::shared::keyboard_activation::activate_focused_button;
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
 use crate::shared::video_message_player_modal::WindowFullscreenAction;
@@ -518,11 +520,27 @@ pub struct App {
     /// The room a globally-hosted report modal is currently collecting a reason
     /// for, so `ReportRoomModalAction::Submit` can target the right room.
     #[rust] pending_report_room_id: Option<OwnedRoomId>,
+    /// Join/leave requests whose modal was dismissed before they finished.
+    ///
+    /// `Modal` stops delivering events to its content once closed, so the
+    /// dismissed modal cannot see its own result. It hands the request over
+    /// here instead, and `report_orphaned_join_leave_results` reports the
+    /// outcome by popup from this always-live context.
+    #[rust] orphaned_join_leave: Vec<JoinLeaveModalKind>,
     /// A stack of previously-selected rooms for mobile navigation.
     /// When a view is popped off the stack, the previous `selected_room` is restored from here.
     #[rust] mobile_room_nav_stack: Vec<SelectedRoom>,
     #[rust(Timer::empty())] room_filter_debounce_timer: Timer,
     #[rust] pending_room_filter_keywords: String,
+    /// The last server-side directory search: `(query, results)`.
+    ///
+    /// Local matches are cheap to recompute from the rooms list, but a
+    /// directory search is a network round-trip the user had to ask for by
+    /// hand. Clicking a result closes the modal, and reopening it used to
+    /// rebuild the list from local rooms alone — so the hits vanished and the
+    /// only way back was to run the same search again. Keyed by query so it
+    /// self-invalidates the moment the text changes.
+    #[rust] last_remote_search: Option<(String, Vec<RoomFilterResultTarget>)>,
     #[rust] auto_update_check_started: bool,
     #[rust] skipped_update_version: Option<String>,
     #[rust] update_prompt_versions: Option<(String, String)>,
@@ -814,6 +832,15 @@ impl MatchEvent for App {
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         self.sync_app_language(cx);
+
+        // Results for join/leave requests whose modal was dismissed before they
+        // came back. Handled here rather than in the modal because a closed
+        // `Modal` no longer forwards events to its content.
+        report_orphaned_join_leave_results(
+            self.app_state.app_language,
+            &mut self.orphaned_join_leave,
+            actions,
+        );
 
         // Pre-scan this actions batch for the *types* of events the blocks below
         // care about, before paying for any widget lookups. Casting an action's
@@ -1417,6 +1444,9 @@ impl MatchEvent for App {
                     } else {
                         self.set_room_filter_modal_empty_state(cx, "", false);
                     }
+                    // Remember them so reopening the modal doesn't throw away a
+                    // search the user had to request explicitly.
+                    self.last_remote_search = Some((query.trim().to_owned(), new_results.clone()));
                     search_results_list.set_results(cx, new_results);
                     continue;
                 }
@@ -1784,6 +1814,10 @@ impl MatchEvent for App {
                     if *was_internal {
                         self.ui.modal(cx, ids!(join_leave_modal)).close(cx);
                     }
+                    continue;
+                }
+                Some(JoinLeaveRoomModalAction::DismissedWhilePending(kind)) => {
+                    self.orphaned_join_leave.push(kind.clone());
                     continue;
                 }
                 _ => {}
@@ -2341,6 +2375,11 @@ impl AppMain for App {
 
         self.handle_ui_zoom_shortcuts(cx, event);
 
+        // Space/Enter on a Tab-focused button. Must run before the tree handles
+        // the event, so the synthesized click lands in the same `Event::Actions`
+        // batch a real click would have.
+        activate_focused_button(cx, &self.ui, event);
+
         // Forward events to the MatchEvent trait implementation.
         self.match_event(cx, event);
         // Keep the room-info-action-modal flag in sync from the GLOBAL modals
@@ -2665,6 +2704,17 @@ impl App {
             }
             for (room_name_id, avatar) in room_items {
                 results.push(RoomFilterResultTarget::LocalRoom { room_name_id, avatar });
+            }
+
+            // Re-attach the directory hits for this exact query. Local matches
+            // are recomputed every time (rooms may have been joined or left),
+            // but the remote ones are carried over rather than silently
+            // dropped — the user asked for them, and asking again costs another
+            // round-trip.
+            if let Some((query, remote)) = self.last_remote_search.as_ref() {
+                if query == keywords {
+                    results.extend(remote.iter().cloned());
+                }
             }
         }
 

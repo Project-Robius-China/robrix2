@@ -131,6 +131,15 @@ pub struct JoinLeaveRoomModal {
     /// * Set to `Some(false)` after a join/leave error occurs.
     /// * Set to `None` when the user is still able to interact with the modal.
     #[rust] final_success: Option<bool>,
+    /// A join/leave request that was still in flight when the modal closed.
+    ///
+    /// Dismissing the modal does not cancel the request — it cannot, the
+    /// server has already been asked. Without this, `kind` was cleared on
+    /// dismissal and the result action then matched nothing, so the user got
+    /// no signal either way: the room quietly appeared (or didn't) minutes
+    /// later, and a failure was never reported at all. Keeping the request's
+    /// identity here lets the outcome still arrive as a popup.
+    #[rust] pending: Option<JoinLeaveModalKind>,
 }
 
 /// Kinds of content that can be shown and handled by the [`JoinLeaveRoomModal`].
@@ -201,6 +210,14 @@ pub enum JoinLeaveRoomModalAction {
         /// Whether to show the tip about holding Shift to bypass the prompt.
         show_tip: bool,
     },
+    /// The modal was dismissed while the request it started was still running.
+    ///
+    /// The request is not cancelled by this — it cannot be, the server has
+    /// already been asked. `Modal` stops delivering events to its content once
+    /// closed, so the modal cannot watch for its own result; the app root takes
+    /// over and reports the outcome by popup. See
+    /// [`report_orphaned_join_leave_results`].
+    DismissedWhilePending(JoinLeaveModalKind),
     /// The modal requested its parent widget to close.
     Close {
         /// `True` if the modal was closed after a successful join/leave action.
@@ -236,6 +253,11 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
         if cancel_clicked ||
             actions.iter().any(|a| matches!(a.downcast_ref(), Some(ModalAction::Dismissed)))
         {
+            // Hand off any in-flight request before forgetting about it, so
+            // its outcome still reaches the user.
+            if let Some(pending) = self.pending.take() {
+                cx.action(JoinLeaveRoomModalAction::DismissedWhilePending(pending));
+            }
             // Inform other widgets that this modal has been closed.
             cx.action(JoinLeaveRoomModalAction::Close { successful: false, was_internal: cancel_clicked });
             self.reset_state();
@@ -255,6 +277,7 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
                 let title: Cow<str>;
                 let description: String;
                 let accept_button_text: &str;
+                let mut request_submitted = true;
                 match kind {
                     JoinLeaveModalKind::AcceptInvite(invite) => {
                         let room_name = invite.room_name_id().to_string();
@@ -322,8 +345,15 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
                                 PopupKind::Error,
                                 None,
                             );
+                            // Nothing is in flight, so there is no outcome to
+                            // wait for if the user dismisses the modal now.
+                            request_submitted = false;
                         }
                     }
+                }
+
+                if request_submitted {
+                    self.pending = Some(kind.clone());
                 }
 
                 self.view.label(cx, ids!(title)).set_text(cx, &title);
@@ -444,6 +474,9 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
         }
 
         if let Some(success) = new_final_success {
+            // The modal reported the outcome itself, so there is nothing left
+            // for `report_orphaned_result` to say if it is dismissed now.
+            self.pending = None;
             self.final_success = Some(success);
             needs_redraw = true;
             accept_button.set_enabled(cx, true);
@@ -459,10 +492,15 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
 }
 
 impl JoinLeaveRoomModal {
+    /// Clears the dialog's own state.
+    ///
+    /// Deliberately leaves `pending` alone: the modal closing says nothing
+    /// about whether the request it started has finished.
     fn reset_state(&mut self) {
         self.kind = None;
         self.final_success = None;
     }
+
 
     /// Populates this modal with the proper info based on 
     /// the given `kind of join or leave action.
@@ -582,4 +620,103 @@ impl JoinLeaveRoomModalRef {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.set_kind(cx, kind, show_tip, app_language);
     }
+}
+
+/// Reports the outcome of join/leave requests whose modal was dismissed while
+/// they were still running.
+///
+/// `Modal` stops delivering events to its content once closed, so a dismissed
+/// [`JoinLeaveRoomModal`] cannot watch for its own result — it hands the
+/// request off via [`JoinLeaveRoomModalAction::DismissedWhilePending`] and the
+/// app root calls this from a context that stays alive. Only popups are
+/// emitted: the labels the modal would normally write into belong to a dialog
+/// the user has already dismissed.
+///
+/// Entries in `pending` are removed as their results arrive.
+pub fn report_orphaned_join_leave_results(
+    app_language: AppLanguage,
+    pending: &mut Vec<JoinLeaveModalKind>,
+    actions: &Actions,
+) {
+    if pending.is_empty() { return }
+
+    pending.retain(|kind| {
+        let room_id = kind.room_id();
+        let was_invite = matches!(
+            kind,
+            JoinLeaveModalKind::AcceptInvite(_) | JoinLeaveModalKind::RejectInvite(_),
+        );
+        let mut resolved = false;
+
+        for action in actions {
+            match action.downcast_ref() {
+                Some(JoinRoomResultAction::Joined { room_id: id }) if id == room_id => {
+                    enqueue_popup_notification(
+                        tr_key(app_language, "join_leave_modal.popup.joined_success"),
+                        PopupKind::Success,
+                        Some(3.0),
+                    );
+                    resolved = true;
+                }
+                Some(JoinRoomResultAction::Failed { room_id: id, error }) if id == room_id => {
+                    enqueue_popup_notification(
+                        utils::stringify_join_leave_error(error, kind.room_name(), true, was_invite),
+                        PopupKind::Error,
+                        None,
+                    );
+                    resolved = true;
+                }
+                _ => {}
+            }
+
+            match action.downcast_ref() {
+                Some(LeaveRoomResultAction::Left { room_id: id }) if id == room_id => {
+                    enqueue_popup_notification(
+                        tr_key(app_language, if was_invite {
+                            "join_leave_modal.popup.rejected_success"
+                        } else {
+                            "join_leave_modal.popup.left_room_success"
+                        }),
+                        PopupKind::Success,
+                        Some(5.0),
+                    );
+                    resolved = true;
+                }
+                Some(LeaveRoomResultAction::Failed { room_id: id, error }) if id == room_id => {
+                    enqueue_popup_notification(
+                        utils::stringify_join_leave_error(error, kind.room_name(), false, was_invite),
+                        PopupKind::Error,
+                        None,
+                    );
+                    resolved = true;
+                }
+                _ => {}
+            }
+
+            if let Some(SpaceRoomListAction::LeaveSpaceResult { space_name_id, result })
+                = action.downcast_ref()
+            {
+                if space_name_id.room_id() == room_id {
+                    match result {
+                        Ok(()) => enqueue_popup_notification(
+                            tr_key(app_language, "join_leave_modal.popup.left_room_success"),
+                            PopupKind::Success,
+                            Some(5.0),
+                        ),
+                        Err(e) => enqueue_popup_notification(
+                            tr_fmt(app_language, "join_leave_modal.description.error_leaving_space", &[
+                                ("space_name", space_name_id.to_string().as_str()),
+                                ("error", e.to_string().as_str()),
+                            ]),
+                            PopupKind::Error,
+                            None,
+                        ),
+                    }
+                    resolved = true;
+                }
+            }
+        }
+
+        !resolved
+    });
 }

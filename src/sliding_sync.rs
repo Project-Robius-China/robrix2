@@ -5647,7 +5647,19 @@ async fn matrix_worker_task(
                             log!("Sent toggle reaction {reaction:?} to {timeline_kind}.");
                             SignalToUI::set_ui_signal();
                         },
-                        Err(_e) => error!("Failed to send toggle reaction to {timeline_kind}; error: {_e:?}"),
+                        Err(e) => {
+                            error!("Failed to send toggle reaction to {timeline_kind}; error: {e:?}");
+                            // The pill is repainted optimistically the instant
+                            // it is clicked, so a silent failure leaves the UI
+                            // claiming a reaction that never reached the room.
+                            // The timeline will drop the local echo on its own;
+                            // say so, or the user never learns it did not land.
+                            enqueue_popup_notification(
+                                format!("Couldn't send the reaction {reaction}: {e}"),
+                                PopupKind::Error,
+                                Some(5.0),
+                            );
+                        }
                     }
                 });
             },
@@ -6418,8 +6430,23 @@ pub fn current_user_id() -> Option<OwnedUserId> {
 static SYNC_SERVICE: Mutex<Option<Arc<SyncService>>> = Mutex::new(None);
 static SYNC_SERVICE_DESIRED_RUNNING: AtomicBool = AtomicBool::new(true);
 static SYNC_SERVICE_ASSUMED_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Whether the sync service last reported itself `Offline`.
+///
+/// The state is otherwise published only as a one-shot broadcast action, which
+/// a widget can act on but not query. A room screen opened *after* the
+/// connection dropped never sees that action, so without this it would have no
+/// way to know it should be showing an offline indication.
+static SYNC_SERVICE_OFFLINE: AtomicBool = AtomicBool::new(false);
 static SYNC_SERVICE_LIFECYCLE_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Returns whether the sync service last reported itself as offline.
+///
+/// See [`SYNC_SERVICE_OFFLINE`] for why this exists alongside
+/// `RoomsListHeaderAction::StateUpdate`.
+pub fn is_sync_service_offline() -> bool {
+    SYNC_SERVICE_OFFLINE.load(Ordering::Acquire)
+}
 
 /// Flag to indicate an account switch is in progress.
 /// Contains the user_id to switch to, if any.
@@ -8280,6 +8307,10 @@ fn handle_sync_service_state_subscriber(mut subscriber: Subscriber<sync_service:
                     if matches!(other, sync_service::State::Running) {
                         reenable_send_queue("sync service running").await;
                     }
+                    SYNC_SERVICE_OFFLINE.store(
+                        matches!(other, sync_service::State::Offline),
+                        Ordering::Release,
+                    );
                     Cx::post_action(RoomsListHeaderAction::StateUpdate(other))
                 }
             }

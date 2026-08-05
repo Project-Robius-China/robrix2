@@ -47,7 +47,9 @@ script_mod! {
             align: Align{y: 0.5}
             padding: Inset{left: 5, right: 5}
 
-            Label {
+            // Doubles as the pane's status line: reads "Editing:" while the
+            // user types and "Saving…" while the edit is in flight.
+            status_label := Label {
                 width: Fill,
                 flow: Right, // do not wrap
                 margin: Inset{top: 3}
@@ -160,6 +162,12 @@ pub struct EditingPane {
 
     #[rust] info: Option<EditingPaneInfo>,
     #[rust] is_animating_out: bool,
+    /// Set between submitting an edit and its result coming back.
+    ///
+    /// The pane used to stay fully live while the request was in flight, so on
+    /// a slow server a second click (or a second Enter) sent a second edit of
+    /// the same message. Both land, and the room sees two edit events.
+    #[rust] is_saving: bool,
     #[rust] last_content_height: f64,
     /// A pending next-frame request used to force a parent relayout
     /// after the hide animation completes.
@@ -231,6 +239,10 @@ impl Widget for EditingPane {
             if self.button(cx, ids!(accept_button)).clicked(actions)
                 || edit_text_input.returned(actions).is_some()
             {
+                // Disabling the accept button covers the click, but Enter in
+                // the text input never goes through the button at all, so the
+                // flag is what actually stops the second submission.
+                if self.is_saving { return }
                 let edited_text = edit_text_input.text().trim().to_string();
                 let edited_content = match info.event_tl_item.content() {
                     TimelineItemContent::MsgLike(msg_like_content) => {
@@ -390,7 +402,7 @@ impl Widget for EditingPane {
                     edited_content,
                 });
 
-                // TODO: show a loading spinner within the accept button.
+                self.set_saving(cx, true);
             }
         }
     }
@@ -451,6 +463,23 @@ impl EditingPane {
         self.visible
     }
 
+    /// Switches the pane between its editable and its in-flight state.
+    ///
+    /// The accept button is greyed and inert while saving, and the header line
+    /// says so — an icon-only checkmark has nowhere to put "Saving…", and a
+    /// button that simply stops responding reads as a broken button.
+    fn set_saving(&mut self, cx: &mut Cx, saving: bool) {
+        self.is_saving = saving;
+        let accept_button = self.button(cx, ids!(accept_button));
+        accept_button.set_enabled(cx, !saving);
+        accept_button.reset_hover(cx);
+        self.label(cx, ids!(status_label)).set_text(
+            cx,
+            if saving { "Saving…" } else { "Editing:" },
+        );
+        self.redraw(cx);
+    }
+
     /// Call this when the result of an edit operation is received.
     ///
     /// This will handle the result, and either show a success message
@@ -475,6 +504,9 @@ impl EditingPane {
                 cx.widget_action(self.widget_uid(), EditingPaneAction::HideAnimationStarted);
             },
             Err(e) => {
+                // Hand the pane back to the user so they can retry or cancel
+                // rather than leaving it stuck on "Saving…" with a dead button.
+                self.set_saving(cx, false);
                 let error_msg = format!("Failed to edit message: {}", e);
                 let error_msg_copy = error_msg.clone();
                 enqueue_notification(NotificationItem {
@@ -532,7 +564,9 @@ impl EditingPane {
 
         self.visible = true;
         self.is_animating_out = false;
-        self.button(cx, ids!(accept_button)).reset_hover(cx);
+        // Also clears any "Saving…" left over from an edit that was abandoned
+        // while its request was still in flight.
+        self.set_saving(cx, false);
         self.button(cx, ids!(cancel_button)).reset_hover(cx);
         self.animator_play(cx, ids!(panel.show));
 
@@ -578,7 +612,9 @@ impl EditingPane {
         });
         self.visible = true;
         self.is_animating_out = false;
-        self.button(cx, ids!(accept_button)).reset_hover(cx);
+        // Also clears any "Saving…" left over from an edit that was abandoned
+        // while its request was still in flight.
+        self.set_saving(cx, false);
         self.button(cx, ids!(cancel_button)).reset_hover(cx);
         self.animator_play(cx, ids!(panel.show));
         self.redraw(cx);
