@@ -1,5 +1,6 @@
 //! A `HtmlOrPlaintext` view can display either plaintext or rich HTML content.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use makepad_widgets::*;
@@ -152,12 +153,76 @@ script_mod! {
         draw_block +: {
             line_color: (MESSAGE_TEXT_COLOR)
             sep_color: (MESSAGE_TEXT_COLOR)
-            // Same inset surface the markdown path uses, so a bot's inline
-            // `code` does not change shade depending on whether the message
-            // happened to contain a fenced block.
+            // Inline `code` keeps the light inset surface: it sits mid-sentence
+            // in a light bubble, where a dark chip reads as a redaction bar.
             code_color: (RBX_BG_SUNKEN)
             quote_bg_color: (RBX_BG_SUNKEN)
             quote_fg_color: (MESSAGE_TEXT_COLOR)
+
+            // A fenced block is its own panel, so it gets the dark code
+            // surface (spec §4.7). Upstream's shader fills both the block and
+            // the inline branch from the single `code_color` uniform, which is
+            // why the two could not be told apart before; this adds a second
+            // uniform and overrides `pixel` to use it for the block branch
+            // only. Every other branch is upstream's, unchanged.
+            //
+            // Only blocks that `colorize_code_blocks` could prove are plain
+            // text get light text to sit on this, so the fill is applied there
+            // rather than here — see that function.
+            block_code_color: instance((RBX_CODE_BG))
+
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                match self.block_type {
+                    FlowBlockType.Quote => {
+                        sdf.box(0. 0. self.rect_size.x self.rect_size.y 2.)
+                        sdf.fill(self.quote_bg_color)
+                        sdf.box(self.space_1 self.space_1 self.space_1 self.rect_size.y-self.space_2 1.5)
+                        sdf.fill(self.quote_fg_color)
+                        return sdf.result
+                    }
+                    FlowBlockType.Sep => {
+                        sdf.box(0. 1. self.rect_size.x-1. self.rect_size.y-2. 2.)
+                        sdf.fill(self.sep_color)
+                        return sdf.result
+                    }
+                    FlowBlockType.Code => {
+                        sdf.box(0. 0. self.rect_size.x self.rect_size.y 2.)
+                        sdf.fill(self.block_code_color)
+                        return sdf.result
+                    }
+                    FlowBlockType.InlineCode => {
+                        sdf.box(1. 1. self.rect_size.x-2. self.rect_size.y-2. 2.)
+                        sdf.fill(self.code_color)
+                        return sdf.result
+                    }
+                    FlowBlockType.Underline => {
+                        sdf.box(0. self.rect_size.y-2. self.rect_size.x 2.0 0.5)
+                        sdf.fill(self.line_color)
+                        return sdf.result
+                    }
+                    FlowBlockType.Strikethrough => {
+                        sdf.box(0. self.rect_size.y * 0.45 self.rect_size.x 2.0 0.5)
+                        sdf.fill(self.line_color)
+                        return sdf.result
+                    }
+                    FlowBlockType.Selection => {
+                        return vec4(self.selection_color.rgb * self.selection_color.a, self.selection_color.a)
+                    }
+                    FlowBlockType.TableCell => {
+                        sdf.rect(0. 0. self.rect_size.x self.rect_size.y)
+                        sdf.fill(self.table_header_bg_color)
+                        let pos = self.pos * self.rect_size
+                        if pos.x > self.rect_size.x - 1.0
+                            || pos.y > self.rect_size.y - 1.0
+                        {
+                            return self.table_border_color
+                        }
+                        return sdf.result
+                    }
+                }
+                return #f00
+            }
         }
 
         quote_layout: Layout{ flow: Flow.Right{wrap: true, row_align: RowAlign.Center}, spacing: 0, padding: Inset{left: 15, top: 10.0, bottom: 10.0}, }
@@ -762,10 +827,110 @@ impl HtmlOrPlaintext {
 
     /// Sets the HTML content, making the HTML visible and the plaintext invisible.
     pub fn show_html<T: AsRef<str>>(&mut self, cx: &mut Cx, html_body: T) {
-        self.html(cx, ids!(html_view.html)).set_text(cx, html_body.as_ref());
+        let body = colorize_code_blocks(html_body.as_ref());
+        self.html(cx, ids!(html_view.html)).set_text(cx, body.as_ref());
         self.view(cx, ids!(html_view)).set_visible(cx, true);
         self.view(cx, ids!(plaintext_view)).set_visible(cx, false);
     }
+}
+
+/// Wraps the body of each plain-text `<pre>` block in a `<font color=…>` so
+/// the code reads against the dark panel `MessageHtml` now paints behind it.
+///
+/// ## Why markup, and not a property
+///
+/// `TextFlow` takes its text colour from exactly one place — the top of its
+/// `font_colors` stack — and `Html` never pushes anything onto that stack for
+/// `<pre>`. There is no per-block text colour to set, so the colour has to
+/// enter through the document. `<font>` is dispatched to `MatrixHtmlSpan`,
+/// which does push `font_colors`, which makes it the only lever available from
+/// outside the widget.
+///
+/// ## Why only plain-text blocks
+///
+/// `Html` treats a `<font>` as a *leaf*: `handle_custom_widget` draws
+/// `find_text()` — the first text node, nothing more — and then calls
+/// `jump_to_close()` to skip the rest of the element. Wrapping a block that
+/// contains markup (a bridge that ships pre-highlighted code, say) would
+/// therefore render its first line and silently drop everything after it. So
+/// a block is rewritten only once it is known to hold nothing but text; any
+/// other block is left exactly as it was, on the light surface it has today.
+fn colorize_code_blocks(html: &str) -> Cow<'_, str> {
+    /// `RBX_CODE_FG`, the light body colour that pairs with `RBX_CODE_BG`.
+    const CODE_FG: &str = "#D7DEE8";
+
+    if !html.contains("<pre") {
+        return Cow::Borrowed(html);
+    }
+
+    let mut out = String::with_capacity(html.len() + 64);
+    let mut rest = html;
+
+    while let Some(pre_at) = rest.find("<pre") {
+        // Everything up to and including the `<pre …>` open tag is copied
+        // verbatim; the rewrite only ever touches the block's body.
+        let after_open = match rest[pre_at..].find('>') {
+            Some(gt) => pre_at + gt + 1,
+            None => break, // Malformed: no close bracket. Leave the tail alone.
+        };
+        let Some(close_rel) = rest[after_open..].find("</pre") else {
+            break; // Unterminated block; copying the tail verbatim is the safe end.
+        };
+        let close_at = after_open + close_rel;
+
+        out.push_str(&rest[..after_open]);
+        let body = &rest[after_open..close_at];
+
+        match plain_code_body(body) {
+            Some((prefix, text, suffix)) => {
+                out.push_str(prefix);
+                out.push_str("<font color=\"");
+                out.push_str(CODE_FG);
+                out.push_str("\">");
+                out.push_str(text);
+                out.push_str("</font>");
+                out.push_str(suffix);
+            }
+            None => out.push_str(body),
+        }
+
+        rest = &rest[close_at..];
+    }
+
+    if out.is_empty() {
+        return Cow::Borrowed(html);
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+/// Splits a `<pre>` body into `(prefix, text, suffix)` when the text is safe to
+/// wrap, or returns `None` when it is not.
+///
+/// Safe means the body is either bare text, or a single `<code …>` element
+/// holding bare text — no other tags at any depth. Anything else keeps its
+/// current rendering rather than risking the truncation described on
+/// [`colorize_code_blocks`].
+fn plain_code_body(body: &str) -> Option<(&str, &str, &str)> {
+    let trimmed = body.trim_start_matches(['\n', '\r']);
+    let leading = &body[..body.len() - trimmed.len()];
+
+    let (prefix, inner, suffix) = if trimmed.starts_with("<code") {
+        let open_end = trimmed.find('>')? + 1;
+        let close_at = trimmed.rfind("</code")?;
+        if close_at < open_end {
+            return None;
+        }
+        (&body[..leading.len() + open_end], &trimmed[open_end..close_at], &trimmed[close_at..])
+    } else {
+        (leading, trimmed, "")
+    };
+
+    // A single `<` anywhere in the body means markup we would drop.
+    if inner.contains('<') || inner.is_empty() {
+        return None;
+    }
+    Some((prefix, inner, suffix))
 }
 
 impl HtmlOrPlaintextRef {
@@ -825,5 +990,91 @@ impl HtmlOrPlaintext {
             }
             i += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod code_block_tests {
+    use super::colorize_code_blocks;
+
+    const FG: &str = "#D7DEE8";
+
+    #[test]
+    fn leaves_bodies_without_a_pre_block_untouched() {
+        let html = "<p>hello <code>inline</code> world</p>";
+        assert_eq!(colorize_code_blocks(html), html);
+    }
+
+    #[test]
+    fn wraps_a_plain_pre_code_block() {
+        let out = colorize_code_blocks("<pre><code>let x = 1;</code></pre>");
+        assert_eq!(
+            out,
+            format!("<pre><code><font color=\"{FG}\">let x = 1;</font></code></pre>"),
+        );
+    }
+
+    #[test]
+    fn wraps_a_pre_block_with_no_inner_code_element() {
+        let out = colorize_code_blocks("<pre>plain</pre>");
+        assert_eq!(out, format!("<pre><font color=\"{FG}\">plain</font></pre>"));
+    }
+
+    #[test]
+    fn keeps_the_language_class_on_the_code_element() {
+        let out = colorize_code_blocks("<pre><code class=\"language-rust\">fn main() {}</code></pre>");
+        assert!(out.contains("<code class=\"language-rust\"><font"), "got: {out}");
+    }
+
+    #[test]
+    fn preserves_multiple_lines_verbatim() {
+        let out = colorize_code_blocks("<pre><code>one\ntwo\nthree</code></pre>");
+        assert!(out.contains("one\ntwo\nthree"), "got: {out}");
+    }
+
+    /// The whole reason for the plain-text restriction: `<font>` is drawn as a
+    /// leaf, so wrapping markup would render the first text node and drop the
+    /// rest. Such a block must come back byte-for-byte unchanged.
+    #[test]
+    fn refuses_to_wrap_a_block_containing_markup() {
+        let html = "<pre><code><span class=\"k\">fn</span> main() {}</code></pre>";
+        assert_eq!(colorize_code_blocks(html), html);
+    }
+
+    #[test]
+    fn rewrites_every_block_in_a_message() {
+        let out = colorize_code_blocks("<pre><code>a</code></pre><p>x</p><pre><code>b</code></pre>");
+        assert_eq!(out.matches("<font color=").count(), 2, "got: {out}");
+        assert!(out.contains("<p>x</p>"), "got: {out}");
+    }
+
+    /// A block that isn't wrappable must not stop a later one from being
+    /// wrapped, and must survive unchanged itself.
+    #[test]
+    fn a_skipped_block_does_not_affect_the_next_one() {
+        let out = colorize_code_blocks("<pre><code><b>a</b></code></pre><pre><code>b</code></pre>");
+        assert!(out.contains("<code><b>a</b></code>"), "got: {out}");
+        assert_eq!(out.matches("<font color=").count(), 1, "got: {out}");
+    }
+
+    #[test]
+    fn leaves_an_unterminated_block_alone() {
+        let html = "<pre><code>oops";
+        assert_eq!(colorize_code_blocks(html), html);
+    }
+
+    #[test]
+    fn leaves_an_empty_block_alone() {
+        let html = "<pre><code></code></pre>";
+        assert_eq!(colorize_code_blocks(html), html);
+    }
+
+    /// Entities are decoded by the parser, not by us — they must reach it
+    /// intact rather than being treated as the markup they look like.
+    #[test]
+    fn passes_escaped_markup_through_as_text() {
+        let out = colorize_code_blocks("<pre><code>if a &lt; b {}</code></pre>");
+        assert!(out.contains("if a &lt; b {}"), "got: {out}");
+        assert!(out.contains("<font color="), "got: {out}");
     }
 }
