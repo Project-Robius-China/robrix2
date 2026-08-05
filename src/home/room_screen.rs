@@ -2419,6 +2419,14 @@ script_mod! {
         inline_code_margin: Inset{ left: 3, right: 3, bottom: 2, top: 2 }
         use_code_block_widget: true
 
+        // An agent reply is the text people most often want to quote, so the
+        // bot card's renderers are selectable like any other message body.
+        // Only one of the card's three renderers ever holds text at a time —
+        // see `populate_bot_text_message_content`, which draws the other two
+        // empty rather than hiding them so their `SelectionTracker`s reset.
+        selectable: true
+        draw_selection +: { color: (RBX_SELECTION_BG) }
+
         draw_text +: {
             color: (MESSAGE_TEXT_COLOR)
         }
@@ -2998,6 +3006,17 @@ script_mod! {
                     }
                 }
 
+                // The plain body. Declared BEFORE `bot_message_card` on purpose:
+                // `View` resolves a selection by taking the first child that
+                // reports text, and a hidden bot card keeps the
+                // `SelectionTracker` it was last drawn with. With the plain body
+                // first, a normal message always wins outright, and a bot
+                // message — whose plain body is drawn empty, see
+                // `populate_bot_text_message_content` — falls through to the
+                // card. The two are mutually exclusive and whichever is inactive
+                // has no height, so declaration order costs nothing visually.
+                message := mod.widgets.SelectableHtmlOrPlaintext { }
+
                 bot_message_card := View {
                     visible: false
                     width: Fill
@@ -3041,7 +3060,7 @@ script_mod! {
                             border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
                         }
 
-                        bot_card_body := HtmlOrPlaintext { }
+                        bot_card_body := mod.widgets.SelectableHtmlOrPlaintext { }
                         bot_card_markdown := mod.widgets.BotTimelineMarkdown {
                             body: ""
                         }
@@ -3106,7 +3125,6 @@ script_mod! {
 
                 }
 
-                message := HtmlOrPlaintext { }
                 splash_card := Splash { }
                 action_buttons := View {
                     visible: false
@@ -3179,6 +3197,17 @@ script_mod! {
                 flow: Down,
                 padding: Inset{ left: 10.0 }
 
+                // The plain body. Declared BEFORE `bot_message_card` on purpose:
+                // `View` resolves a selection by taking the first child that
+                // reports text, and a hidden bot card keeps the
+                // `SelectionTracker` it was last drawn with. With the plain body
+                // first, a normal message always wins outright, and a bot
+                // message — whose plain body is drawn empty, see
+                // `populate_bot_text_message_content` — falls through to the
+                // card. The two are mutually exclusive and whichever is inactive
+                // has no height, so declaration order costs nothing visually.
+                message := mod.widgets.SelectableHtmlOrPlaintext { }
+
                 bot_message_card := View {
                     visible: false
                     width: Fill
@@ -3222,7 +3251,7 @@ script_mod! {
                             border_color: (mod.widgets.COLOR_BOT_CARD_BORDER)
                         }
 
-                        bot_card_body := HtmlOrPlaintext { }
+                        bot_card_body := mod.widgets.SelectableHtmlOrPlaintext { }
                         bot_card_markdown := mod.widgets.BotTimelineMarkdown {
                             body: ""
                         }
@@ -3287,7 +3316,6 @@ script_mod! {
 
                 }
 
-                message := HtmlOrPlaintext { }
                 action_buttons := View {
                     visible: false
                     width: Fill
@@ -5246,6 +5274,13 @@ script_mod! {
 
             auto_tail: true, // set to `true` to lock the view to the last item.
             max_pull_down: 0.0, // set to `0.0` to disable the pulldown bounce animation.
+
+            // Drag across message text to select it, including across message
+            // boundaries; the list owns the anchor/cursor and stitches the
+            // per-item text back together for copy. Each item must keep at most
+            // one of its bodies reporting text — see `SelectableHtmlOrPlaintext`
+            // for why, and for how `Message` holds to that.
+            selectable: true,
             // TODO: enable `reuse_items: true` once Makepad's Html/TextFlow widget
             //   properly resets all internal state during `script_apply(Reload)`.
             //   Currently, stale TextFlow layout state (particularly related to
@@ -6724,6 +6759,15 @@ pub struct RoomScreen {
     #[rust] room_info_members_cache: Option<RoomInfoMembersCache>,
     /// Derived bot identities for the current immutable room-member snapshot.
     #[rust] timeline_bot_context_cache: Option<CachedTimelineBotContext>,
+    /// The timeline's drag-selection as it stood when the message context menu
+    /// was last opened, paired with the message it was opened on.
+    ///
+    /// Showing the menu moves key focus off the timeline list, and the list
+    /// drops its selection when it loses focus — so the text has to be taken
+    /// before the menu appears for "Copy Text" to still see it. The event id is
+    /// kept alongside it so a later copy request aimed at a *different* message
+    /// cannot pick up this one's words.
+    #[rust] selection_at_context_menu_open: Option<(TimelineEventItemId, String)>,
     /// The set of pinned events in this room.
     #[rust] pinned_events: Vec<OwnedEventId>,
     /// Whether this room has been successfully loaded (received from the homeserver).
@@ -7704,9 +7748,10 @@ impl Widget for RoomScreen {
             // Forward the event to the inner timeline view, but capture any actions it produces
             // such that we can handle the ones relevant to only THIS RoomScreen widget right here and now,
             // ensuring they are not mistakenly handled by other RoomScreen widget instances.
-            let mut actions_generated_within_this_room_screen = cx.capture_actions(|cx|
+            let mut actions_generated_within_this_room_screen = cx.capture_actions(|cx| {
+                self.dispatch_secondary_mouse_down_to_timeline_items(cx, event, &mut room_scope);
                 self.view.handle_event(cx, event, &mut room_scope)
-            );
+            });
             // Here, we handle and remove any general actions that are relevant to only this RoomScreen.
             // Removing the handled actions ensures they are not mistakenly handled by other RoomScreen widget instances.
             actions_generated_within_this_room_screen.retain(|action| {
@@ -8429,6 +8474,64 @@ impl RoomScreen {
         }
         banner.set_visible(cx, show);
         self.redraw(cx);
+    }
+
+    /// The text the user currently has drag-selected in the timeline, if any.
+    ///
+    /// The selection spans message boundaries, so this is whatever the list
+    /// stitched together across the items it covers — not one message's body.
+    /// `None` when nothing is selected, so callers can fall back to acting on a
+    /// whole message.
+    fn selected_timeline_text(&self, cx: &mut Cx) -> Option<String> {
+        let portal_list = self.portal_list(cx, ids!(timeline.list));
+        let list = portal_list.borrow()?;
+        if !list.has_selection() {
+            return None;
+        }
+        let text = list.get_selected_text();
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// Hands a secondary-button `MouseDown` directly to the timeline's items,
+    /// bypassing the `PortalList`'s selection gate.
+    ///
+    /// A selectable `PortalList` only forwards `MouseDown` to its items when
+    /// the pointer is over an interactive child; everything else it keeps for
+    /// itself, because that is where a drag-select would start. A secondary
+    /// button can never start one (the list requires a primary hit), but it is
+    /// swallowed by that same rule — which would silently drop the right-click
+    /// that opens a message's context menu.
+    ///
+    /// Dispatching here rather than synthesizing the action keeps `Message` the
+    /// only place that decides what a right-click means. It also cannot fire
+    /// twice: the first item to hit-test captures the digit and marks the event
+    /// handled, so the regular pass right after this sees `Hit::Nothing`.
+    fn dispatch_secondary_mouse_down_to_timeline_items(
+        &mut self,
+        cx: &mut Cx,
+        event: &Event,
+        scope: &mut Scope,
+    ) {
+        if !matches!(event, Event::MouseDown(mouse) if mouse.button.is_secondary()) {
+            return;
+        }
+        // Collected up front so the list's `RefCell` is not still borrowed while
+        // an item handler runs — item handlers reach back into the widget tree.
+        let items: Vec<WidgetRef> = {
+            let portal_list = self.portal_list(cx, ids!(timeline.list));
+            let Some(list) = portal_list.borrow() else { return };
+            let mut items: Vec<(usize, WidgetRef)> = list
+                .items()
+                .iter()
+                .map(|(id, item)| (*id, item.widget.clone()))
+                .collect();
+            // Visual order, matching how the list itself forwards events.
+            items.sort_by_key(|(id, _)| *id);
+            items.into_iter().map(|(_, widget)| widget).collect()
+        };
+        for item in items {
+            item.handle_event(cx, event, scope);
+        }
     }
 
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
@@ -10362,6 +10465,23 @@ impl RoomScreen {
                     }
                 }
                 MessageAction::CopyText(details) => {
+                    // A drag-selection is the more specific request: the user
+                    // picked those words, so "Copy Text" copies them rather than
+                    // silently widening back out to whole messages. Only for the
+                    // message the selection was captured on — a copy aimed
+                    // anywhere else falls through to the whole-body path below.
+                    let selection = self.selection_at_context_menu_open
+                        .take_if(|(event_id, _)| event_id == &details.timeline_event_id)
+                        .map(|(_, text)| text);
+                    if let Some(selected) = selection {
+                        cx.copy_to_clipboard(&selected);
+                        enqueue_popup_notification(
+                            tr_key(self.app_language, "room_screen.popup.message.copied"),
+                            PopupKind::Success,
+                            Some(2.0),
+                        );
+                        return;
+                    }
                     let Some(tl) = self.tl_state.as_ref() else { return };
                     if let Some(event_tl_item) = Self::find_event_in_timeline(&tl.items, details, has_encryption_notice) {
                         // Mirror the timeline's bot detection so the clipboard
@@ -10612,7 +10732,15 @@ impl RoomScreen {
                 // This is handled within the Message widget itself.
                 MessageAction::HighlightMessage(..) => { }
                 // This is handled by the top-level App itself.
-                MessageAction::OpenMessageContextMenu { .. } => { }
+                MessageAction::OpenMessageContextMenu { details, .. } => {
+                    // Grab the selection before the menu takes key focus and the
+                    // timeline list drops it. `None` here is what makes "Copy
+                    // Text" fall back to copying the whole message.
+                    let event_id = details.timeline_event_id.clone();
+                    self.selection_at_context_menu_open = self
+                        .selected_timeline_text(cx)
+                        .map(|text| (event_id, text));
+                }
                 // This isn't yet handled, as we need to completely redesign it.
                 MessageAction::ActionBarOpen { .. } => { }
                 // This isn't yet handled, as we need to completely redesign it.
@@ -12955,8 +13083,12 @@ fn populate_message_view(
                             );
 
                             if let Some(ref splash) = splash_code {
-                                // SPLASH CARD MODE: render native Makepad card
-                                item.view(cx, ids!(content.message)).set_visible(cx, false);
+                                // SPLASH CARD MODE: render native Makepad card.
+                                // Empty rather than hidden — this widget carries
+                                // the item's text selection, and a hidden one keeps
+                                // answering with stale text. See
+                                // `HtmlOrPlaintext::clear_body`.
+                                item.html_or_plaintext(cx, ids!(content.message)).clear_body(cx);
                                 let splash_widget = item.splash(cx, ids!(content.splash_card));
                                 splash_widget.set_visible(cx, true);
                                 splash_widget.set_text(cx, splash);
@@ -13737,7 +13869,15 @@ fn populate_text_message_content(
         let html = apply_room_mention(linkified_html, room_mention_room_id);
         match html {
             Cow::Owned(linkified_html) => message_content_widget.show_html(cx, &linkified_html),
-            Cow::Borrowed(plaintext) => message_content_widget.show_plaintext(cx, plaintext),
+            // A body with nothing to linkify comes back borrowed and unescaped.
+            // It still goes through the HTML renderer rather than the plaintext
+            // `Label`, because only the HTML path is a `TextFlow` and therefore
+            // the only one that can be drag-selected. `linkify_get_urls` already
+            // escapes the text it rewrites, so escaping here just makes both
+            // branches feed the renderer the same kind of input.
+            Cow::Borrowed(plaintext) => {
+                message_content_widget.show_html(cx, htmlize::escape_text(plaintext))
+            }
         }
     };
 
@@ -13889,7 +14029,13 @@ fn populate_bot_text_message_content(
     let message_view = item.html_or_plaintext(cx, ids!(content.message));
 
     bot_card_view.set_visible(cx, render_state.show_card);
-    message_view.set_visible(cx, !render_state.show_card);
+    if render_state.show_card {
+        // The card owns the body, so the plain renderer has nothing to show —
+        // but it is emptied rather than hidden, because it carries this item's
+        // text selection. See `HtmlOrPlaintext::clear_body`.
+        message_view.clear_body(cx);
+    }
+    message_view.set_visible(cx, true);
 
     if !render_state.show_card {
         // Clear the meta-band badge before returning: this item widget is
@@ -14049,15 +14195,26 @@ fn populate_bot_text_message_content(
     };
 
     let code_block_mode = bot_timeline_code_block_mode(&render_state);
-    body_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::None);
-    markdown_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Highlighted);
-    markdown_plain_widget.set_visible(cx, code_block_mode == BotTimelineCodeBlockMode::Plain);
-    // Hiding the inactive renderer is not enough: a Markdown widget that still
-    // holds text keeps drawing its own DrawList after `set_visible(false)`, so
-    // toggling the fold on a body with a ``` block stacked the folded preview on
-    // top of the leftover full text. Worse, that leftover is invisible for
-    // hit-testing, so its links stopped responding to clicks. Clearing the text
-    // of whichever renderer is not in use makes it draw nothing at all.
+    // Clearing the text is what actually retires a renderer — hiding it is not
+    // enough, because a Markdown widget that still holds text keeps drawing its
+    // own DrawList after `set_visible(false)`: toggling the fold on a body with
+    // a ``` block stacked the folded preview on top of the leftover full text,
+    // and that leftover swallowed clicks on the links underneath it.
+    //
+    // Since clearing is what does the work, all three stay *visible* and the two
+    // that are idle simply draw nothing. They have to be drawn: these renderers
+    // are selectable, and `TextFlow` resets its `SelectionTracker` only inside
+    // `begin()`, which a hidden widget never reaches — an idle-but-hidden
+    // renderer would keep answering hit tests, and copy, with the body it last
+    // held. Drawn empty, it reports no text and the live renderer wins the
+    // selection outright.
+    //
+    // (`set_visible` is change-guarded, and these item widgets are recycled, so
+    // this is both cheap and necessary — a slot that previously hid a renderer
+    // would otherwise keep it hidden.)
+    body_widget.set_visible(cx, true);
+    markdown_widget.set_visible(cx, true);
+    markdown_plain_widget.set_visible(cx, true);
     if code_block_mode != BotTimelineCodeBlockMode::Highlighted {
         markdown_widget.set_text(cx, "");
     }
@@ -14065,7 +14222,7 @@ fn populate_bot_text_message_content(
         markdown_plain_widget.set_text(cx, "");
     }
     if code_block_mode != BotTimelineCodeBlockMode::None {
-        body_widget.show_plaintext(cx, "");
+        body_widget.clear_body(cx);
     }
 
     let drawn = if render_state.show_body_card {
