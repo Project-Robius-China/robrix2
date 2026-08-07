@@ -16427,7 +16427,7 @@ mod tests {
 
     #[test]
     fn test_room_members_fetch_updates_rooms_list_member_ids() {
-        let src = include_str!("room_screen.rs");
+        let src = include_str!("mod.rs");
 
         assert!(src.contains("TimelineUpdate::RoomMembersListFetched"));
         assert!(src.contains("RoomsListUpdate::UpdateRoomMemberUserIds"));
@@ -16457,7 +16457,7 @@ mod tests {
 
     #[test]
     fn test_detected_bot_binding_uses_registry_augmented_known_bots() {
-        let src = include_str!("room_screen.rs");
+        let src = include_str!("mod.rs");
         let fn_pos = src
             .find("fn detected_bot_binding_for_members")
             .expect("detected_bot_binding_for_members should exist");
