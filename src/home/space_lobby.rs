@@ -64,11 +64,11 @@ script_mod! {
             hover: instance(0.0)
             active: instance(0.0)
 
-            color: instance(COLOR_NAVIGATION_TAB_BG)
-            color_hover: instance(COLOR_NAVIGATION_TAB_BG_HOVER)
-            color_active: instance(COLOR_ACTIVE_PRIMARY)
+            color: instance(RBX_BG_SURFACE)
+            color_hover: instance(RBX_BG_HOVER)
+            color_active: instance(RBX_BG_SELECTED)
             border_size: uniform(0.0)
-            border_color: instance(#0000)
+            border_color: instance(RBX_TRANSPARENT)
             border_radius: uniform(4.0)
             border_inset: uniform(vec4(0.0))
 
@@ -113,9 +113,9 @@ script_mod! {
                 hover: instance(0.0)
                 down: instance(0.0)
 
-                color: (COLOR_TEXT)
-                color_hover: instance(COLOR_TEXT)
-                color_active: instance(COLOR_TEXT)
+                color: (RBX_FG_PRIMARY)
+                color_hover: instance(RBX_FG_PRIMARY)
+                color_active: instance(RBX_FG_PRIMARY)
 
                 get_color: fn() -> vec4 {
                     return mix(
@@ -142,9 +142,9 @@ script_mod! {
                 hover: instance(0.0)
                 down: instance(0.0)
 
-                color: (COLOR_TEXT)
-                color_hover: instance(COLOR_TEXT)
-                color_active: instance(COLOR_TEXT)
+                color: (RBX_FG_PRIMARY)
+                color_hover: instance(RBX_FG_PRIMARY)
+                color_active: instance(RBX_FG_PRIMARY)
 
                 text_style: REGULAR_TEXT {font_size: 11},
 
@@ -226,6 +226,7 @@ script_mod! {
             level: 0.0
             is_last: 0.0
             parent_mask: 0.0
+            line_color: (RBX_DIVIDER)
 
             pixel: fn() {
                 let pos = self.pos * self.rect_size;
@@ -290,8 +291,8 @@ script_mod! {
         show_bg: true
         draw_bg +: {
             hover: instance(0.0)
-            color: instance(#fff)
-            color_hover: instance(#f5f5f5)
+            color: instance(RBX_BG_SURFACE)
+            color_hover: instance(RBX_BG_HOVER)
             pixel: fn() {
                 return mix(self.color, self.color_hover, self.hover);
             }
@@ -314,7 +315,7 @@ script_mod! {
                 width: 16,
                 height: 16,
                 margin: Inset{ left: -6, right: 4 }
-                draw_bg.color: #888
+                draw_bg.color: (RBX_FG_TERTIARY)
                 draw_bg.border_radius: 1.5 // less rounded
             }
 
@@ -334,26 +335,25 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     max_lines: 2
                     text_overflow: Ellipsis
-                    draw_text +: { text_style: REGULAR_TEXT {font_size: 10.5}, color: #1a1a1a }
+                    draw_text +: { text_style: RBX_TEXT_BODY {}, color: (RBX_FG_PRIMARY) }
                 }
 
                 suggested_tag := RoundedView {
                     visible: false
                     width: Fit, height: Fit,
-                    padding: Inset { left: 6, right: 6, top: 3, bottom: 3 }
+                    padding: Inset { left: 9, right: 9, top: 3, bottom: 3 }
                     show_bg: true
                     draw_bg +: {
-                        color: #E8F4FD
-                        border_radius: 3.0
-                        border_size: 0.75
-                        border_color: (COLOR_INFO_BLUE)
+                        color: (RBX_ACCENT_SOFT)
+                        border_radius: (RBX_RADIUS_PILL)
+                        border_size: 0.0
                     }
                     suggested_label := Label {
                         padding: 0
                         margin: 0
                         width: Fit, height: Fit,
                         text: "Suggested"
-                        draw_text +: { text_style: REGULAR_TEXT {font_size: 8.5}, color: (COLOR_INFO_BLUE) }
+                        draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_ACCENT) }
                     }
                 }
 
@@ -364,7 +364,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     max_lines: 2
                     text_overflow: Ellipsis
-                    draw_text +: { text_style: REGULAR_TEXT {font_size: 8.5}, color: #737373 }
+                    draw_text +: { text_style: RBX_TEXT_META {}, color: (RBX_FG_SECONDARY) }
                 }
             }
         }
@@ -381,9 +381,10 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: #f5f5f5
-                border_radius: 4.0
-                border_size: 0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
             join_button := RobrixPositiveIconButton {
@@ -449,7 +450,7 @@ script_mod! {
             width: 18,
             height: 18,
             draw_bg +: {
-                color: (COLOR_ACTIVE_PRIMARY)
+                color: (RBX_ACCENT)
                 border_size: 2.5
             }
         }
@@ -460,8 +461,8 @@ script_mod! {
             flow: Flow.Right{wrap: true},
             align: Align{ x: 0.5, y: 0.5 }
             draw_text +: {
-                color: #737373,
-                text_style: REGULAR_TEXT {font_size: 10}
+                color: (RBX_FG_SECONDARY),
+                text_style: RBX_TEXT_BODY {}
             }
             text: ""
         }
@@ -489,7 +490,7 @@ script_mod! {
                 height: 14,
                 margin: Inset{left: 10, right: 4}
                 draw_bg +: {
-                    color: (COLOR_ACTIVE_PRIMARY)
+                    color: (RBX_ACCENT)
                     border_size: 2.0
                 }
             }
@@ -498,8 +499,8 @@ script_mod! {
                 width: Fit,
                 height: Fit,
                 draw_text +: {
-                    text_style: REGULAR_TEXT {font_size: 9},
-                    color: #888,
+                    text_style: RBX_TEXT_META {},
+                    color: (RBX_FG_TERTIARY),
                 }
                 text: "Loading..."
             }
@@ -513,7 +514,7 @@ script_mod! {
             height: 14,
             margin: Inset{left: 8, right: 10}
             draw_bg +: {
-                color: (COLOR_ACTIVE_PRIMARY)
+                color: (RBX_ACCENT)
                 border_size: 2.0
             }
         }
@@ -522,8 +523,8 @@ script_mod! {
             width: Fit,
             height: Fit,
             draw_text +: {
-                text_style: REGULAR_TEXT {font_size: 9},
-                color: #888,
+                text_style: RBX_TEXT_META {},
+                color: (RBX_FG_TERTIARY),
             }
             text: ""
         }
@@ -538,7 +539,7 @@ script_mod! {
 
         show_bg: true
         draw_bg +: {
-            color: COLOR_PRIMARY
+            color: (RBX_BG_SURFACE)
         }
 
         // Header with parent space info
@@ -549,7 +550,7 @@ script_mod! {
             padding: Inset{left: 16, right: 16, top: 16, bottom: 8}
 
             show_bg: true,
-            draw_bg.color: (COLOR_BG_PREVIEW)
+            draw_bg.color: (RBX_BG_SURFACE)
 
             space_info_row := View {
                 width: Fill,
@@ -564,8 +565,8 @@ script_mod! {
                     flow: Right, // do not wrap
                     margin: Inset{left: 2}
                     draw_text +: {
-                        text_style: REGULAR_TEXT {font_size: 10},
-                        color: #737373,
+                        text_style: RBX_TEXT_META {},
+                        color: (RBX_FG_SECONDARY),
                     }
                     text: "Welcome to the space:"
                 }
@@ -597,8 +598,8 @@ script_mod! {
                     flow: Right, // do not wrap
                     margin: Inset{top: 4} // vertically center-align with the avatar
                     draw_text +: {
-                        text_style: TITLE_TEXT {font_size: 14},
-                        color: #1a1a1a,
+                        text_style: RBX_TEXT_SECTION_TITLE {},
+                        color: (RBX_FG_PRIMARY),
                     }
                     text: ""
                 }
