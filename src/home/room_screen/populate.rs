@@ -2,6 +2,7 @@
 //! for every message kind, replies, thread summaries, and send state.
 
 use super::*;
+use crate::shared::bouncing_dots::BouncingDotsWidgetRefExt;
 
 /// How a message's delivery should be shown in the timeline.
 ///
@@ -22,7 +23,7 @@ pub(super) enum MessageDeliveryState {
 impl MessageDeliveryState {
     /// Reads the delivery state of a timeline item, or `None` when the message
     /// has none to show (already delivered, or never went through the queue).
-    fn from_item(item: &EventTimelineItem) -> Option<Self> {
+    pub(super) fn from_item(item: &EventTimelineItem) -> Option<Self> {
         match item.send_state()? {
             EventSendState::NotSentYet { .. } => Some(Self::Sending),
             // `Sent` still describes a local echo, but one the server has
@@ -1069,60 +1070,40 @@ pub(super) fn populate_text_message_content(
     }
 }
 
-/// Renders a message's delivery state: a pill in the meta band, plus the reason
-/// and the two recovery actions when the send is parked for good.
+/// Renders a message's delivery state in the bottom-right indicator: animated
+/// dots while the send queue still owns the message, a warning button once the
+/// send has failed (clicking it opens the resend confirmation modal).
 ///
 /// Every widget is written on every call, never only on the branch that needs
-/// it. These item widgets are recycled by the PortalList, so a pill left visible
-/// would reappear under an unrelated message.
+/// it. These item widgets are recycled by the PortalList, so an indicator left
+/// visible would reappear under an unrelated message.
 pub(super) fn populate_send_state(cx: &mut Cx, item: &WidgetRef, event_tl_item: &EventTimelineItem) {
     let state = MessageDeliveryState::from_item(event_tl_item);
 
-    let pill = item.view(cx, ids!(content.message_action_bar.send_state_pill));
-    let failure = item.view(cx, ids!(content.send_failure_section));
+    let indicator = item.view(cx, ids!(content.message_action_bar.send_state_indicator));
+    let dots = item.bouncing_dots(
+        cx,
+        ids!(content.message_action_bar.send_state_indicator.sending_dots),
+    );
+    let failure_button = item.button(
+        cx,
+        ids!(content.message_action_bar.send_state_indicator.send_failure_button),
+    );
 
-    let (pill_text, pill_bg, pill_fg) = match &state {
-        Some(MessageDeliveryState::Sending) => (
-            "Sending",
-            crate::shared::design_tokens::RBX_NEUTRAL_BG,
-            crate::shared::design_tokens::RBX_NEUTRAL_FG,
-        ),
-        Some(MessageDeliveryState::FailedRetrying) => (
-            "Waiting to retry",
-            crate::shared::design_tokens::RBX_WARNING_BG,
-            crate::shared::design_tokens::RBX_WARNING_FG,
-        ),
-        Some(MessageDeliveryState::FailedWedged { .. }) => (
-            "Not sent",
-            crate::shared::design_tokens::RBX_DANGER_BG,
-            crate::shared::design_tokens::RBX_DANGER_FG,
-        ),
-        None => ("", crate::shared::design_tokens::RBX_NEUTRAL_BG, crate::shared::design_tokens::RBX_NEUTRAL_FG),
-    };
+    let sending = matches!(state, Some(MessageDeliveryState::Sending));
+    let failed = matches!(
+        state,
+        Some(MessageDeliveryState::FailedRetrying | MessageDeliveryState::FailedWedged { .. })
+    );
 
-    pill.set_visible(cx, state.is_some());
-    if state.is_some() {
-        item.label(cx, ids!(content.message_action_bar.send_state_pill.send_state_label))
-            .set_text(cx, pill_text);
-        let mut pill_view = pill;
-        script_apply_eval!(cx, pill_view, {
-            draw_bg +: { color: #(pill_bg) }
-        });
-        let mut pill_label =
-            item.label(cx, ids!(content.message_action_bar.send_state_pill.send_state_label));
-        script_apply_eval!(cx, pill_label, {
-            draw_text +: { color: #(pill_fg) }
-        });
+    indicator.set_visible(cx, sending || failed);
+    dots.set_visible(cx, sending);
+    if sending {
+        dots.start_animation(cx);
+    } else {
+        dots.stop_animation(cx);
     }
-
-    match &state {
-        Some(MessageDeliveryState::FailedWedged { reason }) => {
-            failure.set_visible(cx, true);
-            item.label(cx, ids!(content.send_failure_section.send_failure_reason))
-                .set_text(cx, reason);
-        }
-        _ => failure.set_visible(cx, false),
-    }
+    failure_button.set_visible(cx, failed);
 }
 
 /// Draws the given image message's content into the `message_content_widget`.

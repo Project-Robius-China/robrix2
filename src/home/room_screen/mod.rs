@@ -27,7 +27,7 @@ use ruma::{OwnedUserId, api::client::receipt::create_receipt::v3::ReceiptType, e
 
 use matrix_sdk_ui::sync_service::State;
 use crate::{
-    app::{AppState, AppStateAction, BotSettingsState, ConfirmDeleteAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{bot_binding_modal::BotBindingModalAction, create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, encryption_notice::{EncryptionNoticeWidgetRefExt, first_other_member_display_name}, invite_modal::InviteModalAction, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
+    app::{AppState, AppStateAction, BotSettingsState, ConfirmDeleteAction, PositiveConfirmationModalAction, SelectedRoom}, avatar_cache, event_preview::{plaintext_body_of_timeline_item, text_preview_of_encrypted_message, text_preview_of_member_profile_change, text_preview_of_other_message_like, text_preview_of_other_state, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::{bot_binding_modal::BotBindingModalAction, create_bot_modal::{CreateBotModalAction, CreateBotModalWidgetExt}, delete_bot_modal::{DeleteBotModalAction, DeleteBotModalWidgetExt}, edited_indicator::EditedIndicatorWidgetRefExt, encryption_notice::{EncryptionNoticeWidgetRefExt, first_other_member_display_name}, invite_modal::InviteModalAction, link_preview::{LinkPreviewCache, LinkPreviewRef, LinkPreviewWidgetRefExt}, loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, room_image_viewer::{get_image_name_and_filesize, populate_matrix_image_modal}, rooms_list::{RoomsListAction, RoomsListRef}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails}, i18n::{AppLanguage, tr_fmt, tr_key}, media_cache::{MediaCache, MediaCacheEntry}, profile::{
         user_profile::{ShowUserProfileAction, UserProfile, UserProfileAndRoomId, UserProfilePaneInfo, UserProfileSlidingPaneRef, UserProfileSlidingPaneWidgetExt},
         user_profile_cache,
     },
@@ -532,17 +532,43 @@ impl Widget for RoomScreen {
                     continue;
                 }
 
-                // "Retry" / "Discard" on a message whose send is parked.
-                let retry_clicked = wr
-                    .button(cx, ids!(content.send_failure_section.send_failure_actions.send_retry_button))
-                    .clicked(actions);
-                let discard_clicked = wr
-                    .button(cx, ids!(content.send_failure_section.send_failure_actions.send_discard_button))
-                    .clicked(actions);
-                if retry_clicked || discard_clicked {
-                    if let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) {
-                        self.act_on_failed_send(cx, tl_idx, retry_clicked);
-                    }
+                // Failure icon on a message whose send failed: confirm, then resend.
+                if wr
+                    .button(cx, ids!(content.message_action_bar.send_state_indicator.send_failure_button))
+                    .clicked(actions)
+                {
+                    let Some(tl_idx) = tl_idx_from_item_id(index, has_encryption_notice) else { continue };
+                    let Some(tl) = self.tl_state.as_ref() else { continue };
+                    let Some(event_tl_item) = tl.items.get(tl_idx).and_then(|item| item.as_event()) else { continue };
+                    // Resending goes through the send queue by transaction id, so a
+                    // local echo without one (which should not exist) cannot recover.
+                    let Some(transaction_id) = event_tl_item.transaction_id() else {
+                        error!("BUG: cannot resend failed local echo without a transaction ID");
+                        continue;
+                    };
+                    let app_language = self.app_language;
+                    let body_text = match MessageDeliveryState::from_item(event_tl_item) {
+                        Some(MessageDeliveryState::FailedWedged { reason }) => tr_fmt(
+                            app_language,
+                            "room_screen.send_state.resend_modal.body_reason",
+                            &[("reason", &reason)],
+                        ),
+                        _ => tr_key(app_language, "room_screen.send_state.resend_modal.body").to_string(),
+                    };
+                    let timeline_kind = tl.kind.clone();
+                    let transaction_id = transaction_id.to_owned();
+                    let content = ConfirmationModalContent {
+                        title_text: tr_key(app_language, "room_screen.send_state.resend_modal.title").into(),
+                        body_text: body_text.into(),
+                        accept_button_text: Some(tr_key(app_language, "room_screen.send_state.resend_modal.resend").into()),
+                        cancel_button_text: Some(tr_key(app_language, "room_screen.send_state.resend_modal.cancel").into()),
+                        on_accept_clicked: Some(Box::new(move |_cx| {
+                            // Re-enables the room's send queue and unwedges the echo.
+                            submit_async_request(MatrixRequest::RetrySend { timeline_kind, transaction_id });
+                        })),
+                        ..Default::default()
+                    };
+                    cx.action(PositiveConfirmationModalAction::Show(RefCell::new(Some(content))));
                     continue;
                 }
 

@@ -329,108 +329,42 @@ script_mod! {
     // its whole `body` subtree with `:=`, so it cannot inherit this from Message.
     // (Named MessageMetaBand to avoid colliding with the retired floating
     // MessageActionBar popup referenced in a commented-out block below.)
-    // Shown under a message whose send is parked and will not move again on its
-    // own: why it failed, and the two ways out. Declared once and instantiated
-    // by both message templates, like MessageDownloadSection.
-    mod.widgets.SendFailureSection = View {
-        visible: false
-        width: Fill,
-        height: Fit
-        flow: Down,
-        spacing: (SPACE_XS)
-        margin: Inset{ top: 4.0, bottom: 2.0 }
-
-        send_failure_reason := Label {
-            width: Fill,
-            height: Fit
-            flow: Flow.Right{wrap: true}
-            draw_text +: {
-                text_style: RBX_TEXT_META {}
-                color: (RBX_DANGER_FG)
-            }
-            text: ""
-        }
-
-        send_failure_actions := View {
-            width: Fill,
-            height: Fit
-            flow: Right,
-            spacing: (SPACE_XS)
-
-            send_retry_button := RobrixIconButton {
-                width: Fit, height: Fit
-                padding: Inset{left: 10.0, right: 10.0, top: 4.0, bottom: 4.0}
-                draw_bg +: {
-                    color: (RBX_ACCENT_SOFT)
-                    color_hover: (RBX_ACCENT_SOFT)
-                    color_down: (RBX_BG_PRESSED)
-                    border_radius: (RBX_RADIUS_MD)
-                    border_size: 1.0
-                    border_color: (RBX_ACCENT)
-                    border_color_hover: (RBX_ACCENT)
-                    border_color_down: (RBX_ACCENT)
-                }
-                draw_text +: {
-                    text_style: (RBX_TEXT_META)
-                    color: (RBX_ACCENT)
-                    color_hover: (RBX_ACCENT)
-                    color_down: (RBX_ACCENT)
-                    color_focus: (RBX_ACCENT)
-                }
-                draw_icon +: { svg: (ICON_SEND), color: (RBX_ACCENT) }
-                icon_walk: Walk{width: 12, height: 12}
-                text: "Retry"
-            }
-
-            send_discard_button := RobrixIconButton {
-                width: Fit, height: Fit
-                padding: Inset{left: 10.0, right: 10.0, top: 4.0, bottom: 4.0}
-                draw_bg +: {
-                    color: (RBX_DANGER_BG)
-                    color_hover: (RBX_DANGER_BG)
-                    color_down: (RBX_BG_PRESSED)
-                    border_radius: (RBX_RADIUS_MD)
-                    border_size: 1.0
-                    border_color: (RBX_DANGER_FG)
-                    border_color_hover: (RBX_DANGER_FG)
-                    border_color_down: (RBX_DANGER_FG)
-                }
-                draw_text +: {
-                    text_style: (RBX_TEXT_META)
-                    color: (RBX_DANGER_FG)
-                    color_hover: (RBX_DANGER_FG)
-                    color_down: (RBX_DANGER_FG)
-                    color_focus: (RBX_DANGER_FG)
-                }
-                draw_icon +: { svg: (ICON_TRASH), color: (RBX_DANGER_FG) }
-                icon_walk: Walk{width: 12, height: 12}
-                text: "Discard"
-            }
-        }
-    }
-
-    // Delivery-state pill for a message still in the send queue. Shares the
-    // meta band so it costs no vertical space, and sits next to the read
-    // receipts — both answer "did this message land?".
-    mod.widgets.SendStatePill = RoundedView {
+    // Bottom-right delivery indicator for a message still in the send queue.
+    // Rides at the trailing edge of the meta band so it costs no vertical
+    // space: animated dots while the local echo is in flight, a warning
+    // button once the send has failed — clicking it asks whether to resend.
+    mod.widgets.SendStateIndicator = View {
         visible: false
         width: Fit,
         height: Fit
-        padding: Inset{ left: 6.0, right: 6.0, top: 1.0, bottom: 1.0 }
-        show_bg: true
-        draw_bg +: {
-            color: (RBX_NEUTRAL_BG)
-            border_radius: (RBX_RADIUS_PILL)
+        align: Align{y: 0.5}
+
+        sending_dots := BouncingDots {
+            visible: false
+            width: 20,
+            height: 10
+            draw_bg +: {
+                color: (RBX_FG_TERTIARY)
+                dot_radius: 1.3
+            }
         }
 
-        send_state_label := Label {
-            width: Fit,
-            height: Fit
-            padding: 0
-            draw_text +: {
-                text_style: RBX_TEXT_META {}
-                color: (RBX_NEUTRAL_FG)
+        send_failure_button := RobrixIconButton {
+            visible: false
+            width: Fit, height: Fit
+            padding: Inset{left: 5.0, right: 5.0, top: 3.0, bottom: 3.0}
+            draw_bg +: {
+                color: (RBX_DANGER_BG)
+                color_hover: (RBX_DANGER_BG)
+                color_down: (RBX_BG_PRESSED)
+                border_radius: (RBX_RADIUS_PILL)
+                border_size: 1.0
+                border_color: (RBX_DANGER_FG)
+                border_color_hover: (RBX_DANGER_FG)
+                border_color_down: (RBX_DANGER_FG)
             }
+            draw_icon +: { svg: (ICON_WARNING), color: (RBX_DANGER_FG) }
+            icon_walk: Walk{width: 12, height: 12}
             text: ""
         }
     }
@@ -441,8 +375,6 @@ script_mod! {
         flow: Right,
         align: Align{y: 0.5}
         spacing: (SPACE_XS)
-
-        send_state_pill := mod.widgets.SendStatePill {}
 
         // Fold affordance for an over-long plain message. Bot replies carry
         // their own toggle inside the card footer; this is the equivalent for
@@ -521,6 +453,8 @@ script_mod! {
             text: ""
         }
         avatar_row := mod.widgets.AvatarRow {}
+
+        send_state_indicator := mod.widgets.SendStateIndicator {}
     }
 
     mod.widgets.Message = set_type_default() do #(Message::register_widget(vm)) {
@@ -825,7 +759,6 @@ script_mod! {
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
                 download_section := mod.widgets.MessageDownloadSection {}
-                send_failure_section := mod.widgets.SendFailureSection {}
                 message_action_bar := mod.widgets.MessageMetaBand {}
                 View {
                     width: Fill,
@@ -1005,7 +938,6 @@ script_mod! {
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
                 download_section := mod.widgets.MessageDownloadSection {}
-                send_failure_section := mod.widgets.SendFailureSection {}
                 message_action_bar := mod.widgets.MessageMetaBand {}
                 View {
                     width: Fill,
@@ -1098,7 +1030,6 @@ script_mod! {
                     } }
                 }
                 download_section := mod.widgets.MessageDownloadSection {}
-                send_failure_section := mod.widgets.SendFailureSection {}
                 animated_message := mod.widgets.AnimatedImage { visible: false }
                 View {
                     width: Fill,
@@ -1127,7 +1058,6 @@ script_mod! {
                     } }
                 }
                 download_section := mod.widgets.MessageDownloadSection {}
-                send_failure_section := mod.widgets.SendFailureSection {}
                 animated_message := mod.widgets.AnimatedImage { visible: false }
                 View {
                     width: Fill,

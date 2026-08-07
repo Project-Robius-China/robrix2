@@ -71,32 +71,6 @@ impl RoomScreen {
     /// Folds/unfolds the long bot reply at `tl_idx`, keyed by its event ID so the
     /// choice survives PortalList recycling. Invalidates that item's content-draw
     /// cache so the body re-populates at its new length.
-    /// Retries or discards the parked send at `tl_idx`.
-    ///
-    /// Discard reuses `RedactMessage`: for a local echo the SDK's `redact`
-    /// aborts the queued send rather than sending a redaction, so no separate
-    /// request is needed.
-    pub(super) fn act_on_failed_send(&mut self, _cx: &mut Cx, tl_idx: usize, retry: bool) {
-        let Some(tl_state) = self.tl_state.as_ref() else { return };
-        let Some(event) = tl_state.items.get(tl_idx).and_then(|item| item.as_event()) else {
-            return;
-        };
-        let timeline_kind = tl_state.kind.clone();
-        if retry {
-            let Some(transaction_id) = event.transaction_id().map(|id| id.to_owned()) else {
-                log!("BUG: retry requested for an item with no transaction id.");
-                return;
-            };
-            submit_async_request(MatrixRequest::RetrySend { timeline_kind, transaction_id });
-        } else {
-            submit_async_request(MatrixRequest::RedactMessage {
-                timeline_kind,
-                timeline_event_id: event.identifier(),
-                reason: None,
-            });
-        }
-    }
-
     pub(super) fn toggle_bot_body_expanded(&mut self, cx: &mut Cx, tl_idx: usize) {
         let Some(tl_state) = self.tl_state.as_mut() else { return };
         let Some(event_id) = tl_state
