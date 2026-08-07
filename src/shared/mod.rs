@@ -15,6 +15,7 @@ pub mod helpers;
 pub mod html_or_plaintext;
 pub mod icon_button;
 pub mod jump_to_bottom_button;
+pub mod keyboard_activation;
 pub mod mentionable_text_input;
 pub mod popup_list;
 pub mod progress_bar;

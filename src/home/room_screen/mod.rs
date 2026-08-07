@@ -35,7 +35,7 @@ use crate::{
     shared::{
         attachment_download::{DownloadDisplayState, DownloadKind, DownloadableAttachment, PendingDownload, PendingDownloadState, mark_pending_download_finished, media_source_mxc, reset_pending_download, start_attachment_download}, avatar::{AvatarRef, AvatarState, AvatarWidgetExt, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, forward_modal::{ForwardMessageContent, ForwardMessageModalAction}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetExt, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
-    sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelinePaginationStatus, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
+    sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelinePaginationStatus, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, is_sync_service_offline, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
@@ -482,15 +482,33 @@ impl Widget for RoomScreen {
 
                 // Handle an image within the message being clicked.
                 let content_message = wr.text_or_image(cx, ids!(content.message));
-                if let TextOrImageAction::Clicked(mxc_uri) = actions.find_widget_action(content_message.widget_uid()).cast() {
-                    let texture = content_message.get_texture(cx);
-                    self.handle_image_click(
-                        cx,
-                        mxc_uri,
-                        texture,
-                        index,
-                    );
-                    continue;
+                match actions.find_widget_action(content_message.widget_uid()).cast() {
+                    TextOrImageAction::Clicked(mxc_uri) => {
+                        let texture = content_message.get_texture(cx);
+                        self.handle_image_click(
+                            cx,
+                            mxc_uri,
+                            texture,
+                            index,
+                        );
+                        continue;
+                    }
+                    TextOrImageAction::RetryRequested(source) => {
+                        // A `Failed` entry is sticky: `try_get_media_or_fetch`
+                        // returns it forever and never re-requests, so a
+                        // transient network blip left the image permanently
+                        // broken for the rest of the session. Dropping the
+                        // entry is what makes the next draw fetch again.
+                        if let Some(tl) = self.tl_state.as_mut() {
+                            tl.media_cache.remove_cache_entry(
+                                media_source_mxc(&source),
+                                Some(MEDIA_THUMBNAIL_FORMAT.into()),
+                            );
+                        }
+                        self.redraw(cx);
+                        continue;
+                    }
+                    TextOrImageAction::None => {}
                 }
 
                 let summary_clicked = wr.button(cx, ids!(state_group_toggle_button)).clicked(actions);
@@ -938,6 +956,7 @@ impl Widget for RoomScreen {
                             tl.link_preview_cache.clear_all_pending_and_failed_requests();
                         }
                     }
+                    self.update_offline_banner(cx);
                     continue;
                 }
 
@@ -1494,6 +1513,7 @@ impl Widget for RoomScreen {
             self.view.widget(cx, ids!(timeline.threads_button)).set_visible(cx, is_desktop);
             self.view.widget(cx, ids!(timeline.info_button)).set_visible(cx, is_desktop);
             self.room_top_bar(cx, ids!(room_top_bar)).set_visible(cx, show_top_bar);
+            self.update_offline_banner(cx);
 
             // RoomTopBar height = header(56) + tabs(40) + divider(1).
             let top_space_offset = if show_top_bar { 97.0 } else { 0.0 };
@@ -1834,6 +1854,29 @@ impl Widget for RoomScreen {
 }
 
 impl RoomScreen {
+    /// Shows or hides the in-room offline strip.
+    ///
+    /// Mobile only: on desktop the rooms list sits next to the room and its
+    /// header already carries the offline icon, so a second indicator would
+    /// only cost a row. On mobile that header is a different screen, which is
+    /// the whole problem — there, the room is the only thing on screen.
+    ///
+    /// Reads the flag rather than tracking the broadcast state itself, so a
+    /// room opened while already offline starts out correct instead of waiting
+    /// for the next transition.
+    fn update_offline_banner(&mut self, cx: &mut Cx) {
+        let show = !effective_is_desktop(cx) && is_sync_service_offline();
+        let banner = self.view.view(cx, ids!(offline_banner));
+        if banner.visible() == show { return }
+        if show {
+            self.view
+                .label(cx, ids!(offline_banner.offline_banner_label))
+                .set_text(cx, tr_key(self.app_language, "room_screen.offline_banner"));
+        }
+        banner.set_visible(cx, show);
+        self.redraw(cx);
+    }
+
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.app_language_initialized = true;

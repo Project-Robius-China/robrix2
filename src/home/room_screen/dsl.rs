@@ -345,6 +345,33 @@ script_mod! {
                     visible: false,
                 }
 
+                // A thin strip shown while the sync service is offline.
+                //
+                // The app's only other connection indicator lives in the rooms
+                // list header, which on mobile is a different screen entirely —
+                // so once you were inside a room, nothing told you that what you
+                // typed was not reaching anyone. Only shown on mobile; on
+                // desktop the rooms list is on screen at the same time and
+                // already carries the offline icon.
+                offline_banner := View {
+                    visible: false,
+                    width: Fill, height: Fit,
+                    flow: Right,
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: Inset{left: 12, right: 12, top: 6, bottom: 6}
+                    show_bg: true,
+                    draw_bg.color: (RBX_DANGER_BG)
+
+                    offline_banner_label := Label {
+                        width: Fit, height: Fit,
+                        flow: Flow.Right{wrap: true},
+                        draw_text +: {
+                            text_style: REGULAR_TEXT { font_size: 10 },
+                            color: (RBX_DANGER_FG),
+                        }
+                    }
+                }
+
                 // The Chat / Info bodies share the same space via an Overlay so
                 // exactly one is shown at a time. (Two `height: Fill` siblings
                 // in a Down flow are sized incorrectly when one is hidden — the

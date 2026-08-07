@@ -501,10 +501,16 @@ impl RoomScreen {
             match action.as_widget_action().widget_uid_eq(room_screen_widget_uid).cast_ref() {
                 MessageAction::React { details, reaction } => {
                     let Some(tl) = self.tl_state.as_ref() else { return };
+                    // Every reaction — from the emoji row, the custom input, or
+                    // a click on an existing pill — funnels through here, so
+                    // this is the one place worth guarding against sending an
+                    // empty key to the server.
+                    let reaction = reaction.trim();
+                    if reaction.is_empty() { continue }
                     submit_async_request(MatrixRequest::ToggleReaction {
                         timeline_kind: tl.kind.clone(),
                         timeline_event_id: details.timeline_event_id.clone(),
-                        reaction: reaction.clone(),
+                        reaction: reaction.to_string(),
                     });
                 }
                 MessageAction::Reply(details) => {

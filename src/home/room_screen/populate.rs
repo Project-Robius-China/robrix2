@@ -1235,15 +1235,25 @@ pub(super) fn populate_image_message_content(
                 }
                 fully_drawn = false;
             }
-            (MediaCacheEntry::Failed(_status_code), _media_format) => {
+            (MediaCacheEntry::Failed(status_code), _media_format) => {
                 if text_or_image_ref.view(cx, ids!(default_image_view)).visible() {
                     fully_drawn = true;
                     return;
                 }
-                text_or_image_ref
-                    .show_text(cx, tr_fmt(app_language, "room_screen.image.failed_to_fetch", &[("body", body), ("mxc_uri", &format!("{:?}", media_source_mxc(&media_source)))]));
-                // For now, we consider this as being "complete". In the future, we could support
-                // retrying to fetch thumbnail of the image on a user click/tap.
+                // Show the message's own body (its alt text / filename) and the
+                // HTTP status, not the `mxc://` URI: the URI is a server-side
+                // identifier the reader cannot open, copy anywhere useful, or
+                // act on, and printing it into the timeline just looks broken.
+                text_or_image_ref.show_error(
+                    cx,
+                    tr_fmt(app_language, "room_screen.image.failed_to_fetch", &[
+                        ("body", body),
+                        ("status", status_code.as_str()),
+                    ]),
+                    media_source.clone(),
+                );
+                // Drawing is complete — the retry button is the way forward
+                // from here, handled in `handle_actions`.
                 fully_drawn = true;
             }
         }

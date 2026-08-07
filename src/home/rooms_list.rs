@@ -1267,15 +1267,12 @@ impl RoomsList {
     /// If `false`, the scroll position is preserved, unless it exceeds the new list length,
     /// in which case the logic in `draw_walk()` will limit it to the max valid index.
     fn update_displayed_rooms(&mut self, cx: &mut Cx, reset_scroll: bool) {
-        let (mut invited, mut favorites, mut direct, mut regular, mut low_priority) = self.generate_displayed_rooms();
-        if self.display_filter.is_some()
-            && invited.is_empty() && favorites.is_empty()
-            && direct.is_empty() && regular.is_empty() && low_priority.is_empty()
-        {
-            self.display_filter = RoomDisplayFilter::default();
-            self.sort_fn = None;
-            (invited, favorites, direct, regular, low_priority) = self.generate_displayed_rooms();
-        }
+        // A filter that matches nothing must show nothing. Clearing the filter
+        // here instead brought the whole room list back while the user's text
+        // was still in the box, which reads as the filter being broken — and it
+        // also made the "no matching rooms" status below unreachable, since
+        // `display_filter` was already None by the time it ran.
+        let (invited, favorites, direct, regular, low_priority) = self.generate_displayed_rooms();
         self.displayed_invited_rooms = invited;
         self.displayed_favorite_rooms = favorites;
         self.displayed_direct_rooms = direct;
