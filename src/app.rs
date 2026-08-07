@@ -17,6 +17,7 @@ use url::Url;
 use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
         account_menu::{AccountMenuAction, AccountMenuWidgetRefExt},
+        add_existing_room_modal::{AddExistingRoomModalAction, AddExistingRoomModalWidgetRefExt},
         add_menu::{AddMenuAction, AddMenuWidgetRefExt},
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, JoinRoomModalAction, JoinRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
@@ -24,7 +25,7 @@ use crate::{
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         report_orphaned_join_leave_results, JoinLeaveModalKind, JoinLeaveRoomModalAction,
         JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender, end_account_switch_guard}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomMemberListFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender, end_account_switch_guard}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
@@ -1603,6 +1604,12 @@ impl MatchEvent for App {
                     cx.action(AppStateAction::UpgradedInviteToJoinedRoom(room_name_id.room_id().clone()));
                     continue;
                 }
+                // A space invite was accepted; upgrade the selected room from invite
+                // to that space's lobby. Same duplicate-handling note as above.
+                RoomsListAction::SpaceInviteAccepted { space_name_id } => {
+                    cx.action(AppStateAction::UpgradedInviteToSpace(space_name_id.clone()));
+                    continue;
+                }
                 _ => {}
             }
 
@@ -1671,6 +1678,33 @@ impl MatchEvent for App {
                         if did_upgrade {
                             self.ui.redraw(cx);
                         }
+                    }
+                    continue;
+                }
+                Some(AppStateAction::UpgradedInviteToSpace(space_name_id)) => {
+                    // Keep the mobile back stack consistent: an entry that was pushed
+                    // as an invite must not send the user back to a dead InviteScreen.
+                    for stacked_room in self.mobile_room_nav_stack.iter_mut() {
+                        stacked_room.upgrade_invite_to_space(space_name_id);
+                    }
+                    let was_viewing_this_invite = self.app_state.selected_room.as_mut()
+                        .is_some_and(|selected_room| selected_room.upgrade_invite_to_space(space_name_id));
+                    if was_viewing_this_invite {
+                        // On Desktop, MainDesktopUI has already swapped the dock tab for a
+                        // SpaceLobbyScreen. Mobile has no dock, so the now-dead InviteScreen
+                        // must come off the stack; we then go to the space itself, the same
+                        // destination that tapping it in the SpacesBar would reach.
+                        if !effective_is_desktop(cx) {
+                            // Note: `pop()` pops all the way back to the root view,
+                            // so the logical nav stack must be emptied to match.
+                            self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+                            self.mobile_room_nav_stack.clear();
+                            self.app_state.selected_room = None;
+                            cx.action(NavigationBarAction::GoToSpace {
+                                space_name_id: space_name_id.clone(),
+                            });
+                        }
+                        self.ui.redraw(cx);
                     }
                     continue;
                 }
@@ -1958,6 +1992,25 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            // Handle the modal that links an existing room into a space.
+            match action.downcast_ref() {
+                Some(AddExistingRoomModalAction::Open { space_name_id, existing_children }) => {
+                    self.ui.add_existing_room_modal(cx, ids!(add_existing_room_modal_inner)).show(
+                        cx,
+                        space_name_id.clone(),
+                        existing_children.clone(),
+                        self.app_state.app_language,
+                    );
+                    self.ui.modal(cx, ids!(add_existing_room_modal)).open(cx);
+                    continue;
+                }
+                Some(AddExistingRoomModalAction::Close) => {
+                    self.ui.modal(cx, ids!(add_existing_room_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
             // Handle the GLOBAL report-room modal (moved out of RoomScreen so it
             // survives mobile<->desktop AdaptiveView rebuilds). RoomScreen emits
             // Open{room_id,...}; the modal widget emits Close/Submit.
@@ -2013,17 +2066,19 @@ impl MatchEvent for App {
 
             // Handle RoomSettingsAction.
             match action.downcast_ref::<RoomSettingsAction>() {
-                Some(RoomSettingsAction::Open { room_id }) => {
+                Some(RoomSettingsAction::Open { room_id, room_name, is_space }) => {
                     let room_id = room_id.clone();
+                    let is_space = *is_space;
                     let rooms_list = cx.get_global::<RoomsListRef>().clone();
-                    let room_name = rooms_list.get_room_name(&room_id)
-                        .map(|rni| rni.to_string())
+                    // Spaces aren't in the rooms list, so their name is passed in.
+                    let room_name = room_name.clone()
+                        .or_else(|| rooms_list.get_room_name(&room_id).map(|rni| rni.to_string()))
                         .unwrap_or_else(|| room_id.as_str().to_string());
                     let canonical_alias = rooms_list.get_room_canonical_alias(&room_id);
                     let alias_str = canonical_alias.as_ref().map(|a| a.as_str());
-                    log!("RoomSettingsAction::Open for {} (name: {})", room_id, room_name);
+                    log!("RoomSettingsAction::Open for {} (name: {}, is_space: {})", room_id, room_name, is_space);
                     self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
-                        .show_settings(cx, room_id.clone(), &room_name, "", alias_str);
+                        .show_settings(cx, room_id.clone(), &room_name, "", alias_str, is_space);
                     self.ui.modal(cx, ids!(room_settings_modal)).open(cx);
                     submit_async_request(MatrixRequest::FetchRoomSettings { room_id });
                     continue;
@@ -2047,17 +2102,24 @@ impl MatchEvent for App {
                     self.ui.modal(cx, ids!(room_settings_modal)).close(cx);
                     continue;
                 }
-                Some(RoomSettingsAction::LeaveRoom { room_id }) => {
+                Some(RoomSettingsAction::LeaveRoom { room_id, is_space }) => {
                     let room_id = room_id.clone();
                     let rooms_list = cx.get_global::<RoomsListRef>().clone();
                     let room_name_id = rooms_list.get_room_name(&room_id)
                         .unwrap_or_else(|| RoomNameId::from(
                             (matrix_sdk::RoomDisplayName::Empty, room_id.clone())
                         ));
-                    cx.action(JoinLeaveRoomModalAction::Open {
-                        kind: JoinLeaveModalKind::LeaveRoom(BasicRoomDetails::Name(room_name_id)),
-                        show_tip: false,
-                    });
+                    let details = BasicRoomDetails::Name(room_name_id);
+                    // Leaving a space also leaves the rooms joined inside it, which is
+                    // a different backend path than leaving a single room.
+                    let kind = match (*is_space, rooms_list.get_space_request_sender()) {
+                        (true, Some(space_request_sender)) => JoinLeaveModalKind::LeaveSpace {
+                            details,
+                            space_request_sender,
+                        },
+                        _ => JoinLeaveModalKind::LeaveRoom(details),
+                    };
+                    cx.action(JoinLeaveRoomModalAction::Open { kind, show_tip: false });
                     self.ui.modal(cx, ids!(room_settings_modal)).close(cx);
                     continue;
                 }
@@ -2086,11 +2148,24 @@ impl MatchEvent for App {
             // Handle RoomSettingsFetchedAction.
             if let Some(fetched) = action.downcast_ref::<RoomSettingsFetchedAction>() {
                 self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
-                    .apply_fetched_settings(cx, fetched.topic.clone(), fetched.is_public);
+                    .apply_fetched_settings(
+                        cx,
+                        fetched.topic.clone(),
+                        fetched.is_public,
+                        fetched.join_rule,
+                        fetched.can_change_join_rule,
+                    );
                 continue;
             }
 
             // Handle RoomAvatarUploadedAction — refresh the avatar widget.
+            // Handle the settings dialog's member list arriving.
+            if let Some(fetched) = action.downcast_ref::<RoomMemberListFetchedAction>() {
+                self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
+                    .apply_member_list(cx, fetched.members.clone());
+                continue;
+            }
+
             if let Some(uploaded) = action.downcast_ref::<RoomAvatarUploadedAction>() {
                 self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
                     .apply_avatar(cx, &uploaded.image_data);
@@ -2099,7 +2174,11 @@ impl MatchEvent for App {
 
             // Handle RoomContextMenuAction::OpenRoomSettings.
             if let Some(RoomContextMenuAction::OpenRoomSettings(room_id)) = action.downcast_ref::<RoomContextMenuAction>() {
-                cx.action(RoomSettingsAction::Open { room_id: room_id.clone() });
+                cx.action(RoomSettingsAction::Open {
+                    room_id: room_id.clone(),
+                    room_name: None,
+                    is_space: false,
+                });
                 continue;
             }
 
@@ -2125,8 +2204,9 @@ impl MatchEvent for App {
             }
 
             match action.downcast_ref() {
-                Some(CreateRoomModalAction::Open { parent_space_id }) => {
-                    self.ui.create_room_modal(cx, ids!(create_room_modal_inner)).show(cx, parent_space_id.clone());
+                Some(CreateRoomModalAction::Open { parent_space_id, create_space }) => {
+                    self.ui.create_room_modal(cx, ids!(create_room_modal_inner))
+                        .show(cx, parent_space_id.clone(), *create_space);
                     self.ui.modal(cx, ids!(create_room_modal)).open(cx);
                     continue;
                 }
@@ -3654,6 +3734,25 @@ impl SelectedRoom {
         }
     }
 
+    /// Upgrades this room from an invite to a joined space
+    /// if its `room_id` matches that of the given `space_name_id`.
+    ///
+    /// Returns `true` if the room was an `InvitedRoom` with the same `room_id`
+    /// that was successfully upgraded to a `Space`; otherwise, returns `false`.
+    pub fn upgrade_invite_to_space(&mut self, space_name_id: &RoomNameId) -> bool {
+        match self {
+            SelectedRoom::InvitedRoom { room_name_id }
+                if room_name_id.room_id() == space_name_id.room_id() =>
+            {
+                *self = SelectedRoom::Space {
+                    space_name_id: space_name_id.clone(),
+                };
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Returns the `LiveId` of the room tab corresponding to this `SelectedRoom`.
     pub fn tab_id(&self) -> LiveId {
         match self {
@@ -4277,6 +4376,9 @@ pub enum AppStateAction {
     /// The given room has successfully been upgraded from being displayed
     /// as an InviteScreen to a RoomScreen.
     UpgradedInviteToJoinedRoom(OwnedRoomId),
+    /// The given space has successfully been upgraded from being displayed
+    /// as an InviteScreen to a SpaceLobbyScreen.
+    UpgradedInviteToSpace(RoomNameId),
     /// The given app state was loaded from persistent storage
     /// and is ready to be restored.
     RestoreAppStateFromPersistentState(Box<AppState>),

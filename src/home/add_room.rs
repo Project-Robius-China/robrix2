@@ -1131,6 +1131,9 @@ pub struct CreateRoomForm {
     #[rust(false)] visibility_popup_visible: bool,
     #[rust(false)] create_public_room: bool,
     #[rust(true)] create_encrypted_room: bool,
+    /// Whether this form creates a space instead of a regular room.
+    /// A space has no timeline, so the encryption option doesn't apply to it.
+    #[rust(false)] create_space: bool,
     #[rust] app_language: AppLanguage,
 }
 
@@ -1190,7 +1193,7 @@ impl WidgetMatchEvent for CreateRoomForm {
         for action in actions {
             if let Some(create_room_action) = action.downcast_ref() {
                 match create_room_action {
-                    CreateRoomAction::Created { room_name_id, parent_space_id, space_link_error, context }
+                    CreateRoomAction::Created { room_name_id, parent_space_id, space_link_error, is_space, context }
                         if context == &self.context =>
                     {
                         self.creating_room = false;
@@ -1203,7 +1206,11 @@ impl WidgetMatchEvent for CreateRoomForm {
                         }
 
                         let room_name_text = room_name_id.to_string();
-                        let mut popup_message = tr_fmt(self.app_language, "add_room.popup.created_room_success", &[
+                        let mut popup_message = tr_fmt(self.app_language, if *is_space {
+                            "add_room.popup.created_space_success"
+                        } else {
+                            "add_room.popup.created_room_success"
+                        }, &[
                             ("room_name", room_name_text.as_str()),
                         ]);
                         let popup_kind = if let Some(link_error) = space_link_error {
@@ -1215,6 +1222,18 @@ impl WidgetMatchEvent for CreateRoomForm {
                             PopupKind::Success
                         };
                         enqueue_popup_notification(popup_message, popup_kind, Some(5.0));
+
+                        // A new space never enters the rooms list, so there is no room
+                        // to wait for and nothing to navigate to here: the SpacesBar
+                        // takes over once the space service reports the joined space.
+                        if *is_space {
+                            self.clear_feedback(cx);
+                            if self.context == CreateRoomContext::SpaceLobbyModal {
+                                cx.action(CreateRoomModalAction::Close);
+                            }
+                            self.view.redraw(cx);
+                            continue;
+                        }
 
                         if cx.has_global::<RoomsListRef>()
                             && cx.get_global::<RoomsListRef>().is_room_loaded(room_name_id.room_id())
@@ -1303,22 +1322,41 @@ impl CreateRoomForm {
         self.creating_room || self.pending_created_room.is_some()
     }
 
+    /// Picks the room- or space-flavoured variant of an i18n key,
+    /// based on what this form is currently creating.
+    #[inline]
+    fn kind_key(&self, room_key: &'static str, space_key: &'static str) -> &'static str {
+        if self.create_space { space_key } else { room_key }
+    }
+
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.view.text_input(cx, ids!(create_room_name_input))
-            .set_empty_text(cx, tr_key(self.app_language, "add_room.create_room.input.placeholder").to_string());
+            .set_empty_text(cx, tr_key(self.app_language, self.kind_key(
+                "add_room.create_room.input.placeholder",
+                "add_room.create_space.input.placeholder",
+            )).to_string());
         self.view.text_input(cx, ids!(create_room_topic_input))
             .set_empty_text(cx, tr_key(self.app_language, "add_room.create_room.topic.placeholder").to_string());
         self.view.label(cx, ids!(create_room_visibility_private_option_label))
-            .set_text(cx, tr_key(self.app_language, "add_room.create_room.visibility.option.private"));
+            .set_text(cx, tr_key(self.app_language, self.kind_key(
+                "add_room.create_room.visibility.option.private",
+                "add_room.create_space.visibility.option.private",
+            )));
         self.view.label(cx, ids!(create_room_visibility_public_option_label))
-            .set_text(cx, tr_key(self.app_language, "add_room.create_room.visibility.option.public"));
+            .set_text(cx, tr_key(self.app_language, self.kind_key(
+                "add_room.create_room.visibility.option.public",
+                "add_room.create_space.visibility.option.public",
+            )));
         self.view.label(cx, ids!(create_room_encryption_label))
             .set_text(cx, tr_key(self.app_language, "add_room.create_room.encryption.label"));
         self.view.label(cx, ids!(create_room_encryption_hint))
             .set_text(cx, tr_key(self.app_language, "add_room.create_room.encryption.hint"));
         self.view.button(cx, ids!(create_room_button))
-            .set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
+            .set_text(cx, tr_key(self.app_language, self.kind_key(
+                "add_room.create_room.button.create",
+                "add_room.create_space.button.create",
+            )));
         self.update_visibility_selector_text(cx);
         self.sync_mode_views(cx);
     }
@@ -1334,19 +1372,31 @@ impl CreateRoomForm {
     }
 
     fn update_visibility_selector_text(&mut self, cx: &mut Cx) {
-        let selector_text = if self.create_public_room {
-            tr_key(self.app_language, "add_room.create_room.visibility.option.public")
+        let selector_text = tr_key(self.app_language, if self.create_public_room {
+            self.kind_key(
+                "add_room.create_room.visibility.option.public",
+                "add_room.create_space.visibility.option.public",
+            )
         } else {
-            tr_key(self.app_language, "add_room.create_room.visibility.option.private")
-        };
+            self.kind_key(
+                "add_room.create_room.visibility.option.private",
+                "add_room.create_space.visibility.option.private",
+            )
+        });
         self.view.label(cx, ids!(create_room_visibility_selector_label))
             .set_text(cx, selector_text);
 
-        let hint_text = if self.create_public_room {
-            tr_key(self.app_language, "add_room.create_room.visibility.hint.public")
+        let hint_text = tr_key(self.app_language, if self.create_public_room {
+            self.kind_key(
+                "add_room.create_room.visibility.hint.public",
+                "add_room.create_space.visibility.hint.public",
+            )
         } else {
-            tr_key(self.app_language, "add_room.create_room.visibility.hint.private")
-        };
+            self.kind_key(
+                "add_room.create_room.visibility.hint.private",
+                "add_room.create_space.visibility.hint.private",
+            )
+        });
         self.view.label(cx, ids!(create_room_visibility_hint))
             .set_text(cx, hint_text);
     }
@@ -1418,12 +1468,16 @@ impl CreateRoomForm {
         let parent_space_id = self.selected_parent_space_id();
 
         self.creating_room = true;
-        self.set_feedback(cx, tr_key(self.app_language, "add_room.feedback.creating_room"), true, false);
+        self.set_feedback(cx, tr_key(self.app_language, self.kind_key(
+            "add_room.feedback.creating_room",
+            "add_room.feedback.creating_space",
+        )), true, false);
         submit_async_request(MatrixRequest::CreateRoom {
             room_name: room_name.to_owned(),
             topic: (!room_topic.is_empty()).then_some(room_topic.to_owned()),
             is_public: self.create_public_room,
             is_encrypted: self.create_encrypted_room,
+            is_space: self.create_space,
             parent_space_id,
             context: self.context.clone(),
         });
@@ -1437,6 +1491,7 @@ impl CreateRoomForm {
         preferred_parent_space_id: Option<OwnedRoomId>,
         context: CreateRoomContext,
         clear_room_name: bool,
+        create_space: bool,
     ) {
         self.context = context;
         self.creating_room = false;
@@ -1447,6 +1502,10 @@ impl CreateRoomForm {
         self.visibility_popup_visible = false;
         self.create_public_room = false;
         self.create_encrypted_room = true;
+        // Set before any text is applied below, since every label picks its
+        // room- or space-flavoured wording from this.
+        self.create_space = create_space;
+        self.set_app_language(cx, self.app_language);
 
         let create_room_name_input = self.view.text_input(cx, ids!(create_room_name_input));
         let create_room_topic_input = self.view.text_input(cx, ids!(create_room_topic_input));
@@ -1459,7 +1518,10 @@ impl CreateRoomForm {
         }
         self.clear_feedback(cx);
         create_room_button.set_enabled(cx, !create_room_name_input.text().trim().is_empty());
-        create_room_button.set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
+        create_room_button.set_text(cx, tr_key(self.app_language, self.kind_key(
+            "add_room.create_room.button.create",
+            "add_room.create_space.button.create",
+        )));
         create_room_button.reset_hover(cx);
         create_room_encrypted_toggle.set_active(cx, self.create_encrypted_room, Animate::No);
         self.set_create_room_public(cx, self.create_public_room);
@@ -1481,12 +1543,21 @@ impl CreateRoomForm {
             .set_visible(cx, self.visibility_popup_visible);
         self.view.label(cx, ids!(create_room_help))
             .set_visible(cx, self.context == CreateRoomContext::AddRoomPage);
+        // A space carries no messages of its own, so it is never encrypted.
+        self.view.view(cx, ids!(create_room_encryption_row))
+            .set_visible(cx, !self.create_space);
 
-        let help_text = if self.fixed_parent_space_id.is_some() {
-            tr_key(self.app_language, "add_room.create_room.help.fixed_parent")
+        let help_text = tr_key(self.app_language, if self.fixed_parent_space_id.is_some() {
+            self.kind_key(
+                "add_room.create_room.help.fixed_parent",
+                "add_room.create_space.help.fixed_parent",
+            )
         } else {
-            tr_key(self.app_language, "add_room.create_room.help.default")
-        };
+            self.kind_key(
+                "add_room.create_room.help.default",
+                "add_room.create_space.help.default",
+            )
+        });
         self.view.label(cx, ids!(create_room_help)).set_text(cx, help_text);
     }
 }
@@ -1515,9 +1586,10 @@ impl CreateRoomFormRef {
         preferred_parent_space_id: Option<OwnedRoomId>,
         context: CreateRoomContext,
         clear_room_name: bool,
+        create_space: bool,
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.prepare(cx, preferred_parent_space_id, context, clear_room_name);
+        inner.prepare(cx, preferred_parent_space_id, context, clear_room_name, create_space);
     }
 }
 
@@ -1526,6 +1598,8 @@ pub struct CreateRoomModal {
     #[deref] view: View,
     #[rust] app_language: AppLanguage,
     #[rust(false)] has_fixed_parent: bool,
+    /// Whether this modal creates a space instead of a regular room.
+    #[rust(false)] create_space: bool,
 }
 
 impl Widget for CreateRoomModal {
@@ -1573,25 +1647,48 @@ impl WidgetMatchEvent for CreateRoomModal {
         create_button.set_text(cx, if is_busy {
             tr_key(self.app_language, "add_room.create_room.button.syncing")
         } else {
-            tr_key(self.app_language, "add_room.create_room.button.create")
+            tr_key(self.app_language, self.kind_key(
+                "add_room.create_room.button.create",
+                "add_room.create_space.button.create",
+            ))
         });
         // cancel_button stays enabled always
     }
 }
 
 impl CreateRoomModal {
+    /// Picks the room- or space-flavoured variant of an i18n key,
+    /// based on what this modal is currently creating.
+    #[inline]
+    fn kind_key(&self, room_key: &'static str, space_key: &'static str) -> &'static str {
+        if self.create_space { space_key } else { room_key }
+    }
+
+    /// The subtitle explains what will be created and, when applicable,
+    /// that it will be nested inside the space the modal was opened from.
+    fn subtitle_key(&self) -> &'static str {
+        match (self.has_fixed_parent, self.create_space) {
+            (true, true) => "add_room.create_space.modal.subtitle",
+            (true, false) => "add_room.create_room.modal.subtitle",
+            (false, true) => "add_room.create_space.help.default",
+            (false, false) => "add_room.create_room.help.default",
+        }
+    }
+
     fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
         self.app_language = app_language;
         self.view.label(cx, ids!(title))
-            .set_text(cx, tr_key(self.app_language, "add_room.create_room.modal.title"));
+            .set_text(cx, tr_key(self.app_language, self.kind_key(
+                "add_room.create_room.modal.title",
+                "add_room.create_space.modal.title",
+            )));
         self.view.label(cx, ids!(subtitle))
-            .set_text(cx, if self.has_fixed_parent {
-                tr_key(self.app_language, "add_room.create_room.modal.subtitle")
-            } else {
-                tr_key(self.app_language, "add_room.create_room.help.default")
-            });
+            .set_text(cx, tr_key(self.app_language, self.subtitle_key()));
         self.view.button(cx, ids!(create_button))
-            .set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
+            .set_text(cx, tr_key(self.app_language, self.kind_key(
+                "add_room.create_room.button.create",
+                "add_room.create_space.button.create",
+            )));
         self.view.button(cx, ids!(cancel_button))
             .set_text(cx, tr_key(self.app_language, "add_room.button.cancel"));
         self.view.create_room_form(cx, ids!(create_room_form))
@@ -1599,26 +1696,23 @@ impl CreateRoomModal {
         self.view.redraw(cx);
     }
 
-    pub fn show(&mut self, cx: &mut Cx, preferred_parent_space_id: Option<OwnedRoomId>) {
+    pub fn show(&mut self, cx: &mut Cx, preferred_parent_space_id: Option<OwnedRoomId>, create_space: bool) {
         self.has_fixed_parent = preferred_parent_space_id.is_some();
+        self.create_space = create_space;
         let create_room_form = self.view.create_room_form(cx, ids!(create_room_form));
-        create_room_form.set_app_language(cx, self.app_language);
         create_room_form.prepare(
             cx,
             preferred_parent_space_id,
             CreateRoomContext::SpaceLobbyModal,
             true,
+            create_space,
         );
-        self.view.label(cx, ids!(subtitle))
-            .set_text(cx, if self.has_fixed_parent {
-                tr_key(self.app_language, "add_room.create_room.modal.subtitle")
-            } else {
-                tr_key(self.app_language, "add_room.create_room.help.default")
-            });
+        // Applies this modal's own labels for the room/space kind just set above,
+        // and forwards the language to the form.
+        self.set_app_language(cx, self.app_language);
         let can_submit = create_room_form.can_submit(cx);
         let create_button = self.view.button(cx, ids!(create_button));
         let cancel_button = self.view.button(cx, ids!(cancel_button));
-        create_button.set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
         create_button.reset_hover(cx);
         cancel_button.reset_hover(cx);
         // Initial button states: form is empty so create disabled, cancel always enabled
@@ -1629,9 +1723,9 @@ impl CreateRoomModal {
 }
 
 impl CreateRoomModalRef {
-    pub fn show(&self, cx: &mut Cx, preferred_parent_space_id: Option<OwnedRoomId>) {
+    pub fn show(&self, cx: &mut Cx, preferred_parent_space_id: Option<OwnedRoomId>, create_space: bool) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.show(cx, preferred_parent_space_id);
+        inner.show(cx, preferred_parent_space_id, create_space);
     }
 }
 
@@ -2173,6 +2267,7 @@ impl Widget for AddRoomScreen {
             if new_room_button.clicked(actions) {
                 cx.action(CreateRoomModalAction::Open {
                     parent_space_id: None,
+                    create_space: false,
                 });
             }
             if start_chat_button.clicked(actions) {
@@ -2703,7 +2798,7 @@ fn populate_room_preview(
     }
 }
 
-fn refresh_space_children(cx: &mut Cx, space_id: &OwnedRoomId) {
+pub(crate) fn refresh_space_children(cx: &mut Cx, space_id: &OwnedRoomId) {
     let Some(rooms_list_ref) = cx.has_global::<RoomsListRef>().then(|| cx.get_global::<RoomsListRef>()) else {
         return;
     };
@@ -2763,12 +2858,14 @@ pub enum KnockResultAction {
 /// Actions sent from the backend task as a result of a [`MatrixRequest::CreateRoom`].
 #[derive(Debug)]
 pub enum CreateRoomAction {
-    /// A new room was created.
+    /// A new room or space was created.
     Created {
         room_name_id: RoomNameId,
         parent_space_id: Option<OwnedRoomId>,
         /// If set, the room was created but couldn't be linked into the requested space.
         space_link_error: Option<String>,
+        /// Whether what was created is a space rather than a regular room.
+        is_space: bool,
         context: CreateRoomContext,
     },
     /// There was an error creating the room.
@@ -2784,6 +2881,8 @@ pub enum CreateRoomAction {
 pub enum CreateRoomModalAction {
     Open {
         parent_space_id: Option<OwnedRoomId>,
+        /// Whether the modal should create a space instead of a regular room.
+        create_space: bool,
     },
     Close,
 }
@@ -2807,7 +2906,13 @@ pub enum JoinRoomModalAction {
 #[derive(Debug)]
 pub enum CreatableSpacesAction {
     Loaded {
+        /// Joined spaces where the user may add or remove children
+        /// (i.e. can send `m.space.child`).
         spaces: Vec<RoomNameId>,
+        /// Joined spaces whose own settings the user may edit
+        /// (i.e. can send `m.room.name`). This is a separate power level from
+        /// the one above, so the two lists are not interchangeable.
+        manageable_spaces: Vec<RoomNameId>,
     },
 }
 

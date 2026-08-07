@@ -187,6 +187,17 @@ impl JoinLeaveModalKind {
         }
     }
 
+    /// Whether this modal is acting on a space rather than a regular room.
+    pub fn is_space(&self) -> bool {
+        match self {
+            JoinLeaveModalKind::AcceptInvite(invite)
+            | JoinLeaveModalKind::RejectInvite(invite) => invite.is_space,
+            JoinLeaveModalKind::JoinRoom { is_space, .. } => *is_space,
+            JoinLeaveModalKind::LeaveSpace { .. } => true,
+            JoinLeaveModalKind::LeaveRoom(_) => false,
+        }
+    }
+
     #[allow(unused)] // remove when we use it in navigate_to_room
     pub fn basic_room_details(&self) -> &BasicRoomDetails {
         match self {
@@ -369,12 +380,21 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
         for action in actions {
             match action.downcast_ref() {
                 Some(JoinRoomResultAction::Joined { room_id }) if room_id == kind.room_id() => {
+                    let is_space = kind.is_space();
                     enqueue_popup_notification(
-                        tr_key(self.app_language, "join_leave_modal.popup.joined_success"),
+                        tr_key(self.app_language, if is_space {
+                            "join_leave_modal.popup.joined_space_success"
+                        } else {
+                            "join_leave_modal.popup.joined_success"
+                        }),
                         PopupKind::Success,
                         Some(3.0),
                     );
-                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "join_leave_modal.title.joined_room"));
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, if is_space {
+                        "join_leave_modal.title.joined_space"
+                    } else {
+                        "join_leave_modal.title.joined_room"
+                    }));
                     let room_name = kind.room_name().to_string();
                     self.view.label(cx, ids!(description)).set_text(cx, &tr_fmt(self.app_language, "join_leave_modal.description.joined_room", &[
                         ("room_name", room_name.as_str()),
@@ -382,7 +402,11 @@ impl WidgetMatchEvent for JoinLeaveRoomModal {
                     new_final_success = Some(true);
                 }
                 Some(JoinRoomResultAction::Failed { room_id, error }) if room_id == kind.room_id() => {
-                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, "join_leave_modal.title.error_joining_room"));
+                    self.view.label(cx, ids!(title)).set_text(cx, tr_key(self.app_language, if kind.is_space() {
+                        "join_leave_modal.title.error_joining_space"
+                    } else {
+                        "join_leave_modal.title.error_joining_room"
+                    }));
                     let was_invite = matches!(kind, JoinLeaveModalKind::AcceptInvite(_) | JoinLeaveModalKind::RejectInvite(_));
                     let msg = utils::stringify_join_leave_error(error, kind.room_name(), true, was_invite);
                     self.view.label(cx, ids!(description)).set_text(cx, &msg);
@@ -519,17 +543,33 @@ impl JoinLeaveRoomModal {
 
         match &kind {
             JoinLeaveModalKind::AcceptInvite(invite) => {
-                title = tr_key(self.app_language, "join_leave_modal.title.confirm_accept_invite");
+                title = tr_key(self.app_language, if invite.is_space {
+                    "join_leave_modal.title.confirm_accept_space_invite"
+                } else {
+                    "join_leave_modal.title.confirm_accept_invite"
+                });
                 let room_name = invite.room_name_id().to_string();
-                description = tr_fmt(self.app_language, "join_leave_modal.description.confirm_accept_invite", &[
+                description = tr_fmt(self.app_language, if invite.is_space {
+                    "join_leave_modal.description.confirm_accept_space_invite"
+                } else {
+                    "join_leave_modal.description.confirm_accept_invite"
+                }, &[
                     ("room_name", room_name.as_str()),
                 ]);
                 tip_button = tr_key(self.app_language, "join_leave_modal.button.join");
             }
             JoinLeaveModalKind::RejectInvite(invite) => {
-                title = tr_key(self.app_language, "join_leave_modal.title.confirm_reject_invite");
+                title = tr_key(self.app_language, if invite.is_space {
+                    "join_leave_modal.title.confirm_reject_space_invite"
+                } else {
+                    "join_leave_modal.title.confirm_reject_invite"
+                });
                 let room_name = invite.room_name_id().to_string();
-                description = tr_fmt(self.app_language, "join_leave_modal.description.confirm_reject_invite", &[
+                description = tr_fmt(self.app_language, if invite.is_space {
+                    "join_leave_modal.description.confirm_reject_space_invite"
+                } else {
+                    "join_leave_modal.description.confirm_reject_invite"
+                }, &[
                     ("room_name", room_name.as_str()),
                 ]);
                 tip_button = tr_key(self.app_language, "join_leave_modal.button.reject");

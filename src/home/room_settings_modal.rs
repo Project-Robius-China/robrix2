@@ -5,7 +5,10 @@ use std::path::PathBuf;
 use makepad_widgets::*;
 use ruma::OwnedRoomId;
 
-use crate::shared::avatar::AvatarWidgetExt;
+use crate::avatar_cache::{self, AvatarCacheEntry};
+use crate::shared::avatar::{AvatarWidgetExt, AvatarWidgetRefExt};
+use crate::shared::design_tokens::{RBX_ACCENT, RBX_BG_SELECTED, RBX_FG_SECONDARY};
+use crate::sliding_sync::{JoinRuleChoice, MatrixRequest, SettingsMemberInfo, submit_async_request};
 use crate::utils::load_png_or_jpg;
 
 script_mod! {
@@ -934,8 +937,16 @@ script_mod! {
 /// Actions emitted by the `RoomSettingsModal`.
 #[derive(Clone, Debug, Default)]
 pub enum RoomSettingsAction {
-    /// Open the modal for the given room.
-    Open { room_id: OwnedRoomId },
+    /// Open the modal for the given room or space.
+    Open {
+        room_id: OwnedRoomId,
+        /// The display name to show. Needed for spaces, which the rooms list
+        /// doesn't know about; `None` falls back to looking the room up there.
+        room_name: Option<String>,
+        /// Whether this is a space. A space has no timeline, so the message-media
+        /// settings don't apply and the wording differs.
+        is_space: bool,
+    },
     /// Close the modal (user clicked close/X).
     Close,
     /// Save room name and topic.
@@ -948,8 +959,8 @@ pub enum RoomSettingsAction {
     AddLocalAddress { room_id: OwnedRoomId, alias: String },
     /// Change media visibility preference.
     SetMediaVisibility { room_id: OwnedRoomId, always_show: bool },
-    /// Leave the room.
-    LeaveRoom { room_id: OwnedRoomId },
+    /// Leave the room, or the space and the joined rooms inside it.
+    LeaveRoom { room_id: OwnedRoomId, is_space: bool },
     /// Upload a new room avatar from the given local file path.
     UploadRoomAvatar { room_id: OwnedRoomId, avatar_path: PathBuf },
     #[default]
@@ -964,6 +975,26 @@ pub struct RoomSettingsModal {
     #[rust] original_name: String,
     #[rust] original_topic: String,
     #[rust] always_show_media: bool,
+    /// Whether the modal is currently showing a space rather than a room.
+    #[rust(false)] is_space: bool,
+    /// The room's current join rule, as last fetched.
+    #[rust] join_rule: JoinRuleChoice,
+    /// Whether this user's power level allows changing the join rule.
+    #[rust(false)] can_change_join_rule: bool,
+    /// Which sidebar tab is showing.
+    #[rust] active_tab: SettingsTab,
+    /// Joined members, populated asynchronously after the dialog opens.
+    #[rust] members: Vec<SettingsMemberInfo>,
+    /// Whether the member list request is still outstanding.
+    #[rust(false)] members_loading: bool,
+}
+
+/// The sidebar sections of the settings dialog.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsTab {
+    #[default]
+    General,
+    Members,
 }
 
 impl Widget for RoomSettingsModal {
@@ -973,7 +1004,60 @@ impl Widget for RoomSettingsModal {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        self.view.draw_walk(cx, scope, walk)
+        while let Some(widget_to_draw) = self.view.draw_walk(cx, scope, walk).step() {
+            let portal_list_ref = widget_to_draw.as_portal_list();
+            let Some(mut list) = portal_list_ref.borrow_mut() else { continue };
+
+            // One extra slot after the members holds the loading/empty placeholder.
+            let count = self.members.len();
+            list.set_item_range(cx, 0, count + 1);
+            while let Some(index) = list.next_visible_item(cx) {
+                let item = if let Some(member) = self.members.get(index) {
+                    let item = list.item(cx, index, id!(member_row));
+                    item.label(cx, ids!(member_name))
+                        .set_text(cx, member.displayable_name());
+                    item.label(cx, ids!(member_user_id))
+                        .set_text(cx, member.user_id.as_str());
+
+                    let role = member.role_label();
+                    item.view(cx, ids!(member_role)).set_visible(cx, role.is_some());
+                    if let Some(role) = role {
+                        item.label(cx, ids!(member_role_label)).set_text(cx, role);
+                    }
+
+                    let avatar = item.avatar(cx, ids!(member_avatar));
+                    let mut drew_avatar = false;
+                    if let Some(uri) = member.avatar_url.as_ref()
+                        && let AvatarCacheEntry::Loaded(data) = avatar_cache::get_or_fetch_avatar(cx, uri)
+                    {
+                        drew_avatar = avatar.show_image(
+                            cx,
+                            None, // member avatars here aren't clickable
+                            |cx, img| load_png_or_jpg(&img, cx, &data),
+                        ).is_ok();
+                    }
+                    if !drew_avatar {
+                        avatar.show_text(cx, None, None, member.displayable_name());
+                    }
+                    item
+                } else if index == count {
+                    let item = list.item(cx, index, id!(members_status));
+                    let text = if self.members_loading {
+                        "Loading members…"
+                    } else if count == 0 {
+                        "No members to show yet."
+                    } else {
+                        ""
+                    };
+                    item.label(cx, ids!(members_status_label)).set_text(cx, text);
+                    item
+                } else {
+                    continue;
+                };
+                item.draw_all(cx, scope);
+            }
+        }
+        DrawStep::done()
     }
 }
 
@@ -996,8 +1080,10 @@ impl WidgetMatchEvent for RoomSettingsModal {
             let name = self.view.text_input(cx, ids!(room_name_input)).text();
             let topic = self.view.text_input(cx, ids!(room_topic_input)).text();
             if name.trim().is_empty() {
-                self.view.label(cx, ids!(name_error_label))
-                    .set_text(cx, "Room name cannot be empty");
+                self.view.label(cx, ids!(name_error_label)).set_text(
+                    cx,
+                    if self.is_space { "Space name cannot be empty" } else { "Room name cannot be empty" },
+                );
                 self.view.label(cx, ids!(name_error_label)).set_visible(cx, true);
                 self.view.redraw(cx);
             } else {
@@ -1033,6 +1119,40 @@ impl WidgetMatchEvent for RoomSettingsModal {
             }
         }
 
+        // Sidebar tabs
+        if self.view.button(cx, ids!(general_tab_button)).clicked(actions) {
+            self.set_active_tab(cx, SettingsTab::General);
+            return;
+        }
+        if self.view.button(cx, ids!(members_tab_button)).clicked(actions) {
+            self.set_active_tab(cx, SettingsTab::Members);
+            return;
+        }
+
+        // Join-rule radio buttons
+        let join_radios = self.view.radio_button_set(
+            cx,
+            ids_array!(join_invite_radio, join_knock_radio, join_public_radio),
+        );
+        if let Some(selected) = join_radios.selected(cx, actions) {
+            let new_rule = match selected {
+                0 => JoinRuleChoice::InviteOnly,
+                1 => JoinRuleChoice::Knock,
+                _ => JoinRuleChoice::Public,
+            };
+            // Guard against re-emitting the rule we just applied from the server.
+            if new_rule != self.join_rule
+                && self.can_change_join_rule
+                && let Some(room_id) = self.room_id.clone()
+            {
+                self.join_rule = new_rule;
+                submit_async_request(MatrixRequest::SetRoomJoinRule {
+                    room_id,
+                    join_rule: new_rule,
+                });
+            }
+        }
+
         // Media radio buttons
         let radios = self.view.radio_button_set(cx, ids_array!(media_hide_radio, media_show_radio));
         if let Some(selected) = radios.selected(cx, actions) {
@@ -1046,7 +1166,7 @@ impl WidgetMatchEvent for RoomSettingsModal {
         // Leave button
         if self.view.button(cx, ids!(leave_button)).clicked(actions) {
             if let Some(room_id) = self.room_id.clone() {
-                cx.action(RoomSettingsAction::LeaveRoom { room_id });
+                cx.action(RoomSettingsAction::LeaveRoom { room_id, is_space: self.is_space });
             }
         }
 
@@ -1084,16 +1204,29 @@ impl RoomSettingsModal {
         room_name: &str,
         room_topic: &str,
         canonical_alias: Option<&str>,
+        is_space: bool,
     ) {
         let room_id_text = room_id.as_str().to_string();
         self.room_id = Some(room_id);
         self.original_name = room_name.to_string();
         self.original_topic = room_topic.to_string();
         self.always_show_media = false;
+        self.is_space = is_space;
+        // Cleared until FetchRoomSettings answers, so the previous room's access
+        // settings never briefly show up under this room's name.
+        self.join_rule = JoinRuleChoice::default();
+        self.can_change_join_rule = false;
+        self.members.clear();
+        self.members_loading = false;
+        self.apply_kind_wording(cx);
+        self.apply_join_rule(cx);
+        self.set_active_tab(cx, SettingsTab::General);
 
         // Update title
-        self.view.label(cx, ids!(title_label))
-            .set_text(cx, &format!("Room Settings – {room_name}"));
+        self.view.label(cx, ids!(title_label)).set_text(cx, &format!(
+            "{} – {room_name}",
+            if is_space { "Space Settings" } else { "Room Settings" },
+        ));
 
         // Populate inputs
         self.view.text_input(cx, ids!(room_name_input))
@@ -1124,6 +1257,53 @@ impl RoomSettingsModal {
         self.view.redraw(cx);
     }
 
+    /// Switches the labels between room and space wording, and hides the parts
+    /// that don't apply to a space.
+    ///
+    /// A space carries no timeline, so the message-media controls are meaningless
+    /// there; the rest of the form (name, topic, avatar, addresses, directory
+    /// visibility) is identical because a space *is* a room underneath.
+    fn apply_kind_wording(&mut self, cx: &mut Cx) {
+        let is_space = self.is_space;
+        self.view.label(cx, ids!(room_name_label)).set_text(
+            cx,
+            if is_space { "Space name" } else { "Room name" },
+        );
+        self.view.label(cx, ids!(room_topic_label)).set_text(
+            cx,
+            if is_space { "Space topic" } else { "Room topic" },
+        );
+        self.view.text_input(cx, ids!(room_name_input)).set_empty_text(
+            cx,
+            if is_space { "Space name".to_string() } else { "Room name".to_string() },
+        );
+        self.view.text_input(cx, ids!(room_topic_input)).set_empty_text(
+            cx,
+            if is_space { "Space topic (optional)".to_string() } else { "Room topic (optional)".to_string() },
+        );
+        self.view.label(cx, ids!(room_id_label)).set_text(
+            cx,
+            if is_space { "Space ID" } else { "Room ID" },
+        );
+        self.view.label(cx, ids!(leave_room_label)).set_text(
+            cx,
+            if is_space { "Leave space" } else { "Leave room" },
+        );
+        self.view.button(cx, ids!(leave_button)).set_text(
+            cx,
+            if is_space { "Leave space" } else { "Leave room" },
+        );
+        self.view.label(cx, ids!(published_desc)).set_text(cx, if is_space {
+            "These are the addresses that are published on the directory for others to find this space."
+        } else {
+            "These are the addresses that are published on the room directory for others to find this room."
+        });
+
+        // The whole "Other" card is only about timeline media today, so the card
+        // is hidden wholesale for spaces rather than left as an empty heading.
+        self.view.view(cx, ids!(moderation_card)).set_visible(cx, !is_space);
+    }
+
     /// Update the avatar widget with freshly uploaded image bytes.
     pub fn apply_avatar(&mut self, cx: &mut Cx, image_data: &[u8]) {
         let _ = self.view.avatar(cx, ids!(room_avatar))
@@ -1131,12 +1311,14 @@ impl RoomSettingsModal {
         self.view.redraw(cx);
     }
 
-    /// Apply fetched settings (topic, is_public) that arrived asynchronously.
+    /// Apply fetched settings (topic, is_public, join rule) that arrived asynchronously.
     pub fn apply_fetched_settings(
         &mut self,
         cx: &mut Cx,
         topic: Option<String>,
         is_public: bool,
+        join_rule: JoinRuleChoice,
+        can_change_join_rule: bool,
     ) {
         if let Some(t) = topic {
             self.original_topic = t.clone();
@@ -1145,7 +1327,126 @@ impl RoomSettingsModal {
         // Update publish toggle state (active == is_public)
         // Toggle widget: set via script_apply_eval on check_box
         let _ = is_public; // reflected by the toggle's current state
+        self.join_rule = join_rule;
+        self.can_change_join_rule = can_change_join_rule;
+        self.apply_join_rule(cx);
         self.view.redraw(cx);
+    }
+
+    /// Switches sidebar tabs, styling the rows and swapping the two body panes.
+    fn set_active_tab(&mut self, cx: &mut Cx, tab: SettingsTab) {
+        self.active_tab = tab;
+        let general_selected = tab == SettingsTab::General;
+
+        // No Rust-side transparent token exists, so it's spelled out here.
+        let transparent = vec4(0.0, 0.0, 0.0, 0.0);
+        for (id, selected) in [
+            (ids!(general_tab_indicator), general_selected),
+            (ids!(members_tab_indicator), !general_selected),
+        ] {
+            let mut indicator = self.view.view(cx, id);
+            let color = if selected { RBX_ACCENT } else { transparent };
+            script_apply_eval!(cx, indicator, { draw_bg +: { color: #(color) } });
+        }
+        for (id, selected) in [
+            (ids!(general_tab_button), general_selected),
+            (ids!(members_tab_button), !general_selected),
+        ] {
+            let mut button = self.view.button(cx, id);
+            let (bg, fg) = if selected {
+                (RBX_BG_SELECTED, RBX_ACCENT)
+            } else {
+                (transparent, RBX_FG_SECONDARY)
+            };
+            script_apply_eval!(cx, button, {
+                draw_bg +: { color: #(bg), color_hover: #(bg) },
+                draw_text +: { color: #(fg), color_hover: #(fg) },
+            });
+            button.reset_hover(cx);
+        }
+
+        self.view.view(cx, ids!(content_scroll)).set_visible(cx, general_selected);
+        self.view.view(cx, ids!(members_pane)).set_visible(cx, !general_selected);
+
+        // The member list is only worth fetching once the user asks to see it.
+        if tab == SettingsTab::Members
+            && self.members.is_empty()
+            && !self.members_loading
+            && let Some(room_id) = self.room_id.clone()
+        {
+            self.members_loading = true;
+            submit_async_request(MatrixRequest::FetchRoomMemberList { room_id });
+        }
+        self.update_members_status(cx);
+        self.view.redraw(cx);
+    }
+
+    /// Applies a freshly-fetched member list.
+    pub fn apply_member_list(&mut self, cx: &mut Cx, members: Vec<SettingsMemberInfo>) {
+        self.members = members;
+        self.members_loading = false;
+        self.update_members_status(cx);
+        self.view.redraw(cx);
+    }
+
+    /// Keeps the summary line and the empty/loading placeholder in sync.
+    fn update_members_status(&mut self, cx: &mut Cx) {
+        let count = self.members.len();
+        let summary = if self.members_loading && count == 0 {
+            String::new()
+        } else if count == 1 {
+            "1 member".to_string()
+        } else {
+            format!("{count} members")
+        };
+        self.view.label(cx, ids!(members_summary)).set_text(cx, &summary);
+    }
+
+    /// Reflects the fetched join rule in the access card.
+    ///
+    /// The options are replaced by an explanatory note whenever we can show the
+    /// current rule but must not overwrite it — either because the user lacks the
+    /// power level, or because the rule carries an allow-list (restricted) that
+    /// this dialog has no editor for.
+    fn apply_join_rule(&mut self, cx: &mut Cx) {
+        let editable = self.can_change_join_rule && self.join_rule.is_settable();
+        self.view.view(cx, ids!(access_options)).set_visible(cx, editable);
+
+        let note = self.view.label(cx, ids!(access_locked_note));
+        note.set_visible(cx, !editable);
+        if !editable {
+            note.set_text(cx, match self.join_rule {
+                JoinRuleChoice::Restricted =>
+                    "Members of a parent space can join. Changing which spaces grant access isn't supported here yet.",
+                JoinRuleChoice::KnockRestricted =>
+                    "Members of a parent space can join, and others can ask. Changing which spaces grant access isn't supported here yet.",
+                JoinRuleChoice::Other =>
+                    "This uses a join rule Robrix doesn't recognise, so it's left untouched.",
+                _ => "You don't have permission to change who can join.",
+            });
+        }
+
+        let selected = match self.join_rule {
+            JoinRuleChoice::InviteOnly => 0,
+            JoinRuleChoice::Knock => 1,
+            JoinRuleChoice::Public => 2,
+            // Nothing sensible to select; the note above explains why.
+            _ => usize::MAX,
+        };
+        for (index, id) in [
+            ids!(join_invite_radio),
+            ids!(join_knock_radio),
+            ids!(join_public_radio),
+        ].into_iter().enumerate() {
+            self.view.radio_button(cx, id).set_active(cx, index == selected, Animate::No);
+        }
+
+        let is_space = self.is_space;
+        self.view.label(cx, ids!(access_desc)).set_text(cx, if is_space {
+            "Controls who can join the space itself. Rooms inside it keep their own settings."
+        } else {
+            "Controls who can join this room."
+        });
     }
 }
 
@@ -1158,15 +1459,29 @@ impl RoomSettingsModalRef {
         room_name: &str,
         room_topic: &str,
         canonical_alias: Option<&str>,
+        is_space: bool,
     ) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.show(cx, room_id, room_name, room_topic, canonical_alias);
+        inner.show(cx, room_id, room_name, room_topic, canonical_alias, is_space);
     }
 
     /// Apply asynchronously-fetched settings (topic, is_public).
-    pub fn apply_fetched_settings(&self, cx: &mut Cx, topic: Option<String>, is_public: bool) {
+    pub fn apply_fetched_settings(
+        &self,
+        cx: &mut Cx,
+        topic: Option<String>,
+        is_public: bool,
+        join_rule: JoinRuleChoice,
+        can_change_join_rule: bool,
+    ) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.apply_fetched_settings(cx, topic, is_public);
+        inner.apply_fetched_settings(cx, topic, is_public, join_rule, can_change_join_rule);
+    }
+
+    /// Applies an asynchronously-fetched member list.
+    pub fn apply_member_list(&self, cx: &mut Cx, members: Vec<SettingsMemberInfo>) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.apply_member_list(cx, members);
     }
 
     /// Update the avatar widget after a successful upload.

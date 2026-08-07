@@ -280,6 +280,14 @@ pub enum RoomsListAction {
     InviteAccepted {
         room_name_id: RoomNameId,
     },
+    /// A space was joined from an accepted invite, meaning that the existing
+    /// `InviteScreen` should be converted to a `SpaceLobbyScreen` for that space.
+    ///
+    /// Unlike [`RoomsListAction::InviteAccepted`], the joined space itself never
+    /// enters the rooms list; it is owned by the SpacesBar from here on.
+    SpaceInviteAccepted {
+        space_name_id: RoomNameId,
+    },
     /// Instructs the top-level app to show the context menu for the given room.
     ///
     /// Emitted by the RoomsList when the user right-clicks or long-presses
@@ -420,6 +428,11 @@ pub struct InvitedRoomInfo {
     pub is_selected: bool,
     /// Whether this is an invite to a direct room.
     pub is_direct: bool,
+    /// Whether this is an invite to a space rather than a regular room.
+    ///
+    /// Accepting such an invite hands the space over to the SpacesBar
+    /// instead of opening a room timeline.
+    pub is_space: bool,
 }
 
 /// Info about the user who invited us to a room.
@@ -1000,11 +1013,24 @@ impl RoomsList {
                             .position(|r| r == &room_id)
                             .map(|index| list_to_remove_from.remove(index));
                     }
-                    else if let Some(_removed) = self.invited_rooms.borrow_mut().remove(&room_id) {
+                    else if let Some(removed) = self.invited_rooms.borrow_mut().remove(&room_id) {
                         log!("Removed room {room_id} from the list of all invited rooms");
                         self.displayed_invited_rooms.iter()
                             .position(|r| r == &room_id)
                             .map(|index| self.displayed_invited_rooms.remove(index));
+
+                        // An accepted invite to a space leaves the rooms list as `Joined`,
+                        // because a joined space is owned by the SpacesBar, not this list.
+                        // Tell the rest of the app to swap the open InviteScreen for that
+                        // space's lobby, mirroring what `InviteAccepted` does for rooms.
+                        if removed.is_space && matches!(new_state, RoomState::Joined) {
+                            cx.widget_action(
+                                self.widget_uid(),
+                                RoomsListAction::SpaceInviteAccepted {
+                                    space_name_id: removed.room_name_id.clone(),
+                                }
+                            );
+                        }
                     }
 
                     self.hidden_rooms.remove(&room_id);
@@ -1604,6 +1630,51 @@ impl RoomsList {
             }
         }
         false
+    }
+
+    /// Sums the unread counts of every joined room inside the given space,
+    /// including rooms nested in its subspaces.
+    ///
+    /// `visited` guards against `m.space.child` cycles, which the spec does not
+    /// forbid, and against a space that is reachable through two paths being
+    /// counted twice.
+    fn accumulate_space_unread(
+        &self,
+        space_id: &OwnedRoomId,
+        visited: &mut HashSet<OwnedRoomId>,
+        counted_rooms: &mut HashSet<OwnedRoomId>,
+        totals: &mut SpaceUnreadCounts,
+    ) {
+        if !visited.insert(space_id.clone()) {
+            return;
+        }
+        let Some(smv) = self.space_map.get(space_id) else { return };
+        for room_id in smv.direct_child_rooms.iter() {
+            if !counted_rooms.insert(room_id.clone()) {
+                continue;
+            }
+            let Some(room) = self.all_joined_rooms.get(room_id) else { continue };
+            totals.num_unread_messages += room.num_unread_messages;
+            totals.num_unread_mentions += room.num_unread_mentions;
+            totals.has_marked_unread |= room.is_marked_unread;
+        }
+        for subspace in smv.direct_subspaces.iter() {
+            self.accumulate_space_unread(subspace, visited, counted_rooms, totals);
+        }
+    }
+}
+
+/// The unread totals of all joined rooms within a space.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpaceUnreadCounts {
+    pub num_unread_messages: u64,
+    pub num_unread_mentions: u64,
+    pub has_marked_unread: bool,
+}
+impl SpaceUnreadCounts {
+    /// Whether anything in the space warrants showing a badge at all.
+    pub fn is_unread(&self) -> bool {
+        self.has_marked_unread || self.num_unread_messages > 0 || self.num_unread_mentions > 0
     }
 }
 
@@ -2221,6 +2292,23 @@ impl RoomsListRef {
                     .get(room_id)
                     .map(|ir| ir.room_name_id.clone())
             )
+    }
+
+    /// Returns the combined unread counts of every joined room inside the given
+    /// space, including rooms nested in its subspaces.
+    ///
+    /// Only counts rooms this client has actually loaded, so the total settles
+    /// as the space's hierarchy finishes paginating.
+    pub fn get_space_unread_counts(&self, space_id: &OwnedRoomId) -> SpaceUnreadCounts {
+        let Some(inner) = self.borrow() else { return SpaceUnreadCounts::default() };
+        let mut totals = SpaceUnreadCounts::default();
+        inner.accumulate_space_unread(
+            space_id,
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+            &mut totals,
+        );
+        totals
     }
 
     /// Returns the canonical alias of the given room, if it is known and loaded.

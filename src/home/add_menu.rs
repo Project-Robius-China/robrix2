@@ -26,7 +26,8 @@ use crate::{
 pub const ADD_MENU_WIDTH: f64 = 244.0;
 /// Approximate total height of the menu card, used only to clamp its position so
 /// it never overflows the bottom edge of the overlay container.
-const ADD_MENU_HEIGHT: f64 = 210.0;
+/// Five 44dip items (+ 2dip spacing each), a divider, and the card's padding.
+const ADD_MENU_HEIGHT: f64 = 256.0;
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -95,6 +96,11 @@ script_mod! {
             new_room_item := mod.widgets.AddMenuItem {
                 draw_icon +: { svg: (ICON_ADD) }
                 text: "New room"
+            }
+
+            new_space_item := mod.widgets.AddMenuItem {
+                draw_icon +: { svg: (ICON_HIERARCHY) }
+                text: "New space"
             }
 
             new_dm_item := mod.widgets.AddMenuItem {
@@ -198,7 +204,10 @@ impl WidgetMatchEvent for AddMenu {
         let mut close_menu = false;
 
         if self.button(cx, ids!(new_room_item)).clicked(actions) {
-            cx.action(CreateRoomModalAction::Open { parent_space_id: None });
+            cx.action(CreateRoomModalAction::Open { parent_space_id: None, create_space: false });
+            close_menu = true;
+        } else if self.button(cx, ids!(new_space_item)).clicked(actions) {
+            cx.action(CreateRoomModalAction::Open { parent_space_id: None, create_space: true });
             close_menu = true;
         } else if self.button(cx, ids!(new_dm_item)).clicked(actions) {
             cx.action(StartChatModalAction::Open);
@@ -222,6 +231,8 @@ impl AddMenu {
         self.app_language = app_language;
         self.button(cx, ids!(new_room_item))
             .set_text(cx, tr_key(self.app_language, "add_menu.item.new_room"));
+        self.button(cx, ids!(new_space_item))
+            .set_text(cx, tr_key(self.app_language, "add_menu.item.new_space"));
         self.button(cx, ids!(new_dm_item))
             .set_text(cx, tr_key(self.app_language, "add_menu.item.new_dm"));
         self.button(cx, ids!(join_item))
@@ -235,7 +246,7 @@ impl AddMenu {
     fn show(&mut self, cx: &mut Cx, app_language: AppLanguage) -> DVec2 {
         self.opened_is_desktop = effective_is_desktop(cx);
         self.set_app_language(cx, app_language);
-        for id in [ids!(new_room_item), ids!(new_dm_item), ids!(join_item), ids!(explore_item)] {
+        for id in [ids!(new_room_item), ids!(new_space_item), ids!(new_dm_item), ids!(join_item), ids!(explore_item)] {
             self.button(cx, id).reset_hover(cx);
         }
         self.visible = true;

@@ -193,6 +193,11 @@ script_mod! {
 pub struct InviteDetails {
     pub room_info: BasicRoomDetails,
     pub inviter: Option<InviterInfo>,
+    /// Whether this is an invite to a space rather than to a regular room.
+    ///
+    /// Accepting a space invite grants access to a set of rooms instead of
+    /// opening a conversation, so the wording differs throughout the flow.
+    pub is_space: bool,
 }
 impl Deref for InviteDetails {
     type Target = BasicRoomDetails;
@@ -331,7 +336,11 @@ impl Widget for InviteScreen {
                         self.invite_state = InviteState::WaitingForJoinedRoom;
                         if !self.has_shown_confirmation {
                             enqueue_popup_notification(
-                                tr_key(self.app_language, "invite_screen.popup.joined_success"),
+                                tr_key(self.app_language, if info.is_space {
+                                    "invite_screen.popup.joined_space_success"
+                                } else {
+                                    "invite_screen.popup.joined_success"
+                                }),
                                 PopupKind::Success,
                                 Some(5.0),
                             );
@@ -345,7 +354,11 @@ impl Widget for InviteScreen {
                             let room_id = info.room_id().clone();
                             enqueue_notification(NotificationItem {
                                 kind: PopupKind::Error,
-                                title: Some("Failed to join room".into()),
+                                title: Some(if info.is_space {
+                                    "Failed to join space".into()
+                                } else {
+                                    "Failed to join room".into()
+                                }),
                                 message: msg.into(),
                                 actions: vec![
                                     NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
@@ -469,10 +482,18 @@ impl Widget for InviteScreen {
                 inviter_name.set_text(cx, inviter.user_id.as_str());
                 inviter_user_id.set_visible(cx, false);
             }
-            (true, tr_key(self.app_language, "invite_screen.message.invited_by"))
+            (true, tr_key(self.app_language, if info.is_space {
+                "invite_screen.message.invited_by_space"
+            } else {
+                "invite_screen.message.invited_by"
+            }))
         }
         else {
-            (false, tr_key(self.app_language, "invite_screen.message.invited_generic"))
+            (false, tr_key(self.app_language, if info.is_space {
+                "invite_screen.message.invited_generic_space"
+            } else {
+                "invite_screen.message.invited_generic"
+            }))
         };
         inviter_view.set_visible(cx, is_visible);
         self.view.label(cx, ids!(invite_message)).set_text(cx, invite_text);
@@ -501,6 +522,11 @@ impl Widget for InviteScreen {
         room_view.label(cx, ids!(room_name)).set_text(cx, &invite_room_label);
 
         // Third, set the buttons' text based on the invite state.
+        let join_button_text = tr_key(self.app_language, if info.is_space {
+            "invite_screen.button.join_space"
+        } else {
+            "invite_screen.button.join"
+        });
         let cancel_button = self.view.button(cx, ids!(cancel_button));
         let accept_button = self.view.button(cx, ids!(accept_button));
         match self.invite_state {
@@ -508,7 +534,7 @@ impl Widget for InviteScreen {
                 cancel_button.set_enabled(cx, true);
                 accept_button.set_enabled(cx, true);
                 cancel_button.set_text(cx, tr_key(self.app_language, "invite_screen.button.reject"));
-                accept_button.set_text(cx, tr_key(self.app_language, "invite_screen.button.join"));
+                accept_button.set_text(cx, join_button_text);
             }
             InviteState::WaitingForJoinResult => {
                 cancel_button.set_enabled(cx, false);
@@ -520,7 +546,7 @@ impl Widget for InviteScreen {
                 cancel_button.set_enabled(cx, false);
                 accept_button.set_enabled(cx, false);
                 cancel_button.set_text(cx, tr_key(self.app_language, "invite_screen.button.rejecting"));
-                accept_button.set_text(cx, tr_key(self.app_language, "invite_screen.button.join"));
+                accept_button.set_text(cx, join_button_text);
             }
             InviteState::WaitingForJoinedRoom => {
                 cancel_button.set_enabled(cx, false);
@@ -556,6 +582,7 @@ impl InviteScreen {
                     room_avatar: invite.room_avatar.clone(),
                 },
                 inviter: invite.inviter_info.clone(),
+                is_space: invite.is_space,
             });
             self.invite_state = invite.invite_state;
             self.has_shown_confirmation = false;
