@@ -164,6 +164,15 @@ script_mod! {
                             }
                         }
 
+                        // A modal to link one of the user's existing rooms into a space.
+                        add_existing_room_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
+                                add_existing_room_modal_inner := AddExistingRoomModal {}
+                            }
+                        }
+
                         // The "Add an agent" bottom sheet (Agent Registry). Hosted at the
                         // app root so its scrim covers the whole screen — including the
                         // bottom navigation bar — preventing taps from leaking through.
@@ -180,7 +189,7 @@ script_mod! {
                             content +: {
                                 height: Fill,
                                 width: Fill,
-                                align: Align{x: 0.5, y: 0.1},
+                                align: Align{x: 0.5, y: 0.5},
                                 room_settings_modal_inner := RoomSettingsModal {}
                             }
                         }

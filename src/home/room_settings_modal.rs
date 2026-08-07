@@ -13,13 +13,17 @@ script_mod! {
     use mod.widgets.*
 
     mod.widgets.RoomSettingsModal = #(RoomSettingsModal::register_widget(vm)) {
+        // A *fixed* height, not `Fill{max}`: the header / scrolling body / footer
+        // split needs a resolved viewport for the ScrollYView, and a `Fill` child
+        // also claims all of the modal's space, which leaves the modal's
+        // `align: y: 0.5` nothing to centre with (the dialog then hugs the top).
         width: Fill { max: 680 }
-        height: Fit
+        height: 600
         margin: Inset{left: 12, right: 12}
 
         RoundedShadowView {
             width: Fill
-            height: Fit
+            height: Fill
             flow: Down
             padding: Inset{top: 0, right: 0, bottom: 0, left: 0}
             show_bg: true
@@ -39,14 +43,14 @@ script_mod! {
                 height: Fit
                 flow: Right
                 align: Align{y: 0.5}
-                padding: Inset{left: 20, right: 12, top: 14, bottom: 14}
+                padding: Inset{left: 20, right: 12, top: 12, bottom: 12}
                 spacing: 8
 
                 title_label := Label {
                     width: Fill
                     height: Fit
                     draw_text +: {
-                        text_style: TITLE_TEXT {font_size: 13}
+                        text_style: RBX_TEXT_SECTION_TITLE {}
                         color: (RBX_FG_PRIMARY)
                     }
                     text: "Room Settings"
@@ -67,504 +71,860 @@ script_mod! {
                 width: Fill
                 height: 1
                 show_bg: true
-                draw_bg +: { color: (COLOR_SECONDARY) }
+                draw_bg +: { color: (RBX_DIVIDER) }
             }
 
             // ── Main area ────────────────────────────────────────────────
             main_area := View {
                 width: Fill
-                height: Fit
+                height: Fill
                 flow: Right
 
-                // Sidebar
-                sidebar := View {
-                    width: 130
-                    height: Fit
+                // Sidebar. `height: Fill` so its surface spans the whole body
+                // next to the content, instead of collapsing to one row.
+                sidebar := SolidView {
+                    width: 150
+                    height: Fill
                     flow: Down
                     padding: Inset{top: 12, left: 0, right: 0, bottom: 12}
                     show_bg: true
-                    draw_bg +: { color: (RBX_BG_SURFACE_SUBTLE) }
+                    draw_bg.color: (RBX_BG_SURFACE_SUBTLE)
 
-                    general_tab_button := RobrixNeutralIconButton {
+                    // Selected nav row: teal rail + tinted background + accent
+                    // label, matching the desktop navigation rail's selected state.
+                    general_tab_row := View {
                         width: Fill
-                        height: 36
-                        padding: Inset{left: 12, right: 8, top: 8, bottom: 8}
-                        align: Align{x: 0.0, y: 0.5}
-                        icon_walk: Walk{width: 0, height: 0}
-                        draw_bg +: {
-                            color: (RBX_BG_SUNKEN)
-                            color_hover: (RBX_BG_HOVER)
-                            color_down: (RBX_BG_PRESSED)
-                            border_radius: 0.0
+                        height: Fit
+                        flow: Right
+                        align: Align{y: 0.5}
+
+                        general_tab_indicator := SolidView {
+                            width: 3
+                            height: 36
+                            show_bg: true
+                            draw_bg.color: (RBX_ACCENT)
                         }
-                        draw_text +: {
-                            color: (RBX_FG_PRIMARY)
-                            color_hover: (RBX_FG_PRIMARY)
-                            color_down: (RBX_FG_PRIMARY)
-                            text_style: REGULAR_TEXT {font_size: 11}
+
+                        general_tab_button := RobrixNeutralIconButton {
+                            width: Fill
+                            height: 36
+                            padding: Inset{left: 12, right: 8, top: 8, bottom: 8}
+                            align: Align{x: 0.0, y: 0.5}
+                            icon_walk: Walk{width: 0, height: 0}
+                            draw_bg +: {
+                                color: (RBX_BG_SELECTED)
+                                color_hover: (RBX_BG_SELECTED)
+                                color_down: (RBX_BG_PRESSED)
+                                border_radius: 0.0
+                            }
+                            draw_text +: {
+                                color: (RBX_ACCENT)
+                                color_hover: (RBX_ACCENT)
+                                color_down: (RBX_ACCENT)
+                                text_style: RBX_TEXT_BODY_STRONG {}
+                            }
+                            text: "General"
                         }
-                        text: "General"
+                    }
+
+                    members_tab_row := View {
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        align: Align{y: 0.5}
+
+                        members_tab_indicator := SolidView {
+                            width: 3
+                            height: 36
+                            show_bg: true
+                            draw_bg.color: (RBX_TRANSPARENT)
+                        }
+
+                        members_tab_button := RobrixNeutralIconButton {
+                            width: Fill
+                            height: 36
+                            padding: Inset{left: 12, right: 8, top: 8, bottom: 8}
+                            align: Align{x: 0.0, y: 0.5}
+                            icon_walk: Walk{width: 0, height: 0}
+                            draw_bg +: {
+                                color: (RBX_TRANSPARENT)
+                                color_hover: (RBX_BG_HOVER)
+                                color_down: (RBX_BG_PRESSED)
+                                border_radius: 0.0
+                            }
+                            draw_text +: {
+                                color: (RBX_FG_SECONDARY)
+                                color_hover: (RBX_FG_PRIMARY)
+                                color_down: (RBX_FG_PRIMARY)
+                                text_style: RBX_TEXT_BODY {}
+                            }
+                            text: "Members"
+                        }
                     }
                 }
 
-                // Content area
+                // Vertical hairline between the sidebar and the content.
+                sidebar_divider := SolidView {
+                    width: 1.0
+                    height: Fill
+                    show_bg: true
+                    draw_bg.color: (RBX_DIVIDER)
+                }
+
+                // Content area. A sunken canvas behind the white section cards,
+                // so the grouping reads as cards rather than as one long form.
                 content_scroll := ScrollYView {
                     width: Fill
-                    height: 520
+                    height: Fill
                     flow: Down
-                    spacing: 0
-                    padding: Inset{left: 24, right: 24, top: 20, bottom: 20}
+                    spacing: 14
+                    padding: Inset{left: 20, right: 20, top: 16, bottom: 20}
+                    show_bg: true
+                    draw_bg.color: (RBX_BG_CANVAS)
 
-                    // ── General heading ──────────────────────────────
-                    general_heading := Label {
+                    general_card := RoundedView {
                         width: Fill
                         height: Fit
-                        margin: Inset{bottom: 16}
-                        draw_text +: {
-                            text_style: TITLE_TEXT {font_size: 13}
-                            color: (RBX_FG_PRIMARY)
+                        flow: Down
+                        padding: Inset{left: 16, right: 16, top: 12, bottom: 14}
+                        show_bg: true
+                        new_batch: true
+                        draw_bg +: {
+                            color: (RBX_BG_SURFACE)
+                            border_radius: (RBX_RADIUS_MD)
+                            border_size: 1.0
+                            border_color: (RBX_STROKE_SOFT)
                         }
-                        text: "General"
-                    }
 
-                    // ── Form row (inputs + avatar) ───────────────────
-                    form_row := View {
-                        width: Fill
-                        height: Fit
-                        flow: Right
-                        spacing: 16
-
-                        // Inputs column
-                        inputs_col := View {
+                        general_heading := Label {
                             width: Fill
                             height: Fit
-                            flow: Down
-                            spacing: 6
-
-                            room_name_label := Label {
-                                width: Fill
-                                height: Fit
-                                margin: Inset{bottom: 2}
-                                draw_text +: {
-                                    text_style: REGULAR_TEXT {font_size: 10.5}
-                                    color: (RBX_FG_SECONDARY)
-                                }
-                                text: "Room Name"
-                            }
-
-                            room_name_input := RobrixTextInput {
-                                width: Fill
-                                height: 44
-                                empty_text: "Room name"
-                            }
-
-                            room_topic_label := Label {
-                                width: Fill
-                                height: Fit
-                                margin: Inset{top: 10, bottom: 2}
-                                draw_text +: {
-                                    text_style: REGULAR_TEXT {font_size: 10.5}
-                                    color: (RBX_FG_SECONDARY)
-                                }
-                                text: "Room Topic"
-                            }
-
-                            room_topic_input := RobrixTextInput {
-                                width: Fill
-                                height: 120
-                                empty_text: "Room topic (optional)"
-                                is_multiline: true
-                            }
-
-                            name_error_label := Label {
-                                visible: false
-                                width: Fill
-                                height: Fit
-                                margin: Inset{top: 2}
-                                draw_text +: {
-                                    text_style: REGULAR_TEXT {font_size: 10}
-                                    color: (COLOR_FG_DANGER_RED)
-                                }
-                                text: ""
-                            }
-
-                            buttons_row := View {
-                                width: Fill
-                                height: Fit
-                                flow: Right
-                                align: Align{x: 1.0, y: 0.5}
-                                margin: Inset{top: 12}
-                                spacing: 10
-
-                                cancel_button := RobrixNeutralIconButton {
-                                    width: 90
-                                    height: 32
-                                    padding: 6
-                                    icon_walk: Walk{width: 0, height: 0}
-                                    draw_icon.svg: (ICON_FORBIDDEN)
-                                    text: "Cancel"
-                                }
-
-                                save_button := RobrixIconButton {
-                                    width: 90
-                                    height: 32
-                                    padding: 6
-                                    icon_walk: Walk{width: 0, height: 0}
-                                    draw_icon.svg: (ICON_CHECKMARK)
-                                    text: "Save"
-                                }
-                            }
-                        }
-
-                        // Avatar column
-                        avatar_col := View {
-                            width: 80
-                            height: Fit
-                            flow: Down
-                            align: Align{x: 0.5}
-                            spacing: 6
-
-                            room_avatar := Avatar {
-                                width: 60
-                                height: 60
-                            }
-
-                            pencil_button := RobrixNeutralIconButton {
-                                width: 60
-                                height: 24
-                                padding: 4
-                                align: Align{x: 0.5, y: 0.5}
-                                draw_icon.svg: (ICON_EDIT)
-                                icon_walk: Walk{width: 12, height: 12}
-                                text: ""
-                            }
-                        }
-                    }
-
-                    // ── Section separator ────────────────────────────
-                    View {
-                        width: Fill
-                        height: 1
-                        margin: Inset{top: 20, bottom: 16}
-                        show_bg: true
-                        draw_bg +: { color: (COLOR_SECONDARY) }
-                    }
-
-                    // ── Advanced ────────────────────────────────────
-                    advanced_heading := Label {
-                        width: Fill
-                        height: Fit
-                        margin: Inset{bottom: 10}
-                        draw_text +: {
-                            text_style: RBX_TEXT_SECTION_TITLE {}
-                            color: (RBX_FG_PRIMARY)
-                        }
-                        text: "Advanced"
-                    }
-
-                    room_id_label := Label {
-                        width: Fill
-                        height: Fit
-                        margin: Inset{bottom: 4}
-                        draw_text +: {
-                            text_style: RBX_TEXT_BODY {}
-                            color: (RBX_FG_SECONDARY)
-                        }
-                        text: "Room ID"
-                    }
-
-                    room_id_input := RobrixTextInput {
-                        width: Fill
-                        height: 36
-                        is_read_only: true
-                        empty_text: "!room:server"
-                    }
-
-                    // ── Section separator ────────────────────────────
-                    View {
-                        width: Fill
-                        height: 1
-                        margin: Inset{top: 20, bottom: 16}
-                        show_bg: true
-                        draw_bg +: { color: (COLOR_SECONDARY) }
-                    }
-
-                    // ── Room Addresses ───────────────────────────────
-                    addresses_heading := Label {
-                        width: Fill
-                        height: Fit
-                        margin: Inset{bottom: 10}
-                        draw_text +: {
-                            text_style: TITLE_TEXT {font_size: 12}
-                            color: (RBX_FG_PRIMARY)
-                        }
-                        text: "Room Addresses"
-                    }
-
-                    published_addresses_label := Label {
-                        width: Fill
-                        height: Fit
-                        margin: Inset{bottom: 4}
-                        draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 11}
-                            color: (RBX_FG_SECONDARY)
-                        }
-                        text: "Published Addresses"
-                    }
-
-                    published_desc := Label {
-                        width: Fill
-                        height: Fit
-                        flow: Flow.Right{wrap: true}
-                        margin: Inset{bottom: 8}
-                        draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 10}
-                            color: (RBX_FG_TERTIARY)
-                        }
-                        text: "These are the addresses that are published on the room directory for others to find this room."
-                    }
-
-                    main_alias_row := View {
-                        width: Fill
-                        height: Fit
-                        flow: Right
-                        align: Align{y: 0.5}
-                        margin: Inset{bottom: 8}
-                        spacing: 8
-
-                        main_alias_label := Label {
-                            width: Fill
-                            height: Fit
+                            margin: Inset{bottom: 3}
                             draw_text +: {
-                                text_style: REGULAR_TEXT {font_size: 10.5}
-                                color: (RBX_FG_SECONDARY)
+                                text_style: RBX_TEXT_SECTION_TITLE {}
+                                color: (RBX_FG_PRIMARY)
                             }
-                            text: "No main address set"
+                            text: "General"
+                        }
+
+                        form_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            spacing: 16
+
+                            // Inputs column
+                            inputs_col := View {
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 6
+
+                                room_name_label := Label {
+                                    width: Fill
+                                    height: Fit
+                                    margin: Inset{bottom: 2}
+                                    draw_text +: {
+                                        text_style: RBX_TEXT_BODY {}
+                                        color: (RBX_FG_SECONDARY)
+                                    }
+                                    text: "Room Name"
+                                }
+
+                                room_name_input := RobrixTextInput {
+                                    width: Fill
+                                    height: 44
+                                    empty_text: "Room name"
+                                }
+
+                                room_topic_label := Label {
+                                    width: Fill
+                                    height: Fit
+                                    margin: Inset{top: 10, bottom: 2}
+                                    draw_text +: {
+                                        text_style: RBX_TEXT_BODY {}
+                                        color: (RBX_FG_SECONDARY)
+                                    }
+                                    text: "Room Topic"
+                                }
+
+                                room_topic_input := RobrixTextInput {
+                                    width: Fill
+                                    height: 120
+                                    empty_text: "Room topic (optional)"
+                                    is_multiline: true
+                                }
+
+                                name_error_label := Label {
+                                    visible: false
+                                    width: Fill
+                                    height: Fit
+                                    margin: Inset{top: 2}
+                                    draw_text +: {
+                                        text_style: RBX_TEXT_META {}
+                                        color: (RBX_DANGER_FG)
+                                    }
+                                    text: ""
+                                }
+                            }
+
+                            // Avatar column
+                            avatar_col := View {
+                                width: 80
+                                height: Fit
+                                flow: Down
+                                align: Align{x: 0.5}
+                                spacing: 6
+
+                                room_avatar := Avatar {
+                                    width: 60
+                                    height: 60
+                                }
+
+                                pencil_button := RobrixNeutralIconButton {
+                                    width: 60
+                                    height: 24
+                                    padding: 4
+                                    align: Align{x: 0.5, y: 0.5}
+                                    draw_icon.svg: (ICON_EDIT)
+                                    icon_walk: Walk{width: 12, height: 12}
+                                    text: ""
+                                }
+                            }
                         }
                     }
 
-                    publish_toggle_row := View {
+                    // ── Access ───────────────────────────────────────
+                    access_card := RoundedView {
                         width: Fill
                         height: Fit
-                        flow: Right
-                        align: Align{y: 0.5}
-                        margin: Inset{bottom: 8}
-                        spacing: 8
+                        flow: Down
+                        padding: Inset{left: 16, right: 16, top: 12, bottom: 14}
+                        show_bg: true
+                        new_batch: true
+                        draw_bg +: {
+                            color: (RBX_BG_SURFACE)
+                            border_radius: (RBX_RADIUS_MD)
+                            border_size: 1.0
+                            border_color: (RBX_STROKE_SOFT)
+                        }
 
-                        publish_toggle := Toggle {
-                            width: Fit
+                        access_heading := Label {
+                            width: Fill
                             height: Fit
-                            padding: Inset{top: 2, right: 4, bottom: 2, left: 2}
+                            margin: Inset{bottom: 3}
+                            draw_text +: {
+                                text_style: RBX_TEXT_CARD_TITLE {}
+                                color: (RBX_FG_PRIMARY)
+                            }
+                            text: "Who can join"
+                        }
+
+                        access_desc := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            margin: Inset{bottom: 8}
+                            draw_text +: {
+                                text_style: RBX_TEXT_META {}
+                                color: (RBX_FG_TERTIARY)
+                            }
                             text: ""
-                            active: false
-                            draw_bg +: {
-                                size: 18.0
-                                color_active: (COLOR_ACTIVE_PRIMARY)
-                                border_color_active: (COLOR_ACTIVE_PRIMARY)
-                                mark_color_active: #fff
+                        }
+
+                        access_options := View {
+                            width: Fill
+                            height: Fit
+                            flow: Down
+                            spacing: 4
+
+                            join_invite_radio := RadioButton {
+                                width: Fit
+                                height: Fit
+                                align: Align{y: 0.5}
+                                padding: Inset{top: 4, bottom: 4, left: 6, right: 4}
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    color_hover: (RBX_FG_PRIMARY)
+                                    color_focus: (RBX_FG_PRIMARY)
+                                    color_active: (RBX_FG_PRIMARY)
+                                    color_down: (RBX_FG_PRIMARY)
+                                    color_disabled: (RBX_FG_DISABLED)
+                                    text_style: RBX_TEXT_BODY {}
+                                }
+                                draw_bg +: {
+                                    color: (RBX_BG_SURFACE)
+                                    border_color: (RBX_STROKE_STRONG)
+                                    border_color_active: (RBX_ACCENT)
+                                    mark_color: vec4(0.0, 0.0, 0.0, 0.0)
+                                    mark_color_active: (RBX_ACCENT)
+                                }
+                                text: "Invite only"
+                            }
+
+                            join_knock_radio := RadioButton {
+                                width: Fit
+                                height: Fit
+                                align: Align{y: 0.5}
+                                padding: Inset{top: 4, bottom: 4, left: 6, right: 4}
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    color_hover: (RBX_FG_PRIMARY)
+                                    color_focus: (RBX_FG_PRIMARY)
+                                    color_active: (RBX_FG_PRIMARY)
+                                    color_down: (RBX_FG_PRIMARY)
+                                    color_disabled: (RBX_FG_DISABLED)
+                                    text_style: RBX_TEXT_BODY {}
+                                }
+                                draw_bg +: {
+                                    color: (RBX_BG_SURFACE)
+                                    border_color: (RBX_STROKE_STRONG)
+                                    border_color_active: (RBX_ACCENT)
+                                    mark_color: vec4(0.0, 0.0, 0.0, 0.0)
+                                    mark_color_active: (RBX_ACCENT)
+                                }
+                                text: "Ask to join"
+                            }
+
+                            join_public_radio := RadioButton {
+                                width: Fit
+                                height: Fit
+                                align: Align{y: 0.5}
+                                padding: Inset{top: 4, bottom: 4, left: 6, right: 4}
+                                draw_text +: {
+                                    color: (RBX_FG_PRIMARY)
+                                    color_hover: (RBX_FG_PRIMARY)
+                                    color_focus: (RBX_FG_PRIMARY)
+                                    color_active: (RBX_FG_PRIMARY)
+                                    color_down: (RBX_FG_PRIMARY)
+                                    color_disabled: (RBX_FG_DISABLED)
+                                    text_style: RBX_TEXT_BODY {}
+                                }
+                                draw_bg +: {
+                                    color: (RBX_BG_SURFACE)
+                                    border_color: (RBX_STROKE_STRONG)
+                                    border_color_active: (RBX_ACCENT)
+                                    mark_color: vec4(0.0, 0.0, 0.0, 0.0)
+                                    mark_color_active: (RBX_ACCENT)
+                                }
+                                text: "Anyone"
                             }
                         }
 
-                        publish_toggle_label := Label {
+                        // Shown instead of the options when the current rule is one
+                        // this dialog can display but not author (restricted), or
+                        // when the user lacks permission to change it.
+                        access_locked_note := Label {
+                            visible: false
                             width: Fill
                             height: Fit
                             flow: Flow.Right{wrap: true}
                             draw_text +: {
-                                text_style: REGULAR_TEXT {font_size: 10}
+                                text_style: RBX_TEXT_META {}
                                 color: (RBX_FG_SECONDARY)
                             }
-                            text: "Publish this room to the public in matrix.org's room directory?"
+                            text: ""
                         }
                     }
 
-                    no_published_label := Label {
+                    addresses_card := RoundedView {
                         width: Fill
                         height: Fit
-                        margin: Inset{bottom: 8}
-                        draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 10}
-                            color: (RBX_FG_TERTIARY)
+                        flow: Down
+                        padding: Inset{left: 16, right: 16, top: 12, bottom: 14}
+                        show_bg: true
+                        new_batch: true
+                        draw_bg +: {
+                            color: (RBX_BG_SURFACE)
+                            border_radius: (RBX_RADIUS_MD)
+                            border_size: 1.0
+                            border_color: (RBX_STROKE_SOFT)
                         }
-                        text: "No other published addresses yet, add one below"
+
+                        addresses_heading := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 3}
+                            draw_text +: {
+                                text_style: RBX_TEXT_CARD_TITLE {}
+                                color: (RBX_FG_PRIMARY)
+                            }
+                            text: "Room Addresses"
+                        }
+
+                        published_addresses_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 4}
+                            draw_text +: {
+                                text_style: RBX_TEXT_BODY {}
+                                color: (RBX_FG_SECONDARY)
+                            }
+                            text: "Published Addresses"
+                        }
+
+                        published_desc := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            margin: Inset{bottom: 8}
+                            draw_text +: {
+                                text_style: RBX_TEXT_META {}
+                                color: (RBX_FG_TERTIARY)
+                            }
+                            text: "These are the addresses that are published on the room directory for others to find this room."
+                        }
+
+                        main_alias_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            align: Align{y: 0.5}
+                            margin: Inset{bottom: 8}
+                            spacing: 8
+
+                            main_alias_label := Label {
+                                width: Fill
+                                height: Fit
+                                draw_text +: {
+                                    text_style: RBX_TEXT_BODY {}
+                                    color: (RBX_FG_SECONDARY)
+                                }
+                                text: "No main address set"
+                            }
+                        }
+
+                        publish_toggle_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            align: Align{y: 0.5}
+                            margin: Inset{bottom: 8}
+                            spacing: 8
+
+                            publish_toggle := Toggle {
+                                width: Fit
+                                height: Fit
+                                padding: Inset{top: 2, right: 4, bottom: 2, left: 2}
+                                text: ""
+                                active: false
+                                draw_bg +: {
+                                    size: 18.0
+                                    color_active: (RBX_ACCENT)
+                                    border_color_active: (RBX_ACCENT)
+                                    mark_color_active: (RBX_FG_ON_ACCENT)
+                                }
+                            }
+
+                            publish_toggle_label := Label {
+                                width: Fill
+                                height: Fit
+                                flow: Flow.Right{wrap: true}
+                                draw_text +: {
+                                    text_style: RBX_TEXT_META {}
+                                    color: (RBX_FG_SECONDARY)
+                                }
+                                text: "Publish this room to the public in matrix.org's room directory?"
+                            }
+                        }
+
+                        no_published_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 8}
+                            draw_text +: {
+                                text_style: RBX_TEXT_META {}
+                                color: (RBX_FG_TERTIARY)
+                            }
+                            text: "No other published addresses yet, add one below"
+                        }
+
+                        add_address_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            align: Align{y: 0.5}
+                            spacing: 8
+                            margin: Inset{bottom: 12}
+
+                            add_address_input := RobrixTextInput {
+                                width: Fill
+                                height: 36
+                                empty_text: "# e.g. my-room"
+                            }
+
+                            add_address_button := RobrixIconButton {
+                                width: 60
+                                height: 36
+                                padding: 6
+                                icon_walk: Walk{width: 0, height: 0}
+                                text: "Add"
+                            }
+                        }
+
+                        local_addresses_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 4}
+                            draw_text +: {
+                                text_style: RBX_TEXT_BODY {}
+                                color: (RBX_FG_SECONDARY)
+                            }
+                            text: "Local Addresses"
+                        }
+
+                        local_desc := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            margin: Inset{bottom: 8}
+                            draw_text +: {
+                                text_style: RBX_TEXT_META {}
+                                color: (RBX_FG_TERTIARY)
+                            }
+                            text: "Set addresses for this room so users can find this room. As an admin, you can set local addresses for this room."
+                        }
                     }
 
-                    add_address_row := View {
+                    moderation_card := RoundedView {
                         width: Fill
                         height: Fit
-                        flow: Right
-                        align: Align{y: 0.5}
-                        spacing: 8
-                        margin: Inset{bottom: 12}
+                        flow: Down
+                        padding: Inset{left: 16, right: 16, top: 12, bottom: 14}
+                        show_bg: true
+                        new_batch: true
+                        draw_bg +: {
+                            color: (RBX_BG_SURFACE)
+                            border_radius: (RBX_RADIUS_MD)
+                            border_size: 1.0
+                            border_color: (RBX_STROKE_SOFT)
+                        }
 
-                        add_address_input := RobrixTextInput {
+                        other_heading := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 3}
+                            draw_text +: {
+                                text_style: RBX_TEXT_CARD_TITLE {}
+                                color: (RBX_FG_PRIMARY)
+                            }
+                            text: "Other"
+                        }
+
+                        moderation_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 6}
+                            draw_text +: {
+                                text_style: RBX_TEXT_BODY {}
+                                color: (RBX_FG_SECONDARY)
+                            }
+                            text: "Moderation and safety"
+                        }
+
+                        show_media_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 2}
+                            draw_text +: {
+                                text_style: RBX_TEXT_BODY {}
+                                color: (RBX_FG_SECONDARY)
+                            }
+                            text: "Show media in timeline"
+                        }
+
+                        show_media_desc := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            margin: Inset{bottom: 6}
+                            draw_text +: {
+                                text_style: RBX_TEXT_META {}
+                                color: (RBX_FG_TERTIARY)
+                            }
+                            text: "A hidden media can always be shown by tapping on it"
+                        }
+
+                        media_hide_radio := RadioButton {
+                            width: Fit
+                            height: Fit
+                            align: Align{y: 0.5}
+                            padding: Inset{top: 4, bottom: 4, left: 6, right: 4}
+                            draw_text +: {
+                                color: (RBX_FG_PRIMARY)
+                                color_hover: (RBX_FG_PRIMARY)
+                                color_focus: (RBX_FG_PRIMARY)
+                                color_active: (RBX_FG_PRIMARY)
+                                color_down: (RBX_FG_PRIMARY)
+                                color_disabled: (RBX_FG_PRIMARY)
+                                text_style: RBX_TEXT_BODY {}
+                            }
+                            draw_bg +: {
+                                color: (RBX_BG_SURFACE)
+                                border_color: (RBX_STROKE_STRONG)
+                                border_color_active: (RBX_ACCENT)
+                                mark_color: vec4(0.0, 0.0, 0.0, 0.0)
+                                mark_color_active: (RBX_ACCENT)
+                            }
+                            text: "Always hide"
+                        }
+
+                        media_show_radio := RadioButton {
+                            width: Fit
+                            height: Fit
+                            align: Align{y: 0.5}
+                            padding: Inset{top: 4, bottom: 4, left: 6, right: 4}
+                            draw_text +: {
+                                color: (RBX_FG_PRIMARY)
+                                color_hover: (RBX_FG_PRIMARY)
+                                color_focus: (RBX_FG_PRIMARY)
+                                color_active: (RBX_FG_PRIMARY)
+                                color_down: (RBX_FG_PRIMARY)
+                                color_disabled: (RBX_FG_PRIMARY)
+                                text_style: RBX_TEXT_BODY {}
+                            }
+                            draw_bg +: {
+                                color: (RBX_BG_SURFACE)
+                                border_color: (RBX_STROKE_STRONG)
+                                border_color_active: (RBX_ACCENT)
+                                mark_color: vec4(0.0, 0.0, 0.0, 0.0)
+                                mark_color_active: (RBX_ACCENT)
+                            }
+                            text: "Always show"
+                        }
+                    }
+
+                    advanced_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        padding: Inset{left: 16, right: 16, top: 12, bottom: 14}
+                        show_bg: true
+                        new_batch: true
+                        draw_bg +: {
+                            color: (RBX_BG_SURFACE)
+                            border_radius: (RBX_RADIUS_MD)
+                            border_size: 1.0
+                            border_color: (RBX_STROKE_SOFT)
+                        }
+
+                        advanced_heading := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 3}
+                            draw_text +: {
+                                text_style: RBX_TEXT_SECTION_TITLE {}
+                                color: (RBX_FG_PRIMARY)
+                            }
+                            text: "Advanced"
+                        }
+
+                        room_id_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 4}
+                            draw_text +: {
+                                text_style: RBX_TEXT_BODY {}
+                                color: (RBX_FG_SECONDARY)
+                            }
+                            text: "Room ID"
+                        }
+
+                        room_id_input := RobrixTextInput {
                             width: Fill
                             height: 36
-                            empty_text: "# e.g. my-room"
+                            is_read_only: true
+                            empty_text: "!room:server"
+                        }
+                    }
+
+                    danger_card := RoundedView {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        padding: Inset{left: 16, right: 16, top: 12, bottom: 14}
+                        show_bg: true
+                        new_batch: true
+                        draw_bg +: {
+                            color: (RBX_BG_SURFACE)
+                            border_radius: (RBX_RADIUS_MD)
+                            border_size: 1.0
+                            border_color: (RBX_STROKE_SOFT)
                         }
 
-                        add_address_button := RobrixIconButton {
-                            width: 60
-                            height: 36
-                            padding: 6
+                        leave_room_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 3}
+                            draw_text +: {
+                                text_style: RBX_TEXT_BODY {}
+                                color: (RBX_FG_SECONDARY)
+                            }
+                            text: "Leave room"
+                        }
+
+                        leave_button := RobrixNegativeIconButton {
+                            width: Fit
+                            height: 32
+                            padding: Inset{left: 12, right: 12, top: 6, bottom: 6}
                             icon_walk: Walk{width: 0, height: 0}
-                            text: "Add"
+                            text: "Leave room"
                         }
                     }
+                }
 
-                    local_addresses_label := Label {
+                // Members tab body. A sibling of `content_scroll` rather than a card
+                // inside it, so the list gets its own PortalList viewport (a virtualized
+                // list nested in a scrolling parent would fight it for scroll events).
+                members_pane := View {
+                    visible: false
+                    width: Fill
+                    height: Fill
+                    flow: Down
+                    show_bg: true
+                    draw_bg.color: (RBX_BG_CANVAS)
+
+                    members_summary := Label {
                         width: Fill
                         height: Fit
-                        margin: Inset{bottom: 4}
+                        padding: Inset{left: 20, right: 20, top: 14, bottom: 10}
                         draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 11}
+                            text_style: RBX_TEXT_META {}
                             color: (RBX_FG_SECONDARY)
                         }
-                        text: "Local Addresses"
+                        text: ""
                     }
 
-                    local_desc := Label {
+                    members_list := PortalList {
                         width: Fill
-                        height: Fit
-                        flow: Flow.Right{wrap: true}
-                        margin: Inset{bottom: 8}
-                        draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 10}
-                            color: (RBX_FG_TERTIARY)
-                        }
-                        text: "Set addresses for this room so users can find this room. As an admin, you can set local addresses for this room."
-                    }
+                        height: Fill
+                        flow: Down
+                        auto_tail: false
+                        max_pull_down: 0.0
 
-                    // ── Section separator ────────────────────────────
-                    View {
-                        width: Fill
-                        height: 1
-                        margin: Inset{top: 12, bottom: 16}
-                        show_bg: true
-                        draw_bg +: { color: (COLOR_SECONDARY) }
-                    }
+                        member_row := View {
+                            width: Fill
+                            height: 56
+                            flow: Right
+                            align: Align{y: 0.5}
+                            padding: Inset{left: 20, right: 20}
+                            spacing: 10
 
-                    // ── Other / Moderation ───────────────────────────
-                    other_heading := Label {
-                        width: Fill
-                        height: Fit
-                        margin: Inset{bottom: 10}
-                        draw_text +: {
-                            text_style: TITLE_TEXT {font_size: 12}
-                            color: (RBX_FG_PRIMARY)
-                        }
-                        text: "Other"
-                    }
+                            member_avatar := Avatar { width: 32, height: 32 }
 
-                    moderation_label := Label {
-                        width: Fill
-                        height: Fit
-                        margin: Inset{bottom: 6}
-                        draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 11}
-                            color: (RBX_FG_SECONDARY)
-                        }
-                        text: "Moderation and safety"
-                    }
+                            member_text := View {
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 1
 
-                    show_media_label := Label {
-                        width: Fill
-                        height: Fit
-                        margin: Inset{bottom: 2}
-                        draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 10.5}
-                            color: (RBX_FG_SECONDARY)
-                        }
-                        text: "Show media in timeline"
-                    }
+                                member_name := Label {
+                                    width: Fill
+                                    height: Fit
+                                    max_lines: 1
+                                    text_overflow: Ellipsis
+                                    draw_text +: {
+                                        text_style: RBX_TEXT_BODY {}
+                                        color: (RBX_FG_PRIMARY)
+                                    }
+                                    text: ""
+                                }
 
-                    show_media_desc := Label {
-                        width: Fill
-                        height: Fit
-                        flow: Flow.Right{wrap: true}
-                        margin: Inset{bottom: 6}
-                        draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 10}
-                            color: (RBX_FG_TERTIARY)
-                        }
-                        text: "A hidden media can always be shown by tapping on it"
-                    }
+                                member_user_id := Label {
+                                    width: Fill
+                                    height: Fit
+                                    max_lines: 1
+                                    text_overflow: Ellipsis
+                                    draw_text +: {
+                                        text_style: RBX_TEXT_META {}
+                                        color: (RBX_FG_TERTIARY)
+                                    }
+                                    text: ""
+                                }
+                            }
 
-                    media_hide_radio := RadioButton {
-                        width: Fit
-                        height: Fit
-                        align: Align{y: 0.5}
-                        padding: Inset{top: 4, bottom: 4, left: 6, right: 4}
-                        draw_text +: {
-                            color: (MESSAGE_TEXT_COLOR)
-                            color_hover: (MESSAGE_TEXT_COLOR)
-                            color_focus: (MESSAGE_TEXT_COLOR)
-                            color_active: (MESSAGE_TEXT_COLOR)
-                            color_down: (MESSAGE_TEXT_COLOR)
-                            color_disabled: (MESSAGE_TEXT_COLOR)
-                            text_style: REGULAR_TEXT {font_size: 10.5}
-                        }
-                        draw_bg +: {
-                            color: (COLOR_PRIMARY)
-                            border_color: (COLOR_SECONDARY_DARKER)
-                            border_color_active: (COLOR_ACTIVE_PRIMARY_DARKER)
-                            mark_color: vec4(0.0, 0.0, 0.0, 0.0)
-                            mark_color_active: (COLOR_ACTIVE_PRIMARY_DARKER)
-                        }
-                        text: "Always hide"
-                    }
+                            member_role := RoundedView {
+                                visible: false
+                                width: Fit
+                                height: Fit
+                                padding: Inset{left: 9, right: 9, top: 3, bottom: 3}
+                                show_bg: true
+                                new_batch: true
+                                draw_bg +: {
+                                    color: (RBX_ACCENT_SOFT)
+                                    border_radius: (RBX_RADIUS_PILL)
+                                    border_size: 0.0
+                                }
 
-                    media_show_radio := RadioButton {
-                        width: Fit
-                        height: Fit
-                        align: Align{y: 0.5}
-                        padding: Inset{top: 4, bottom: 4, left: 6, right: 4}
-                        draw_text +: {
-                            color: (MESSAGE_TEXT_COLOR)
-                            color_hover: (MESSAGE_TEXT_COLOR)
-                            color_focus: (MESSAGE_TEXT_COLOR)
-                            color_active: (MESSAGE_TEXT_COLOR)
-                            color_down: (MESSAGE_TEXT_COLOR)
-                            color_disabled: (MESSAGE_TEXT_COLOR)
-                            text_style: REGULAR_TEXT {font_size: 10.5}
+                                member_role_label := Label {
+                                    width: Fit
+                                    height: Fit
+                                    draw_text +: {
+                                        text_style: RBX_TEXT_BADGE {}
+                                        color: (RBX_ACCENT)
+                                    }
+                                    text: ""
+                                }
+                            }
                         }
-                        draw_bg +: {
-                            color: (COLOR_PRIMARY)
-                            border_color: (COLOR_SECONDARY_DARKER)
-                            border_color_active: (COLOR_ACTIVE_PRIMARY_DARKER)
-                            mark_color: vec4(0.0, 0.0, 0.0, 0.0)
-                            mark_color_active: (COLOR_ACTIVE_PRIMARY_DARKER)
+
+                        members_status := View {
+                            width: Fill
+                            height: Fit
+                            padding: Inset{left: 20, right: 20, top: 16, bottom: 16}
+
+                            members_status_label := Label {
+                                width: Fill
+                                height: Fit
+                                flow: Flow.Right{wrap: true}
+                                draw_text +: {
+                                    text_style: RBX_TEXT_BODY {}
+                                    color: (RBX_FG_SECONDARY)
+                                }
+                                text: ""
+                            }
                         }
-                        text: "Always show"
                     }
+                }
 
-                    // ── Section separator ────────────────────────────
-                    View {
-                        width: Fill
-                        height: 1
-                        margin: Inset{top: 16, bottom: 16}
-                        show_bg: true
-                        draw_bg +: { color: (COLOR_SECONDARY) }
-                    }
+            }
 
-                    // ── Leave Room ───────────────────────────────────
-                    leave_room_label := Label {
-                        width: Fill
-                        height: Fit
-                        margin: Inset{bottom: 10}
-                        draw_text +: {
-                            text_style: REGULAR_TEXT {font_size: 11}
-                            color: (RBX_FG_SECONDARY)
-                        }
-                        text: "Leave room"
-                    }
+            // ── Sticky footer ────────────────────────────────────────────
+            // The save/cancel pair belongs to the whole dialog, so it stays put
+            // at the bottom instead of scrolling away in the middle of the form.
+            footer_divider := SolidView {
+                width: Fill
+                height: 1.0
+                show_bg: true
+                draw_bg.color: (RBX_DIVIDER)
+            }
 
-                    leave_button := RobrixNegativeIconButton {
-                        width: Fit
-                        height: 32
-                        padding: Inset{left: 12, right: 12, top: 6, bottom: 6}
-                        icon_walk: Walk{width: 0, height: 0}
-                        text: "Leave room"
-                    }
+            footer := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{x: 1.0, y: 0.5}
+                spacing: 10
+                padding: Inset{left: 24, right: 24, top: 12, bottom: 12}
+
+                cancel_button := RobrixNeutralIconButton {
+                    width: 100
+                    height: 34
+                    padding: 6
+                    align: Align{x: 0.5, y: 0.5}
+                    icon_walk: Walk{width: 0, height: 0}
+                    draw_icon.svg: (ICON_FORBIDDEN)
+                    text: "Cancel"
+                }
+
+                save_button := RobrixIconButton {
+                    width: 100
+                    height: 34
+                    padding: 6
+                    align: Align{x: 0.5, y: 0.5}
+                    icon_walk: Walk{width: 0, height: 0}
+                    draw_icon.svg: (ICON_CHECKMARK)
+                    text: "Save"
                 }
             }
         }
