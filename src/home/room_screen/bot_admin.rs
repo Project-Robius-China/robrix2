@@ -4,6 +4,205 @@
 
 use super::*;
 
+script_mod! {
+    use mod.prelude.widgets.*
+    use mod.widgets.*
+
+    mod.widgets.AppServicePanel = #(AppServicePanel::register_widget(vm)) {
+        width: Fill
+        height: Fit
+        margin: Inset{left: 14, right: 54, top: 10, bottom: 16}
+        flow: Down
+        align: Align{x: 0.0, y: 0.0}
+        spacing: 8
+
+        sender_row := View {
+            width: Fit
+            height: Fit
+            flow: Right
+            spacing: 6
+
+            sender_name := Label {
+                width: Fit
+                height: Fit
+                draw_text +: {
+                    text_style: USERNAME_TEXT_STYLE { font_size: 10.8 }
+                    color: (COLOR_ACTIVE_PRIMARY)
+                }
+                text: ""
+            }
+
+            sender_tag := Label {
+                width: Fit
+                height: Fit
+                draw_text +: {
+                    text_style: REGULAR_TEXT { font_size: 9.5 }
+                    color: #8A8A8A
+                }
+                text: ""
+            }
+        }
+
+        bubble := RoundedView {
+            width: 408
+            height: Fit
+            flow: Down
+            spacing: 8
+            padding: Inset{top: 14, right: 14, bottom: 12, left: 14}
+
+            show_bg: true
+            draw_bg +: {
+                color: (COLOR_PRIMARY)
+                border_radius: 0.0
+                border_size: 1.0
+                border_color: (COLOR_SECONDARY_DARKER)
+            }
+
+            header := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+
+                title := Label {
+                    width: Fit
+                    height: Fit
+                    draw_text +: {
+                        text_style: USERNAME_TEXT_STYLE { font_size: 11.2 }
+                        color: #1F1F1F
+                    }
+                    text: ""
+                }
+
+                spacer := View {
+                    width: Fill
+                    height: Fit
+                }
+
+                dismiss_button := RobrixNeutralIconButton {
+                    width: 28
+                    height: 24
+                    align: Align{x: 0.5, y: 0.5}
+                    spacing: 0
+                    padding: 0
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 12, height: 12}
+                    text: ""
+                }
+            }
+
+            subtitle := Label {
+                width: Fill
+                height: Fit
+                draw_text +: {
+                    text_style: REGULAR_TEXT { font_size: 10.5 }
+                    color: (COLOR_TEXT)
+                }
+                text: ""
+            }
+
+            footer := View {
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{x: 1.0, y: 0.5}
+
+                timestamp := Label {
+                    width: Fit
+                    height: Fit
+                    draw_text +: {
+                        text_style: REGULAR_TEXT { font_size: 8.8 }
+                        color: #9A9A9A
+                    }
+                    text: ""
+                }
+            }
+        }
+
+        keyboard := View {
+            width: Fit
+            height: Fit
+            flow: Down
+            spacing: 8
+
+            first_row := View {
+                width: Fit
+                height: Fit
+                flow: Right
+                spacing: 8
+
+                create_button := RobrixPositiveIconButton {
+                    width: 156
+                    height: 46
+                    padding: 10
+                    draw_icon.svg: (ICON_CHECKMARK)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1}}
+                    text: ""
+                }
+
+                list_button := RobrixNeutralIconButton {
+                    width: 156
+                    height: 46
+                    padding: 10
+                    draw_icon.svg: (ICON_SEARCH)
+                    icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                    text: ""
+                }
+            }
+
+            second_row := View {
+                width: Fit
+                height: Fit
+                flow: Right
+                spacing: 8
+
+                delete_button := RobrixNegativeIconButton {
+                    width: 156
+                    height: 46
+                    padding: 10
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                    text: ""
+                }
+
+                help_button := RobrixNeutralIconButton {
+                    width: 156
+                    height: 46
+                    padding: 10
+                    draw_icon.svg: (ICON_INFO)
+                    icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                    text: ""
+                }
+            }
+
+            third_row := View {
+                width: Fit
+                height: Fit
+                flow: Right
+                spacing: 8
+
+                view_bound_button := RobrixNeutralIconButton {
+                    width: 156
+                    height: 46
+                    padding: 10
+                    draw_icon.svg: (ICON_SEARCH)
+                    icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                    text: "View Bound Bots"
+                }
+
+                unbind_button := RobrixNeutralIconButton {
+                    width: 156
+                    height: 46
+                    padding: 10
+                    draw_icon.svg: (ICON_CLOSE)
+                    icon_walk: Walk{width: 14, height: 14, margin: Inset{left: -2, right: -1}}
+                    text: ""
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn escape_slash_command_arg(value: &str) -> String {
     value.trim().replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -447,6 +646,186 @@ pub(super) fn extract_bot_user_ids_from_listbots_reply(
     }
 
     bot_user_ids
+}
+
+#[derive(Clone, Default, Debug)]
+pub enum AppServicePanelAction {
+    Dismiss,
+    OpenCreateBotModal,
+    OpenDeleteBotModal,
+    SendListBots,
+    SendBotHelp,
+    ShowBoundBots,
+    Unbind,
+    #[default]
+    None,
+}
+
+impl ActionDefaultRef for AppServicePanelAction {
+    fn default_ref() -> &'static Self {
+        static DEFAULT: AppServicePanelAction = AppServicePanelAction::None;
+        &DEFAULT
+    }
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct AppServicePanel {
+    #[deref] view: View,
+    #[rust] app_language: AppLanguage,
+    #[rust] app_language_initialized: bool,
+}
+
+impl Widget for AppServicePanel {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if !self.app_language_initialized || self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+        self.view.handle_event(cx, event, scope);
+
+        let room_screen_props = scope
+            .props
+            .get::<RoomScreenProps>()
+            .expect("BUG: RoomScreenProps should be available in Scope::props for AppServicePanel");
+        self.view
+            .button(cx, ids!(keyboard.third_row.view_bound_button))
+            .set_visible(cx, room_screen_props.app_service_enabled);
+        self.view
+            .button(cx, ids!(keyboard.third_row.unbind_button))
+            .set_visible(cx, room_screen_props.app_service_room_bound);
+
+        if let Event::Actions(actions) = event {
+            if self
+                .view
+                .button(cx, ids!(bubble.header.dismiss_button))
+                .clicked(actions)
+            {
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    AppServicePanelAction::Dismiss,
+                );
+            }
+
+            if self
+                .view
+                .button(cx, ids!(keyboard.first_row.create_button))
+                .clicked(actions)
+            {
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    AppServicePanelAction::OpenCreateBotModal,
+                );
+            }
+
+            if self
+                .view
+                .button(cx, ids!(keyboard.first_row.list_button))
+                .clicked(actions)
+            {
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    AppServicePanelAction::SendListBots,
+                );
+            }
+
+            if self
+                .view
+                .button(cx, ids!(keyboard.second_row.delete_button))
+                .clicked(actions)
+            {
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    AppServicePanelAction::OpenDeleteBotModal,
+                );
+            }
+
+            if self
+                .view
+                .button(cx, ids!(keyboard.second_row.help_button))
+                .clicked(actions)
+            {
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    AppServicePanelAction::SendBotHelp,
+                );
+            }
+
+            if self
+                .view
+                .button(cx, ids!(keyboard.third_row.view_bound_button))
+                .clicked(actions)
+            {
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    AppServicePanelAction::ShowBoundBots,
+                );
+            }
+
+            if self
+                .view
+                .button(cx, ids!(keyboard.third_row.unbind_button))
+                .clicked(actions)
+            {
+                cx.widget_action(
+                    room_screen_props.room_screen_widget_uid,
+                    AppServicePanelAction::Unbind,
+                );
+            }
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if !self.app_language_initialized || self.app_language != app_language {
+            self.set_app_language(cx, app_language);
+        }
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl AppServicePanel {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.app_language_initialized = true;
+        self.view
+            .label(cx, ids!(sender_row.sender_name))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.sender_name"));
+        self.view
+            .label(cx, ids!(sender_row.sender_tag))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.sender_tag"));
+        self.view
+            .label(cx, ids!(bubble.header.title))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.title"));
+        self.view
+            .label(cx, ids!(bubble.subtitle))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.subtitle"));
+        self.view
+            .label(cx, ids!(bubble.footer.timestamp))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.timestamp_now"));
+        self.view
+            .button(cx, ids!(keyboard.first_row.create_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.create_bot"));
+        self.view
+            .button(cx, ids!(keyboard.first_row.list_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.list_bots"));
+        self.view
+            .button(cx, ids!(keyboard.second_row.delete_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.delete_bot"));
+        self.view
+            .button(cx, ids!(keyboard.second_row.help_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.bot_help"));
+        self.view
+            .button(cx, ids!(keyboard.third_row.view_bound_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.bots"));
+        self.view
+            .button(cx, ids!(keyboard.third_row.unbind_button))
+            .set_text(cx, tr_key(self.app_language, "room_screen.app_service.button.unbind"));
+        self.view.redraw(cx);
+    }
 }
 
 #[cfg(test)]
