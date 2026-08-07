@@ -828,6 +828,374 @@ impl AppServicePanel {
     }
 }
 
+
+impl RoomScreen {
+    pub(super) fn timeline_bot_context(
+        &mut self,
+        app_state: Option<&AppState>,
+        room_id: &OwnedRoomId,
+        room_members: Option<&Arc<Vec<RoomMember>>>,
+    ) -> TimelineBotContext {
+        let Some(app_state) = app_state else {
+            return TimelineBotContext::default();
+        };
+
+        let app_service_enabled = app_state.bot_settings.enabled;
+        let room_is_bound = app_state.bot_settings.is_room_bound(room_id);
+        let persisted_bound_bot_user_id = if app_service_enabled {
+            app_state.bot_settings.bound_bot_user_id(room_id).map(ToOwned::to_owned)
+        } else {
+            None
+        };
+        let persisted_bound_bot_user_ids = if app_service_enabled {
+            app_state.bot_settings.bound_bot_user_ids(room_id)
+        } else {
+            Vec::new()
+        };
+        let resolved_parent_bot_user_id = if app_service_enabled {
+            app_state
+                .bot_settings
+                .resolved_bot_user_id(current_user_id().as_deref())
+                .ok()
+        } else {
+            None
+        };
+        let known_bot_user_ids = timeline_known_bot_user_ids(app_state);
+
+        if let Some(cached) = self.timeline_bot_context_cache.as_ref()
+            && cached.matches(
+                room_id,
+                room_members,
+                app_service_enabled,
+                room_is_bound,
+                persisted_bound_bot_user_id.as_ref(),
+                &persisted_bound_bot_user_ids,
+                resolved_parent_bot_user_id.as_ref(),
+                &known_bot_user_ids,
+            )
+        {
+            return cached.value.clone();
+        }
+        if self.timeline_bot_context_cache.is_some() {
+            self.invalidate_timeline_bot_context();
+        }
+
+        let has_persisted_management_binding = resolved_parent_bot_user_id
+            .as_ref()
+            .is_some_and(|resolved_parent_bot_user_id|
+                persisted_bound_bot_user_ids
+                    .iter()
+                    .any(|bot_user_id| bot_user_id == resolved_parent_bot_user_id)
+            );
+        let room_bot_user_ids = room_members
+            .map(|members|
+                collect_room_bot_user_ids(
+                    members.as_ref(),
+                    resolved_parent_bot_user_id.as_deref(),
+                    &known_bot_user_ids,
+                    &persisted_bound_bot_user_ids,
+                )
+            )
+            .unwrap_or_else(|| persisted_bound_bot_user_ids.clone());
+        let detected_bound_bot_user_id = if app_service_enabled {
+            room_members.and_then(|members|
+                detected_bot_binding_for_members(
+                    app_state,
+                    room_id,
+                    members.as_ref(),
+                )
+            )
+        } else {
+            None
+        };
+        let bound_bot_user_id = persisted_bound_bot_user_id
+            .clone()
+            .or(detected_bound_bot_user_id);
+        let value = TimelineBotContext {
+            app_service_enabled,
+            app_service_room_bound: bound_bot_user_id.is_some(),
+            has_persisted_management_binding,
+            bound_bot_user_id,
+            resolved_parent_bot_user_id: resolved_parent_bot_user_id.clone(),
+            persisted_bound_bot_user_ids: persisted_bound_bot_user_ids.clone(),
+            room_bot_user_ids,
+            known_bot_user_ids: known_bot_user_ids.clone(),
+        };
+        self.timeline_bot_context_cache = Some(CachedTimelineBotContext {
+            room_id: room_id.clone(),
+            room_members: room_members.cloned(),
+            app_service_enabled,
+            room_is_bound,
+            persisted_bound_bot_user_id,
+            persisted_bound_bot_user_ids,
+            resolved_parent_bot_user_id,
+            known_bot_user_ids,
+            value: value.clone(),
+        });
+        value
+    }
+
+    pub(super) fn invalidate_timeline_bot_context(&mut self) {
+        self.timeline_bot_context_cache = None;
+        if let Some(tl) = self.tl_state.as_mut() {
+            tl.content_drawn_since_last_update.clear();
+            tl.profile_drawn_since_last_update.clear();
+        }
+    }
+
+    pub(super) fn discover_known_bot_user_ids_from_timeline_items(
+        app_state: &AppState,
+        timeline_items: &Vector<Arc<TimelineItem>>,
+    ) -> Vec<OwnedUserId> {
+        let Ok(parent_bot_user_id) = app_state
+            .bot_settings
+            .resolved_bot_user_id(current_user_id().as_deref())
+        else {
+            return Vec::new();
+        };
+
+        let default_server_name = current_user_id()
+            .map(|user_id| user_id.server_name().to_owned());
+        let mut discovered_bot_user_ids = Vec::<OwnedUserId>::new();
+        let mut push_bot_user_id = |bot_user_id: OwnedUserId| {
+            if bot_user_id.as_str() == parent_bot_user_id.as_str() {
+                return;
+            }
+            if !discovered_bot_user_ids
+                .iter()
+                .any(|existing_bot_user_id| existing_bot_user_id.as_str() == bot_user_id.as_str())
+            {
+                discovered_bot_user_ids.push(bot_user_id);
+            }
+        };
+
+        for item in timeline_items {
+            let TimelineItemKind::Event(event_tl_item) = item.kind() else { continue };
+            if event_tl_item.sender().as_str() != parent_bot_user_id.as_str() {
+                continue;
+            }
+            let Some(message_text) = Self::extract_message_text(item) else { continue };
+            for bot_user_id in extract_bot_user_ids_from_listbots_reply(
+                &message_text,
+                default_server_name.as_ref(),
+            ) {
+                push_bot_user_id(bot_user_id);
+            }
+        }
+
+        discovered_bot_user_ids
+    }
+
+    pub(super) fn set_app_service_actions_visible(&mut self, cx: &mut Cx, visible: bool) {
+        self.show_app_service_actions = visible;
+        self.redraw(cx);
+    }
+
+    pub(super) fn toggle_app_service_actions(&mut self, cx: &mut Cx) {
+        self.set_app_service_actions_visible(cx, !self.show_app_service_actions);
+    }
+
+    pub(super) fn close_create_bot_modal(&self, cx: &mut Cx) {
+        self.view.modal(cx, ids!(create_bot_modal)).close(cx);
+    }
+
+    pub(super) fn close_delete_bot_modal(&self, cx: &mut Cx) {
+        self.view.modal(cx, ids!(delete_bot_modal)).close(cx);
+    }
+
+    pub(super) fn open_create_bot_modal(&mut self, cx: &mut Cx) {
+        let Some(room_name_id) = self.room_name_id.clone() else {
+            return;
+        };
+        self.set_app_service_actions_visible(cx, false);
+        self.view
+            .create_bot_modal(cx, ids!(create_bot_modal_inner))
+            .show(cx, room_name_id);
+        self.view.modal(cx, ids!(create_bot_modal)).open(cx);
+    }
+
+    pub(super) fn open_delete_bot_modal(&mut self, cx: &mut Cx) {
+        let Some(room_name_id) = self.room_name_id.clone() else {
+            return;
+        };
+        self.set_app_service_actions_visible(cx, false);
+        self.view
+            .delete_bot_modal(cx, ids!(delete_bot_modal_inner))
+            .show(cx, room_name_id);
+        self.view.modal(cx, ids!(delete_bot_modal)).open(cx);
+    }
+
+    pub(super) fn reset_app_service_ui(&mut self, cx: &mut Cx) {
+        self.set_app_service_actions_visible(cx, false);
+        self.close_create_bot_modal(cx);
+        self.close_delete_bot_modal(cx);
+    }
+
+    pub(super) fn resolved_app_service_bot_user_id(
+        &self,
+        app_state: &AppState,
+        room_id: &OwnedRoomId,
+    ) -> Option<OwnedUserId> {
+        if let Some(bot_user_id) = app_state.bot_settings.bound_bot_user_id(room_id.as_ref()) {
+            return Some(bot_user_id.to_owned());
+        }
+
+        self.tl_state
+            .as_ref()
+            .filter(|tl| tl.kind.room_id() == room_id)
+            .and_then(|tl| tl.room_members.as_ref())
+            .and_then(|members|
+                detected_bot_binding_for_members(
+                    app_state,
+                    room_id,
+                    members.as_ref(),
+                )
+            )
+    }
+
+    pub(super) fn is_app_service_room_bound(&self, app_state: &AppState, room_id: &OwnedRoomId) -> bool {
+        self.resolved_app_service_bot_user_id(app_state, room_id).is_some()
+    }
+
+    pub(super) fn send_app_service_feedback_message(&self, message: impl Into<String>) {
+        let Some(room_id) = self.room_id().cloned() else {
+            return;
+        };
+        let message = format!("[App Service] {}", message.into());
+        submit_async_request(MatrixRequest::SendMessage {
+            timeline_kind: TimelineKind::MainRoom { room_id },
+            message: RoomMessageEventContent::notice_plain(message),
+            replied_to: None,
+            target_user_id: None,
+            explicit_room: false,
+            broadcast_target_user_ids: None,
+            #[cfg(feature = "tsp")]
+            sign_with_tsp: false,
+        });
+    }
+
+    pub(super) fn send_botfather_command(
+        &mut self,
+        cx: &mut Cx,
+        app_state: &AppState,
+        command: &str,
+        success_message: String,
+    ) -> bool {
+        let Some(timeline_kind) = self.timeline_kind.clone() else {
+            return false;
+        };
+        if timeline_kind.thread_root_event_id().is_some() {
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.bot.main_timeline_only"),
+            );
+            return false;
+        }
+
+        let Some(room_id) = self.room_id().cloned() else {
+            return false;
+        };
+        if !app_state.bot_settings.enabled {
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.bot.enable_before_commands"),
+            );
+            return false;
+        }
+        let bound_bot_user_id = self.resolved_app_service_bot_user_id(app_state, &room_id);
+        if bound_bot_user_id.is_none() {
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.bot.bind_before_commands"),
+            );
+            return false;
+        }
+
+        submit_async_request(MatrixRequest::SendMessage {
+            timeline_kind,
+            message: RoomMessageEventContent::text_plain(command),
+            replied_to: None,
+            target_user_id: bound_bot_user_id,
+            explicit_room: false,
+            broadcast_target_user_ids: None,
+            #[cfg(feature = "tsp")]
+            sign_with_tsp: false,
+        });
+
+        self.send_app_service_feedback_message(success_message);
+        self.set_app_service_actions_visible(cx, false);
+        true
+    }
+
+    pub(super) fn send_create_bot_command(
+        &mut self,
+        cx: &mut Cx,
+        app_state: &AppState,
+        username: &str,
+        display_name: &str,
+        system_prompt: Option<&str>,
+    ) {
+        let Some(timeline_kind) = self.timeline_kind.clone() else {
+            return;
+        };
+        if timeline_kind.thread_root_event_id().is_some() {
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.bot.creation_main_timeline_only"),
+            );
+            return;
+        }
+
+        let Some(room_id) = self.room_id().cloned() else {
+            return;
+        };
+        if !app_state.bot_settings.enabled {
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.app_service.enable_before_create"),
+            );
+            return;
+        }
+        if !self.is_app_service_room_bound(app_state, &room_id) {
+            self.send_app_service_feedback_message(
+                tr_key(self.app_language, "room_screen.popup.app_service.bind_before_create"),
+            );
+            return;
+        }
+
+        let command = format_create_bot_command(username, display_name, system_prompt);
+        if self.send_botfather_command(
+            cx,
+            app_state,
+            &command,
+            tr_fmt(self.app_language, "room_screen.popup.bot.sent_createbot", &[("username", username)]),
+        ) {
+            self.close_create_bot_modal(cx);
+        }
+    }
+
+    pub(super) fn send_delete_bot_command(
+        &mut self,
+        cx: &mut Cx,
+        app_state: &AppState,
+        user_id_or_localpart: &str,
+    ) {
+        let matrix_user_id =
+            match resolve_delete_bot_user_id(user_id_or_localpart, current_user_id().as_deref(), self.app_language) {
+                Ok(user_id) => user_id,
+                Err(error) => {
+                    self.send_app_service_feedback_message(error);
+                    return;
+                }
+            };
+
+        let command = format_delete_bot_command(matrix_user_id.as_ref());
+        if self.send_botfather_command(
+            cx,
+            app_state,
+            &command,
+            tr_fmt(self.app_language, "room_screen.popup.bot.sent_deletebot", &[("matrix_user_id", matrix_user_id.as_str())]),
+        ) {
+            self.close_delete_bot_modal(cx);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

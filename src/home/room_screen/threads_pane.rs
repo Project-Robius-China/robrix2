@@ -578,3 +578,148 @@ impl ThreadsSlidingPaneRef {
         inner.hide(cx);
     }
 }
+
+pub(super) const ROOM_INFO_PANE_DESKTOP_WIDTH: f32 = 320.0;
+pub(super) const ROOM_INFO_PANE_MOBILE_BREAKPOINT: f32 = 700.0;
+
+impl RoomScreen {
+    pub(super) fn show_threads_pane(&mut self, cx: &mut Cx) {
+        self.hide_room_info_pane(cx);
+        self.ensure_threads_state_for_current_room();
+        if !self.threads_pane_state.initialized && !self.threads_pane_state.is_loading {
+            self.request_more_threads(cx, false);
+        }
+        self.refresh_threads_pane(cx);
+        self.threads_sliding_pane(cx, ids!(threads_sliding_pane)).show(cx);
+        self.threads_button(cx, ids!(timeline.threads_button)).set_visible(cx, false);
+        self.redraw(cx);
+    }
+
+    pub(super) fn refresh_threads_pane(&mut self, cx: &mut Cx) {
+        let Some(room_name_id) = self.room_name_id.as_ref() else { return };
+        self.threads_sliding_pane(cx, ids!(threads_sliding_pane)).set_info(
+            cx,
+            ThreadsPaneInfo {
+                room_name: room_name_id.to_string(),
+                entries: self.threads_pane_state.entries.iter()
+                    .map(|entry| ThreadsPaneEntryInfo {
+                        thread_root_event_id: entry.thread_root_event_id.clone(),
+                        title: entry.title.clone(),
+                        subtitle: match entry.reply_count {
+                            1 => String::from("1 reply"),
+                            n => format!("{n} replies"),
+                        },
+                        time: utils::relative_format(entry.timestamp)
+                            .unwrap_or_else(|| String::from("")),
+                        preview: entry.latest_reply_preview.clone().unwrap_or_else(|| String::from("Tap to open thread")),
+                    })
+                    .collect(),
+                status_text: self.threads_pane_state.status_text.clone(),
+                show_entries: !self.threads_pane_state.entries.is_empty(),
+                loading_text: if self.threads_pane_state.entries.is_empty() {
+                    String::from("Loading threads...")
+                } else {
+                    String::from("Loading more threads...")
+                },
+                show_loading: self.threads_pane_state.is_loading,
+            },
+        );
+    }
+
+    pub(super) fn hide_threads_pane(&mut self, cx: &mut Cx) {
+        self.threads_sliding_pane(cx, ids!(threads_sliding_pane)).hide(cx);
+        let show_threads_button = effective_is_desktop(cx);
+        self.threads_button(cx, ids!(timeline.threads_button))
+            .set_visible(cx, show_threads_button);
+    }
+
+    pub(super) fn ensure_threads_state_for_current_room(&mut self) {
+        let Some(room_id) = self.room_id().cloned() else { return };
+        if self.threads_pane_state.room_id.as_ref().is_some_and(|current| current == &room_id) {
+            return;
+        }
+        self.threads_pane_state = ThreadsPaneState {
+            room_id: Some(room_id),
+            status_text: String::from("Loading threads..."),
+            ..Default::default()
+        };
+    }
+
+    pub(super) fn request_more_threads(&mut self, _cx: &mut Cx, load_more: bool) {
+        self.ensure_threads_state_for_current_room();
+        let Some(room_id) = self.threads_pane_state.room_id.clone() else { return };
+        if self.threads_pane_state.is_loading {
+            return;
+        }
+        let from = if load_more {
+            let Some(from) = self.threads_pane_state.prev_batch_token.clone() else { return };
+            Some(from)
+        } else {
+            None
+        };
+        self.threads_pane_state.is_loading = true;
+        if !self.threads_pane_state.initialized {
+            self.threads_pane_state.status_text = String::from("Loading threads...");
+        }
+        submit_async_request(MatrixRequest::ListRoomThreads {
+            room_id,
+            from,
+        });
+    }
+
+    pub(super) fn on_threads_loaded(
+        &mut self,
+        cx: &mut Cx,
+        _from: Option<&String>,
+        threads: &[FetchedRoomThread],
+        prev_batch_token: Option<String>,
+    ) {
+        self.threads_pane_state.is_loading = false;
+        self.threads_pane_state.initialized = true;
+        self.threads_pane_state.prev_batch_token = prev_batch_token;
+        self.threads_pane_state.entries.extend_from_slice(threads);
+        self.threads_pane_state.entries.sort_by_key(|entry| u64::from(entry.timestamp.0));
+        self.threads_pane_state.entries.dedup_by(|a, b| a.thread_root_event_id == b.thread_root_event_id);
+        self.threads_pane_state.status_text = if self.threads_pane_state.entries.is_empty() {
+            String::from("No threads yet.")
+        } else {
+            String::new()
+        };
+        self.refresh_threads_pane(cx);
+        self.redraw(cx);
+    }
+
+    pub(super) fn on_threads_failed(&mut self, cx: &mut Cx, error: &str) {
+        self.threads_pane_state.is_loading = false;
+        self.threads_pane_state.initialized = true;
+        if self.threads_pane_state.entries.is_empty() {
+            self.threads_pane_state.status_text = format!("Failed to load threads.\n\nError: {error}");
+        } else {
+            let error_display = error.to_string();
+            let room_id_retry = self.threads_pane_state.room_id.clone();
+            let from_retry = self.threads_pane_state.prev_batch_token.clone();
+            enqueue_notification(NotificationItem {
+                kind: PopupKind::Error,
+                title: Some("Load threads failed".into()),
+                message: format!("Failed to load more threads.\n\nError: {error}").into(),
+                actions: vec![
+                    NotificationAction::new("Retry", NotifActionStyle::Primary, move |_cx| {
+                        if let Some(room_id) = room_id_retry.clone() {
+                            submit_async_request(MatrixRequest::ListRoomThreads {
+                                room_id,
+                                from: from_retry.clone(),
+                            });
+                        }
+                    }),
+                    NotificationAction::new("Copy details", NotifActionStyle::Neutral, move |cx| {
+                        cx.copy_to_clipboard(&error_display);
+                    }),
+                ],
+                auto_dismissal_duration: Some(5.0),
+                ..Default::default()
+            });
+        }
+        self.refresh_threads_pane(cx);
+        self.redraw(cx);
+    }
+}

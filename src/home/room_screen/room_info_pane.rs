@@ -1753,6 +1753,261 @@ impl RoomInfoSlidingPaneRef {
     }
 }
 
+
+pub(super) const TOPIC_PREVIEW_CHARS: usize = 140;
+
+impl RoomScreen {
+    /// Build the room-info payload from current state, or `None` if no room is
+    /// displayed. Shared by both the sliding info pane and the inline "Info"
+    /// tab body so the two presentations stay in sync.
+    ///
+    /// `app_state`, when available, makes the member list's "Bot" marker
+    /// registry-aware (AgentRegistry ∪ app-service known bots), mirroring the
+    /// timeline. Callers without a reachable `AppState` (no `Scope` in hand)
+    /// pass `None`, which falls back to the name-only heuristic.
+    pub(super) fn build_room_info_pane_info(
+        &mut self,
+        app_state: Option<&AppState>,
+        is_direct_room: bool,
+    ) -> Option<RoomInfoPaneInfo> {
+        let room_id = self.room_id().cloned()?;
+        let room_name = self.room_name_id.as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| room_id.to_string());
+        let room_avatar_fallback_text = self.room_name_id.as_ref()
+            .and_then(|room_name_id| room_name_id.name_for_avatar().map(ToOwned::to_owned))
+            .unwrap_or_else(|| String::from("?"));
+        let room_avatar_uri = self.room_avatar_url.clone();
+        let (topic, visibility, encryption, is_encrypted, is_favorite, joined_count) = get_client()
+            .and_then(|client| client.get_room(&room_id))
+            .map(|room| {
+                let topic = room.topic()
+                    .unwrap_or_else(|| String::from("No topic"));
+                let visibility = match room.is_public() {
+                    Some(true) => String::from("Public"),
+                    Some(false) => String::from("Private"),
+                    None => String::from("Unknown"),
+                };
+                let encryption_state = room.encryption_state();
+                let is_encrypted = encryption_state.is_encrypted();
+                let encryption = if encryption_state.is_unknown() {
+                    String::from("Unknown")
+                } else if is_encrypted {
+                    String::from("Encrypted")
+                } else {
+                    String::from("Unencrypted")
+                };
+                // Authoritative joined count from the room summary, available
+                // even before the full member list is fetched.
+                let joined_count = room.joined_members_count() as usize;
+                (topic, visibility, encryption, is_encrypted, room.is_favourite(), joined_count)
+            })
+            .unwrap_or_else(|| (
+                String::from("No topic"),
+                String::from("Unknown"),
+                String::from("Unknown"),
+                false,
+                false,
+                0,
+            ));
+
+        let my_user_id = current_user_id();
+        let bot_identity = room_info_bot_identity_fingerprint(app_state, my_user_id.as_deref());
+        // Clone the members `Arc` out first (cheap) so the `tl_state` borrow is
+        // released before we (mutably) touch the cache below.
+        let members_arc = self.tl_state.as_ref().and_then(|tl| tl.room_members.clone());
+        let room_info_dm_target = if is_direct_room {
+            members_arc.as_ref().and_then(|members|
+                room_info_dm_target_from_user_ids(
+                    members.iter().map(|member| member.user_id()),
+                    my_user_id.as_deref(),
+                )
+            )
+        } else {
+            None
+        };
+        let show_title_bot_pill = room_info_title_shows_agent_badge(
+            app_state,
+            room_id.as_ref(),
+            room_info_dm_target.as_deref(),
+            members_arc.iter()
+                .flat_map(|members| members.iter())
+                .map(|member| member.user_id()),
+        );
+
+        let (people_entries, show_people_loading, member_count, is_agent_enabled, my_role) =
+            if let Some(members) = members_arc {
+                let cache_valid = self.room_info_members_cache.as_ref().is_some_and(|c|
+                    c.room_id == room_id
+                        && Arc::ptr_eq(&c.members, &members)
+                        && c.bot_identity == bot_identity
+                );
+                if !cache_valid {
+                    // Expensive path — only when the member list actually changed.
+                    let my_role = members.iter()
+                        .find(|member| my_user_id.as_deref() == Some(member.user_id()))
+                        .map(|member| match member.suggested_role_for_power_level() {
+                            RoomMemberRole::Creator => "Owner",
+                            RoomMemberRole::Administrator => "Admin",
+                            RoomMemberRole::Moderator => "Moderator",
+                            RoomMemberRole::User => "Member",
+                        })
+                        .unwrap_or("")
+                        .to_string();
+
+                    let level_weight = |level: &str| -> u8 {
+                        match level {
+                            "Creator" => 0,
+                            "Admin" => 1,
+                            "Moderator" => 2,
+                            _ => 3,
+                        }
+                    };
+
+                    // Registry-aware bot detection, mirroring the timeline's
+                    // `is_timeline_sender_bot`: the union of the AgentRegistry
+                    // and (app-service-gated) known-bot list, plus the
+                    // resolved parent BotFather MXID. Computed once here
+                    // (not per member) since it's the same for every entry.
+                    let known_bot_user_ids = &bot_identity.known_bot_user_ids;
+                    let resolved_parent_bot_user_id =
+                        bot_identity.resolved_parent_bot_user_id.as_deref();
+
+                    // Build with a precomputed (role-weight, lowercased-name) sort
+                    // key so sorting doesn't allocate a String per comparison.
+                    let mut keyed: Vec<(u8, String, RoomInfoPeopleEntryInfo)> = members.iter()
+                        .map(|member| {
+                            let display_name = member.display_name()
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_else(|| member.user_id().to_string());
+                            let is_bot = is_known_or_likely_bot(
+                                    member.user_id(),
+                                    resolved_parent_bot_user_id,
+                                    known_bot_user_ids,
+                                ) || is_likely_bot_member(member, resolved_parent_bot_user_id);
+                            let level = match member.suggested_role_for_power_level() {
+                                RoomMemberRole::Creator => String::from("Creator"),
+                                RoomMemberRole::Administrator => String::from("Admin"),
+                                RoomMemberRole::Moderator => String::from("Moderator"),
+                                RoomMemberRole::User => String::new(),
+                            };
+                            let avatar_fallback_text = utils::user_name_first_letter(&display_name)
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_else(|| String::from("?"));
+                            let weight = level_weight(&level);
+                            let sort_name = display_name.to_lowercase();
+                            (weight, sort_name, RoomInfoPeopleEntryInfo {
+                                user_id: member.user_id().to_owned(),
+                                display_name,
+                                level,
+                                is_bot,
+                                avatar_uri: member.avatar_url().map(ToOwned::to_owned),
+                                avatar_fallback_text,
+                            })
+                        })
+                        .collect();
+                    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                    let entries: Vec<RoomInfoPeopleEntryInfo> =
+                        keyed.into_iter().map(|(_, _, entry)| entry).collect();
+
+                    // A room is "Agent-enabled" if any of its members is detected
+                    // as a bot (mirrors `is_likely_bot_member`).
+                    let is_agent_enabled = entries.iter().any(|entry| entry.is_bot);
+                    let entries = Arc::new(entries);
+                    self.room_info_members_cache = Some(RoomInfoMembersCache {
+                        room_id: room_id.clone(),
+                        members: Arc::clone(&members),
+                        bot_identity: bot_identity.clone(),
+                        entries,
+                        is_agent_enabled,
+                        my_role,
+                    });
+                }
+
+                // The cache is now valid for this (room, member-list) pair; reuse
+                // the prebuilt rows via a cheap `Arc` clone.
+                let cache = self.room_info_members_cache.as_ref().expect("just populated");
+                (
+                    Arc::clone(&cache.entries),
+                    false,
+                    cache.entries.len(),
+                    cache.is_agent_enabled,
+                    cache.my_role.clone(),
+                )
+            } else {
+                (Arc::new(Vec::new()), true, 0, false, String::new())
+            };
+
+        // Prefer the actually-loaded member-list length so the header count, the
+        // avatar-stack "+N", and the People sub-page list all agree. Fall back to
+        // the room-summary joined count only before the member list has loaded
+        // (gives an accurate number immediately instead of a "0" flash).
+        let member_count = if member_count > 0 { member_count } else { joined_count };
+        let people_count_text = if show_people_loading {
+            String::from("People")
+        } else {
+            format!("{member_count} Members")
+        };
+
+        Some(RoomInfoPaneInfo {
+            room_name,
+            room_id: room_id.to_string(),
+            owned_room_id: room_id,
+            topic,
+            visibility,
+            encryption,
+            is_encrypted,
+            is_favorite,
+            is_agent_enabled,
+            show_title_bot_pill,
+            member_count,
+            my_role,
+            room_avatar_uri,
+            room_avatar_fallback_text,
+            people_entries,
+            people_count_text,
+            show_people_loading,
+        })
+    }
+
+    pub(super) fn refresh_room_info_pane(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
+        let is_direct_room = self.current_room_is_direct(cx);
+        if let Some(info) = self.build_room_info_pane_info(app_state, is_direct_room) {
+            self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).set_info(cx, info);
+        }
+    }
+
+    /// Populate the inline "Info" tab body (a second `RoomInfoSlidingPane`
+    /// instance mounted inline inside `keyboard_view`).
+    pub(super) fn refresh_inline_room_info(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
+        let is_direct_room = self.current_room_is_direct(cx);
+        if let Some(info) = self.build_room_info_pane_info(app_state, is_direct_room) {
+            self.room_info_sliding_pane(cx, ids!(info_content)).set_info(cx, info);
+        }
+    }
+
+    pub(super) fn current_room_is_direct(&self, cx: &mut Cx) -> bool {
+        let Some(room_id) = self.room_id() else { return false };
+        if !cx.has_global::<RoomsListRef>() {
+            return false;
+        }
+        cx.get_global::<RoomsListRef>()
+            .is_direct_room(room_id)
+            .unwrap_or(false)
+    }
+
+    pub(super) fn show_room_info_pane(&mut self, cx: &mut Cx, app_state: Option<&AppState>) {
+        self.hide_threads_pane(cx);
+        self.refresh_room_info_pane(cx, app_state);
+        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).show(cx);
+        self.redraw(cx);
+    }
+
+    pub(super) fn hide_room_info_pane(&mut self, cx: &mut Cx) {
+        self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).hide(cx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
