@@ -1719,6 +1719,26 @@ fn add_octos_broadcast_targets(
     content
 }
 
+/// Enqueues a raw `m.room.message` content through the room's send queue.
+///
+/// Unlike `Room::send_raw` — which performs the HTTP request directly and only
+/// shows the message after the server round-trip brings it back over sync —
+/// the send queue inserts a local echo into the timeline immediately, with the
+/// same `Sending`/`SendingFailed` delivery-state lifecycle as `Timeline::send`.
+/// The raw JSON (including octos routing fields) goes over the wire verbatim.
+async fn send_queued_raw_message(
+    room: &matrix_sdk::Room,
+    raw_content: serde_json::Value,
+) -> Result<matrix_sdk::send_queue::SendHandle, String> {
+    let raw = serde_json::value::to_raw_value(&raw_content)
+        .map(matrix_sdk::ruma::serde::Raw::<AnyMessageLikeEventContent>::from_json)
+        .map_err(|e| e.to_string())?;
+    room.send_queue()
+        .send_raw(raw, "m.room.message".to_owned())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 fn add_octos_routing_metadata(
     content: serde_json::Value,
     target_user_id: Option<&UserId>,
@@ -5180,12 +5200,12 @@ async fn matrix_worker_task(
                                     return;
                                 }
                             };
-                            match timeline.room().send_raw("m.room.message", raw_content).await {
-                                Ok(_response) => {
+                            match send_queued_raw_message(timeline.room(), raw_content).await {
+                                Ok(_handle) => {
                                     if target_user_id.is_some() {
-                                        log!("Sent targeted reply message to {timeline_kind}.");
+                                        log!("Enqueued targeted reply message to {timeline_kind}.");
                                     } else {
-                                        log!("Sent explicit-room reply message to {timeline_kind}.");
+                                        log!("Enqueued explicit-room reply message to {timeline_kind}.");
                                     }
                                 }
                                 Err(_e) => {
@@ -5237,12 +5257,12 @@ async fn matrix_worker_task(
                                 return;
                             }
                         };
-                        match timeline.room().send_raw("m.room.message", raw_content).await {
-                            Ok(_response) => {
+                        match send_queued_raw_message(timeline.room(), raw_content).await {
+                            Ok(_handle) => {
                                 if target_user_id.is_some() {
-                                    log!("Sent targeted message to {timeline_kind}.");
+                                    log!("Enqueued targeted message to {timeline_kind}.");
                                 } else {
-                                    log!("Sent explicit-room message to {timeline_kind}.");
+                                    log!("Enqueued explicit-room message to {timeline_kind}.");
                                 }
                             }
                             Err(_e) => {
