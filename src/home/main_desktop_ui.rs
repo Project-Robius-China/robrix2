@@ -473,6 +473,56 @@ impl MainDesktopUI {
         self.sync_visible_room_timelines(cx);
     }
 
+    /// Replaces an accepted space invite with that space's lobby in the dock.
+    ///
+    /// This is the space counterpart of [`Self::replace_invite_with_joined_room()`]:
+    /// a joined space has no timeline, so the InviteScreen tab becomes a
+    /// `SpaceLobbyScreen` showing the space's rooms and subspaces.
+    fn replace_invite_with_space_lobby(
+        &mut self,
+        cx: &mut Cx,
+        space_name_id: &RoomNameId,
+    ) {
+        let tab_id = LiveId::from_str(space_name_id.room_id().as_str());
+        // Nothing to replace if this space's invite was never opened in a tab.
+        if !self.open_rooms.contains_key(&tab_id) {
+            return;
+        }
+
+        let upgraded = SelectedRoom::Space { space_name_id: space_name_id.clone() };
+        let dock = self.view.dock(cx, ids!(dock));
+        let Some((new_widget, true)) = dock.replace_tab(
+            cx,
+            tab_id,
+            id!(space_lobby_screen),
+            Some(upgraded.display_name()),
+            false,
+        ) else {
+            // Nothing we can really do here except log an error.
+            error!("BUG: failed to replace InviteScreen tab with SpaceLobbyScreen for {space_name_id}");
+            return;
+        };
+
+        // Set the info to be displayed in the newly-replaced SpaceLobbyScreen.
+        new_widget
+            .as_space_lobby_screen()
+            .set_displayed_space(cx, space_name_id);
+        self.initialized_tabs.insert(tab_id);
+
+        // Go through all existing `SelectedRoom` instances and replace the
+        // `SelectedRoom::InvitedRoom`s with `SelectedRoom::Space`s.
+        for selected_room in self.most_recently_selected_room.iter_mut()
+            .chain(self.room_order.iter_mut())
+            .chain(self.open_rooms.values_mut())
+        {
+            selected_room.upgrade_invite_to_space(space_name_id);
+        }
+
+        // Finally, emit an action to update the AppState with the new space.
+        cx.action(AppStateAction::UpgradedInviteToSpace(space_name_id.clone()));
+        self.sync_visible_room_timelines(cx);
+    }
+
     /// Saves a copy of the current UI state of the dock into the given app state,
     /// properly accounting for which space is currently selected.
     fn save_dock_state_to(&mut self, cx: &mut Cx, app_state: &mut AppState) {
@@ -594,8 +644,20 @@ impl WidgetMatchEvent for MainDesktopUI {
                 };
                 let app_state = scope.data.get_mut::<AppState>().unwrap();
                 self.save_dock_state_to(cx, app_state);
+                let entered_space = new_space.is_some();
                 self.selected_space = new_space;
                 self.load_dock_state_from(cx, app_state);
+                // A space's lobby is its home page, so entering a space lands there
+                // rather than on the generic Welcome tab of the default layout.
+                // If the lobby tab already exists in this space's saved layout,
+                // this just focuses it.
+                if entered_space
+                    && let SelectedTab::Space { space_name_id } = tab
+                {
+                    self.focus_or_create_tab(cx, SelectedRoom::Space {
+                        space_name_id: space_name_id.clone(),
+                    });
+                }
                 self.redraw(cx);
                 continue;
             }
@@ -663,6 +725,9 @@ impl WidgetMatchEvent for MainDesktopUI {
                 }
                 RoomsListAction::InviteAccepted { room_name_id } => {
                     self.replace_invite_with_joined_room(cx, scope, room_name_id);
+                }
+                RoomsListAction::SpaceInviteAccepted { space_name_id } => {
+                    self.replace_invite_with_space_lobby(cx, space_name_id);
                 }
                 RoomsListAction::OpenRoomContextMenu { .. } => {}
                 RoomsListAction::None => { }

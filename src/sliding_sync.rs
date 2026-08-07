@@ -12,7 +12,7 @@ use matrix_sdk::{
     config::RequestConfig, encryption::EncryptionSettings, event_handler::EventHandlerDropGuard, media::MediaRequestParameters, room::{edit::EditedContent, reply::Reply, IncludeRelations, ListThreadsOptions, RelationsOptions, RoomMember, RoomMemberRole}, ruma::{
         api::{Direction, client::{
             account::register::v3::Request as RegistrationRequest,
-            room::{Visibility, create_room::v3::{Request as CreateRoomRequest, RoomPreset}},
+            room::{Visibility, create_room::v3::{CreationContent, Request as CreateRoomRequest, RoomPreset}},
             directory::get_public_rooms_filtered,
             error::ErrorKind,
             filter::RoomEventFilter,
@@ -24,7 +24,7 @@ use matrix_sdk::{
             direct::DirectUserIdentifier,
             relation::RelationType,
             room::{
-                encryption::RoomEncryptionEventContent, member::{MembershipState, StrippedRoomMemberEvent}, message::RoomMessageEventContent, power_levels::RoomPowerLevels, MediaSource
+                encryption::RoomEncryptionEventContent, join_rules::RoomJoinRulesEventContent, member::{MembershipState, StrippedRoomMemberEvent}, message::RoomMessageEventContent, power_levels::{RoomPowerLevels, UserPowerLevel}, MediaSource
             },
             space::{child::SpaceChildEventContent, parent::SpaceParentEventContent},
             AnyMessageLikeEventContent, AnySyncTimelineEvent, AnyTimelineEvent, sticker::StickerEventContent,
@@ -36,7 +36,7 @@ use matrix_sdk_ui::{
     RoomListService, Timeline, encryption_sync_service, room_list_service::{RoomListItem, RoomListLoadingState, SyncIndicator, filters}, sync_service::{self, SyncService}, timeline::{LatestEventValue, RoomExt, TimelineEventItemId, TimelineFocus, TimelineItem, TimelineReadReceiptTracking, TimelineDetails, default_event_filter}
 };
 use robius_open::Uri;
-use ruma::{OwnedRoomOrAliasId, OwnedTransactionId, RoomId, events::tag::Tags};
+use ruma::{OwnedRoomOrAliasId, OwnedTransactionId, RoomId, events::tag::Tags, room::JoinRule, serde::Raw};
 use tokio::{
     runtime::Handle,
     sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
@@ -48,7 +48,7 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     account_manager::{self, Account},
     app::{AppStateAction, RoomFilterRemoteSearchAction}, app_data_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
-        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, space_lobby::SpaceChildAction, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
     }, homeserver::{CapabilityProbeAction, HsCapabilities, IdentityProviderSummary}, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, room_preview_cache::{enqueue_room_preview_update, RoomPreviewUpdate}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
@@ -703,6 +703,82 @@ pub struct RoomSettingsFetchedAction {
     pub room_id: OwnedRoomId,
     pub topic: Option<String>,
     pub is_public: bool,
+    pub join_rule: JoinRuleChoice,
+    /// Whether this user is allowed to change the join rule at all.
+    pub can_change_join_rule: bool,
+}
+
+/// Who is allowed to join a room or space, reduced to the choices the settings
+/// UI offers plus the ones it can only display.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JoinRuleChoice {
+    /// Invite-only. The default for private rooms and spaces.
+    #[default]
+    InviteOnly,
+    /// Anyone who knows the address can join.
+    Public,
+    /// Anyone can request an invite.
+    Knock,
+    /// Restricted to members of one or more other spaces.
+    ///
+    /// Shown but not settable here: choosing *which* spaces grant access needs a
+    /// picker, and silently rewriting an existing allow-list would lock people out.
+    Restricted,
+    /// Like [`Self::Restricted`], but non-members may also knock.
+    KnockRestricted,
+    /// A join rule this client doesn't model (including the legacy `private`).
+    Other,
+}
+impl JoinRuleChoice {
+    /// Whether this choice can be applied from the settings UI.
+    pub fn is_settable(self) -> bool {
+        matches!(self, Self::InviteOnly | Self::Public | Self::Knock)
+    }
+}
+impl From<&JoinRule> for JoinRuleChoice {
+    fn from(rule: &JoinRule) -> Self {
+        match rule {
+            JoinRule::Invite => Self::InviteOnly,
+            JoinRule::Public => Self::Public,
+            JoinRule::Knock => Self::Knock,
+            JoinRule::Restricted(_) => Self::Restricted,
+            JoinRule::KnockRestricted(_) => Self::KnockRestricted,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// One member row in the settings dialog's member list.
+#[derive(Clone, Debug)]
+pub struct SettingsMemberInfo {
+    pub user_id: OwnedUserId,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<OwnedMxcUri>,
+    /// The member's power level, used to label admins and moderators.
+    pub power_level: i64,
+}
+impl SettingsMemberInfo {
+    /// The name to show, falling back to the user ID when no display name is set.
+    pub fn displayable_name(&self) -> &str {
+        self.display_name.as_deref().unwrap_or_else(|| self.user_id.as_str())
+    }
+
+    /// A role label for notable power levels, or `None` for regular members.
+    pub fn role_label(&self) -> Option<&'static str> {
+        match self.power_level {
+            pl if pl >= 100 => Some("Admin"),
+            pl if pl >= 50 => Some("Moderator"),
+            _ => None,
+        }
+    }
+}
+
+/// Result of [`MatrixRequest::FetchRoomMemberList`].
+#[derive(Clone, Debug)]
+pub struct RoomMemberListFetchedAction {
+    pub room_id: OwnedRoomId,
+    /// Joined members, sorted by power level (descending) then name.
+    pub members: Vec<SettingsMemberInfo>,
 }
 
 /// Posted after a room avatar is successfully uploaded and set.
@@ -1352,17 +1428,32 @@ pub enum MatrixRequest {
         allow_create: bool,
         create_encrypted: bool,
     },
-    /// Request to create a new room, optionally underneath a selected parent space.
+    /// Request to create a new room or space, optionally underneath a selected parent space.
     CreateRoom {
         room_name: String,
         topic: Option<String>,
         is_public: bool,
         is_encrypted: bool,
+        /// If `true`, create a space (`m.space`) instead of a regular room.
+        /// Spaces are never encrypted, so `is_encrypted` is ignored when this is set.
+        is_space: bool,
         parent_space_id: Option<OwnedRoomId>,
         context: CreateRoomContext,
     },
     /// Request the list of joined spaces where the current user may create child rooms.
     GetCreatableSpaces,
+    /// Request to link an existing room (or space) into the given parent space,
+    /// by sending an `m.space.child` state event.
+    AddRoomToSpace {
+        space_id: OwnedRoomId,
+        child: RoomNameId,
+    },
+    /// Request to unlink a child room (or subspace) from the given parent space,
+    /// by clearing its `m.space.child` state event.
+    RemoveRoomFromSpace {
+        space_id: OwnedRoomId,
+        child: RoomNameId,
+    },
     /// Request to fetch profile information for the given user ID.
     GetUserProfile {
         user_id: OwnedUserId,
@@ -1640,6 +1731,19 @@ pub enum MatrixRequest {
     /// Fetch room-specific settings: topic and whether the room is public.
     /// Response arrives as a [`RoomSettingsFetchedAction`].
     FetchRoomSettings {
+        room_id: OwnedRoomId,
+    },
+    /// Set who is allowed to join the given room or space.
+    SetRoomJoinRule {
+        room_id: OwnedRoomId,
+        join_rule: JoinRuleChoice,
+    },
+    /// Fetch the member list of a room or space for the settings dialog.
+    ///
+    /// Unlike [`MatrixRequest::GetRoomMembers`], this is addressed by room ID and
+    /// answers with an action, because a space has no timeline to deliver into.
+    /// Response arrives as a [`RoomMemberListFetchedAction`].
+    FetchRoomMemberList {
         room_id: OwnedRoomId,
     },
     /// Set the display name (title) of a room.
@@ -3939,7 +4043,7 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::CreateRoom { room_name, topic, is_public, is_encrypted, parent_space_id, context } => {
+            MatrixRequest::CreateRoom { room_name, topic, is_public, is_encrypted, is_space, parent_space_id, context } => {
                 let Some(client) = get_client() else { continue };
                 let _create_room_task = Handle::current().spawn(async move {
                     let mut request = CreateRoomRequest::new();
@@ -3955,7 +4059,26 @@ async fn matrix_worker_task(
                     } else {
                         RoomPreset::PrivateChat
                     });
-                    if is_encrypted {
+                    // A space is just a room whose `m.room.create` content declares
+                    // `type: m.space`; everything else about the request is the same.
+                    if is_space {
+                        let mut creation_content = CreationContent::new();
+                        creation_content.room_type = Some(ruma::room::RoomType::Space);
+                        match Raw::new(&creation_content) {
+                            Ok(raw) => request.creation_content = Some(raw),
+                            Err(error) => {
+                                error!("BUG: failed to serialize space creation content: {error}");
+                                Cx::post_action(CreateRoomAction::Failed {
+                                    room_name,
+                                    error: matrix_sdk::Error::UnknownError(Box::new(error)),
+                                    context,
+                                });
+                                return;
+                            }
+                        }
+                    }
+                    // Spaces hold no messages, so encryption doesn't apply to them.
+                    if is_encrypted && !is_space {
                         request.initial_state.push(
                             InitialStateEvent::with_empty_state_key(
                                 RoomEncryptionEventContent::with_recommended_defaults(),
@@ -3963,7 +4086,7 @@ async fn matrix_worker_task(
                         );
                     }
 
-                    log!("Creating new room \"{room_name}\"...");
+                    log!("Creating new {} \"{room_name}\"...", if is_space { "space" } else { "room" });
                     match client.create_room(request).await {
                         Ok(room) => {
                             let mut space_link_error = None;
@@ -3982,6 +4105,7 @@ async fn matrix_worker_task(
                                 room_name_id,
                                 parent_space_id,
                                 space_link_error,
+                                is_space,
                                 context,
                             });
                         }
@@ -3997,11 +4121,17 @@ async fn matrix_worker_task(
                 let Some(client) = get_client() else { continue };
                 let _creatable_spaces_task = Handle::current().spawn(async move {
                     let Some(user_id) = client.user_id().map(ToOwned::to_owned) else {
-                        Cx::post_action(CreatableSpacesAction::Loaded { spaces: Vec::new() });
+                        Cx::post_action(CreatableSpacesAction::Loaded {
+                            spaces: Vec::new(),
+                            manageable_spaces: Vec::new(),
+                        });
                         return;
                     };
 
+                    // Adding children and editing the space itself are governed by
+                    // two different power levels, so they're collected separately.
                     let mut spaces = Vec::new();
+                    let mut manageable_spaces = Vec::new();
                     for room in client.joined_rooms() {
                         if room.room_type() != Some(ruma::room::RoomType::Space) {
                             continue;
@@ -4010,15 +4140,61 @@ async fn matrix_worker_task(
                         let Ok(power_levels) = room.power_levels().await else {
                             continue;
                         };
-                        if !power_levels.user_can_send_state(&user_id, StateEventType::SpaceChild) {
+                        let can_add_children = power_levels
+                            .user_can_send_state(&user_id, StateEventType::SpaceChild);
+                        let can_edit_space = power_levels
+                            .user_can_send_state(&user_id, StateEventType::RoomName);
+                        if !can_add_children && !can_edit_space {
                             continue;
                         }
 
-                        spaces.push(RoomNameId::from_room(&room).await);
+                        let space_name_id = RoomNameId::from_room(&room).await;
+                        if can_add_children {
+                            spaces.push(space_name_id.clone());
+                        }
+                        if can_edit_space {
+                            manageable_spaces.push(space_name_id);
+                        }
                     }
 
                     spaces.sort_by_cached_key(|space| space.to_string().to_lowercase());
-                    Cx::post_action(CreatableSpacesAction::Loaded { spaces });
+                    manageable_spaces.sort_by_cached_key(|space| space.to_string().to_lowercase());
+                    Cx::post_action(CreatableSpacesAction::Loaded { spaces, manageable_spaces });
+                });
+            }
+
+            MatrixRequest::AddRoomToSpace { space_id, child } => {
+                let Some(client) = get_client() else { continue };
+                let _add_to_space_task = Handle::current().spawn(async move {
+                    log!("Adding room {child} to space {space_id}...");
+                    let result = match client.get_room(child.room_id()) {
+                        Some(child_room) => attach_room_to_space(&client, &child_room, &space_id).await,
+                        None => Err(anyhow!("Room {child} was not found")),
+                    };
+                    if let Err(error) = result.as_ref() {
+                        error!("Failed to add room {child} to space {space_id}: {error}");
+                    }
+                    Cx::post_action(SpaceChildAction::Added {
+                        space_id,
+                        child,
+                        error: result.err().map(|e| e.to_string()),
+                    });
+                });
+            }
+
+            MatrixRequest::RemoveRoomFromSpace { space_id, child } => {
+                let Some(client) = get_client() else { continue };
+                let _remove_from_space_task = Handle::current().spawn(async move {
+                    log!("Removing room {child} from space {space_id}...");
+                    let result = detach_room_from_space(&client, &space_id, child.room_id()).await;
+                    if let Err(error) = result.as_ref() {
+                        error!("Failed to remove room {child} from space {space_id}: {error}");
+                    }
+                    Cx::post_action(SpaceChildAction::Removed {
+                        space_id,
+                        child,
+                        error: result.err().map(|e| e.to_string()),
+                    });
                 });
             }
 
@@ -4439,7 +4615,102 @@ async fn matrix_worker_task(
                     if let Some(room) = client.get_room(&room_id) {
                         let topic = room.topic();
                         let is_public = room.is_public().unwrap_or(false);
-                        Cx::post_action(RoomSettingsFetchedAction { room_id, topic, is_public });
+                        let join_rule = room.join_rule()
+                            .as_ref()
+                            .map(JoinRuleChoice::from)
+                            .unwrap_or_default();
+                        let can_change_join_rule = match (client.user_id(), room.power_levels().await) {
+                            (Some(user_id), Ok(power_levels)) => {
+                                power_levels.user_can_send_state(user_id, StateEventType::RoomJoinRules)
+                            }
+                            _ => false,
+                        };
+                        Cx::post_action(RoomSettingsFetchedAction {
+                            room_id,
+                            topic,
+                            is_public,
+                            join_rule,
+                            can_change_join_rule,
+                        });
+                    }
+                });
+            }
+
+            MatrixRequest::FetchRoomMemberList { room_id } => {
+                let Some(client) = get_client() else { continue };
+                let _fetch_members_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        error!("FetchRoomMemberList: room {room_id} not found");
+                        return;
+                    };
+                    let members = match room.members(RoomMemberships::JOIN).await {
+                        Ok(members) => members,
+                        Err(error) => {
+                            error!("Failed to fetch members of {room_id}: {error:?}");
+                            return;
+                        }
+                    };
+                    let mut members: Vec<SettingsMemberInfo> = members.into_iter()
+                        .map(|member| SettingsMemberInfo {
+                            user_id: member.user_id().to_owned(),
+                            display_name: member.display_name().map(ToOwned::to_owned),
+                            avatar_url: member.avatar_url().map(ToOwned::to_owned),
+                            // Room v12+ creators have an "infinite" power level;
+                            // saturate it so ordering and the Admin label still work.
+                            power_level: match member.power_level() {
+                                UserPowerLevel::Infinite => i64::MAX,
+                                UserPowerLevel::Int(int) => int.into(),
+                                _ => 0,
+                            },
+                        })
+                        .collect();
+                    // Admins and moderators first, then alphabetically, so the
+                    // people who can act on the space are immediately visible.
+                    members.sort_by(|a, b| {
+                        b.power_level.cmp(&a.power_level).then_with(||
+                            a.displayable_name().to_lowercase()
+                                .cmp(&b.displayable_name().to_lowercase())
+                        )
+                    });
+                    Cx::post_action(RoomMemberListFetchedAction { room_id, members });
+                });
+            }
+
+            MatrixRequest::SetRoomJoinRule { room_id, join_rule } => {
+                let Some(client) = get_client() else { continue };
+                let _set_join_rule_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        error!("SetRoomJoinRule: room {room_id} not found");
+                        return;
+                    };
+                    // Only the plain rules are settable here; the restricted ones
+                    // carry an allow-list this UI has no way to author.
+                    let rule = match join_rule {
+                        JoinRuleChoice::InviteOnly => JoinRule::Invite,
+                        JoinRuleChoice::Public => JoinRule::Public,
+                        JoinRuleChoice::Knock => JoinRule::Knock,
+                        other => {
+                            error!("BUG: SetRoomJoinRule called with unsettable rule {other:?}");
+                            return;
+                        }
+                    };
+                    match room.send_state_event(RoomJoinRulesEventContent::new(rule)).await {
+                        Ok(_) => {
+                            log!("Set join rule of {room_id} to {join_rule:?}");
+                            enqueue_popup_notification(
+                                "Updated who can join.",
+                                PopupKind::Success,
+                                Some(3.0),
+                            );
+                        }
+                        Err(error) => {
+                            error!("Failed to set join rule of {room_id}: {error:?}");
+                            enqueue_popup_notification(
+                                format!("Couldn't update who can join: {error}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                        }
                     }
                 });
             }
@@ -5992,6 +6263,40 @@ async fn attach_room_to_space(client: &Client, child_room: &Room, space_id: &Own
     Ok(())
 }
 
+/// Unlinks a child room (or subspace) from the given parent space.
+///
+/// State events can't be deleted, so a child is removed by overwriting its
+/// `m.space.child` with empty content: without a `via` list the link is not a
+/// valid one, which is how both the homeserver and the SDK treat it as gone.
+async fn detach_room_from_space(
+    client: &Client,
+    space_id: &OwnedRoomId,
+    child_room_id: &OwnedRoomId,
+) -> Result<()> {
+    let space_room = client.get_room(space_id)
+        .ok_or_else(|| anyhow!("Space {space_id} was not found"))?;
+    space_room
+        .send_state_event_raw("m.space.child", child_room_id.as_str(), serde_json::json!({}))
+        .await?;
+
+    // Best-effort: drop the reverse `m.space.parent` link too, so the child
+    // stops advertising a space it is no longer part of. We may not be in that
+    // room, or may lack permission there, and neither should fail the removal.
+    if let Some(child_room) = client.get_room(child_room_id)
+        && child_room.state() == RoomState::Joined
+        && let Some(user_id) = client.user_id()
+        && let Ok(child_power_levels) = child_room.power_levels().await
+        && child_power_levels.user_can_send_state(user_id, StateEventType::SpaceParent)
+        && let Err(error) = child_room
+            .send_state_event_raw("m.space.parent", space_id.as_str(), serde_json::json!({}))
+            .await
+    {
+        warning!("Removed {child_room_id} from space {space_id}, but failed to clear its m.space.parent: {error}");
+    }
+
+    Ok(())
+}
+
 async fn room_route_with_fallback(room: &Room) -> Vec<OwnedServerName> {
     match room.route().await {
         Ok(route) if !route.is_empty() => route,
@@ -6743,6 +7048,12 @@ struct RoomListServiceRoomInfo {
     room_id: OwnedRoomId,
     state: RoomState,
     is_direct: bool,
+    /// Whether this "room" is actually a space.
+    ///
+    /// Joined spaces are handled by the SpaceService (not the rooms list),
+    /// but *invited* spaces do come through the room list service so that
+    /// the user can accept or decline the invite.
+    is_space: bool,
     is_marked_unread: bool,
     is_tombstoned: bool,
     tags: Option<Tags>,
@@ -6774,6 +7085,7 @@ impl RoomListServiceRoomInfo {
             room_id: room.room_id().to_owned(),
             state: room.state(),
             is_direct: is_direct.unwrap_or(false),
+            is_space: room.is_space(),
             is_marked_unread: room.is_marked_unread(),
             is_tombstoned: room.is_tombstoned(),
             tags: tags.ok().flatten(),
@@ -7379,12 +7691,19 @@ async fn room_list_service_loop(room_list_service: Arc<RoomListService>) -> Resu
         all_rooms_list.entries_with_dynamic_adapters(usize::MAX);
 
     // By default, our rooms list should only show rooms that are:
-    // 1. not spaces (those are handled by the SpaceService),
+    // 1. not spaces, *unless* we've been invited to that space. Joined spaces are
+    //    handled by the SpaceService and shown in the SpacesBar, but a space invite
+    //    has nowhere else to appear, so we let it through into the invites section.
+    //    Once such a space is joined, it stops matching this filter and is removed
+    //    from the rooms list, at which point the SpaceService picks it up.
     // 2. not left (clients don't typically show rooms that the user has already left),
     // 3. not outdated (don't show tombstoned rooms whose successor is already joined).
     room_list_dynamic_entries_controller.set_filter(Box::new(
         filters::new_filter_all(vec![
-            Box::new(filters::new_filter_not(Box::new(filters::new_filter_space()))),
+            Box::new(filters::new_filter_any(vec![
+                Box::new(filters::new_filter_not(Box::new(filters::new_filter_space()))),
+                Box::new(filters::new_filter_invite()),
+            ])),
             Box::new(filters::new_filter_non_left()),
             Box::new(filters::new_filter_deduplicate_versions()),
         ])
@@ -7845,10 +8164,15 @@ async fn update_room(
 fn remove_room(room: &RoomListServiceRoomInfo) {
     ENQUEUED_INVITE_FALLBACK_ROOMS.lock().unwrap().remove(&room.room_id);
     ALL_JOINED_ROOMS.lock().unwrap().remove(&room.room_id);
+    // Read the state from the live `Room` rather than the cached `RoomListServiceRoomInfo`,
+    // because a room is also removed when it stops matching the room list filter,
+    // in which case the cached state is the *old* one. This matters for accepted space
+    // invites: the space leaves the list as `Joined`, which is what tells the RoomsList
+    // to hand it over to the SpacesBar instead of just dropping the invite.
     enqueue_rooms_list_update(
         RoomsListUpdate::RemoveRoom {
             room_id: room.room_id.clone(),
-            new_state: room.state,
+            new_state: room.room.state(),
         }
     );
 }
@@ -7888,6 +8212,7 @@ async fn enqueue_invited_room(new_room: &RoomListServiceRoomInfo) {
         invite_state: Default::default(),
         is_selected: false,
         is_direct: new_room.is_direct,
+        is_space: new_room.is_space,
     }));
     Cx::post_action(AppStateAction::RoomLoadedSuccessfully {
         room_name_id,
@@ -7927,6 +8252,20 @@ async fn add_new_room(
             return Ok(());
         }
         RoomState::Joined => { } // Fall through to adding the joined room below.
+    }
+
+    // A *joined* space must never become an entry in the rooms list: it belongs to
+    // the SpacesBar, which the SpaceService feeds. We can still observe one here
+    // right after the user accepts a space invite (the room list service reports the
+    // Invited --> Joined transition before the space drops out of the filtered list),
+    // so drop any leftover invite entry for it and stop.
+    if new_room.is_space {
+        log!("Ignoring joined space {} in the rooms list; the SpacesBar owns it.", new_room.room_id);
+        enqueue_rooms_list_update(RoomsListUpdate::RemoveRoom {
+            room_id: new_room.room_id.clone(),
+            new_state: RoomState::Joined,
+        });
+        return Ok(());
     }
 
     // If we didn't already subscribe to this room, do so now.

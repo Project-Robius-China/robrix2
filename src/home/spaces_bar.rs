@@ -13,7 +13,7 @@ use matrix_sdk::{RoomDisplayName, RoomState};
 use ruma::{OwnedRoomAliasId, OwnedRoomId, room::JoinRuleSummary};
 
 use crate::{
-    app::AppState, home::navigation_tab_bar::{NavigationBarAction, SelectedTab}, i18n::{AppLanguage, tr_fmt, tr_key}, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, settings::app_preferences::{effective_is_desktop, AppPreferencesAction, ViewModeOverride}, shared::{avatar::AvatarWidgetRefExt, design_tokens::{RBX_FG_SECONDARY, RBX_NAV_FG}, room_filter_input_bar::MainFilterAction}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
+    app::AppState, home::{add_room::CreateRoomAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef}, i18n::{AppLanguage, tr_fmt, tr_key}, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, settings::app_preferences::{effective_is_desktop, AppPreferencesAction, ViewModeOverride}, shared::{avatar::AvatarWidgetRefExt, design_tokens::{RBX_FG_SECONDARY, RBX_NAV_FG}, room_filter_input_bar::MainFilterAction, unread_badge::UnreadBadgeWidgetRefExt}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
 };
 
 script_mod! {
@@ -29,7 +29,9 @@ script_mod! {
 
         width: (NAVIGATION_TAB_BAR_SIZE - 5),
         height: (NAVIGATION_TAB_BAR_SIZE - 5),
-        flow: Down
+        // Overlay so the unread badge can sit on the avatar's top-right corner
+        // instead of taking a row in the layout.
+        flow: Overlay
         padding: 5,
         margin: 3,
         align: Align{x: 0.5, y: 0.5}
@@ -92,55 +94,71 @@ script_mod! {
             }
         }
 
-        avatar := Avatar {
-            width: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_SIZE
-            height: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_SIZE
-            // If no avatar picture, use white text on the teal identity square
-            // (RBX_IDENTITY_TEAL) — reads well on both the dark rail and light strip.
-            text_view +: {
-                draw_bg.color: (RBX_IDENTITY_TEAL),
-                text +: {
-                    draw_text +: {
-                        text_style: theme.font_regular { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
-                        color: (COLOR_PRIMARY),
+        entry_content := View {
+            width: Fill
+            height: Fill
+            flow: Down
+            align: Align{x: 0.5, y: 0.5}
+
+            avatar := Avatar {
+                width: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_SIZE
+                height: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_SIZE
+                // If no avatar picture, use white text on the teal identity square
+                // (RBX_IDENTITY_TEAL) — reads well on both the dark rail and light strip.
+                text_view +: {
+                    draw_bg.color: (RBX_IDENTITY_TEAL),
+                    text +: {
+                        draw_text +: {
+                            text_style: theme.font_regular { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
+                            color: (COLOR_PRIMARY),
+                        }
+                    }
+                }
+            }
+
+            space_name := Label {
+                width: Fill,
+                // height: Fit
+                height: 0,
+                flow: Flow.Right{wrap: false}, // do not wrap
+                padding: 0,
+                align: Align{x: 0.5}
+                max_lines: 1
+                text_overflow: Ellipsis
+                draw_text +: {
+                    active: instance(0.0)
+                    hover: instance(0.0)
+                    down: instance(0.0)
+
+                    color: (RBX_NAV_FG)
+                    color_hover: uniform(RBX_NAV_FG_ACTIVE)
+                    color_active: uniform(RBX_NAV_FG_ACTIVE)
+
+                    // text_style: theme.font_bold {font_size: 9}
+                    text_style: REGULAR_TEXT {font_size: 9}
+
+                    get_color: fn() {
+                        return mix(
+                            mix(
+                                self.color,
+                                self.color_hover,
+                                self.hover
+                            ),
+                            self.color_active,
+                            self.active
+                        )
                     }
                 }
             }
         }
 
-        space_name := Label {
-            width: Fill,
-            // height: Fit
-            height: 0,
-            flow: Flow.Right{wrap: false}, // do not wrap
-            padding: 0,
-            align: Align{x: 0.5}
-            max_lines: 1
-            text_overflow: Ellipsis
-            draw_text +: {
-                active: instance(0.0)
-                hover: instance(0.0)
-                down: instance(0.0)
+        // Unread badge pinned to the entry's top-right corner, above the avatar.
+        unread_badge_layer := View {
+            width: Fill
+            height: Fill
+            align: Align{x: 1.0, y: 0.0}
 
-                color: (RBX_NAV_FG)
-                color_hover: uniform(RBX_NAV_FG_ACTIVE)
-                color_active: uniform(RBX_NAV_FG_ACTIVE)
-
-                // text_style: theme.font_bold {font_size: 9}
-                text_style: REGULAR_TEXT {font_size: 9}
-
-                get_color: fn() {
-                    return mix(
-                        mix(
-                            self.color,
-                            self.color_hover,
-                            self.hover
-                        ),
-                        self.color_active,
-                        self.active
-                    )
-                }
-            }
+            unread_badge := UnreadBadge {}
         }
 
         animator: Animator {
@@ -150,21 +168,21 @@ script_mod! {
                     from: {all: Forward {duration: 0.15}}
                     apply: {
                         draw_bg: {down: [{time: 0.0, value: 0.0}], hover: 0.0}
-                        space_name: { draw_text: {down: [{time: 0.0, value: 0.0}], hover: 0.0} }
+                        entry_content: { space_name: { draw_text: {down: [{time: 0.0, value: 0.0}], hover: 0.0} } }
                     }
                 }
                 on: AnimatorState{
                     from: {all: Snap}
                     apply: {
                         draw_bg: {down: [{time: 0.0, value: 0.0}], hover: 1.0}
-                        space_name: { draw_text: {down: [{time: 0.0, value: 0.0}], hover: 1.0} }
+                        entry_content: { space_name: { draw_text: {down: [{time: 0.0, value: 0.0}], hover: 1.0} } }
                     }
                 }
                 down: AnimatorState{
                     from: {all: Forward {duration: 0.2}}
                     apply: {
                         draw_bg: {down: [{time: 0.0, value: 1.0}], hover: 1.0,}
-                        space_name: { draw_text: {down: [{time: 0.0, value: 1.0}], hover: 1.0,} }
+                        entry_content: { space_name: { draw_text: {down: [{time: 0.0, value: 1.0}], hover: 1.0,} } }
                     }
                 }
             }
@@ -174,14 +192,14 @@ script_mod! {
                     from: {all: Snap}
                     apply: {
                         draw_bg: {active: 0.0}
-                        space_name: { draw_text: {active: 0.0} }
+                        entry_content: { space_name: { draw_text: {active: 0.0} } }
                     }
                 }
                 on: AnimatorState{
                     from: {all: Snap}
                     apply: {
                         draw_bg: {active: 1.0}
-                        space_name: { draw_text: {active: 1.0} }
+                        entry_content: { space_name: { draw_text: {active: 1.0} } }
                     }
                 }
             }
@@ -253,6 +271,10 @@ script_mod! {
                 text_style: theme.font_bold { font_size: 11.5 }
             }
             text: ""
+        }
+
+        unread_badge := UnreadBadge {
+            margin: Inset{left: 8}
         }
 
         room_count := Label {
@@ -634,6 +656,10 @@ pub struct SpacesBar {
     /// The ID of the currently-selected space in this SpacesBar.
     /// Only one space can be selected at once.
     #[rust] selected_space: Option<OwnedRoomId>,
+
+    /// A top-level space the user just created, which we jump to as soon as the
+    /// space service reports it as joined (it cannot be selected before that).
+    #[rust] pending_created_space: Option<OwnedRoomId>,
     #[rust] applied_view_mode: ViewModeOverride,
 }
 
@@ -662,6 +688,7 @@ impl Widget for SpacesBar {
                     self.displayed_spaces.clear();
                     self.is_filtered = false;
                     self.selected_space = None;
+                    self.pending_created_space = None;
                     self.redraw(cx);
                     continue;
                 }
@@ -670,6 +697,17 @@ impl Widget for SpacesBar {
                 // not from any other RoomFilterInputBar instance (e.g., SpaceLobbyScreen's).
                 if let Some(MainFilterAction::Changed(keywords)) = action.downcast_ref() {
                     self.update_displayed_spaces(cx, keywords);
+                    continue;
+                }
+
+                // A newly-created top-level space isn't in this bar yet: it only shows up
+                // once the space service reports it as joined. Remember it so we can jump
+                // to it then. Subspaces are excluded — those appear in their parent's
+                // lobby tree, and switching the whole app to them would be jarring.
+                if let Some(CreateRoomAction::Created { room_name_id, parent_space_id: None, is_space: true, .. })
+                    = action.downcast_ref()
+                {
+                    self.pending_created_space = Some(room_name_id.room_id().clone());
                     continue;
                 }
 
@@ -831,6 +869,19 @@ impl Widget for SpacesBar {
                                 }
                             }
                         }
+                        // Aggregate unread across every joined room in the space,
+                        // so a space badge answers "is there anything new in here?"
+                        // without having to open it.
+                        let unread = cx.has_global::<RoomsListRef>()
+                            .then(|| cx.get_global::<RoomsListRef>()
+                                .get_space_unread_counts(space.space_name_id.room_id()))
+                            .unwrap_or_default();
+                        item.unread_badge(cx, ids!(unread_badge)).update_counts(
+                            unread.has_marked_unread,
+                            unread.num_unread_mentions,
+                            unread.num_unread_messages,
+                        );
+
                         item.as_spaces_bar_entry().set_metadata(
                             cx,
                             space.space_name_id.clone(),
@@ -940,8 +991,19 @@ impl SpacesBar {
                     // `displayed_spaces` (the Vec that draw_walk iterates) — i.e. the
                     // intermittent "spaces don't show" bug. So reconcile every time.
                     let was_displayed = self.displayed_spaces.contains(&space_id);
+                    let space_name_id = joined_space.space_name_id.clone();
                     self.all_joined_spaces.insert(space_id.clone(), joined_space);
-                    adjust_displayed_spaces(was_displayed, should_display, space_id, &mut self.displayed_spaces);
+                    adjust_displayed_spaces(was_displayed, should_display, space_id.clone(), &mut self.displayed_spaces);
+
+                    // A space the user just created only reaches us once the homeserver
+                    // has synced it back, which is why the navigation waits until here
+                    // rather than happening at creation time.
+                    if self.pending_created_space.as_ref() == Some(&space_id) {
+                        self.pending_created_space = None;
+                        self.selected_space = Some(space_id.clone());
+                        enqueue_spaces_list_update(SpacesListUpdate::ScrollToSpace(space_id));
+                        cx.action(NavigationBarAction::GoToSpace { space_name_id });
+                    }
                 }
 
                 SpacesListUpdate::UpdateCanonicalAlias { space_id, new_canonical_alias } => {

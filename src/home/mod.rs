@@ -1,6 +1,7 @@
 use makepad_widgets::{ScriptVm, event::{DigitId, FingerDownEvent, FingerLongPressEvent, FingerUpEvent}};
 
 pub mod account_menu;
+pub mod add_existing_room_modal;
 pub mod add_menu;
 pub mod add_room;
 pub mod bot_binding_modal;
@@ -121,6 +122,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     room_context_menu::script_mod(vm);
     room_settings_modal::script_mod(vm);
     invite_modal::script_mod(vm);
+    add_existing_room_modal::script_mod(vm);
     invite_screen::script_mod(vm);
     tombstone_footer::script_mod(vm);
     room_screen::script_mod(vm);

@@ -47,6 +47,25 @@ script_mod! {
         }
     }
 
+    // A hierarchy icon shown next to the name of an invited *space*, so a space
+    // invite is distinguishable at a glance from the room invites around it.
+    // Joined spaces never appear in this list (the SpacesBar owns them), so this
+    // is only ever shown on invites.
+    mod.widgets.SpaceIcon = View {
+        width: Fit, height: Fit,
+        visible: false,
+
+        Icon {
+            width: 17, height: 17,
+            align: Align{x: 0.5, y: 0.5}
+            draw_icon +: {
+                svg: (ICON_HIERARCHY)
+                color: (RBX_ACCENT)
+            }
+            icon_walk: Walk{ width: 14, height: 14 }
+        }
+    }
+
     mod.widgets.RoomName = Label {
         width: Fill, height: Fit
         flow: Flow.Right{wrap: false},
@@ -256,6 +275,7 @@ script_mod! {
                     // is only shown at sidebar widths <= 200px, so a smaller cap
                     // than FullPreview leaves room for the pill.
                     room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.70}} }
+                    space_icon := mod.widgets.SpaceIcon {}
                     bot_pill := mod.widgets.RoomsListBotPill {}
                 }
                 unread_badge := UnreadBadge {}
@@ -281,6 +301,7 @@ script_mod! {
                             // Same fix as IconAndName above, but with a larger cap since
                             // FullPreview is shown on desktop/wider sidebars.
                             room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.78}} }
+                            space_icon := mod.widgets.SpaceIcon {}
                             bot_pill := mod.widgets.RoomsListBotPill {}
                         }
                         timestamp := mod.widgets.RoomsListEntryTimestamp { }
@@ -476,6 +497,9 @@ impl RoomsListEntryContent {
         );
         self.view.view(cx, ids!(bot_pill)).set_visible(cx, show_agent_badge);
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, room_info.is_tombstoned);
+        // Entries are recycled between invited and joined rooms, so the space
+        // marker must be cleared here rather than only set in `draw_invited_room`.
+        self.view.view(cx, ids!(space_icon)).set_visible(cx, false);
     }
 
     /// Populates this RoomsListEntry with info about an invited room.
@@ -488,25 +512,36 @@ impl RoomsListEntryContent {
         self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
         // Hide the timestamp field, and use the latest message field to show the inviter.
         self.view.label(cx, ids!(timestamp)).set_text(cx, "");
-        let inviter_string = match &room_info.inviter_info {
-            Some(InviterInfo { user_id, display_name: Some(dn), .. }) => {
+        // Space invites get their own wording, because "joining" a space means
+        // gaining access to a set of rooms rather than opening a conversation.
+        let inviter_string = match (&room_info.inviter_info, room_info.is_space) {
+            (Some(InviterInfo { user_id, display_name: Some(dn), .. }), is_space) => {
                 let display_name = htmlize::escape_text(dn);
                 let user_id = htmlize::escape_text(user_id.as_str());
                 tr_fmt(
                     app_language,
-                    "rooms_list_entry.invited.by_name_and_user",
+                    if is_space {
+                        "rooms_list_entry.invited.space.by_name_and_user"
+                    } else {
+                        "rooms_list_entry.invited.by_name_and_user"
+                    },
                     &[("display_name", display_name.as_ref()), ("user_id", user_id.as_ref())],
                 )
             }
-            Some(InviterInfo { user_id, .. }) => {
+            (Some(InviterInfo { user_id, .. }), is_space) => {
                 let user_id = htmlize::escape_text(user_id.as_str());
                 tr_fmt(
                     app_language,
-                    "rooms_list_entry.invited.by_user",
+                    if is_space {
+                        "rooms_list_entry.invited.space.by_user"
+                    } else {
+                        "rooms_list_entry.invited.by_user"
+                    },
                     &[("user_id", user_id.as_ref())],
                 )
             }
-            None => tr_key(app_language, "rooms_list_entry.invited.generic").to_string(),
+            (None, true) => tr_key(app_language, "rooms_list_entry.invited.space.generic").to_string(),
+            (None, false) => tr_key(app_language, "rooms_list_entry.invited.generic").to_string(),
         };
         self.view.html_or_plaintext(cx, ids!(latest_message)).show_html(cx, &inviter_string);
 
@@ -530,6 +565,7 @@ impl RoomsListEntryContent {
         self.view.view(cx, ids!(encryption_icon)).set_visible(cx, false);
         self.view.view(cx, ids!(bot_pill)).set_visible(cx, false);
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, false);
+        self.view.view(cx, ids!(space_icon)).set_visible(cx, room_info.is_space);
         self.draw_common(cx, &room_info.room_avatar, room_info.is_selected);
     }
 
