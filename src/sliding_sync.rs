@@ -1558,6 +1558,11 @@ pub enum MatrixRequest {
         mxc_uri: OwnedMxcUri,
         on_fetched: fn(AvatarUpdate),
     },
+    /// Request to fetch or compute a joined room's avatar, e.g., upon its first
+    /// appearance in the rooms list. Response: [`RoomsListUpdate::UpdateRoomAvatar`].
+    FetchRoomAvatar {
+        room_name_id: RoomNameId,
+    },
     /// Request to fetch media from the server.
     /// Upon completion of the async media request, the `on_fetched` function
     /// will be invoked with four arguments: the `destination`, the `media_request`,
@@ -5124,6 +5129,15 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::FetchRoomAvatar { room_name_id } => {
+                let Some(client) = get_client() else { continue };
+                let Some(room) = client.get_room(room_name_id.room_id()) else {
+                    log!("Skipping avatar fetch for unknown room {}", room_name_id.room_id());
+                    continue;
+                };
+                spawn_fetch_room_avatar_inner(room, room_name_id);
+            }
+
             MatrixRequest::DownloadAndSaveFile { mxc_uri, app_language, update_sender } => {
                 let Some(client) = get_client() else {
                     if let Some(sender) = update_sender.as_ref() {
@@ -8358,7 +8372,7 @@ async fn add_new_room(
         ),
         canonical_alias: new_room.room.canonical_alias(),
         alt_aliases: new_room.room.alt_aliases(),
-        has_been_paginated: false,
+        has_been_shown: false,
         is_selected: false,
         is_direct: new_room.is_direct,
         dm_target,
@@ -8383,7 +8397,8 @@ async fn add_new_room(
         room_name_id,
         is_invite: false,
     });
-    spawn_fetch_room_avatar(new_room);
+    // The room's avatar is fetched lazily, upon its first appearance in the rooms list
+    // (see `RoomsList::draw_walk()`), instead of eagerly here for every joined room.
     Ok(())
 }
 
@@ -9508,11 +9523,20 @@ async fn timeline_subscriber_handler(
 
 /// Spawn a new async task to fetch the room's new avatar.
 fn spawn_fetch_room_avatar(room: &RoomListServiceRoomInfo) {
-    let room_id = room.room_id.clone();
     let room_name_id = RoomNameId::from((room.display_name.clone(), room.room_id.clone()));
-    let inner_room = room.room.clone();
+    spawn_fetch_room_avatar_inner(room.room.clone(), room_name_id);
+}
+
+/// Spawns an async task to fetch or compute the room's avatar and send it to the rooms list.
+fn spawn_fetch_room_avatar_inner(room: Room, room_name_id: RoomNameId) {
+    // Limit the number of concurrent room avatar fetches, as they can be expensive
+    // and max out the CPUs, e.g. when a huge initial sync reveals many rooms at once.
+    static ROOM_AVATAR_FETCH_LIMIT: Semaphore = Semaphore::const_new(8);
+
     Handle::current().spawn(async move {
-        let room_avatar = room_avatar(&inner_room, &room_name_id).await;
+        let Ok(_permit) = ROOM_AVATAR_FETCH_LIMIT.acquire().await else { return };
+        let room_id = room_name_id.room_id().clone();
+        let room_avatar = room_avatar(&room, &room_name_id).await;
         rooms_list::enqueue_rooms_list_update(RoomsListUpdate::UpdateRoomAvatar {
             room_id,
             room_avatar,
@@ -9523,21 +9547,23 @@ fn spawn_fetch_room_avatar(room: &RoomListServiceRoomInfo) {
 /// Fetches and returns the avatar image for the given room (if one exists),
 /// otherwise returns a text avatar string of the first character of the room name.
 async fn room_avatar(room: &Room, room_name_id: &RoomNameId) -> FetchedRoomAvatar {
-    match room.avatar(AVATAR_THUMBNAIL_FORMAT.into()).await {
-        Ok(Some(avatar)) => FetchedRoomAvatar::Image(avatar.into()),
-        _ => {
-            if let Ok(room_members) = room.members(RoomMemberships::ACTIVE).await {
-                if room_members.len() == 2 {
-                    if let Some(non_account_member) = room_members.iter().find(|m| !m.is_account_user()) {
-                        if let Ok(Some(avatar)) = non_account_member.avatar(AVATAR_THUMBNAIL_FORMAT.into()).await {
-                            return FetchedRoomAvatar::Image(avatar.into());
-                        }
-                    }
-                }
+    if let Ok(Some(avatar)) = room.avatar(AVATAR_THUMBNAIL_FORMAT.into()).await {
+        return FetchedRoomAvatar::Image(avatar.into());
+    }
+    // For rooms without an avatar that have only one hero (i.e., a 2-member DM),
+    // use that hero's avatar instead of fetching the full member list.
+    if let Ok([one_hero]) = <[_; 1]>::try_from(room.heroes()) {
+        if let Some(avatar_url) = one_hero.avatar_url {
+            let request = MediaRequestParameters {
+                source: MediaSource::Plain(avatar_url),
+                format: AVATAR_THUMBNAIL_FORMAT.into(),
+            };
+            if let Ok(avatar) = room.client().media().get_media_content(&request, true).await {
+                return FetchedRoomAvatar::Image(avatar.into());
             }
-            utils::avatar_from_room_name(room_name_id.name_for_avatar())
         }
     }
+    utils::avatar_from_room_name(room_name_id.name_for_avatar())
 }
 
 /// Spawn an async task to login to the given Matrix homeserver using the given SSO identity provider ID.
