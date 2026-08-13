@@ -746,8 +746,8 @@ pub(super) fn populate_message_view(
         item.reaction_list(cx, ids!(content.reaction_list)).set_list(
             cx,
             event_tl_item.content().reactions(),
-            timeline_kind.clone(),
-            timeline_event_id.clone(),
+            timeline_kind,
+            &timeline_event_id,
             item_id,
         );
         populate_read_receipts(&item, cx, timeline_kind, event_tl_item);
