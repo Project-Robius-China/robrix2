@@ -196,7 +196,7 @@ askar-storage = { git = "https://github.com/openwallet-foundation/askar.git" }
 ## cherry-pick of ruma#2510 ("unstable-compat-lax-syncv5-deser"): tolerate
 ## non-compliant/corrupt fields in sliding sync v5 responses instead of dropping
 ## the whole per-room object (suspected cause of invites/new rooms never appearing).
-ruma = { git = "https://github.com/project-robius/ruma.git", branch = "tsp-lax-syncv5-deser" }
+ruma = { git = "https://github.com/Project-Robius-China/ruma.git", branch = "tsp-lax-syncv5-deser" }
 
 [build-dependencies]
 toml = "1"

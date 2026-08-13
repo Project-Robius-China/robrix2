@@ -5967,7 +5967,7 @@ dependencies = [
 [[package]]
 name = "ruma"
 version = "0.14.1"
-source = "git+https://github.com/project-robius/ruma.git?branch=tsp#98196b1db32d3393216f31d2c085a7082bd1d28d"
+source = "git+https://github.com/Project-Robius-China/ruma.git?branch=tsp-lax-syncv5-deser#20c2c60f4e8555078e8692ad9f8592b705b9ac23"
 dependencies = [
  "assign",
  "js_int",
@@ -5982,7 +5982,7 @@ dependencies = [
 [[package]]
 name = "ruma-client-api"
 version = "0.22.1"
-source = "git+https://github.com/project-robius/ruma.git?branch=tsp#98196b1db32d3393216f31d2c085a7082bd1d28d"
+source = "git+https://github.com/Project-Robius-China/ruma.git?branch=tsp-lax-syncv5-deser#20c2c60f4e8555078e8692ad9f8592b705b9ac23"
 dependencies = [
  "as_variant",
  "assign",
@@ -6005,7 +6005,7 @@ dependencies = [
 [[package]]
 name = "ruma-common"
 version = "0.17.1"
-source = "git+https://github.com/project-robius/ruma.git?branch=tsp#98196b1db32d3393216f31d2c085a7082bd1d28d"
+source = "git+https://github.com/Project-Robius-China/ruma.git?branch=tsp-lax-syncv5-deser#20c2c60f4e8555078e8692ad9f8592b705b9ac23"
 dependencies = [
  "as_variant",
  "base64",
@@ -6037,7 +6037,7 @@ dependencies = [
 [[package]]
 name = "ruma-events"
 version = "0.32.1"
-source = "git+https://github.com/project-robius/ruma.git?branch=tsp#98196b1db32d3393216f31d2c085a7082bd1d28d"
+source = "git+https://github.com/Project-Robius-China/ruma.git?branch=tsp-lax-syncv5-deser#20c2c60f4e8555078e8692ad9f8592b705b9ac23"
 dependencies = [
  "as_variant",
  "indexmap 2.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -6059,7 +6059,7 @@ dependencies = [
 [[package]]
 name = "ruma-html"
 version = "0.6.0"
-source = "git+https://github.com/project-robius/ruma.git?branch=tsp#98196b1db32d3393216f31d2c085a7082bd1d28d"
+source = "git+https://github.com/Project-Robius-China/ruma.git?branch=tsp-lax-syncv5-deser#20c2c60f4e8555078e8692ad9f8592b705b9ac23"
 dependencies = [
  "as_variant",
  "html5ever",
@@ -6070,7 +6070,7 @@ dependencies = [
 [[package]]
 name = "ruma-identifiers-validation"
 version = "0.12.0"
-source = "git+https://github.com/project-robius/ruma.git?branch=tsp#98196b1db32d3393216f31d2c085a7082bd1d28d"
+source = "git+https://github.com/Project-Robius-China/ruma.git?branch=tsp-lax-syncv5-deser#20c2c60f4e8555078e8692ad9f8592b705b9ac23"
 dependencies = [
  "js_int",
  "thiserror 2.0.17",
@@ -6079,7 +6079,7 @@ dependencies = [
 [[package]]
 name = "ruma-macros"
 version = "0.17.1"
-source = "git+https://github.com/project-robius/ruma.git?branch=tsp#98196b1db32d3393216f31d2c085a7082bd1d28d"
+source = "git+https://github.com/Project-Robius-China/ruma.git?branch=tsp-lax-syncv5-deser#20c2c60f4e8555078e8692ad9f8592b705b9ac23"
 dependencies = [
  "as_variant",
  "cfg-if 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
