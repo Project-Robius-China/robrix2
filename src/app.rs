@@ -3039,6 +3039,11 @@ impl App {
 pub struct AppState {
     /// The currently-selected room, which is highlighted (selected) in the RoomsList
     /// and considered "active" in the main rooms screen.
+    ///
+    /// Tolerant of per-field deser failures (e.g. an incompatible format from a
+    /// previous version): a bad value here falls back to `None` instead of
+    /// invalidating the entire persisted `AppState`.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub selected_room: Option<SelectedRoom>,
     /// The currently-selected navigation tab: defines which top-level view is shown.
     ///
@@ -3050,31 +3055,36 @@ pub struct AppState {
     #[serde(skip)]
     pub selected_tab: SelectedTab,
     /// The saved "snapshot" of the dock's UI layout/state for the main "all rooms" home view.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub saved_dock_state_home: SavedDockState,
     /// The saved "snapshot" of the dock's UI layout/state for each space,
     /// keyed by the space ID.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub saved_dock_state_per_space: HashMap<OwnedRoomId, SavedDockState>,
     /// Whether a user is currently logged in to Robrix or not.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub logged_in: bool,
     /// The preferred app language.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub app_language: AppLanguage,
     /// App-wide UI/behavior preferences.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub app_prefs: AppPreferences,
     /// Whether the app is currently showing the login screen for adding another account.
     /// This is transient state and not persisted.
     #[serde(skip)]
     pub adding_account: bool,
     /// Local configuration and UI state for bot-assisted room binding.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub bot_settings: BotSettingsState,
     /// Global source of truth for agent identities, keyed by agent MXID.
     ///
     /// Persisted per Matrix account. Old saved states that predate this field
     /// deserialize to an empty registry via `#[serde(default)]`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub agent_registry: AgentRegistry,
     /// Translation API configuration.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub translation: crate::room::translation::TranslationConfig,
 }
 

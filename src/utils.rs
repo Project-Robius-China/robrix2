@@ -16,6 +16,23 @@ use crate::{
 /// The scheme for GEO links, used for location messages in Matrix.
 pub const GEO_URI_SCHEME: &str = "geo:";
 
+/// serde `deserialize_with` helper: falls back to `T::default()` if the stored
+/// value for this field is present but unparseable/incompatible (e.g. a removed
+/// enum variant, or a type that changed shape across versions), instead of
+/// failing the deserialization of the entire enclosing struct.
+///
+/// Pair this with `#[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]`
+/// on a field so that one corrupt/outdated field can't cause the whole
+/// persisted struct (e.g. `AppState`) to be discarded on load.
+pub fn deserialize_or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
 
 /// A wrapper type that implements the `Debug` trait for non-`Debug` types.
 pub struct DebugWrapper<T>(T);
