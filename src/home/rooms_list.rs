@@ -30,6 +30,7 @@ use crate::{
         add_room::CreateRoomAction,
         navigation_tab_bar::{NavigationBarAction, SelectedTab},
         room_context_menu::RoomContextMenuDetails,
+        room_screen::invalidate_timeline_state_for_room,
         rooms_list_entry::RoomsListEntryAction,
         space_lobby::{SpaceLobbyAction, SpaceLobbyEntryWidgetExt},
     },
@@ -1034,6 +1035,16 @@ impl RoomsList {
                     }
 
                     self.hidden_rooms.remove(&room_id);
+
+                    // If the removed room is no longer joined (left/kicked/banned),
+                    // drop all of its saved timeline UI state. This also covers the
+                    // case where the room state changed remotely (e.g. the user was
+                    // kicked/banned by someone else), which never goes through the
+                    // local `LeaveRoomResultAction::Left` cleanup path in `app.rs`.
+                    if matches!(new_state, RoomState::Left | RoomState::Banned) {
+                        invalidate_timeline_state_for_room(cx, &room_id);
+                    }
+
                     self.update_status();
                 }
                 RoomsListUpdate::ClearRooms => {

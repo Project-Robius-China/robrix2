@@ -419,11 +419,28 @@ pub(super) struct SavedState {
 ///
 /// This function requires passing in a reference to `Cx`,
 /// which isn't used, but acts as a guarantee that this function
-/// must only be called by the main UI thread. 
+/// must only be called by the main UI thread.
 pub fn clear_timeline_states(_cx: &mut Cx) {
     // Clear timeline states cache
     TIMELINE_STATES.with_borrow_mut(|states| {
         states.clear();
+    });
+}
+
+/// Clears all UI-related timeline state (the main room timeline plus any open
+/// thread timelines) for the single room `room_id`.
+///
+/// Call this once a room is no longer joined (left, kicked, or banned) so its
+/// stale UI state — scroll position, pending downloads, tombstone info, etc. —
+/// doesn't linger in the cache indefinitely (e.g. reappearing with wrong state
+/// if the user later rejoins the same room).
+///
+/// This function requires passing in a reference to `Cx`,
+/// which isn't used, but acts as a guarantee that this function
+/// must only be called by the main UI thread.
+pub fn invalidate_timeline_state_for_room(_cx: &mut Cx, room_id: &RoomId) {
+    TIMELINE_STATES.with_borrow_mut(|states| {
+        states.retain(|kind, _| kind.room_id() != room_id);
     });
 }
 
