@@ -528,6 +528,10 @@
   "rooms_list_entry.invited.by_name_and_user": "Invited by <b>{display_name}</b> ({user_id})",
   "rooms_list_entry.invited.by_user": "Invited by {user_id}",
   "rooms_list_entry.invited.generic": "You were invited",
+  "rooms_list_entry.invited.space.by_name_and_user": "Space invite from <b>{display_name}</b> ({user_id})",
+  "rooms_list_entry.invited.space.by_user": "Space invite from {user_id}",
+  "rooms_list_entry.invited.space.generic": "You were invited to a space",
+
   "loading_pane.title.default": "Loading content...",
   "loading_pane.title.searching_older": "Searching older messages...",
   "loading_pane.status.searching_event": "Looking for event {target_event_id}\n\nFetched {events_paginated} messages so far...",

@@ -528,6 +528,10 @@
   "rooms_list_entry.invited.by_name_and_user": "由 <b>{display_name}</b> ({user_id}) 邀请",
   "rooms_list_entry.invited.by_user": "由 {user_id} 邀请",
   "rooms_list_entry.invited.generic": "你收到了邀请",
+  "rooms_list_entry.invited.space.by_name_and_user": "<b>{display_name}</b> ({user_id}) 邀请你加入空间",
+  "rooms_list_entry.invited.space.by_user": "{user_id} 邀请你加入空间",
+  "rooms_list_entry.invited.space.generic": "你收到了空间邀请",
+
   "loading_pane.title.default": "正在加载内容...",
   "loading_pane.title.searching_older": "正在搜索更早的消息...",
   "loading_pane.status.searching_event": "正在查找事件 {target_event_id}\n\n目前已拉取 {events_paginated} 条消息...",
