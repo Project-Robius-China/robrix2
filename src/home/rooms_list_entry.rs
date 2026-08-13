@@ -474,15 +474,17 @@ impl RoomsListEntryContent {
         show_agent_badge: bool,
     ) {
         self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
+        // Note: entries are recycled by the PortalList, so every field must be set
+        // in every branch below — otherwise a reused entry keeps showing another
+        // room's stale timestamp/message preview until that field happens to change.
+        let timestamp = self.view.label(cx, ids!(timestamp));
+        let latest_message = self.view.html_or_plaintext(cx, ids!(latest_message));
         if let Some((ts, msg)) = room_info.latest.as_ref() {
-            if let Some(human_readable_date) = relative_format(*ts) {
-                self.view
-                    .label(cx, ids!(timestamp))
-                    .set_text(cx, &human_readable_date);
-            }
-            self.view
-                .html_or_plaintext(cx, ids!(latest_message))
-                .show_html(cx, msg);
+            timestamp.set_text(cx, relative_format(*ts).as_deref().unwrap_or(""));
+            latest_message.show_html(cx, msg);
+        } else {
+            timestamp.set_text(cx, "");
+            latest_message.show_plaintext(cx, "[No recent messages]");
         }
 
         self.view.unread_badge(cx, ids!(unread_badge)).update_counts(
