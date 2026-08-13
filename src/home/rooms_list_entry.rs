@@ -473,7 +473,7 @@ impl RoomsListEntryContent {
         room_info: &JoinedRoomInfo,
         show_agent_badge: bool,
     ) {
-        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
+        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.display());
         if let Some((ts, msg)) = room_info.latest.as_ref() {
             if let Some(human_readable_date) = relative_format(*ts) {
                 self.view
@@ -509,7 +509,7 @@ impl RoomsListEntryContent {
         room_info: &InvitedRoomInfo,
         app_language: AppLanguage,
     ) {
-        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
+        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.display());
         // Hide the timestamp field, and use the latest message field to show the inviter.
         self.view.label(cx, ids!(timestamp)).set_text(cx, "");
         // Space invites get their own wording, because "joining" a space means

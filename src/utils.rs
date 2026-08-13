@@ -913,6 +913,20 @@ impl RoomNameId {
         )
     }
 
+    /// Returns an efficient displayable/string representation.
+    ///
+    /// Prefer this over `.to_string()` in hot paths (e.g. per-item draw calls),
+    /// since it borrows the underlying name instead of always allocating a new `String`.
+    pub fn display(&self) -> Cow<'_, str> {
+        match &self.display_name {
+            RoomDisplayName::Named(n)
+            | RoomDisplayName::Aliased(n)
+            | RoomDisplayName::Calculated(n) => Cow::Borrowed(n.as_str()),
+            RoomDisplayName::Empty => Cow::Owned(format!("Room ID {}", self.room_id)),
+            RoomDisplayName::EmptyWas(name) => Cow::Owned(format!("Empty Room (was \"{name}\")")),
+        }
+    }
+
     /// Get a reference to the underlying display name.
     #[inline]
     pub fn display_name(&self) -> &RoomDisplayName {

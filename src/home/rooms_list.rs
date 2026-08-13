@@ -450,7 +450,7 @@ pub fn build_room_search_text(
 ) -> String {
     let mut search_text = format!(
         "{} {}",
-        room_name_id.to_string().to_lowercase(),
+        room_name_id.display().to_lowercase(),
         room_name_id.room_id().as_str().to_lowercase(),
     );
     if let Some(alias) = canonical_alias {

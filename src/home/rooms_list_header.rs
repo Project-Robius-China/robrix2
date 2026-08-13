@@ -366,7 +366,7 @@ impl Widget for RoomsListHeader {
                     let header_title = self.view.label(cx, ids!(header_title));
                     let show_back = match tab {
                         SelectedTab::Space { space_name_id } => {
-                            header_title.set_text(cx, &space_name_id.to_string());
+                            header_title.set_text(cx, &space_name_id.display());
                             self.showing_space_title = true;
                             // On mobile there's no spaces rail to step out of a space,
                             // so surface a back button that returns to "All Rooms".

@@ -534,7 +534,7 @@ pub fn build_space_search_text(
 ) -> String {
     let mut search_text = format!(
         "{} {}",
-        space_name_id.to_string().to_lowercase(),
+        space_name_id.display().to_lowercase(),
         space_name_id.room_id().as_str().to_lowercase(),
     );
     if let Some(alias) = canonical_alias {
@@ -840,7 +840,7 @@ impl Widget for SpacesBar {
                         };
                         // Populate the space name (zero-height on the desktop entry,
                         // visible on the mobile row) and, on mobile, the room count.
-                        let space_name = space.space_name_id.to_string();
+                        let space_name = space.space_name_id.display();
                         item.label(cx, ids!(space_name)).set_text(cx, &space_name);
                         if !is_desktop {
                             item.label(cx, ids!(room_count)).set_text(
