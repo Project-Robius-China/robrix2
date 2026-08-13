@@ -610,6 +610,7 @@
   "slash_command.go.description": "Run an issue end to end: plan → implement → review → final review",
   "slash_command.review.description": "Re-run the review + Codex final review for an issue",
   "slash_command.status.description": "Show the workflow status of all issues",
+  "slash_command.thread.description": "Configure this thread's agent session: model <name|default> or mode <plan|auto>",
   "slash_command.workflow_header": "Workflow Commands",
   "slash_command.deletebot.description": "Delete an existing bot",
   "slash_command.header": "Bot Commands",

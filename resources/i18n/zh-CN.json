@@ -610,6 +610,7 @@
   "slash_command.go.description": "端到端执行 issue：plan → implement → review → 终审",
   "slash_command.review.description": "重跑评审 + Codex 终审",
   "slash_command.status.description": "显示所有 issue 的工作流状态",
+  "slash_command.thread.description": "配置本 thread 的 agent 会话：model <名称|default> 或 mode <plan|auto>",
   "slash_command.workflow_header": "工作流命令",
   "slash_command.deletebot.description": "删除一个已有的 Bot",
   "slash_command.header": "Bot 命令",
