@@ -67,6 +67,8 @@
   "settings.preferences.app.agent_chat.toggle": "启用远程 agent-chat 支持",
   "settings.preferences.app.agent_chat.description": "在含有 coordinator agent（如 wf_coordinator）的房间里提供 /create-issue、/go、/review、/status 工作流斜杠命令。需要用 'agent_chat' Cargo feature 构建。",
   "settings.preferences.app.popup.updated_agent_chat": "已更新 agent-chat 支持设置",
+  "settings.preferences.app.agent_ops.contract_notice": "Agent Operations 正在等待 agent-chat 发布、绑定并通过逐字节校验的合同产物。Robrix 不采集、也不保存 Dashboard Token。",
+  "settings.preferences.app.agent_ops.open_status": "查看 Agent Operations 集成状态",
   "settings.preferences.app.thumbnail.label": "缩略图最大高度",
   "settings.preferences.app.thumbnail.option.small": "小（200 像素，默认）",
   "settings.preferences.app.thumbnail.option.medium": "中（400 像素）",
@@ -81,7 +83,6 @@
   "settings.preferences.app.popup.invalid_thumbnail_height": "自定义缩略图高度必须是正整数。",
   "language.option.english": "English",
   "language.option.chinese_simplified": "简体中文",
-
   "login.title.login_to_robrix": "登录 Robrix",
   "login.title.create_account": "创建你的 Robrix 账号",
   "login.input.user_id": "用户 ID",
@@ -158,7 +159,6 @@
   "login.status.cancel": "取消",
   "login_status_modal.title": "登录状态",
   "login_status_modal.button.cancel": "取消",
-
   "room_context_menu.button.mark_unread": "标记为未读",
   "room_context_menu.button.mark_read": "标记为已读",
   "room_context_menu.button.favorite": "收藏",
@@ -178,7 +178,6 @@
   "room_context_menu.popup.removing_botfather": "正在将 BotFather {bot_user_id} 从该房间移除...",
   "room_context_menu.popup.inviting_botfather": "正在邀请 BotFather {bot_user_id} 加入该房间...",
   "room_context_menu.popup.bot_settings_unavailable": "当前无法获取机器人设置。",
-
   "bot_binding_modal.title": "管理房间机器人",
   "bot_binding_modal.body": "为 {room_name} 添加或移除机器人。",
   "bot_binding_modal.label.current_room_bots": "当前房间机器人",
@@ -202,7 +201,6 @@
   "bot_binding_modal.status.remark_requires_added_bot": "请先将该机器人添加到房间，再保存备注。",
   "bot_binding_modal.popup.inviting": "正在将机器人 {bot_user_id} 添加到该房间...",
   "bot_binding_modal.popup.removing": "正在将机器人 {bot_user_id} 从该房间移除...",
-
   "account_menu.badge.active": "当前",
   "account_menu.item.add_account": "登录更多账号",
   "account_menu.item.settings": "账号设置",
@@ -320,7 +318,6 @@
   "add_room.word.verb.joined": "完整加入",
   "add_room.word.adj.invited": "受邀",
   "add_room.word.adj.joined": "已加入",
-
   "settings.account.title": "账号设置",
   "settings.account.section.your_avatar": "你的头像：",
   "settings.account.section.your_display_name": "你的显示名称：",
@@ -384,7 +381,6 @@
   "settings.account.verification.unverified_hint": "请在其他客户端中使用以下信息完成验证：",
   "settings.account.verification.device_info.with_session": "会话：\"{session_name}\"，设备 ID：{device_id}",
   "settings.account.verification.device_info.device_only": "设备 ID：{device_id}",
-
   "settings.labs.app_service.title": "应用服务",
   "settings.labs.app_service.description": "在这里启用 Matrix 应用服务支持。",
   "settings.labs.app_service.enable_label": "启用应用服务",
@@ -420,7 +416,6 @@
   "settings.labs.agents.framework.octos_direct.name": "Octos (Direct)",
   "settings.labs.agents.framework.octos_direct.tag": "直接 Agent",
   "settings.labs.agents.framework.octos_direct.blurb": "Octos, 作为 Matrix 好友直接添加。",
-
   "settings.labs.translation.title": "实时翻译",
   "settings.labs.translation.description": "在输入栏中配置兼容 OpenAI API 的实时消息翻译服务。",
   "settings.labs.translation.status.enabled": "已启用",
@@ -435,7 +430,6 @@
   "settings.labs.translation.test.ok": "成功：{result}",
   "settings.labs.translation.test.failed": "失败：{error}",
   "settings.labs.translation.test.error": "错误：{error}",
-
   "room_input_bar.input.placeholder": "输入消息（支持 Markdown）...",
   "room_input_bar.translation.preview.apply": "应用",
   "room_input_bar.translation.preview.idle": "开始输入即可翻译...",
@@ -448,7 +442,6 @@
   "room_input_bar.target.reply_bot": "回复 → {display_name}",
   "room_input_bar.target.menu.bound_bot": "{display_name}",
   "room_input_bar.target.menu.room": "发到房间",
-
   "invite_screen.message.invited_by": "邀请你加入：",
   "invite_screen.message.invited_generic": "你被邀请加入：",
   "invite_screen.button.reject": "拒绝邀请",
@@ -535,20 +528,17 @@
   "rooms_list_entry.invited.by_name_and_user": "由 <b>{display_name}</b> ({user_id}) 邀请",
   "rooms_list_entry.invited.by_user": "由 {user_id} 邀请",
   "rooms_list_entry.invited.generic": "你收到了邀请",
-
   "loading_pane.title.default": "正在加载内容...",
   "loading_pane.title.searching_older": "正在搜索更早的消息...",
   "loading_pane.status.searching_event": "正在查找事件 {target_event_id}\n\n目前已拉取 {events_paginated} 条消息...",
   "loading_pane.title.error": "内容加载失败",
   "loading_pane.button.cancel": "取消",
   "loading_pane.button.okay": "确定",
-
   "rooms_list_header.title.all_rooms": "全部房间",
   "rooms_list_header.popup.offline": "无法连接 Matrix 服务器，请检查网络连接。",
   "rooms_list_header.tooltip.syncing": "同步中...",
   "rooms_list_header.tooltip.offline": "离线",
   "rooms_list_header.tooltip.synced": "已完全同步",
-
   "room_filter_input.placeholder": "筛选房间与空间...",
   "search_messages.button.todo": "搜索（待实现）",
   "search_messages.button.tooltip": "搜索消息",
@@ -580,10 +570,8 @@
   "new_message_context_menu.button.view_source": "查看源码",
   "new_message_context_menu.button.jump_related": "跳转到关联事件",
   "new_message_context_menu.button.delete": "删除",
-
   "welcome_screen.title": "欢迎来到 Robrix！",
   "welcome_screen.body_html": "<p>我们的 Matrix 客户端仍在快速开发中。目前，你可以访问你在其他客户端中已加入的房间和空间。</p><p><br></p><p>不过别担心，我们正在持续扩展 Robrix 的功能！</p><p><br></p><p>欢迎在我们的 Matrix 频道查看最新公告：</p><p><b>#robrix:matrix.org</b></p>",
-
   "room_screen.bot.delete.error.empty_user_id": "请输入要删除的机器人 Matrix 用户 ID。",
   "room_screen.bot.delete.error.invalid_user_id": "无效的 Matrix 用户 ID：{full_user_id}",
   "room_screen.bot.delete.error.current_user_unavailable": "当前用户 ID 不可用，无法解析机器人的 homeserver。",
@@ -626,7 +614,7 @@
   "slash_command.deletebot.description": "删除一个已有的 Bot",
   "slash_command.header": "Bot 命令",
   "slash_command.invitebot.description": "邀请一个已注册的 Bot 加入本房间",
-  "slash_command.invitebot.empty_hint": "暂无已知 Bot——请先在 设置 \u2192 Agents 中注册",
+  "slash_command.invitebot.empty_hint": "暂无已知 Bot——请先在 设置 → Agents 中注册",
   "slash_command.invitebot.all_present_hint": "所有已知 Bot 都已在本房间中",
   "slash_command.listbots.description": "列出所有可用的 Bot",
   "slash_command.schedule.description": "在当前聊天中安排任务",
@@ -660,7 +648,6 @@
   "room_screen.popup.message.forward_not_found": "在时间线中找不到可转发的消息，请重试。",
   "room_screen.popup.message.view_source_not_found": "在时间线中找不到要查看源码的消息。",
   "room_screen.popup.message.related_not_found": "在时间线中找不到关联消息或事件。",
-
   "forward_modal.title": "转发消息",
   "forward_modal.body": "请输入目标 Matrix 房间 ID。",
   "forward_modal.input.destination_room_id": "!room:example.org",
@@ -731,7 +718,6 @@
   "room_screen.app_service.button.bot_help": "Bot 帮助",
   "room_screen.app_service.button.bots": "机器人",
   "room_screen.app_service.button.unbind": "解绑",
-
   "spaces_bar.tooltip.unknown_space_name": "未知空间名称",
   "spaces_bar.status.none_matching": "未找到\n匹配的空间。",
   "spaces_bar.status.none_joined": "未找到\n已加入的空间。",
@@ -741,7 +727,6 @@
   "spaces_bar.status.n_joined": "找到 {count} 个\n已加入的空间。",
   "spaces_bar.status.many_matching": "找到 99+ 个\n匹配的空间。",
   "spaces_bar.status.many_joined": "找到 99+ 个\n已加入的空间。",
-
   "tsp.settings.title": "TSP 钱包设置",
   "tsp.settings.section.active_identity": "当前活跃身份：",
   "tsp.settings.section.wallets": "你的钱包：",
@@ -774,7 +759,6 @@
   "tsp.wallet_entry.modal.remove.body": "确认要将钱包“{wallet_name}”从列表中移除吗？\n\n这不会删除实际的钱包文件。",
   "tsp.wallet_entry.modal.remove.accept": "移除",
   "tsp.wallet_entry.popup.delete_not_implemented": "删除钱包功能暂未实现。",
-
   "app.room_filter.search_results_title": "搜索结果",
   "app.room_filter.empty_hint": "输入关键词以搜索房间和空间...",
   "app.room_filter.no_local_results": "本地未找到“{keywords}”相关结果。请选择下方类型以搜索服务器。",
@@ -787,14 +771,12 @@
   "app.room_filter.remote.kind.people": "联系人",
   "app.room_filter.remote.kind.rooms": "房间",
   "app.room_filter.remote.kind.spaces": "空间",
-
   "rooms_list.category.invites": "邀请",
   "rooms_list.category.favorites": "收藏",
   "rooms_list.category.rooms": "房间",
   "rooms_list.category.people": "联系人",
   "rooms_list.category.low_priority": "低优先级",
   "rooms_list.category.left_rooms": "已离开房间",
-
   "space_lobby.entry.explore_space": "探索此空间",
   "space_lobby.header.welcome": "欢迎来到此空间：",
   "space_lobby.header.public_space": "🌐  公开空间",
@@ -818,5 +800,34 @@
   "space_lobby.item.member_one": "1 位成员",
   "space_lobby.item.member_n": "{count} 位成员",
   "space_lobby.item.child_room_one": "~{count} 个房间",
-  "space_lobby.item.child_room_n": "~{count} 个房间"
+  "space_lobby.item.child_room_n": "~{count} 个房间",
+  "agent_ops.title": "Agent 操作",
+  "agent_ops.status.contract_blocked": "集成暂不可用：agent-chat canonical 客户端合同产物尚未就绪。",
+  "agent_ops.status.contract_next_step": "Robrix 不会请求 Dashboard 凭据，也不会发送后台操作。构建运行时前，须发布、绑定并校验全部 io.agentchat.agent_ops.v1 产物。",
+  "agent_ops.status.no_manifest": "缺少 agent-chat 客户端合同清单，面板保持关闭。",
+  "agent_ops.status.unreadable_manifest": "无法读取 agent-chat 客户端合同清单，其内容不可信，面板保持关闭。",
+  "agent_ops.status.contract_mismatch": "随附的清单描述的合同与本客户端所用的不一致。",
+  "agent_ops.status.not_released": "agent-chat 客户端合同已实现但尚未发布，其产物仍可能变化。",
+  "agent_ops.status.unbound_commit": "合同标记为已发布但未指明来源 commit，产物仍是移动目标。",
+  "agent_ops.status.invalid_source_commit": "合同的来源绑定不是完整的 Git 对象 ID。",
+  "agent_ops.status.empty_artifacts": "合同清单未列出任何产物，没有可供校验的对象。",
+  "agent_ops.status.invalid_artifact_manifest": "合同清单包含无效的产物条目。",
+  "agent_ops.status.incomplete_artifact_manifest": "合同清单缺少 V1 必需产物。",
+  "agent_ops.status.artifact_set_mismatch": "编译进客户端的产物集合与合同清单不一致。",
+  "agent_ops.status.artifact_digest_mismatch": "编译进客户端的产物未通过 SHA-256 校验。",
+  "agent_ops.status.contract_ready": "agent-chat 客户端合同产物已固定并通过校验。",
+  "agent_ops.detail.no_manifest": "当前构建没有编译进合同清单。",
+  "agent_ops.detail.unreadable_manifest": "无法解析编译进客户端的清单，因此不会信任其中的任何声明。",
+  "agent_ops.detail.contract_mismatch": "本客户端使用 {expected}，但清单描述的是 {found}。",
+  "agent_ops.detail.not_released": "清单的发布状态为 {release_status}；只有已发布产物才能被使用。",
+  "agent_ops.detail.unbound_commit": "已发布清单必须指明生成这些产物的不可变来源 commit。",
+  "agent_ops.detail.invalid_source_commit": "来源 commit 必须是完整的小写十六进制 Git 对象 ID，长度为 40 或 64 个字符。",
+  "agent_ops.detail.empty_artifacts": "不含产物的清单无法定义可供客户端使用的合同。",
+  "agent_ops.detail.invalid_artifact_manifest": "产物路径必须是安全的相对路径，SHA-256 必须为小写十六进制，且路径不得重复。",
+  "agent_ops.detail.incomplete_artifact_manifest": "清单缺少 io.agentchat.agent_ops.v1 要求的 {missing_count} 个产物。",
+  "agent_ops.detail.artifact_set_mismatch": "与清单相比，当前构建缺少 {missing_count} 个产物，并多出 {unexpected_count} 个产物。",
+  "agent_ops.detail.artifact_digest_mismatch": "编译进客户端的 {path} 与 agent-chat 发布的摘要不一致。",
+  "agent_ops.detail.contract_ready": "共 {artifact_count} 个产物摘要均与来源 commit {source_commit} 发布的合同一致。",
+  "agent_ops.status.next_step_release": "闸门关闭期间，Robrix 不请求任何凭据，也不发送后台操作。请从 agent-chat 重新同步已发布清单及全部匹配的 canonical 产物。",
+  "agent_ops.status.next_step_runtime": "合同就绪不等于已连接。启用 canary 前，仍须实现并验证客户端 bootstrap、鉴权、传输和四个操作视图。"
 }

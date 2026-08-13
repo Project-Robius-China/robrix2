@@ -67,6 +67,8 @@
   "settings.preferences.app.agent_chat.toggle": "Enable remote agent-chat support",
   "settings.preferences.app.agent_chat.description": "Adds the /create-issue, /go, /review and /status workflow slash-commands in rooms that contain a coordinator agent (e.g. wf_coordinator). Requires a build with the 'agent_chat' Cargo feature.",
   "settings.preferences.app.popup.updated_agent_chat": "Agent-chat support setting updated",
+  "settings.preferences.app.agent_ops.contract_notice": "Agent Operations is waiting for released, pinned, byte-verified agent-chat contract artifacts. Robrix does not collect or store a Dashboard token.",
+  "settings.preferences.app.agent_ops.open_status": "View Agent Operations integration status",
   "settings.preferences.app.thumbnail.label": "Maximum Height of Thumbnails",
   "settings.preferences.app.thumbnail.option.small": "Small (200 pixels, default)",
   "settings.preferences.app.thumbnail.option.medium": "Medium (400 pixels)",
@@ -81,7 +83,6 @@
   "settings.preferences.app.popup.invalid_thumbnail_height": "Custom thumbnail height must be a positive whole number.",
   "language.option.english": "English",
   "language.option.chinese_simplified": "Simplified Chinese",
-
   "login.title.login_to_robrix": "Login to Robrix",
   "login.title.create_account": "Create your Robrix account",
   "login.input.user_id": "User ID",
@@ -158,7 +159,6 @@
   "login.status.cancel": "Cancel",
   "login_status_modal.title": "Login Status",
   "login_status_modal.button.cancel": "Cancel",
-
   "room_context_menu.button.mark_unread": "Mark as Unread",
   "room_context_menu.button.mark_read": "Mark as Read",
   "room_context_menu.button.favorite": "Favorite",
@@ -178,7 +178,6 @@
   "room_context_menu.popup.removing_botfather": "Removing BotFather {bot_user_id} from this room...",
   "room_context_menu.popup.inviting_botfather": "Inviting BotFather {bot_user_id} into this room...",
   "room_context_menu.popup.bot_settings_unavailable": "Bot settings are unavailable right now.",
-
   "bot_binding_modal.title": "Manage Room Bots",
   "bot_binding_modal.body": "Add or remove bots for {room_name}.",
   "bot_binding_modal.label.current_room_bots": "Current Room Bots",
@@ -202,7 +201,6 @@
   "bot_binding_modal.status.remark_requires_added_bot": "Add this bot to the room before saving a remark.",
   "bot_binding_modal.popup.inviting": "Adding bot {bot_user_id} to this room...",
   "bot_binding_modal.popup.removing": "Removing bot {bot_user_id} from this room...",
-
   "account_menu.badge.active": "Active",
   "account_menu.item.add_account": "Log Into More Accounts",
   "account_menu.item.settings": "Account Settings",
@@ -320,7 +318,6 @@
   "add_room.word.verb.joined": "fully joined",
   "add_room.word.adj.invited": "invited",
   "add_room.word.adj.joined": "joined",
-
   "settings.account.title": "Account Settings",
   "settings.account.section.your_avatar": "Your Avatar:",
   "settings.account.section.your_display_name": "Your Display Name:",
@@ -384,7 +381,6 @@
   "settings.account.verification.unverified_hint": "Verify it from another client using this info:",
   "settings.account.verification.device_info.with_session": "Session: \"{session_name}\",  Device ID: {device_id}",
   "settings.account.verification.device_info.device_only": "Device ID: {device_id}",
-
   "settings.labs.app_service.title": "App Service",
   "settings.labs.app_service.description": "Enable Matrix app service support here. ",
   "settings.labs.app_service.enable_label": "Enable App Service",
@@ -420,7 +416,6 @@
   "settings.labs.agents.framework.octos_direct.name": "Octos (Direct)",
   "settings.labs.agents.framework.octos_direct.tag": "DIRECT AGENT",
   "settings.labs.agents.framework.octos_direct.blurb": "Octos, added as a Matrix friend.",
-
   "settings.labs.translation.title": "Real-time Translation",
   "settings.labs.translation.description": "Configure an OpenAI-compatible API for real-time message translation in the input bar.",
   "settings.labs.translation.status.enabled": "Enabled",
@@ -435,7 +430,6 @@
   "settings.labs.translation.test.ok": "OK: {result}",
   "settings.labs.translation.test.failed": "Failed: {error}",
   "settings.labs.translation.test.error": "Error: {error}",
-
   "room_input_bar.input.placeholder": "Write a message (in Markdown) ...",
   "room_input_bar.translation.preview.apply": "Apply",
   "room_input_bar.translation.preview.idle": "Start typing to translate...",
@@ -448,7 +442,6 @@
   "room_input_bar.target.reply_bot": "Reply → {display_name}",
   "room_input_bar.target.menu.bound_bot": "{display_name}",
   "room_input_bar.target.menu.room": "To room",
-
   "invite_screen.message.invited_by": "has invited you to join:",
   "invite_screen.message.invited_generic": "You have been invited to join:",
   "invite_screen.button.reject": "Reject Invite",
@@ -481,7 +474,6 @@
   "invite_modal.status.invalid_user_id": "Invalid User ID. Expected format: @user:server.xyz",
   "invite_modal.status.success_invited": "Successfully invited {user_id}!",
   "invite_modal.status.send_failed": "Failed to send invite: {error}",
-
   "join_leave_modal.button.cancel": "Cancel",
   "join_leave_modal.button.yes": "Yes",
   "join_leave_modal.button.okay": "Okay",
@@ -533,24 +525,20 @@
   "join_leave_modal.title.confirm_leave_space": "Leave this space?",
   "join_leave_modal.description.confirm_leave_space": "Are you sure you want to leave \"{room_name}\"?\n\nIf you leave this space, you will also leave any joined rooms within this space.\n\nIf this is a private space, you won't be able to join this space without being re-invited to it.",
   "join_leave_modal.tip.with_button": "Tip: hold Shift when clicking the \"{button_text}\" button to bypass this prompt.",
-
   "rooms_list_entry.invited.by_name_and_user": "Invited by <b>{display_name}</b> ({user_id})",
   "rooms_list_entry.invited.by_user": "Invited by {user_id}",
   "rooms_list_entry.invited.generic": "You were invited",
-
   "loading_pane.title.default": "Loading content...",
   "loading_pane.title.searching_older": "Searching older messages...",
   "loading_pane.status.searching_event": "Looking for event {target_event_id}\n\nFetched {events_paginated} messages so far...",
   "loading_pane.title.error": "Error loading content",
   "loading_pane.button.cancel": "Cancel",
   "loading_pane.button.okay": "Okay",
-
   "rooms_list_header.title.all_rooms": "All Rooms",
   "rooms_list_header.popup.offline": "Cannot reach the Matrix homeserver. Please check your connection.",
   "rooms_list_header.tooltip.syncing": "Syncing...",
   "rooms_list_header.tooltip.offline": "Offline",
   "rooms_list_header.tooltip.synced": "Fully synced",
-
   "room_filter_input.placeholder": "Filter rooms & spaces...",
   "search_messages.button.todo": "Search (TODO)",
   "search_messages.button.tooltip": "Search messages",
@@ -582,10 +570,8 @@
   "new_message_context_menu.button.view_source": "View Source",
   "new_message_context_menu.button.jump_related": "Jump to Related Event",
   "new_message_context_menu.button.delete": "Delete",
-
   "welcome_screen.title": "Welcome to Robrix!",
   "welcome_screen.body_html": "<p>Our Matrix client is under heavy development. Currently, you can access the rooms and spaces that you've joined in other clients.</p><p><br></p><p>But don't worry, we're constantly expanding the featureset of Robrix!</p><p><br></p><p>Look for the latest announcements in our Matrix channel:</p><p><b>#robrix:matrix.org</b></p>",
-
   "room_screen.bot.delete.error.empty_user_id": "Please enter the bot Matrix user ID to delete.",
   "room_screen.bot.delete.error.invalid_user_id": "Invalid Matrix user ID: {full_user_id}",
   "room_screen.bot.delete.error.current_user_unavailable": "Current user ID is unavailable, so the bot homeserver cannot be resolved.",
@@ -628,7 +614,7 @@
   "slash_command.deletebot.description": "Delete an existing bot",
   "slash_command.header": "Bot Commands",
   "slash_command.invitebot.description": "Invite a registered bot to this room",
-  "slash_command.invitebot.empty_hint": "No known bots \u2014 register one in Settings \u2192 Agents first",
+  "slash_command.invitebot.empty_hint": "No known bots — register one in Settings → Agents first",
   "slash_command.invitebot.all_present_hint": "All known bots are already in this room",
   "slash_command.listbots.description": "List all available bots",
   "slash_command.schedule.description": "Schedule a task in this chat",
@@ -662,7 +648,6 @@
   "room_screen.popup.message.forward_not_found": "Could not find a forwardable message in the timeline. Please try again.",
   "room_screen.popup.message.view_source_not_found": "Could not find message in timeline to view source.",
   "room_screen.popup.message.related_not_found": "Could not find related message or event in timeline.",
-
   "forward_modal.title": "Forward Message",
   "forward_modal.body": "Enter the destination Matrix room ID.",
   "forward_modal.input.destination_room_id": "!room:example.org",
@@ -733,7 +718,6 @@
   "room_screen.app_service.button.bot_help": "Bot Help",
   "room_screen.app_service.button.bots": "Bots",
   "room_screen.app_service.button.unbind": "Unbind",
-
   "spaces_bar.tooltip.unknown_space_name": "Unknown Space Name",
   "spaces_bar.status.none_matching": "Found no\nmatching spaces.",
   "spaces_bar.status.none_joined": "Found no\njoined spaces.",
@@ -743,7 +727,6 @@
   "spaces_bar.status.n_joined": "Found {count}\njoined spaces.",
   "spaces_bar.status.many_matching": "Found 99+\nmatching spaces.",
   "spaces_bar.status.many_joined": "Found 99+\njoined spaces.",
-
   "tsp.settings.title": "TSP Wallet Settings",
   "tsp.settings.section.active_identity": "Your active identity:",
   "tsp.settings.section.wallets": "Your Wallets:",
@@ -776,7 +759,6 @@
   "tsp.wallet_entry.modal.remove.body": "Are you sure you want to remove the wallet \"{wallet_name}\" from the list?\n\nThis won't delete the actual wallet file.",
   "tsp.wallet_entry.modal.remove.accept": "Remove",
   "tsp.wallet_entry.popup.delete_not_implemented": "Delete wallet feature is not yet implemented.",
-
   "app.room_filter.search_results_title": "Search Results",
   "app.room_filter.empty_hint": "Type to search rooms and spaces...",
   "app.room_filter.no_local_results": "No local results for \"{keywords}\". Choose a type below to search server.",
@@ -789,14 +771,12 @@
   "app.room_filter.remote.kind.people": "people",
   "app.room_filter.remote.kind.rooms": "rooms",
   "app.room_filter.remote.kind.spaces": "spaces",
-
   "rooms_list.category.invites": "Invites",
   "rooms_list.category.favorites": "Favorites",
   "rooms_list.category.rooms": "Rooms",
   "rooms_list.category.people": "People",
   "rooms_list.category.low_priority": "Low Priority",
   "rooms_list.category.left_rooms": "Left Rooms",
-
   "space_lobby.entry.explore_space": "Explore this Space",
   "space_lobby.header.welcome": "Welcome to the space:",
   "space_lobby.header.public_space": "🌐  Public space",
@@ -820,5 +800,34 @@
   "space_lobby.item.member_one": "1 member",
   "space_lobby.item.member_n": "{count} members",
   "space_lobby.item.child_room_one": "~{count} room",
-  "space_lobby.item.child_room_n": "~{count} rooms"
+  "space_lobby.item.child_room_n": "~{count} rooms",
+  "agent_ops.title": "Agent Operations",
+  "agent_ops.status.contract_blocked": "Integration unavailable: canonical agent-chat client contract artifacts are not ready.",
+  "agent_ops.status.contract_next_step": "No Dashboard credential is requested and no backend operation is sent. Release, pin, and verify every io.agentchat.agent_ops.v1 artifact before building the runtime.",
+  "agent_ops.status.no_manifest": "The agent-chat client contract manifest is missing, so the panel stays closed.",
+  "agent_ops.status.unreadable_manifest": "The agent-chat client contract manifest could not be read, so nothing about it can be trusted.",
+  "agent_ops.status.contract_mismatch": "The bundled manifest describes a different contract than this client speaks.",
+  "agent_ops.status.not_released": "The agent-chat client contract is implemented but not released; its artifacts can still change.",
+  "agent_ops.status.unbound_commit": "The contract is marked released but names no source commit, so its artifacts are still a moving target.",
+  "agent_ops.status.invalid_source_commit": "The contract source binding is not a full Git object ID.",
+  "agent_ops.status.empty_artifacts": "The contract manifest lists no artifacts, so there is nothing to verify against.",
+  "agent_ops.status.invalid_artifact_manifest": "The contract manifest contains an invalid artifact entry.",
+  "agent_ops.status.incomplete_artifact_manifest": "The contract manifest is missing required V1 artifacts.",
+  "agent_ops.status.artifact_set_mismatch": "The compiled artifact set does not match the contract manifest.",
+  "agent_ops.status.artifact_digest_mismatch": "A compiled artifact failed SHA-256 verification.",
+  "agent_ops.status.contract_ready": "The agent-chat client contract artifacts are pinned and verified.",
+  "agent_ops.detail.no_manifest": "No contract manifest was compiled into this build.",
+  "agent_ops.detail.unreadable_manifest": "The compiled manifest could not be parsed, so none of its claims are trusted.",
+  "agent_ops.detail.contract_mismatch": "This client speaks {expected}, but the manifest describes {found}.",
+  "agent_ops.detail.not_released": "The manifest release status is {release_status}; only released artifacts may be consumed.",
+  "agent_ops.detail.unbound_commit": "A released manifest must identify the immutable source commit that produced its artifacts.",
+  "agent_ops.detail.invalid_source_commit": "The source commit must be a complete lowercase 40- or 64-character hexadecimal Git object ID.",
+  "agent_ops.detail.empty_artifacts": "A manifest with no artifacts cannot define a consumable client contract.",
+  "agent_ops.detail.invalid_artifact_manifest": "Artifact paths must be safe relative paths, SHA-256 values must be lowercase hexadecimal, and paths must be unique.",
+  "agent_ops.detail.incomplete_artifact_manifest": "The manifest omits {missing_count} artifacts required by io.agentchat.agent_ops.v1.",
+  "agent_ops.detail.artifact_set_mismatch": "Compared with the manifest, this build has {missing_count} missing artifacts and {unexpected_count} unexpected artifacts.",
+  "agent_ops.detail.artifact_digest_mismatch": "The compiled bytes for {path} do not match agent-chat's published digest.",
+  "agent_ops.detail.contract_ready": "All {artifact_count} artifact digests match the contract released from {source_commit}.",
+  "agent_ops.status.next_step_release": "Robrix requests no credential and sends no backend operation while this gate is closed. Re-vendor the released manifest and every matching canonical artifact from agent-chat.",
+  "agent_ops.status.next_step_runtime": "Contract readiness does not mean connected. Implement and validate client bootstrap, authentication, transport, and the four operational views before enabling a canary."
 }
