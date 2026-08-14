@@ -1524,22 +1524,11 @@ impl RoomInputBar {
             self.redraw(cx);
         }
 
-        // The "/" toolbar shortcut opens the slash-command popup. Guarded to the
-        // main timeline (slash/bot commands aren't supported inside threads).
+        // The "/" toolbar shortcut opens the slash-command popup. Inside a thread
+        // the popup offers only the thread-relevant workflow commands (e.g.
+        // `/thread model|mode`); the list itself is timeline-aware, so no gate here.
         if self.button(cx, ids!(slash_command_button)).clicked(actions) {
-            let in_thread = scope
-                .props
-                .get::<RoomScreenProps>()
-                .is_some_and(|props| props.timeline_kind.thread_root_event_id().is_some());
-            if in_thread {
-                enqueue_popup_notification(
-                    "Slash commands are only supported in the main room timeline.",
-                    PopupKind::Warning,
-                    Some(4.0),
-                );
-            } else {
-                mentionable_text_input.open_slash_command_popup(cx, scope);
-            }
+            mentionable_text_input.open_slash_command_popup(cx, scope);
             self.redraw(cx);
         }
 

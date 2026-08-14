@@ -1,0 +1,27 @@
+{
+  "schema": "io.robrix.agent_ops.proposal.r3",
+  "request_id": "request-resolution-continue",
+  "client_session_id": "server-session-continue",
+  "scope_id": "scope-room-agent-1",
+  "projection_id": "projection-1",
+  "stream_epoch": "bb47bc6e-9f02-41df-90f6-8bb83b924b88",
+  "auth_fence_generation": 3,
+  "snapshot_seq": 42,
+  "action_capability": "fixture-action-capability-resolution-continue",
+  "target": {
+    "entity_kind": "dispatch",
+    "entity_id": "dispatch-continue",
+    "entity_version": 7
+  },
+  "resource_precondition": {
+    "resource_id": "resource-continue",
+    "dirty_generation": 2
+  },
+  "inspection_id": "inspection-continue",
+  "inspection_token": "fixture-inspection-token-continue",
+  "operator_note": "The partial changes are understood and can be continued safely",
+  "resolution": {
+    "kind": "continue",
+    "recovery_instruction": "Continue from the inspected changes and run the focused tests"
+  }
+}

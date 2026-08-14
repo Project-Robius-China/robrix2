@@ -258,4 +258,49 @@ mod tests {
             "输入消息（支持 Markdown）...",
         );
     }
+
+    #[test]
+    fn agent_ops_status_and_detail_keys_exist_in_all_locales() {
+        for suffix in [
+            "status.no_manifest",
+            "status.unreadable_manifest",
+            "status.contract_mismatch",
+            "status.not_released",
+            "status.unbound_commit",
+            "status.invalid_source_commit",
+            "status.empty_artifacts",
+            "status.invalid_artifact_manifest",
+            "status.incomplete_artifact_manifest",
+            "status.artifact_set_mismatch",
+            "status.artifact_digest_mismatch",
+            "status.contract_ready",
+            "detail.no_manifest",
+            "detail.unreadable_manifest",
+            "detail.contract_mismatch",
+            "detail.not_released",
+            "detail.unbound_commit",
+            "detail.invalid_source_commit",
+            "detail.empty_artifacts",
+            "detail.invalid_artifact_manifest",
+            "detail.incomplete_artifact_manifest",
+            "detail.artifact_set_mismatch",
+            "detail.artifact_digest_mismatch",
+            "detail.contract_ready",
+            "status.next_step_release",
+            "status.next_step_runtime",
+        ] {
+            let key = format!("agent_ops.{suffix}");
+            for language in AppLanguage::ALL {
+                assert!(
+                    dictionary(language).contains_key(&key),
+                    "missing i18n key {key:?} for language {language:?}",
+                );
+            }
+            assert_ne!(
+                dictionary(AppLanguage::English).get(&key),
+                dictionary(AppLanguage::ChineseSimplified).get(&key),
+                "Chinese Agent Operations text must not fall back to English for {key}",
+            );
+        }
+    }
 }

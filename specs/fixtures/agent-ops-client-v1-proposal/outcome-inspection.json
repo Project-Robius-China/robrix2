@@ -1,0 +1,47 @@
+{
+  "schema": "io.robrix.agent_ops.proposal.r3",
+  "scope_id": "scope-room-agent-1",
+  "projection_id": "projection-1",
+  "stream_epoch": "bb47bc6e-9f02-41df-90f6-8bb83b924b88",
+  "auth_fence_generation": 3,
+  "snapshot_seq": 42,
+  "client_session_id": "server-session-1",
+  "inspection_id": "inspection-1",
+  "inspection_token": "fixture-inspection-token",
+  "dispatch_target": {
+    "entity_kind": "dispatch",
+    "entity_id": "dispatch-1",
+    "entity_version": 7
+  },
+  "task_id": "task-1",
+  "terminal_reason": "runner process exited before final outcome was confirmed",
+  "expires_at_unix_ms": 1785947100000,
+  "resource": {
+    "resource_id": "resource-1",
+    "entity_version": 9,
+    "dirty_generation": 2,
+    "label": "robrix2 · task-1",
+    "branch": "agentchat/task-1",
+    "dirty_reason": "runner exited after work may have been applied"
+  },
+  "resolution_action": {
+    "action_id": "action-resolve-1",
+    "kind": "resolve_outcome",
+    "target": {
+      "entity_kind": "dispatch",
+      "entity_id": "dispatch-1",
+      "entity_version": 7
+    },
+    "resource_precondition": {
+      "resource_id": "resource-1",
+      "dirty_generation": 2
+    },
+    "allowed_resolutions": [
+      "continue",
+      "accept_completed",
+      "keep_blocked"
+    ],
+    "expires_at_unix_ms": 1785947100000,
+    "capability": "fixture-action-capability-resolution"
+  }
+}
