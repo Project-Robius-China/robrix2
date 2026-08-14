@@ -235,7 +235,20 @@ thread_local! {
     /// The global set of all timeline states, one entry per room.
     ///
     /// This is only useful when accessed from the main UI thread.
-    pub(super) static TIMELINE_STATES: RefCell<HashMap<TimelineKind, TimelineUiState>> = 
+    pub(super) static TIMELINE_STATES: RefCell<HashMap<TimelineKind, TimelineUiState>> =
+        RefCell::new(HashMap::new());
+
+    /// A per-room generation counter, bumped each time a room's timeline states
+    /// are invalidated (left/kicked/banned). A room absent from this map is at
+    /// generation 0.
+    ///
+    /// A still-open RoomScreen saves its state back into `TIMELINE_STATES` when
+    /// it is hidden/closed, which can happen *after* the invalidation ran — and
+    /// even after the user has already re-joined the room. Each `TimelineUiState`
+    /// records the generation it was created at, and `store_timeline_state`
+    /// rejects any state from an older generation, so a pre-kick state can never
+    /// be written back, no matter how late it arrives.
+    static TIMELINE_ROOM_GENERATIONS: RefCell<HashMap<OwnedRoomId, u64>> =
         RefCell::new(HashMap::new());
 }
 
@@ -248,6 +261,11 @@ thread_local! {
 pub(super) struct TimelineUiState {
     /// Info determining whether this is a main room timeline is a thread-focused timeline.
     pub(super) kind: TimelineKind,
+
+    /// The room's timeline-state generation at the time this state was created;
+    /// see [`TIMELINE_ROOM_GENERATIONS`]. A state from an older generation is
+    /// stale (created before a leave/kick/ban) and must not be stored.
+    pub(super) generation: u64,
 
     /// The power levels of the currently logged-in user in this room.
     pub(super) user_power: UserPowerLevels,
@@ -419,7 +437,7 @@ pub(super) struct SavedState {
 ///
 /// This function requires passing in a reference to `Cx`,
 /// which isn't used, but acts as a guarantee that this function
-/// must only be called by the main UI thread. 
+/// must only be called by the main UI thread.
 pub fn clear_timeline_states(_cx: &mut Cx) {
     // Clear timeline states cache
     TIMELINE_STATES.with_borrow_mut(|states| {
@@ -427,9 +445,87 @@ pub fn clear_timeline_states(_cx: &mut Cx) {
     });
 }
 
+/// Clears all UI-related timeline state (the main room timeline plus any open
+/// thread timelines) for the single room `room_id`.
+///
+/// Call this once a room is no longer joined (left, kicked, or banned) so its
+/// stale UI state — scroll position, pending downloads, tombstone info, etc. —
+/// doesn't linger in the cache indefinitely (e.g. reappearing with wrong state
+/// if the user later rejoins the same room).
+///
+/// This function requires passing in a reference to `Cx`,
+/// which isn't used, but acts as a guarantee that this function
+/// must only be called by the main UI thread.
+pub fn invalidate_timeline_state_for_room(_cx: &mut Cx, room_id: &RoomId) {
+    TIMELINE_STATES.with_borrow_mut(|states| {
+        states.retain(|kind, _| kind.room_id() != room_id);
+    });
+    // A RoomScreen currently displaying this room still holds its state and will
+    // try to save it back upon being hidden/closed; bumping the generation makes
+    // `store_timeline_state` reject that state, even if the room gets re-joined
+    // before the late save happens.
+    bump_timeline_generation(room_id);
+}
+
+fn bump_timeline_generation(room_id: &RoomId) {
+    TIMELINE_ROOM_GENERATIONS.with_borrow_mut(|generations| {
+        *generations.entry(room_id.to_owned()).or_insert(0) += 1;
+    });
+}
+
+/// Returns the current timeline-state generation for the given room.
+///
+/// A newly-created `TimelineUiState` must record this value; see
+/// [`store_timeline_state`].
+pub(super) fn current_timeline_generation(room_id: &RoomId) -> u64 {
+    TIMELINE_ROOM_GENERATIONS.with_borrow(|generations| {
+        generations.get(room_id).copied().unwrap_or(0)
+    })
+}
+
+/// Returns whether a timeline state created at `generation` is still current
+/// for the given room, i.e., whether the room has not been invalidated since.
+pub(super) fn is_generation_current(room_id: &RoomId, generation: u64) -> bool {
+    generation == current_timeline_generation(room_id)
+}
+
+/// Saves the given timeline state into the global `TIMELINE_STATES` map,
+/// unless it was created before the room's last invalidation
+/// (left/kicked/banned), in which case it is stale and gets discarded.
+pub(super) fn store_timeline_state(tl: TimelineUiState) {
+    if !is_generation_current(tl.kind.room_id(), tl.generation) {
+        log!("Discarding stale timeline state (from before a leave/kick/ban) for room {:?}", tl.kind);
+        return;
+    }
+    TIMELINE_STATES.with_borrow_mut(|ts| ts.insert(tl.kind.clone(), tl));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_generation_rejected_after_invalidation_and_new_generation_accepted() {
+        let room_id = RoomId::parse("!timeline_generation_test:example.org").unwrap();
+
+        // A state created now records the current generation and would be storable.
+        let pre_kick_generation = current_timeline_generation(&room_id);
+        assert!(is_generation_current(&room_id, pre_kick_generation));
+
+        // The user is kicked/banned: the room's generation is bumped
+        // (this is what `invalidate_timeline_state_for_room` does).
+        bump_timeline_generation(&room_id);
+
+        // A late save of the pre-kick state must be rejected — even though the
+        // user may have already re-joined the room by now (re-joining does not
+        // reset the generation).
+        assert!(!is_generation_current(&room_id, pre_kick_generation));
+
+        // A state created after re-joining records the new generation and is accepted.
+        let post_rejoin_generation = current_timeline_generation(&room_id);
+        assert!(is_generation_current(&room_id, post_rejoin_generation));
+        assert_ne!(pre_kick_generation, post_rejoin_generation);
+    }
 
     #[test]
     fn adjacent_timeline_snapshots_coalesce_without_crossing_control_updates() {

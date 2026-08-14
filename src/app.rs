@@ -540,6 +540,14 @@ pub struct App {
     /// A stack of previously-selected rooms for mobile navigation.
     /// When a view is popped off the stack, the previous `selected_room` is restored from here.
     #[rust] mobile_room_nav_stack: Vec<SelectedRoom>,
+    /// Whether a nav-stack pop requested by `purge_room_ui_state` may have been
+    /// swallowed by an in-flight transition animation (StackNavigation's `pop()`
+    /// silently no-ops in that case) and must be retried once the current
+    /// transition finishes. Cleared only by an actual mobile-stack push
+    /// (`push_selected_room_view`) — NOT by `RoomFocused`, which the desktop
+    /// dock also emits when auto-refocusing another tab without touching the
+    /// mobile stack.
+    #[rust] pending_room_nav_pop: bool,
     #[rust(Timer::empty())] room_filter_debounce_timer: Timer,
     #[rust] pending_room_filter_keywords: String,
     /// The last server-side directory search: `(query, results)`.
@@ -1636,40 +1644,60 @@ impl MatchEvent for App {
                 self.set_mobile_room_view_updates_enabled(cx, view_id, false);
             }
 
+            // If a nav pop requested by `purge_room_ui_state` was swallowed by an
+            // in-flight transition animation, retry it once a transition finishes.
+            // The retry is deferred to a fresh Actions pass (via `cx.action`) so it
+            // runs after StackNavigation has cleared its transition state,
+            // regardless of intra-pass handler ordering.
+            if self.pending_room_nav_pop {
+                if matches!(
+                    action.as_widget_action().cast(),
+                    StackNavigationTransitionAction::ShowDone
+                        | StackNavigationTransitionAction::HideEnd(_)
+                ) {
+                    cx.action(AppStateAction::RetryPendingRoomNavPop);
+                }
+            }
+
             // Handle actions that instruct us to update the top-level app state.
             if let Some(LeaveRoomResultAction::Left { room_id }) = action.downcast_ref() {
                 enqueue_rooms_list_update(RoomsListUpdate::HideRoom { room_id: room_id.clone() });
-                self.app_state
-                    .bot_settings
-                    .set_room_bound(room_id.clone(), None, false);
-
-                let removed_from_home = self.app_state.saved_dock_state_home.remove_room_id(room_id);
-                let removed_from_spaces: usize = self.app_state.saved_dock_state_per_space
-                    .values_mut()
-                    .map(|saved| saved.remove_room_id(room_id))
-                    .sum();
-                let removed_tabs = removed_from_home + removed_from_spaces;
-                let mut cleared_selected_room = false;
-
-                if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
-                    self.app_state.selected_room = None;
-                    cleared_selected_room = true;
-                }
-                if removed_tabs > 0 || cleared_selected_room {
-                    if let Some(user_id) = current_user_id() {
-                        if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
-                            error!("Failed to persist app state after leaving room {room_id}. Error: {e}");
-                        }
-                    }
-                }
-
-                cx.action(MainDesktopUiAction::CloseRoomTabs { room_id: room_id.clone() });
+                self.purge_room_ui_state(cx, room_id);
+                continue;
+            }
+            // A room was removed remotely (this user was kicked or banned by someone
+            // else), which never goes through the local `LeaveRoomResultAction::Left`
+            // path above; perform the same top-level UI cleanup for it.
+            if let Some(AppStateAction::RoomRemovedRemotely(room_id)) = action.downcast_ref() {
+                self.purge_room_ui_state(cx, room_id);
                 continue;
             }
 
             match action.downcast_ref() {
                 Some(AppStateAction::RoomFocused(selected_room)) => {
                     self.app_state.selected_room = Some(selected_room.clone());
+                    // Deliberately do NOT clear `pending_room_nav_pop` here:
+                    // RoomFocused is also emitted by MainDesktopUi's automatic
+                    // re-focus after CloseRoomTabs closes the removed room's tab,
+                    // which does not touch the mobile view stack — the swallowed
+                    // pop must still be retried or the hidden stack would keep
+                    // the removed room as its current view. The flag is cleared
+                    // in `push_selected_room_view` instead, the one place that
+                    // actually pushes onto the mobile stack.
+                    continue;
+                }
+                Some(AppStateAction::RetryPendingRoomNavPop) => {
+                    // No `selected_room` guard here: on Desktop, the dock's
+                    // automatic re-focus of another tab sets `selected_room`
+                    // without touching the mobile stack, and the pop must still
+                    // happen. Any *mobile-stack* navigation since the removal
+                    // would have cleared the flag (see `push_selected_room_view`),
+                    // so the retry can never undo a deliberate navigation.
+                    if self.pending_room_nav_pop {
+                        self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+                        self.mobile_room_nav_stack.clear();
+                    }
+                    self.pending_room_nav_pop = false;
                     continue;
                 }
                 Some(AppStateAction::FocusNone) => {
@@ -2942,6 +2970,57 @@ impl App {
             .map(|index| Self::ROOM_SCREEN_IDS[index])
     }
 
+    /// Purges all top-level UI state for a room this user is no longer in,
+    /// whether they left it locally or were kicked/banned remotely:
+    /// unbinds bots, removes its tabs from all saved dock states, clears the
+    /// selected room if it was this one, persists the app state if anything
+    /// changed, and closes any open dock tabs for it.
+    fn purge_room_ui_state(&mut self, cx: &mut Cx, room_id: &OwnedRoomId) {
+        self.app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), None, false);
+
+        let removed_from_home = self.app_state.saved_dock_state_home.remove_room_id(room_id);
+        let removed_from_spaces: usize = self.app_state.saved_dock_state_per_space
+            .values_mut()
+            .map(|saved| saved.remove_room_id(room_id))
+            .sum();
+        let removed_tabs = removed_from_home + removed_from_spaces;
+        let mut cleared_selected_room = false;
+
+        // Drop the room from the mobile back stack too, so navigating back
+        // can never land on a room this user is no longer in.
+        self.mobile_room_nav_stack.retain(|stacked| stacked.room_id() != room_id);
+
+        if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
+            // The user may be viewing this room right now (on Mobile), or the
+            // hidden mobile view stack may still contain it (on Desktop after a
+            // breakpoint change); pop the navigation stack back to the root
+            // regardless of breakpoint — at root, `pop()` is a harmless no-op.
+            // (`pop()` pops all the way back to the root view, matching the
+            // logical stack clear.)
+            //
+            // StackNavigation's `pop()` silently no-ops while a transition
+            // animation is in flight, which would leave the removed room as the
+            // current view indefinitely; mark the pop as pending so it gets
+            // retried once the current transition finishes.
+            self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+            self.pending_room_nav_pop = true;
+            self.mobile_room_nav_stack.clear();
+            self.app_state.selected_room = None;
+            cleared_selected_room = true;
+        }
+        if removed_tabs > 0 || cleared_selected_room {
+            if let Some(user_id) = current_user_id() {
+                if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                    error!("Failed to persist app state after being removed from room {room_id}. Error: {e}");
+                }
+            }
+        }
+
+        cx.action(MainDesktopUiAction::CloseRoomTabs { room_id: room_id.clone() });
+    }
+
     fn set_mobile_room_view_updates_enabled(
         &mut self,
         cx: &mut Cx,
@@ -3029,6 +3108,15 @@ impl App {
         self.app_state.selected_room = Some(selected_room);
 
         // Push the view onto the mobile navigation stack.
+        // This is a genuine mobile-stack navigation, superseding any pending
+        // pop from an earlier room removal — that pop must not fire later and
+        // undo this navigation. Exception: if a transition is in flight (only
+        // reachable on Desktop; Mobile early-returned above), this push will
+        // itself be swallowed by StackNavigation, so a pending pop must remain
+        // pending to clean up whatever the hidden stack settles on.
+        if !view_stack.is_transitioning() {
+            self.pending_room_nav_pop = false;
+        }
         self.ui.stack_navigation(cx, ids!(view_stack)).push(cx, view_id);
         self.ui.redraw(cx);
     }
@@ -3042,6 +3130,11 @@ impl App {
 pub struct AppState {
     /// The currently-selected room, which is highlighted (selected) in the RoomsList
     /// and considered "active" in the main rooms screen.
+    ///
+    /// Tolerant of per-field deser failures (e.g. an incompatible format from a
+    /// previous version): a bad value here falls back to `None` instead of
+    /// invalidating the entire persisted `AppState`.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub selected_room: Option<SelectedRoom>,
     /// The currently-selected navigation tab: defines which top-level view is shown.
     ///
@@ -3053,31 +3146,36 @@ pub struct AppState {
     #[serde(skip)]
     pub selected_tab: SelectedTab,
     /// The saved "snapshot" of the dock's UI layout/state for the main "all rooms" home view.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub saved_dock_state_home: SavedDockState,
     /// The saved "snapshot" of the dock's UI layout/state for each space,
     /// keyed by the space ID.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub saved_dock_state_per_space: HashMap<OwnedRoomId, SavedDockState>,
     /// Whether a user is currently logged in to Robrix or not.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub logged_in: bool,
     /// The preferred app language.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub app_language: AppLanguage,
     /// App-wide UI/behavior preferences.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub app_prefs: AppPreferences,
     /// Whether the app is currently showing the login screen for adding another account.
     /// This is transient state and not persisted.
     #[serde(skip)]
     pub adding_account: bool,
     /// Local configuration and UI state for bot-assisted room binding.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub bot_settings: BotSettingsState,
     /// Global source of truth for agent identities, keyed by agent MXID.
     ///
     /// Persisted per Matrix account. Old saved states that predate this field
     /// deserialize to an empty registry via `#[serde(default)]`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub agent_registry: AgentRegistry,
     /// Translation API configuration.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub translation: crate::room::translation::TranslationConfig,
 }
 
@@ -4414,6 +4512,13 @@ pub enum AppStateAction {
         room_to_close: Option<OwnedRoomId>,
         destination_room: BasicRoomDetails,
     },
+    /// The given room was removed remotely (this user was kicked or banned),
+    /// so all of its top-level UI state (dock tabs, selection) must be purged.
+    RoomRemovedRemotely(OwnedRoomId),
+    /// Retry a mobile nav-stack pop that was swallowed by an in-flight
+    /// transition animation. Posted (deferred) when a transition finishes
+    /// while `pending_room_nav_pop` is set.
+    RetryPendingRoomNavPop,
     None,
 }
 

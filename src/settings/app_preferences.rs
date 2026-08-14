@@ -6,18 +6,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[derive(Default)]
 pub struct AppPreferences {
-    #[serde(default)]
+    // Note: every field below tolerates per-field deser failures (e.g. a removed
+    // enum variant, or a value from a previous incompatible format) by falling
+    // back to that field's default instead of failing to deserialize the whole
+    // `AppPreferences` struct — see `crate::utils::deserialize_or_default`.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub view_mode: ViewModeOverride,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub send_on_enter: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub thumbnail_max_height: ThumbnailMaxHeight,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub ui_zoom: UiZoom,
     /// Whether the experimental remote agent-chat support is enabled at runtime.
     /// Only has an effect when the crate is built with the `agent_chat` feature;
     /// gates the workflow `/` slash-commands. Defaults to off.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub agent_chat_enabled: bool,
 }
 
