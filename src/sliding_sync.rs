@@ -6766,30 +6766,37 @@ pub fn current_user_id() -> Option<OwnedUserId> {
     )
 }
 
-/// The display name of the currently-logged-in user, if any.
-static OWN_DISPLAY_NAME: Mutex<Option<String>> = Mutex::new(None);
+/// The display name of the currently-logged-in user.
+///
+/// Three states: `None` = not fetched yet; `Some(None)` = fetched, and this
+/// account has no display name set; `Some(Some(name))` = fetched successfully.
+/// Caching the "no display name" answer matters too — otherwise an account
+/// without one would re-hit the profile endpoint on every call.
+static OWN_DISPLAY_NAME: Mutex<Option<Option<String>>> = Mutex::new(None);
 
 /// Returns the display name of the currently logged-in user, if any.
-/// Fetches and caches it if not yet known, avoiding a network round trip
-/// on every subsequent call (e.g. for every new room reported by sync).
+/// Fetches and caches the result (including a "no display name" result) if not
+/// yet known, avoiding a network round trip on every subsequent call
+/// (e.g. for every new room reported by sync). Fetch errors are not cached.
 async fn own_display_name(client: &Client) -> Option<String> {
-    if let Some(name) = OWN_DISPLAY_NAME.lock().unwrap().clone() {
-        return Some(name);
+    if let Some(cached) = OWN_DISPLAY_NAME.lock().unwrap().clone() {
+        return cached;
     }
-    let fetched = client.account().get_display_name().await.ok().flatten();
-    if fetched.is_some() {
-        *OWN_DISPLAY_NAME.lock().unwrap() = fetched.clone();
+    match client.account().get_display_name().await {
+        Ok(fetched) => {
+            *OWN_DISPLAY_NAME.lock().unwrap() = Some(fetched.clone());
+            fetched
+        }
+        Err(_) => None,
     }
-    fetched
 }
 
 /// A cap on concurrent per-room async tasks (e.g. processing an initial sync's
 /// worth of new rooms, or fetching avatars) so a huge home server doesn't
 /// flood every CPU core and starve the main UI thread.
 static MAX_CONCURRENCY: LazyLock<usize> = LazyLock::new(||
-    std::thread::available_parallelism() // SMT/hyperthreads
+    std::thread::available_parallelism()
         .map_or(4, |n| n.get())
-        .min(num_cpus::get_physical()) // real CPU count
         .saturating_sub(2) // leave a core or two for the main UI thread, etc
         .clamp(2, 16)
 );
@@ -7558,6 +7565,9 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
             ALL_JOINED_ROOMS.lock().unwrap().clear();
             IGNORED_USERS.lock().unwrap().clear();
+            // Clear the cached display name too, otherwise the new account's room
+            // previews would briefly show the previous account's display name.
+            OWN_DISPLAY_NAME.lock().unwrap().take();
 
             // Clear the rooms list UI
             enqueue_rooms_list_update(RoomsListUpdate::ClearRooms);

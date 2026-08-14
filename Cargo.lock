@@ -5916,7 +5916,6 @@ dependencies = [
  "matrix-sdk-ui",
  "mime",
  "mime_guess",
- "num_cpus",
  "percent-encoding",
  "quinn",
  "rand 0.8.5",
