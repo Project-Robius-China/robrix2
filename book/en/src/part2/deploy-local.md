@@ -13,17 +13,19 @@ flowchart LR
     end
     subgraph local["Local processes"]
         ROBRIX["Robrix2 (cargo run)"]
-        BE["agent-chat backend :8090"]
+        BE["HAFleet backend :8090"]
         DASH["dashboard :8084"]
         BRIDGE["bridge-matrix.js"]
-        TMUX["tmux: Claude Code / Codex"]
+        RUNNER["one-shot runners<br/>claude -p / codex app-server"]
     end
     ROBRIX -->|login http://127.0.0.1:8128| PALPO
     BRIDGE <--> PALPO
     BRIDGE <--> BE
     BE --- DASH
-    BE <-->|MCP + notifications| TMUX
+    BE -->|spawned per turn, exits after replying| RUNNER
 ```
+
+> The agent-chat project has been renamed **HAFleet**; the CLI and env-var prefix changed from `agentchat`/`AGENTCHAT_*` to `hafleet`/`HAFLEET_*` accordingly. This chapter is written for the thread-session runner mode (recommended, and the mode this book was verified against): agents have no resident process — the backend spawns a one-shot runner per conversational turn, and idle agents cost zero processes. The legacy resident-tmux mode remains in the code as a rollback path (turn off `HAFLEET_THREAD_SESSIONS` to fall back) but is no longer the recommended deployment.
 
 ## 1. Start Palpo (Matrix Homeserver)
 
@@ -51,11 +53,11 @@ You can also skip Docker and build/run with `cargo` per the [Palpo repository](h
 
 ## 2. Configure and Start agent-chat
 
-Prerequisites: **Node.js 22+**, **tmux**, and at least one coding runtime (Claude Code or Codex CLI).
+Prerequisites: **Node.js 22+** and at least one coding runtime (Claude Code or Codex CLI). Under thread-session mode tmux is no longer required (it is only used transiently for one-time agent registration, see below).
 
 ```bash
-git clone https://github.com/ZhangHanDong/agent-chat.git
-cd agent-chat
+git clone https://github.com/hagency-org/HAFleet.git
+cd HAFleet
 npm install
 cp .env.example .env
 ```
@@ -80,12 +82,20 @@ MATRIX_AGENT_PASSWORD_SECRET=<another long random secret>
 MATRIX_BRIDGE_SECRET=<secret shared by backend and bridge>
 
 MATRIX_TRUST_MODE=enforce
-MATRIX_TRUSTED_INVITER_MXIDS=@alex:127.0.0.1:8128
+# Note: besides the human operator, the bridge bot itself must be listed —
+# it issues room invites on behalf of the agent puppets
+MATRIX_TRUSTED_INVITER_MXIDS=@alex:127.0.0.1:8128,@agent-bridge-alexlocal:127.0.0.1:8128
 MATRIX_OPERATOR_MXIDS=@alex:127.0.0.1:8128
 MATRIX_DEFAULT_WAKE=off
+
+# thread-session runner mode (recommended): one isolated session per Matrix thread
+HAFLEET_THREAD_SESSIONS=1
+HAFLEET_ROUTER_TASK_CUTOVER=1
 ```
 
-Do not write just a display name or `alex`; security boundaries use full MXIDs. `MATRIX_OPERATOR_MXIDS` / `MATRIX_ADMIN_MXIDS` must not both be left empty, because the admin-command ACL has a `no_acl` fallback for backward compatibility with old deployments (these two entries do not exist in `.env.example` — add them yourself). If homeserver registration is closed, you must also pre-create the bridge account and every `@ac_*` account, or configure a registration token supported by your server.
+> On first start, `HAFLEET_ROUTER_TASK_CUTOVER=1` migrates `tasks.json` one-way into SQLite (a `.bak` is kept automatically); SQLite is the task store of record afterwards. `HAFLEET_THREAD_SESSIONS` requires it. Both variables must reach the backend AND the bridge.
+
+Do not write just a display name or `alex`; security boundaries use full MXIDs. **Omitting the bridge bot from `MATRIX_TRUSTED_INVITER_MXIDS` is the most common deployment mistake** — the symptom is the bridge log filling with `UNTRUSTED reason=untrusted_inviter` while agent puppets never join rooms. `MATRIX_OPERATOR_MXIDS` / `MATRIX_ADMIN_MXIDS` must not both be left empty, because the admin-command ACL has a `no_acl` fallback for backward compatibility with old deployments (these two entries do not exist in `.env.example` — add them yourself). If homeserver registration is closed, you must also pre-create the bridge account and every `@ac_*` account, or configure a registration token supported by your server.
 
 ### Linux: The Supported Install Path
 
@@ -99,17 +109,19 @@ The installer is currently a Linux/systemd path. Whether user units are used dep
 
 ### macOS: The Development Run Path
 
-macOS currently has no equivalent full installer. First remove all `<...>` placeholders and quote any values containing shell special characters correctly; then run the following in four terminals, each from the same environment:
+macOS currently has no equivalent full installer. The recommended path is the repository's local supervisor, which brings up all four services (backend `:8090`, dashboard `:8084`, local notification relay, Matrix bridge) with one command and restarts children when they exit:
 
 ```bash
 set -a; source .env; set +a
-node backend-v2.js
-node server.js
-PUSH_RELAY_MODE=local node push-relay.js
-node bridge-matrix.js
+node services/hafleet-services.mjs run --profile services/services-local.json
 ```
 
-These four are, respectively, the backend `:8090`, the dashboard `:8084`, the local notification relay, and the Matrix bridge; every one of them must inherit the same environment. If you already have a local supervisor/LaunchAgent setup, you can use `bin/agentchat service restart --profile local` — but clone + `npm install` by itself does not create these services on macOS.
+**Two path variables that are easy to get wrong** (we hit both during a real upgrade):
+
+- `HAFLEET_RUNTIME_DIR` — the data directory (where `data/` lives). The supervisor's `--runtime` flag only affects its own state files; **child processes rely entirely on this environment variable**. Left unset, the backend creates an empty `data/` next to the code — the symptom is "services healthy but agents: 0 and messages vanish". If code and data share a directory you can omit it.
+- `HAFLEET_HOMEDIR` — the agent home root (tokens, state, workspaces), default `~/.hafleet`. When upgrading from old agent-chat where agents live under `~/.agentchat`, you must point this back explicitly, or runners fail with `agent token is unavailable`.
+
+You can still start the four processes by hand in four terminals as the old docs described, but every terminal must source the same `.env` plus the variables above.
 
 **Verify the base services**:
 
@@ -118,20 +130,22 @@ curl --noproxy '*' http://127.0.0.1:8090/health   # backend health check
 open http://127.0.0.1:8084                        # local monitoring dashboard
 ```
 
-### Bind a Local Project to the Agent and Start It
+### Register the Agent and Bind a Local Project
 
-Declare the project boundary first, then start the runtime:
+Declare the project boundary first, then do the one-time registration:
 
 ```bash
-bin/agentchat project add wf_coordinator /absolute/path/to/my-project --mode symlink
-bin/agentchat project list wf_coordinator
-bin/agentchat up wf_coordinator /absolute/path/to/my-project claude
-bin/agentchat ls
+bin/hafleet project add wf_coordinator /absolute/path/to/my-project --mode symlink
+bin/hafleet project list wf_coordinator
+bin/hafleet up wf_coordinator /absolute/path/to/my-project claude   # one-time registration
+bin/hafleet ls
 ```
 
-`symlink` lets the agent write directly into the source repository; `copy` is an isolated replica that does not write changes back to the source directory. Add only the project paths the agent needs — do not expose your whole working directory or home. The model can be chosen at launch with `--model <model>`; changing the model requires restarting that runtime. Natural-language per-task model selection from within Robrix2 is not wired up yet.
+`symlink` lets the agent write directly into the source repository; `copy` is an isolated replica that does not write changes back to the source directory. Add only the project paths the agent needs — do not expose your whole working directory or home.
 
-A managed launch registers the `@ac_<name>` puppet account, connects MCP, and pins the runtime permission policy: Claude Code uses `--permission-mode auto` with the approval channel; Codex uses `workspace-write` + the `on-request` hook. Codex's first `up` requires typing `TRUST` once in a local TTY; do not hand-edit the trust state, and do not manually relaunch a CLI inside tmux without the managed parameters.
+What `up` accomplishes here is **registration**: it creates the `@ac_<name>` puppet account, mints the token, and writes the workspace and MCP configuration. Under thread-session mode those are everything a runner needs — once registration completes you can stop the tmux pane with `bin/hafleet down`, and Matrix messages are handled from then on by one-shot runners the backend spawns per turn; no resident runtime is needed. A Codex agent's first `up` requires typing `TRUST` once in a local TTY; do not hand-edit the trust state.
+
+**Per-turn runner permissions are pinned by the backend**: an ordinary chat turn runs Claude with `--permission-mode plan` (read-only) and Codex in a `read-only` sandbox; only turns bound to a task (or explicitly granted by an operator via `/thread mode auto`, see chapter 5.3) get write access, and concurrent writes are serialized by the workspace lease. The model defaults to the agent's configuration and can be overridden per thread with `/thread model <name>` — the model must match the agent's framework (naming a Claude model for a Codex agent fails at runtime).
 
 ## 3. Start Robrix2
 
@@ -151,7 +165,7 @@ After logging in, flip the runtime switch once: **Settings → Preferences → E
 1. **Create the backend group**:
 
    ```bash
-   bin/agentchat cli create-group robrix2-board wf_coordinator
+   bin/hafleet cli create-group robrix2-board wf_coordinator
    ```
 
    **Current bootstrap limitation**: when the bridge observes a new group, it automatically creates a Matrix room of the same name and joins the agent to it; there is currently no "backend group only / no room" switch. In the auto-created room, the agent's inviter is the bridge, so no human owner is established. A formal release should first add that mode or a validated owner-claim flow.
@@ -193,10 +207,13 @@ After logging in, flip the runtime switch once: **Settings → Preferences → E
 | Robrix2 login fails | Palpo container logs; does the homeserver address include the right port |
 | Bridge won't start | Are `API_TOKEN`, `MATRIX_BRIDGE_SECRET`, the bot password, and the agent password secret non-empty; are backend/bridge reading the same `.env` |
 | **The bridge is completely unresponsive to room messages** | Confirm trust mode is enforce and the trusted inviter is the full MXID that invited the bridge; check the bridge trust logs |
-| `!bindroom` replies Group not found | Create the group first with `agentchat cli create-group` |
+| `!bindroom` replies Group not found | Create the group first with `hafleet cli create-group` |
 | `!bindroom` says no permission | The sender is not in `MATRIX_OPERATOR_MXIDS` |
-| @Agent gets no reaction | Is the agent actually in the room; is `agentchat ls` online; did the bridge receive an explicit mention; is the push relay healthy |
+| @Agent gets no reaction | Is the agent actually in the room; is the agent registered in `hafleet ls`; did the bridge receive an explicit mention; is the push relay healthy |
 | No workflow commands in the `/` palette | Built with `--features agent_chat` + the Preferences toggle on; is there a `*_coordinator` in the room |
-| Approval instantly denied / card missing | Is there a unique owner binding; was the approval-room invite accepted; was the runtime launched managed; did the backend create a pending record |
+| Approval instantly denied / card missing | Is there a unique owner binding; was the approval-room invite accepted; are runners spawning normally (backend log `[router-runner]`); did the backend create a pending record |
+| Services healthy but agents: 0, messages vanish | `HAFLEET_RUNTIME_DIR` does not point at the real data directory — the backend is running against an empty `data/` |
+| Every runner fails with `agent token is unavailable` | `HAFLEET_HOMEDIR` disagrees with where the agents actually live (old deployments: `~/.agentchat`) |
+| The agent says it is in plan mode and cannot write | Expected: chat turns are read-only; use the task flow or `/thread mode auto` for write access |
 
 For full layer-by-layer diagnosis see [Operations Acceptance and Troubleshooting](operations.md). Next: [Team Collaboration in Practice](collab-overview.md).

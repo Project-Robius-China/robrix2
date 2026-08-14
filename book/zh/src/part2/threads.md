@@ -2,7 +2,7 @@
 
 > **定位**：本章建立 HAgency 最重要的协作习惯 —— 任务住进 Thread，主时间线只留封面；并给出「什么进 Thread、什么进主时间线、什么走 DM」的分流原则。前置依赖：第 5.2 章。
 
-作战室很快会同时进行多件事。如果所有进度都刷在主时间线，房间会在一天内变得不可读。HAgency 的约定是：**每个任务一条 Thread**，过程细节收进线索，主时间线保留任务「封面」。这是协作约定；消息是否真的回到 Thread 还取决于 backend reply context。
+作战室很快会同时进行多件事。如果所有进度都刷在主时间线，房间会在一天内变得不可读。HAgency 的约定是：**每个任务一条 Thread**，过程细节收进线索，主时间线保留任务「封面」。在 thread-session 模式下这不只是协作约定：每条 Thread 在 backend 侧就是一个隔离的 Agent 会话（见下文）。
 
 一条消息从你的 Thread 出发、到 Agent、再回到同一条 Thread 的完整旅程：
 
@@ -12,17 +12,39 @@ sequenceDiagram
     participant M as Matrix（Palpo）
     participant B as agent-chat 桥
     participant BE as backend :8090
-    participant A as Agent（tmux）
+    participant R as 一次性 runner
 
     H->>M: @wf_coordinator 咋样了？（m.thread 关系）
     M->>B: 房间事件
-    B->>BE: 转为 agent-chat 消息（记录线索上下文）
-    BE->>A: 通知推进 tmux
-    A->>BE: 带 reply_to 的结构化回复
-    BE->>B: 出站消息
-    B->>M: 从可信 matrixContext 重建 m.thread + m.in_reply_to
+    B->>BE: 转为 backend 消息（记录线索上下文）
+    BE->>BE: 路由到该 (Agent, Thread) 的独立会话
+    BE->>R: 孵化 runner，喂入本 Thread 的会话上下文
+    R->>BE: 回复（runner 无法指定落点）
+    BE->>B: 出站消息（reply outbox，落点由 backend 派生）
+    B->>M: 重建 m.thread + m.in_reply_to
     M->>H: Thread 内出现回复
 ```
+
+## 每条 Thread 一个独立会话
+
+Thread 不只是 UI 上的折叠线索——在 backend 里，**每个 (Agent, Thread) 组合就是一个持久的独立会话**：
+
+- **上下文隔离**：Thread A 里说过的约束、代号、偏好绝不会渗入 Thread B。同一个 Agent 在两条 Thread 里被问同一个问题，各自只依据本 Thread 的历史作答。
+- **进程即临时工**：Agent 没有常驻进程。每一轮问答由 backend 孵化一次性 runner（`claude -p` / `codex app-server`），喂入从数据库重建的本 Thread 上下文，答完即销毁。Thread 的"记忆"存在 SQLite 里，backend 重启后追问，Agent 依然记得本 Thread 之前聊过什么。
+- **并行不阻塞**：Thread A 里跑长任务时，Thread B 的提问由另一个 runner 并行处理，互不排队。
+- **回复落点是 transport 保证**：runner 的回复经 backend 的 reply outbox 发出，Thread 归属由 backend 从会话记录派生，模型自己无法把回复投错线索。
+- **共享的是身份**：Agent 的名字、Matrix 木偶、工作目录和长期记忆仍是同一份——它像一个人类助理，在每条线索里保持专注，但记得自己是谁。
+
+### 在 Thread 里配置会话：`/thread` 指令
+
+operator（`MATRIX_OPERATOR_MXIDS` 中的账号）可以在任意 Thread 里发指令调整**这一条 Thread** 的会话：
+
+```text
+/thread model claude-haiku-4-5   # 本 Thread 换模型(default 恢复)
+/thread mode auto                # 授予本 Thread 写权限(plan 收回)
+```
+
+指令消息不进入对话上下文，Agent 会回一条确认通知。注意三点：指令后**不能带其他文字**（会收到用法提示）；`mode auto` 是审计过的写授权，该 Thread 后续每轮都可写工作区（并发写仍被租约序列化）；模型名要与 Agent 框架匹配——Thread 里有多个 Agent 时指令会应用到**所有**参与者的会话，给 Codex Agent 指定 Claude 模型会导致该会话运行时报错。
 
 ## 派单入线索
 
@@ -40,7 +62,7 @@ coordinator 接到任务后，在主时间线发一条派发摘要（派给谁�
 
 截图里 alex 只发了一句 `@wf_coordinator 咋样了？`，coordinator 给出结构化状态：谁接了单、任务 active 的起始时间、分支上有没有新提交、接下来走什么流程，并承诺主动更新。
 
-主动汇报目前是 **workflow skill 约定，不是 transport 保证**。Agent 忙碌、push relay 未推进、会话中断，或 `post()` 没带 `reply_to` 时，都可能没有更新或掉回主时间线。人仍应使用 `/status`、Project Board、dashboard task/heartbeat 与 Git 状态作为兜底。
+回复落在正确 Thread 是 transport 保证（见上节）；但**主动汇报的节奏**仍是 workflow skill 约定——Agent 忙于长任务时可能长时间不更新。人仍应使用 `/status`、Project Board、dashboard task/heartbeat 与 Git 状态作为兜底。
 
 ## Thread 连续性实际如何工作
 
