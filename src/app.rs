@@ -2940,7 +2940,20 @@ impl App {
         let removed_tabs = removed_from_home + removed_from_spaces;
         let mut cleared_selected_room = false;
 
+        // Drop the room from the mobile back stack too, so navigating back
+        // can never land on a room this user is no longer in.
+        self.mobile_room_nav_stack.retain(|stacked| stacked.room_id() != room_id);
+
         if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
+            // On Mobile, the user may be viewing this room right now; pop the
+            // navigation stack back to the root (rooms list) since the room's
+            // screen is now showing a room they're no longer in.
+            // (`pop()` pops all the way back to the root view, matching the
+            // logical stack clear above.)
+            if !effective_is_desktop(cx) {
+                self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+                self.mobile_room_nav_stack.clear();
+            }
             self.app_state.selected_room = None;
             cleared_selected_room = true;
         }

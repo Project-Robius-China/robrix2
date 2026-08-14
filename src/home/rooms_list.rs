@@ -30,7 +30,7 @@ use crate::{
         add_room::CreateRoomAction,
         navigation_tab_bar::{NavigationBarAction, SelectedTab},
         room_context_menu::RoomContextMenuDetails,
-        room_screen::{clear_timeline_invalidation_for_room, invalidate_timeline_state_for_room},
+        room_screen::invalidate_timeline_state_for_room,
         rooms_list_entry::RoomsListEntryAction,
         space_lobby::{SpaceLobbyAction, SpaceLobbyEntryWidgetExt},
     },
@@ -784,8 +784,6 @@ impl RoomsList {
                 }
                 RoomsListUpdate::AddJoinedRoom(joined_room) => {
                     let room_id = joined_room.room_name_id.room_id().clone();
-                    // (Re-)joining a room makes its timeline states storable again.
-                    clear_timeline_invalidation_for_room(&room_id);
                     let is_direct = joined_room.is_direct;
                     let has_favorite_tag = joined_room.tags.contains_key(&TagName::Favorite);
                     let has_low_priority_tag = joined_room.tags.contains_key(&TagName::LowPriority);

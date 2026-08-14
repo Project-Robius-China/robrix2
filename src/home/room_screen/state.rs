@@ -238,15 +238,18 @@ thread_local! {
     pub(super) static TIMELINE_STATES: RefCell<HashMap<TimelineKind, TimelineUiState>> =
         RefCell::new(HashMap::new());
 
-    /// Rooms whose timeline states have been invalidated (left/kicked/banned)
-    /// and must not be re-saved into `TIMELINE_STATES`.
+    /// A per-room generation counter, bumped each time a room's timeline states
+    /// are invalidated (left/kicked/banned). A room absent from this map is at
+    /// generation 0.
     ///
     /// A still-open RoomScreen saves its state back into `TIMELINE_STATES` when
-    /// it is hidden/closed, which can happen *after* the invalidation ran.
-    /// This set lets `store_timeline_state` reject such late re-insertions.
-    /// A room is removed from this set once it becomes joined again.
-    static INVALIDATED_TIMELINE_ROOMS: RefCell<HashSet<OwnedRoomId>> =
-        RefCell::new(HashSet::new());
+    /// it is hidden/closed, which can happen *after* the invalidation ran — and
+    /// even after the user has already re-joined the room. Each `TimelineUiState`
+    /// records the generation it was created at, and `store_timeline_state`
+    /// rejects any state from an older generation, so a pre-kick state can never
+    /// be written back, no matter how late it arrives.
+    static TIMELINE_ROOM_GENERATIONS: RefCell<HashMap<OwnedRoomId, u64>> =
+        RefCell::new(HashMap::new());
 }
 
 /// The UI-side state of a single room's timeline, which is only accessed/updated by the UI thread.
@@ -258,6 +261,11 @@ thread_local! {
 pub(super) struct TimelineUiState {
     /// Info determining whether this is a main room timeline is a thread-focused timeline.
     pub(super) kind: TimelineKind,
+
+    /// The room's timeline-state generation at the time this state was created;
+    /// see [`TIMELINE_ROOM_GENERATIONS`]. A state from an older generation is
+    /// stale (created before a leave/kick/ban) and must not be stored.
+    pub(super) generation: u64,
 
     /// The power levels of the currently logged-in user in this room.
     pub(super) user_power: UserPowerLevels,
@@ -453,27 +461,40 @@ pub fn invalidate_timeline_state_for_room(_cx: &mut Cx, room_id: &RoomId) {
         states.retain(|kind, _| kind.room_id() != room_id);
     });
     // A RoomScreen currently displaying this room still holds its state and will
-    // try to save it back upon being hidden/closed; block that re-insertion.
-    INVALIDATED_TIMELINE_ROOMS.with_borrow_mut(|rooms| {
-        rooms.insert(room_id.to_owned());
+    // try to save it back upon being hidden/closed; bumping the generation makes
+    // `store_timeline_state` reject that state, even if the room gets re-joined
+    // before the late save happens.
+    bump_timeline_generation(room_id);
+}
+
+fn bump_timeline_generation(room_id: &RoomId) {
+    TIMELINE_ROOM_GENERATIONS.with_borrow_mut(|generations| {
+        *generations.entry(room_id.to_owned()).or_insert(0) += 1;
     });
 }
 
-/// Marks the given room as valid again, e.g., once it has been (re-)joined,
-/// such that its timeline states can be saved to `TIMELINE_STATES` once more.
-pub fn clear_timeline_invalidation_for_room(room_id: &RoomId) {
-    INVALIDATED_TIMELINE_ROOMS.with_borrow_mut(|rooms| {
-        rooms.remove(room_id);
-    });
+/// Returns the current timeline-state generation for the given room.
+///
+/// A newly-created `TimelineUiState` must record this value; see
+/// [`store_timeline_state`].
+pub(super) fn current_timeline_generation(room_id: &RoomId) -> u64 {
+    TIMELINE_ROOM_GENERATIONS.with_borrow(|generations| {
+        generations.get(room_id).copied().unwrap_or(0)
+    })
+}
+
+/// Returns whether a timeline state created at `generation` is still current
+/// for the given room, i.e., whether the room has not been invalidated since.
+fn is_generation_current(room_id: &RoomId, generation: u64) -> bool {
+    generation == current_timeline_generation(room_id)
 }
 
 /// Saves the given timeline state into the global `TIMELINE_STATES` map,
-/// unless its room has been invalidated (left/kicked/banned) in the meantime.
+/// unless it was created before the room's last invalidation
+/// (left/kicked/banned), in which case it is stale and gets discarded.
 pub(super) fn store_timeline_state(tl: TimelineUiState) {
-    let is_invalidated = INVALIDATED_TIMELINE_ROOMS
-        .with_borrow(|rooms| rooms.contains(tl.kind.room_id()));
-    if is_invalidated {
-        log!("Discarding timeline state for invalidated (left/banned) room {:?}", tl.kind);
+    if !is_generation_current(tl.kind.room_id(), tl.generation) {
+        log!("Discarding stale timeline state (from before a leave/kick/ban) for room {:?}", tl.kind);
         return;
     }
     TIMELINE_STATES.with_borrow_mut(|ts| ts.insert(tl.kind.clone(), tl));
@@ -482,6 +503,29 @@ pub(super) fn store_timeline_state(tl: TimelineUiState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_generation_rejected_after_invalidation_and_new_generation_accepted() {
+        let room_id = RoomId::parse("!timeline_generation_test:example.org").unwrap();
+
+        // A state created now records the current generation and would be storable.
+        let pre_kick_generation = current_timeline_generation(&room_id);
+        assert!(is_generation_current(&room_id, pre_kick_generation));
+
+        // The user is kicked/banned: the room's generation is bumped
+        // (this is what `invalidate_timeline_state_for_room` does).
+        bump_timeline_generation(&room_id);
+
+        // A late save of the pre-kick state must be rejected — even though the
+        // user may have already re-joined the room by now (re-joining does not
+        // reset the generation).
+        assert!(!is_generation_current(&room_id, pre_kick_generation));
+
+        // A state created after re-joining records the new generation and is accepted.
+        let post_rejoin_generation = current_timeline_generation(&room_id);
+        assert!(is_generation_current(&room_id, post_rejoin_generation));
+        assert_ne!(pre_kick_generation, post_rejoin_generation);
+    }
 
     #[test]
     fn adjacent_timeline_snapshots_coalesce_without_crossing_control_updates() {

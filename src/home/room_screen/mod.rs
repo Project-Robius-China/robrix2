@@ -85,7 +85,7 @@ use small_state::*;
 use state::*;
 pub use threads_pane::*;
 pub(crate) use bot_admin::is_known_or_likely_bot;
-pub use state::{RoomScreenProps, RoomScreenTooltipActions, TimelineUpdate, clear_timeline_states, clear_timeline_invalidation_for_room, invalidate_timeline_state_for_room};
+pub use state::{RoomScreenProps, RoomScreenTooltipActions, TimelineUpdate, clear_timeline_states, invalidate_timeline_state_for_room};
 
 /// The maximum number of timeline items to search through
 /// when looking for a particular event.
@@ -2039,8 +2039,10 @@ impl RoomScreen {
                 None
             };
 
+            let generation = state::current_timeline_generation(kind.room_id());
             let tl_state = TimelineUiState {
                 kind,
+                generation,
                 // Initially, we assume the user has all power levels by default.
                 // This avoids unexpectedly hiding any UI elements that should be visible to the user.
                 // This doesn't mean that the user can actually perform all actions;
