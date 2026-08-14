@@ -2945,15 +2945,17 @@ impl App {
         self.mobile_room_nav_stack.retain(|stacked| stacked.room_id() != room_id);
 
         if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
-            // On Mobile, the user may be viewing this room right now; pop the
-            // navigation stack back to the root (rooms list) since the room's
-            // screen is now showing a room they're no longer in.
+            // The user may be viewing this room right now (on Mobile), or the
+            // hidden mobile view stack may still contain it (on Desktop after a
+            // breakpoint change); pop the navigation stack back to the root
+            // regardless of breakpoint — at root, `pop()` is a harmless no-op.
             // (`pop()` pops all the way back to the root view, matching the
-            // logical stack clear above.)
-            if !effective_is_desktop(cx) {
-                self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
-                self.mobile_room_nav_stack.clear();
-            }
+            // logical stack clear.) Note: even if `pop()` silently no-ops during
+            // an in-flight transition animation, correctness is preserved: the
+            // stale screen's timeline state carries an old generation, so it
+            // gets discarded on the next display instead of being reused.
+            self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+            self.mobile_room_nav_stack.clear();
             self.app_state.selected_room = None;
             cleared_selected_room = true;
         }

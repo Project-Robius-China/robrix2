@@ -485,7 +485,7 @@ pub(super) fn current_timeline_generation(room_id: &RoomId) -> u64 {
 
 /// Returns whether a timeline state created at `generation` is still current
 /// for the given room, i.e., whether the room has not been invalidated since.
-fn is_generation_current(room_id: &RoomId, generation: u64) -> bool {
+pub(super) fn is_generation_current(room_id: &RoomId, generation: u64) -> bool {
     generation == current_timeline_generation(room_id)
 }
 

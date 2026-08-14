@@ -2368,6 +2368,16 @@ impl RoomScreen {
         // If this timeline is already displayed, we don't need to do anything major,
         // but we do need update the `room_name_id` in case it has changed, or it has been cleared.
         if self.timeline_kind.as_ref().is_some_and(|kind| kind == &timeline_kind) {
+            // A held state from before a leave/kick/ban is stale: this widget may
+            // never have been hidden in between (e.g. a paused mobile view slot),
+            // so the room may have been left *and re-joined* while we still hold
+            // the pre-kick state. Drop it and re-initialize from scratch.
+            if self.tl_state.as_ref().is_some_and(|tl|
+                !state::is_generation_current(tl.kind.room_id(), tl.generation)
+            ) {
+                log!("Discarding stale in-widget timeline state (from before a leave/kick/ban) for {timeline_kind:?}");
+                self.tl_state = None;
+            }
             self.room_name_id = Some(room_name_id.clone());
             self.room_avatar_url = get_client()
                 .and_then(|client| client.get_room(room_name_id.room_id()))
