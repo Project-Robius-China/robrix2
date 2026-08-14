@@ -2365,19 +2365,27 @@ impl RoomScreen {
             }
         };
 
-        // If this timeline is already displayed, we don't need to do anything major,
-        // but we do need update the `room_name_id` in case it has changed, or it has been cleared.
-        if self.timeline_kind.as_ref().is_some_and(|kind| kind == &timeline_kind) {
-            // A held state from before a leave/kick/ban is stale: this widget may
-            // never have been hidden in between (e.g. a paused mobile view slot),
-            // so the room may have been left *and re-joined* while we still hold
-            // the pre-kick state. Drop it and re-initialize from scratch.
-            if self.tl_state.as_ref().is_some_and(|tl|
-                !state::is_generation_current(tl.kind.room_id(), tl.generation)
-            ) {
-                log!("Discarding stale in-widget timeline state (from before a leave/kick/ban) for {timeline_kind:?}");
-                self.tl_state = None;
-            }
+        // A held state from before a leave/kick/ban is stale: this widget may
+        // never have been hidden in between (e.g. a paused mobile view slot),
+        // so the room may have been left *and re-joined* while we still hold
+        // the pre-kick state. Such a state must not take the same-timeline fast
+        // path below — it needs the full teardown path (`hide_timeline()` etc.),
+        // which stops subscriber tasks, timers, and pane state, and whose
+        // attempt to save the stale state is rejected by the generation check
+        // in `store_timeline_state`.
+        let held_state_is_stale = self.tl_state.as_ref().is_some_and(|tl|
+            !state::is_generation_current(tl.kind.room_id(), tl.generation)
+        );
+        if held_state_is_stale {
+            log!("Tearing down stale in-widget timeline state (from before a leave/kick/ban) for {timeline_kind:?}");
+        }
+
+        // If this timeline is already displayed (and its state is not stale),
+        // we don't need to do anything major, but we do need update the
+        // `room_name_id` in case it has changed, or it has been cleared.
+        if !held_state_is_stale
+            && self.timeline_kind.as_ref().is_some_and(|kind| kind == &timeline_kind)
+        {
             self.room_name_id = Some(room_name_id.clone());
             self.room_avatar_url = get_client()
                 .and_then(|client| client.get_room(room_name_id.room_id()))

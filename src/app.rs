@@ -540,6 +540,11 @@ pub struct App {
     /// A stack of previously-selected rooms for mobile navigation.
     /// When a view is popped off the stack, the previous `selected_room` is restored from here.
     #[rust] mobile_room_nav_stack: Vec<SelectedRoom>,
+    /// Whether a nav-stack pop requested by `purge_room_ui_state` may have been
+    /// swallowed by an in-flight transition animation (StackNavigation's `pop()`
+    /// silently no-ops in that case) and must be retried once the current
+    /// transition finishes. Cleared when the user selects a room again.
+    #[rust] pending_room_nav_pop: bool,
     #[rust(Timer::empty())] room_filter_debounce_timer: Timer,
     #[rust] pending_room_filter_keywords: String,
     /// The last server-side directory search: `(query, results)`.
@@ -1630,6 +1635,21 @@ impl MatchEvent for App {
                 self.set_mobile_room_view_updates_enabled(cx, view_id, false);
             }
 
+            // If a nav pop requested by `purge_room_ui_state` was swallowed by an
+            // in-flight transition animation, retry it once a transition finishes.
+            // The retry is deferred to a fresh Actions pass (via `cx.action`) so it
+            // runs after StackNavigation has cleared its transition state,
+            // regardless of intra-pass handler ordering.
+            if self.pending_room_nav_pop {
+                if matches!(
+                    action.as_widget_action().cast(),
+                    StackNavigationTransitionAction::ShowDone
+                        | StackNavigationTransitionAction::HideEnd(_)
+                ) {
+                    cx.action(AppStateAction::RetryPendingRoomNavPop);
+                }
+            }
+
             // Handle actions that instruct us to update the top-level app state.
             if let Some(LeaveRoomResultAction::Left { room_id }) = action.downcast_ref() {
                 enqueue_rooms_list_update(RoomsListUpdate::HideRoom { room_id: room_id.clone() });
@@ -1647,6 +1667,18 @@ impl MatchEvent for App {
             match action.downcast_ref() {
                 Some(AppStateAction::RoomFocused(selected_room)) => {
                     self.app_state.selected_room = Some(selected_room.clone());
+                    // The user deliberately navigated to a room; a still-pending
+                    // pop from an earlier room removal must not undo that.
+                    self.pending_room_nav_pop = false;
+                    continue;
+                }
+                Some(AppStateAction::RetryPendingRoomNavPop) => {
+                    // Only retry if nothing was selected in the meantime.
+                    if self.pending_room_nav_pop && self.app_state.selected_room.is_none() {
+                        self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+                        self.mobile_room_nav_stack.clear();
+                    }
+                    self.pending_room_nav_pop = false;
                     continue;
                 }
                 Some(AppStateAction::FocusNone) => {
@@ -2950,11 +2982,14 @@ impl App {
             // breakpoint change); pop the navigation stack back to the root
             // regardless of breakpoint — at root, `pop()` is a harmless no-op.
             // (`pop()` pops all the way back to the root view, matching the
-            // logical stack clear.) Note: even if `pop()` silently no-ops during
-            // an in-flight transition animation, correctness is preserved: the
-            // stale screen's timeline state carries an old generation, so it
-            // gets discarded on the next display instead of being reused.
+            // logical stack clear.)
+            //
+            // StackNavigation's `pop()` silently no-ops while a transition
+            // animation is in flight, which would leave the removed room as the
+            // current view indefinitely; mark the pop as pending so it gets
+            // retried once the current transition finishes.
             self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+            self.pending_room_nav_pop = true;
             self.mobile_room_nav_stack.clear();
             self.app_state.selected_room = None;
             cleared_selected_room = true;
@@ -4455,6 +4490,10 @@ pub enum AppStateAction {
     /// The given room was removed remotely (this user was kicked or banned),
     /// so all of its top-level UI state (dock tabs, selection) must be purged.
     RoomRemovedRemotely(OwnedRoomId),
+    /// Retry a mobile nav-stack pop that was swallowed by an in-flight
+    /// transition animation. Posted (deferred) when a transition finishes
+    /// while `pending_room_nav_pop` is set.
+    RetryPendingRoomNavPop,
     None,
 }
 
