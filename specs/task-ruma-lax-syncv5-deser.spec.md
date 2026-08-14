@@ -77,14 +77,24 @@ estimate: 0.5d
   那么 该邀请无需重启即出现在 Invites 列表
   但是 日志不出现 "The room must exist since it has been joined"
 
-场景: main 与本分支 A-B 对照归因
+场景: 真实失败 payload 在两版 ruma 上重放归因(critical)
+  标签: critical
+  测试: manual_test_replay_captured_payload_on_both_ruma_revs
+  层级: manual
+  审核: human
+  假设 已捕获一份真实失败的 sync v5 per-room 响应 JSON(通过开启 SDK HTTP 日志或代理抓包,在 main 构建复现房间不显示时截取)
+  当 将完全相同的 payload 分别输入旧 ruma rev(98196b1d)与本分支 ruma rev(20c2c60f4)的 sync v5 响应反序列化(可仿照 ruma#2510 自带单测构造)
+  那么 旧 rev 对该 per-room 对象反序列化失败,新 rev 保留房间对象且仅将非法字段置空
+  并且 归因前提是 payload 确实含四个受宽松处理字段之一的非法值:room name、room avatar、hero displayname、hero avatar_url(ruma#2510 仅覆盖这四个;若捕获的 payload 不含其中任何非法值,则本修复不是该次失败的原因)
+
+场景: 运行期 live A-B 对照(辅助证据)
   测试: manual_test_ab_comparison_against_main
   层级: manual
   审核: human
   假设 同一账号与同一 homeserver,分别运行 main 分支与本分支构建
   当 在两个构建下重复执行 运行期邀请与服务端建房场景
   那么 main 构建复现房间不显示,本分支构建房间即时显示
-  并且 归因成立的前提是失败响应确实含 name/avatar/hero 四字段之一的非法值(ruma#2510 仅宽松处理这四个字段;若两个构建行为一致,说明该场景未触发兼容分支,不能作为本修复的证据)
+  但是 两次服务端响应可能不同,本场景仅作辅助证据,严格归因以 payload 重放场景为准
 
 场景: 运行期服务端建房即时显示
   测试: manual_test_server_created_room_materializes_without_restart
@@ -98,9 +108,9 @@ estimate: 0.5d
   测试: manual_test_corrupt_field_drops_field_not_room
   层级: manual
   审核: human
-  假设 homeserver 在某房间的 sync v5 响应中发送格式非法的 name 或 avatar 字段
+  假设 homeserver 在某房间的 sync v5 响应中发送非法类型的 room name、room avatar、hero displayname 或 hero avatar_url 字段
   当 robrix2 处理该增量响应
-  那么 该房间仍被物化并显示(名称/头像回退为空)
+  那么 该房间仍被物化并显示(对应字段回退为空)
   但是 整个 per-room 对象不因单字段损坏而被丢弃
 
 ### Rule: no-regression — 健康路径零回归
