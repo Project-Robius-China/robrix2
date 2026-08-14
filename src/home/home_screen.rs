@@ -212,7 +212,7 @@ script_mod! {
                         max_lines: 1
                         text_overflow: Ellipsis
                         draw_text +: {
-                            text_style: theme.font_bold { font_size: 13.0 }
+                            text_style: BOLD_TEXT { font_size: 13.0 }
                             color: (ROOM_NAME_TEXT_COLOR)
                         }
                     }
@@ -222,7 +222,7 @@ script_mod! {
                         max_lines: 1
                         text_overflow: Ellipsis
                         draw_text +: {
-                            text_style: theme.font_regular { font_size: 9.5 }
+                            text_style: REGULAR_TEXT { font_size: 9.5 }
                             color: (RBX_FG_SECONDARY)
                         }
                         text: ""
@@ -274,7 +274,7 @@ script_mod! {
                 show: AnimatorState{
                     redraw: true
                     from: { all: Forward { duration: (mod.widgets.SPACES_BAR_ANIMATION_DURATION_SECS) } }
-                    apply: { height: (NAVIGATION_TAB_BAR_SIZE),  draw_bg: { shadow_color: #x00000055 } }
+                    apply: { height: (NAVIGATION_TAB_BAR_SIZE),  draw_bg: { shadow_color: (RBX_SHADOW_NAV) } }
                 }
                 hide: AnimatorState{
                     redraw: true

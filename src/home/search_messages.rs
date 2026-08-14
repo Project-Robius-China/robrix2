@@ -127,7 +127,7 @@ script_mod! {
                 width: Fit, height: Fit,
                 draw_text +: {
                     color: #888
-                    text_style: theme.font_regular { font_size: 9.0 }
+                    text_style: REGULAR_TEXT { font_size: 9.0 }
                 }
                 text: ""
             }
@@ -234,7 +234,7 @@ script_mod! {
                     empty_text: "Search messages..."
                     draw_bg.border_size: 0.0
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: 10 },
+                        text_style: REGULAR_TEXT { font_size: 10 },
                     }
                 }
 

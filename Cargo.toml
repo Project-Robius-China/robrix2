@@ -201,6 +201,16 @@ winresource = "0.1"
 [package.metadata.docs.rs]
 all-features = true
 
+## Optimize all dependencies even in dev builds. Robrix itself stays at
+## opt-level 0 for fast incremental compiles and precise debugging, but the
+## heavy machinery it sits on — makepad's CPU rasterizer / text shaping /
+## glyph outlining (SF and Hiragino do real gvar/CFF work per glyph), the
+## script VM that Splash isolates evaluate, and the matrix-sdk — is far too
+## slow at -O0: native scrolling visibly janks and the headless UX harness
+## measures seconds per frame instead of milliseconds.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 debug = false
 strip = "symbols"
@@ -362,5 +372,11 @@ used_underscore_binding = "allow"
 ## sandbox dirs, mobile-layout detection, ArkUI native inputs), with the legacy
 ## `old/` crate copies removed so the repo resolves as a cargo git dependency.
 [patch."https://github.com/makepad/makepad"]
-makepad-widgets = { git = "https://github.com/ZhangHanDong/makepad", branch = "dev" }
-makepad-code-editor = { git = "https://github.com/ZhangHanDong/makepad", branch = "dev" }
+## Pinned to ymote/makepad `robrix2-fixes` (ZhangHanDong/makepad dev @ e40c5c6
+## plus the fixes robrix2 depends on: Splash-isolate shader identity, headless
+## renderer correctness, ttf-parser gvar-alloc for Apple variable fonts, the
+## CoreText outline fallback for hvgl-only system fonts like PingFang, and the
+## closed-Modal overdraw fix). PR'd upstream as ZhangHanDong/makepad#6 —
+## switch back to the upstream branch once that merges.
+makepad-widgets = { git = "https://github.com/ymote/makepad", rev = "1199cace4da2d0f9f2d53f5c08a256e7ac8de378", features = ["serde"] }
+makepad-code-editor = { git = "https://github.com/ymote/makepad", rev = "1199cace4da2d0f9f2d53f5c08a256e7ac8de378" }

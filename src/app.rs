@@ -780,6 +780,12 @@ const MAX_LOG_FILES_TO_KEEP: usize = 10;
 
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
+        // Splash isolate VMs default to makepad's stock DARK theme; robrix2's
+        // surfaces are light, so agent splash-card content rendered near-white
+        // text on white — visually blank. Select the light theme for every
+        // isolate before any splash card evaluates.
+        cx.set_splash_isolate_theme(live_id!(light));
+
         // only init logging/tracing once
         let _ = tracing_subscriber::fmt()
             .with_max_level(tracing_subscriber::filter::LevelFilter::ERROR)

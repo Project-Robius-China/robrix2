@@ -80,7 +80,7 @@ script_mod! {
             color_down: (RBX_FG_PRIMARY)
             color_active: (RBX_FG_PRIMARY)
             color_focus: (RBX_FG_PRIMARY)
-            text_style: theme.font_bold { font_size: 11.0 }
+            text_style: BOLD_TEXT { font_size: 11.0 }
         }
     }
 
@@ -117,7 +117,7 @@ script_mod! {
                     width: Fill, height: Fit, margin: 0,
                     max_lines: 1, text_overflow: Ellipsis,
                     draw_text +: {
-                        text_style: theme.font_bold { font_size: 13.0, line_spacing: 1.0 }
+                        text_style: BOLD_TEXT { font_size: 13.0, line_spacing: 1.0 }
                         color: (RBX_FG_PRIMARY)
                     }
                     text: ""
@@ -127,7 +127,7 @@ script_mod! {
                     margin: Inset{top: -4}
                     max_lines: 1, text_overflow: Ellipsis,
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: 9.5, line_spacing: 1.0 }
+                        text_style: REGULAR_TEXT { font_size: 9.5, line_spacing: 1.0 }
                         color: (RBX_FG_SECONDARY)
                     }
                     text: ""

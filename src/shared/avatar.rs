@@ -328,7 +328,7 @@ impl Avatar {
                         timeline_kind.room_id().to_owned(),
                         data.clone()
                     ))),
-                    |cx, img| utils::load_png_or_jpg(&img, cx, &data),
+                    |cx, img| utils::load_avatar_image_async(&img, cx, &data),
                 )
                 .ok()
             })

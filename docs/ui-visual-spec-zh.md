@@ -107,14 +107,14 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 | `RBX_BG_DISABLED` | `#F0F2F6` | 禁用控件表面 |
 | `RBX_FG_PRIMARY` | `#16233B` | 主文字（非纯黑） |
 | `RBX_FG_SECONDARY` | `#5A6B86` | 副文字 / meta |
-| `RBX_FG_TERTIARY` | `#8A98AE` | 时间戳 / 极弱字 |
+| `RBX_FG_TERTIARY` | `#687283` | 时间戳 / 极弱字（AA 4.5:1 on 白/canvas）|
 | `RBX_FG_ON_ACCENT` | `#FFFFFF` | accent/深底上的字 |
 | `RBX_FG_DISABLED` | `#AEB7C6` | 禁用字 |
-| `RBX_ACCENT` | `#119FB3` | 主 CTA / 选中 / 聚焦 |
-| `RBX_ACCENT_HOVER` | `#0E8C9E` | accent hover |
-| `RBX_ACCENT_PRESSED` | `#0B7484` | accent pressed |
+| `RBX_ACCENT` | `#0D7988` | 主 CTA / 选中 / 聚焦（白字 5.11:1）|
+| `RBX_ACCENT_HOVER` | `#0A6675` | accent hover |
+| `RBX_ACCENT_PRESSED` | `#085460` | accent pressed |
 | `RBX_ACCENT_SOFT` | `#E4F5F7` | 选中 chip 底 / 高亮行 |
-| `RBX_LINK` | `#1887C9` | 链接 |
+| `RBX_LINK` | `#167CB9` | 链接（4.55:1 on 白）|
 | `RBX_BRAND_PURPLE` | `#572DCC` | 仅品牌入口 |
 | `RBX_BRAND_CYAN` | `#05CDC7` | 仅品牌 |
 | `RBX_BRAND_BLUE` | `#2D7CFF` | 仅品牌（立方 logo 蓝面） |
@@ -122,10 +122,10 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 | `RBX_STROKE_SOFT` | `#E6EBF2` | 卡片 / 控件默认描边 |
 | `RBX_STROKE_STRONG` | `#D5DEEA` | 强调 / 聚焦描边 |
 | `RBX_DIVIDER` | `#00000010` | 行间分隔线 |
-| `RBX_SUCCESS_FG` / `_BG` | `#1B8A4B` / `#E8F6EE` | Connected/Healthy/Active |
-| `RBX_WARNING_FG` / `_BG` | `#C6790B` / `#FBF1DD` | Approval required/Pending |
-| `RBX_DANGER_FG` / `_BG` | `#C5392F` / `#FBE9E7` | Reject/Failed/Error |
-| `RBX_INFO_FG` / `_BG` | `#1E6FBF` / `#E7F0FB` | capability/linked |
+| `RBX_SUCCESS_FG` / `_BG` | `#197F45` / `#E8F6EE` | Connected/Healthy/Active（4.53:1）|
+| `RBX_WARNING_FG` / `_BG` | `#9C6009` / `#FBF1DD` | Approval required/Pending（4.58:1）|
+| `RBX_DANGER_FG` / `_BG` | `#B93429` / `#FBE9E7` | Reject/Failed/Error（4.99:1）|
+| `RBX_INFO_FG` / `_BG` | `#1C67B0` / `#E7F0FB` | capability/linked（5.05:1）|
 | `RBX_NEUTRAL_FG` / `_BG` | `#5A6B86` / `#EEF1F6` | Idle/中性 |
 | `RBX_NAV_BG` | `#1A2336` | 桌面导航栏底 |
 | `RBX_NAV_FG` / `_FG_ACTIVE` | `#AEBAD0` / `#FFFFFF` | 导航项字 |
@@ -189,7 +189,7 @@ DSL 中用 `(RBX_TOKEN)` 引用（已 `use mod.widgets.*`）；Rust 侧用 `crat
 | `RBX_SCRIM` | `#16233B` @50% | modal / sheet 后的遮罩 |
 | `RBX_SHADOW` | `#16233B` @15% | 卡 / dropdown / popup 投影色 |
 | `RBX_SHADOW_STRONG` | `#16233B` @25% | sheet / modal 投影色 |
-| `RBX_FOCUS_RING` | `#119FB3`（=accent） | 键盘焦点环色 |
+| `RBX_FOCUS_RING` | `#0D7988`（=accent） | 键盘焦点环色 |
 | `RBX_FOCUS_WIDTH` | 2 | 焦点环宽 |
 
 > 卡片靠圆角 + 描边，不用阴影；阴影只给浮层（sheet / modal / dropdown / composer）。blur/offset 在 recipe 里，token 只给颜色。

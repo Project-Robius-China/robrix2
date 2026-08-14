@@ -91,7 +91,7 @@ script_mod! {
                 text_view +: {
                     text +: {
                         draw_text +: {
-                            text_style: theme.font_regular { font_size: 40.0 }
+                            text_style: REGULAR_TEXT { font_size: 40.0 }
                         }
                     }
                 }

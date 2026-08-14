@@ -277,7 +277,7 @@ script_mod! {
         title := TitleLabel {
             text: "Add/Explore Rooms and Spaces"
             draw_text +: {
-                text_style: theme.font_regular {font_size: 18},
+                text_style: REGULAR_TEXT {font_size: 18},
             }
         }
 
@@ -478,7 +478,7 @@ script_mod! {
             }
 
             subsection_alias_id := SubsectionLabel {
-                draw_text +: { text_style: theme.font_regular { font_size: 12 } }
+                draw_text +: { text_style: REGULAR_TEXT { font_size: 12 } }
             }
 
             room_alias_and_id_view := View {
@@ -508,7 +508,7 @@ script_mod! {
             }
 
             subsection_topic := SubsectionLabel {
-                draw_text +: { text_style: theme.font_regular { font_size: 12 } }
+                draw_text +: { text_style: REGULAR_TEXT { font_size: 12 } }
             }
 
             room_topic := MessageHtml {
@@ -943,7 +943,7 @@ script_mod! {
                 }
 
                 subsection_alias_id := SubsectionLabel {
-                    draw_text +: { text_style: theme.font_regular { font_size: 12 } }
+                    draw_text +: { text_style: REGULAR_TEXT { font_size: 12 } }
                 }
 
                 room_alias_and_id_view := View {
@@ -973,7 +973,7 @@ script_mod! {
                 }
 
                 subsection_topic := SubsectionLabel {
-                    draw_text +: { text_style: theme.font_regular { font_size: 12 } }
+                    draw_text +: { text_style: REGULAR_TEXT { font_size: 12 } }
                 }
 
                 room_topic := MessageHtml {

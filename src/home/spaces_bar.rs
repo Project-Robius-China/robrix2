@@ -46,8 +46,8 @@ script_mod! {
             // Teal selection wash, kept translucent so it reads on BOTH the dark
             // desktop rail AND the light mobile spaces strip (this entry template is
             // shared by both). The strong selection signal is the teal bar below.
-            color_hover: instance(#x119FB324)
-            color_active: instance(#x119FB33D)
+            color_hover: instance((RBX_ACCENT_WASH_HOVER))
+            color_active: instance((RBX_ACCENT_WASH_ACTIVE))
             accent_color: instance((RBX_ACCENT))
 
             border_color: instance(#0000)
@@ -109,7 +109,7 @@ script_mod! {
                     draw_bg.color: (RBX_IDENTITY_TEAL),
                     text +: {
                         draw_text +: {
-                            text_style: theme.font_regular { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
+                            text_style: REGULAR_TEXT { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
                             color: (COLOR_PRIMARY),
                         }
                     }
@@ -134,7 +134,7 @@ script_mod! {
                     color_hover: uniform(RBX_NAV_FG_ACTIVE)
                     color_active: uniform(RBX_NAV_FG_ACTIVE)
 
-                    // text_style: theme.font_bold {font_size: 9}
+                    // text_style: BOLD_TEXT {font_size: 9}
                     text_style: REGULAR_TEXT {font_size: 9}
 
                     get_color: fn() {
@@ -228,7 +228,7 @@ script_mod! {
             // Transparent default; a faint dark wash on hover/press (reads on the
             // white mobile surface), plus a teal accent bar on the left edge.
             color: instance(#0000)
-            color_hover: instance(#x00000010)
+            color_hover: instance((RBX_DIVIDER))
             accent_color: instance((RBX_ACCENT))
 
             pixel: fn() {
@@ -254,7 +254,7 @@ script_mod! {
                 draw_bg.color: (RBX_IDENTITY_TEAL),
                 text +: {
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: 15 },
+                        text_style: REGULAR_TEXT { font_size: 15 },
                         color: (COLOR_PRIMARY),
                     }
                 }
@@ -268,7 +268,7 @@ script_mod! {
             text_overflow: Ellipsis,
             draw_text +: {
                 color: (RBX_FG_PRIMARY)
-                text_style: theme.font_bold { font_size: 11.5 }
+                text_style: BOLD_TEXT { font_size: 11.5 }
             }
             text: ""
         }
