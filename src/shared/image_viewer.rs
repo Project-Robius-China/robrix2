@@ -239,7 +239,7 @@ script_mod! {
                         height: Fit,
                         ts_label := Label {
                             draw_text +: {
-                                text_style: theme.font_regular {font_size: 9.5},
+                                text_style: REGULAR_TEXT {font_size: 9.5},
                                 color: (COLOR_TEXT)
                             }
                         }

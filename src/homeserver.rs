@@ -16,6 +16,13 @@ pub struct HsCapabilities {
     pub registration_enabled: bool,
     /// Optional UIAA probe result (empty when server requires MAS).
     pub uiaa_probe: Option<UiaaInfo>,
+    /// True iff `/_matrix/client/v3/login` advertises an `m.login.sso` flow.
+    ///
+    /// Distinct from `sso_providers` being non-empty: a server may support SSO
+    /// while naming no individual providers (matrix.org does exactly this, via
+    /// delegated OIDC). Only `false` here means "no SSO at all", which is what
+    /// the login screen keys its SSO row off.
+    pub sso_supported: bool,
     /// Identity providers harvested from `/_matrix/client/v3/login`.
     pub sso_providers: Vec<IdentityProviderSummary>,
     /// URL to open in the system browser for MAS self-registration.

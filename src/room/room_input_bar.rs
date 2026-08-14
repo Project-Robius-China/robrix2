@@ -566,7 +566,7 @@ script_mod! {
             color: #0000
             hover: instance(0.0)
             pixel: fn() {
-                return mix(self.color, #xF0F4FA, self.hover)
+                return mix(self.color, (RBX_COMPOSER_BG), self.hover)
             }
         }
         animator: Animator {
@@ -589,13 +589,13 @@ script_mod! {
             margin: Inset{right: 10}
             show_bg: true
             draw_bg +: {
-                color: #xE8EEF8
+                color: (RBX_COMPOSER_BG_SUNKEN)
                 border_radius: 3.0
             }
             lang_code := Label {
                 width: Fit, height: Fit
                 draw_text +: {
-                    color: #x555555
+                    color: (RBX_COMPOSER_INK_MUTED)
                     text_style: REGULAR_TEXT { font_size: 9 }
                 }
                 text: "en"
@@ -605,7 +605,7 @@ script_mod! {
         lang_name := Label {
             width: Fill, height: Fit
             draw_text +: {
-                color: #x333333
+                color: (RBX_COMPOSER_INK)
                 text_style: REGULAR_TEXT { font_size: 11 }
             }
             text: "English"
@@ -637,12 +637,12 @@ script_mod! {
         width: Fit, height: Fit
         padding: Inset{left: 10, right: 10, top: 5, bottom: 5}
         draw_bg +: {
-            color: #xF7F9FD
-            color_hover: #xEEF3F9
-            color_down: #xE5ECF5
+            color: (RBX_COMPOSER_INPUT_BG)
+            color_hover: (RBX_COMPOSER_INPUT_HOVER)
+            color_down: (RBX_COMPOSER_INPUT_DOWN)
             border_radius: 9.0
             border_size: 1.0
-            border_color: #xD7DFEA
+            border_color: (RBX_COMPOSER_STROKE)
         }
         draw_text +: {
             color: (COLOR_TEXT)
@@ -904,7 +904,7 @@ script_mod! {
             spacing: 8
             show_bg: true
             draw_bg +: {
-                color: #xF0F4FA
+                color: (RBX_COMPOSER_BG)
                 border_radius: 4.0
             }
 
@@ -913,13 +913,13 @@ script_mod! {
                 padding: Inset{left: 6, right: 6, top: 2, bottom: 2}
                 show_bg: true
                 draw_bg +: {
-                    color: #xE0E8F0
+                    color: (RBX_COMPOSER_BG_ACTIVE)
                     border_radius: 3.0
                 }
                 translation_lang_code := Label {
                     width: Fit, height: Fit
                     draw_text +: {
-                        color: #x555555
+                        color: (RBX_COMPOSER_INK_MUTED)
                         text_style: REGULAR_TEXT { font_size: 9 }
                     }
                     text: "en"
@@ -930,7 +930,7 @@ script_mod! {
                 width: Fill, height: Fit
                 flow: Flow.Right{wrap: true}
                 draw_text +: {
-                    color: #x333333
+                    color: (RBX_COMPOSER_INK)
                     text_style: REGULAR_TEXT { font_size: 11 }
                 }
                 text: ""
@@ -958,12 +958,12 @@ script_mod! {
                 spacing: 0
                 draw_icon +: {
                     svg: (ICON_CLOSE)
-                    color: #x999999
+                    color: (RBX_COMPOSER_INK_FAINT)
                 }
                 draw_bg +: {
                     color: #0000
-                    color_hover: #xE0E0E0
-                    color_down: #xD0D0D0
+                    color_hover: (RBX_COMPOSER_GREY_HOVER)
+                    color_down: (RBX_COMPOSER_GREY_DOWN)
                 }
                 icon_walk: Walk{width: 12, height: 12}
                 text: ""

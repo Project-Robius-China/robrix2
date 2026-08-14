@@ -93,13 +93,13 @@ script_mod! {
             icon_walk: Walk{width: 18, height: 18}
             draw_icon +: {
                 svg: (mod.widgets.VIDEO_MODAL_ICON_CLOSE)
-                color: #xffffff
+                color: (RBX_FG_ON_ACCENT)
             }
             draw_bg +: {
                 border_radius: 5.0
-                color: #x111827
-                color_hover: #x374151
-                color_down: #x111827
+                color: (RBX_MEDIA_CONTROL_BG)
+                color_hover: (RBX_MEDIA_CONTROL_BG_HOVER)
+                color_down: (RBX_MEDIA_CONTROL_BG)
             }
         }
     }

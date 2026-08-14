@@ -218,7 +218,7 @@ script_mod! {
         align: Align{x: 0.5, y: 0}
         flow: Right,
         show_bg: true,
-        draw_bg.color: #xDAF5E5F0, // mostly opaque light green
+        draw_bg.color: (RBX_HIGHLIGHT_NEW), // mostly opaque light green
 
         label := Label {
             width: Fill,
@@ -239,6 +239,14 @@ script_mod! {
         height: Fill,
         align: Align{x: 0.5, y: 0.0} // center horizontally, align to top vertically
         flow: Overlay,
+        // Give the message list its own GPU draw list. Without it, every
+        // PortalList item recycle during a scroll re-batches the enclosing
+        // draw list rather than just this subtree. Upstream robrix made the
+        // same change (7e7f93a, "fix perf issues surrounding unnecessary
+        // redraws"); the composer and several settings screens here already
+        // isolate themselves this way, but the timeline — the one surface
+        // that redraws on every scroll frame — did not.
+        new_batch: true
 
         list := PortalList {
             height: Fill,
@@ -307,8 +315,8 @@ script_mod! {
         }
         draw_bg +: {
             color: #0000
-            color_hover: #xF0F4FA
-            color_down: #xE8EEF8
+            color_hover: (RBX_COMPOSER_BG)
+            color_down: (RBX_COMPOSER_BG_SUNKEN)
             border_size: 0.0
             border_radius: 0.0
         }

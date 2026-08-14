@@ -228,7 +228,7 @@ script_mod! {
                     margin: 0, padding: 0,
                     draw_text +: {
                         color: (RBX_ACCENT)
-                        text_style: theme.font_bold { font_size: 10.5 }
+                        text_style: BOLD_TEXT { font_size: 10.5 }
                     }
                     text: "Active"
                 }

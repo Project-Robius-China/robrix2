@@ -178,7 +178,7 @@ script_mod! {
             flow: Flow.Right{wrap: true},
             draw_text +: {
                 color: (COLOR_FG_ACCEPT_GREEN),
-                text_style: theme.font_bold {font_size: 12}
+                text_style: BOLD_TEXT {font_size: 12}
             }
             text: ""
         }

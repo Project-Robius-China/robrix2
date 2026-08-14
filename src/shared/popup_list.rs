@@ -277,8 +277,8 @@ script_mod! {
             border_size: 0.0
             border_radius: 6.0
             color: #00000000
-            color_hover: #x00000012
-            color_down: #x0000001E
+            color_hover: (RBX_HIT_DOWN)
+            color_down: (RBX_HIT_PRESSED)
             border_color: #00000000
             border_color_hover: #00000000
             border_color_down: #00000000

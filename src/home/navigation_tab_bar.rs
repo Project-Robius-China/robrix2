@@ -125,7 +125,7 @@ script_mod! {
             color_active: (RBX_NAV_FG_ACTIVE)
             color_focus: (RBX_NAV_FG)
 
-            text_style: theme.font_bold {font_size: 9}
+            text_style: BOLD_TEXT {font_size: 9}
         }
 
         draw_icon +: {
@@ -267,7 +267,7 @@ script_mod! {
                 draw_bg.color: (COLOR_FG_DISABLED),
                 text +: {
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
+                        text_style: REGULAR_TEXT { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
                         color: (COLOR_PRIMARY),
                     }
                 }

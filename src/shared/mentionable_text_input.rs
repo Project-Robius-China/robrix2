@@ -1036,7 +1036,7 @@ script_mod! {
     use mod.widgets.*
 
     let FOCUS_HOVER_COLOR = #C
-    let KEYBOARD_FOCUS_OR_COLOR_HOVER = #x1C274C
+    let KEYBOARD_FOCUS_OR_COLOR_HOVER = (RBX_MENTION_FOCUS)
 
     // Template for user list items in the mention dropdown
     mod.widgets.UserListItem = View {

@@ -58,7 +58,7 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
-    mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE = theme.font_regular {
+    mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE = REGULAR_TEXT {
         font_size: (16),
         line_spacing: (1.2),
     }

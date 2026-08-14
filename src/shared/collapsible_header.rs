@@ -57,7 +57,7 @@ script_mod! {
             text: "",
             draw_text +: {
                 // Lighter weight than the bold section-title token — calmer group label.
-                text_style: theme.font_regular { font_size: 12.5 },
+                text_style: REGULAR_TEXT { font_size: 12.5 },
                 color: (RBX_FG_SECONDARY),
             }
         }
