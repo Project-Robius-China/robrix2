@@ -338,11 +338,11 @@ pub struct JoinedRoomInfo {
     /// The avatar for this room: either an array of bytes holding the avatar image
     /// or a string holding the first Unicode character of the room name.
     pub room_avatar: FetchedRoomAvatar,
-    /// Whether this room has been paginated at least once.
-    /// We pre-paginate visible rooms at least once in order to
-    /// be able to display the latest message in the RoomsListEntry
-    /// and to have something to immediately show when a user first opens a room.
-    pub has_been_paginated: bool,
+    /// Whether this room has been shown in the rooms list yet.
+    /// Determines whether we perform first-time actions like pre-paginating
+    /// its timeline and fetching its avatar, deferred until the room is
+    /// actually scrolled into view rather than done eagerly for every room.
+    pub has_been_shown: bool,
     /// Whether this room is currently selected in the UI.
     pub is_selected: bool,
     /// Whether this a direct room.
@@ -450,7 +450,7 @@ pub fn build_room_search_text(
 ) -> String {
     let mut search_text = format!(
         "{} {}",
-        room_name_id.to_string().to_lowercase(),
+        room_name_id.display().to_lowercase(),
         room_name_id.room_id().as_str().to_lowercase(),
     );
     if let Some(alias) = canonical_alias {
@@ -721,7 +721,7 @@ impl RoomsList {
                     tags: Tags::default(),
                     latest: None,
                     room_avatar,
-                    has_been_paginated: false,
+                    has_been_shown: false,
                     is_selected: false,
                     is_direct: false,
                     dm_target: None,
@@ -2033,14 +2033,19 @@ impl Widget for RoomsList {
                         let item = list.item(cx, portal_list_index, id!(rooms_list_entry));
                         favorite_room.is_selected = self.current_active_room.as_ref()
                             .is_some_and(|sel_room| sel_room.room_id() == favorite_room_id);
-                        if PREPAGINATE_VISIBLE_ROOMS && !favorite_room.has_been_paginated {
-                            favorite_room.has_been_paginated = true;
-                            submit_async_request(MatrixRequest::PaginateTimeline {
-                                timeline_kind: TimelineKind::MainRoom {
-                                    room_id: favorite_room.room_name_id.room_id().clone(),
-                                },
-                                num_events: 50,
-                                direction: PaginationDirection::Backwards,
+                        if !favorite_room.has_been_shown {
+                            favorite_room.has_been_shown = true;
+                            if PREPAGINATE_VISIBLE_ROOMS {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: TimelineKind::MainRoom {
+                                        room_id: favorite_room.room_name_id.room_id().clone(),
+                                    },
+                                    num_events: 50,
+                                    direction: PaginationDirection::Backwards,
+                                });
+                            }
+                            submit_async_request(MatrixRequest::FetchRoomAvatar {
+                                room_name_id: favorite_room.room_name_id.clone(),
                             });
                         }
                         item_scope.override_props(&*favorite_room, |scope| {
@@ -2093,15 +2098,20 @@ impl Widget for RoomsList {
                         direct_room.is_selected = self.current_active_room.as_ref()
                             .is_some_and(|sel_room| sel_room.room_id() == direct_room_id);
 
-                        // Paginate the room if it hasn't been paginated yet.
-                        if PREPAGINATE_VISIBLE_ROOMS && !direct_room.has_been_paginated {
-                            direct_room.has_been_paginated = true;
-                            submit_async_request(MatrixRequest::PaginateTimeline {
-                                timeline_kind: TimelineKind::MainRoom {
-                                    room_id: direct_room.room_name_id.room_id().clone(),
-                                },
-                                num_events: 50,
-                                direction: PaginationDirection::Backwards,
+                        // Paginate and fetch the avatar the first time this room is shown.
+                        if !direct_room.has_been_shown {
+                            direct_room.has_been_shown = true;
+                            if PREPAGINATE_VISIBLE_ROOMS {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: TimelineKind::MainRoom {
+                                        room_id: direct_room.room_name_id.room_id().clone(),
+                                    },
+                                    num_events: 50,
+                                    direction: PaginationDirection::Backwards,
+                                });
+                            }
+                            submit_async_request(MatrixRequest::FetchRoomAvatar {
+                                room_name_id: direct_room.room_name_id.clone(),
                             });
                         }
                         // Pass the room info down to the RoomsListEntry widget via Scope.
@@ -2131,15 +2141,20 @@ impl Widget for RoomsList {
                         regular_room.is_selected = self.current_active_room.as_ref()
                             .is_some_and(|sel_room| sel_room.room_id() == regular_room_id);
 
-                        // Paginate the room if it hasn't been paginated yet.
-                        if PREPAGINATE_VISIBLE_ROOMS && !regular_room.has_been_paginated {
-                            regular_room.has_been_paginated = true;
-                            submit_async_request(MatrixRequest::PaginateTimeline {
-                                timeline_kind: TimelineKind::MainRoom {
-                                    room_id: regular_room.room_name_id.room_id().clone(),
-                                },
-                                num_events: 50,
-                                direction: PaginationDirection::Backwards,
+                        // Paginate and fetch the avatar the first time this room is shown.
+                        if !regular_room.has_been_shown {
+                            regular_room.has_been_shown = true;
+                            if PREPAGINATE_VISIBLE_ROOMS {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: TimelineKind::MainRoom {
+                                        room_id: regular_room.room_name_id.room_id().clone(),
+                                    },
+                                    num_events: 50,
+                                    direction: PaginationDirection::Backwards,
+                                });
+                            }
+                            submit_async_request(MatrixRequest::FetchRoomAvatar {
+                                room_name_id: regular_room.room_name_id.clone(),
                             });
                         }
                         // Pass the room info down to the RoomsListEntry widget via Scope.
@@ -2165,14 +2180,19 @@ impl Widget for RoomsList {
                         let item = list.item(cx, portal_list_index, id!(rooms_list_entry));
                         low_priority_room.is_selected = self.current_active_room.as_ref()
                             .is_some_and(|sel_room| sel_room.room_id() == low_priority_room_id);
-                        if PREPAGINATE_VISIBLE_ROOMS && !low_priority_room.has_been_paginated {
-                            low_priority_room.has_been_paginated = true;
-                            submit_async_request(MatrixRequest::PaginateTimeline {
-                                timeline_kind: TimelineKind::MainRoom {
-                                    room_id: low_priority_room.room_name_id.room_id().clone(),
-                                },
-                                num_events: 50,
-                                direction: PaginationDirection::Backwards,
+                        if !low_priority_room.has_been_shown {
+                            low_priority_room.has_been_shown = true;
+                            if PREPAGINATE_VISIBLE_ROOMS {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: TimelineKind::MainRoom {
+                                        room_id: low_priority_room.room_name_id.room_id().clone(),
+                                    },
+                                    num_events: 50,
+                                    direction: PaginationDirection::Backwards,
+                                });
+                            }
+                            submit_async_request(MatrixRequest::FetchRoomAvatar {
+                                room_name_id: low_priority_room.room_name_id.clone(),
                             });
                         }
                         item_scope.override_props(&*low_priority_room, |scope| {

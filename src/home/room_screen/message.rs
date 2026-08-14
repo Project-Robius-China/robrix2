@@ -1267,45 +1267,58 @@ impl Widget for Message {
             self.animator_play(cx, ids!(highlight.off));
         }
 
-        let Some(details) = self.details.clone() else { return };
+        // Avoid cloning the entire `MessageDetails` (which owns several `OwnedEventId`s)
+        // on every single event this widget receives; only pull out the cheap bits we
+        // need for hit-testing, and clone the whole struct only when actually building
+        // an action to dispatch.
+        let Some(d) = self.details.as_ref() else { return };
+        let room_screen_widget_uid = d.room_screen_widget_uid;
+        let thread_root_event_id = d.thread_root_event_id.clone();
+        let item_id = d.item_id;
 
         // We first handle a click on the replied-to message preview, if present,
         // because we don't want any widgets within the replied-to message to be
         // clickable or otherwise interactive.
         match event.hits(cx, self.view(cx, ids!(replied_to_message)).area()) {
             Hit::FingerDown(fe) if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) => {
-                cx.widget_action(
-                    details.room_screen_widget_uid,
-                    MessageAction::OpenMessageContextMenu {
-                        details: details.clone(),
-                        abs_pos: fe.abs,
-                        opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
-                    }
-                );
+                if let Some(details) = self.details.clone() {
+                    cx.widget_action(
+                        room_screen_widget_uid,
+                        MessageAction::OpenMessageContextMenu {
+                            details,
+                            abs_pos: fe.abs,
+                            opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
+                        }
+                    );
+                }
             }
             Hit::FingerDown(_) => {}
             Hit::FingerLongPress(lp) => {
-                cx.widget_action(
-                    details.room_screen_widget_uid, 
-                    MessageAction::OpenMessageContextMenu {
-                        details: details.clone(),
-                        abs_pos: lp.abs,
-                        opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
-                    }
-                );
+                if let Some(details) = self.details.clone() {
+                    cx.widget_action(
+                        room_screen_widget_uid,
+                        MessageAction::OpenMessageContextMenu {
+                            details,
+                            abs_pos: lp.abs,
+                            opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
+                        }
+                    );
+                }
             }
             // If the hit occurred on the replied-to message preview, jump to it.
             Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
-                cx.widget_action(
-                    details.room_screen_widget_uid, 
-                    MessageAction::JumpToRelated(details.clone()),
-                );
+                if let Some(details) = self.details.clone() {
+                    cx.widget_action(
+                        room_screen_widget_uid,
+                        MessageAction::JumpToRelated(details),
+                    );
+                }
             }
             _ => { }
         }
 
         // Handle clicks on the thread summary shown beneath a thread-root message.
-        if let Some(thread_root_event_id) = details.thread_root_event_id.as_ref() {
+        if let Some(thread_root_event_id) = thread_root_event_id.as_ref() {
             let thread_root_summary = self.view(cx, ids!(thread_root_summary));
             let apply_hover = |cx: &mut Cx, bg_color: Vec4| {
                 let mut thread_root_summary_ref = thread_root_summary.clone();
@@ -1317,14 +1330,16 @@ impl Widget for Message {
                 Hit::FingerDown(fe) => {
                     apply_hover(cx, COLOR_THREAD_SUMMARY_BG_HOVER);
                     if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) {
-                        cx.widget_action(
-                            details.room_screen_widget_uid, 
-                            MessageAction::OpenMessageContextMenu {
-                                details: details.clone(),
-                                abs_pos: fe.abs,
-                                opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
-                            }
-                        );
+                        if let Some(details) = self.details.clone() {
+                            cx.widget_action(
+                                room_screen_widget_uid,
+                                MessageAction::OpenMessageContextMenu {
+                                    details,
+                                    abs_pos: fe.abs,
+                                    opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
+                                }
+                            );
+                        }
                     }
                 }
                 Hit::FingerHoverIn(_) => {
@@ -1334,20 +1349,22 @@ impl Widget for Message {
                     apply_hover(cx, COLOR_THREAD_SUMMARY_BG);
                 }
                 Hit::FingerLongPress(lp) => {
-                    cx.widget_action(
-                        details.room_screen_widget_uid, 
-                        MessageAction::OpenMessageContextMenu {
-                            details: details.clone(),
-                            abs_pos: lp.abs,
-                            opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
-                        }
-                    );
+                    if let Some(details) = self.details.clone() {
+                        cx.widget_action(
+                            room_screen_widget_uid,
+                            MessageAction::OpenMessageContextMenu {
+                                details,
+                                abs_pos: lp.abs,
+                                opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
+                            }
+                        );
+                    }
                 }
                 Hit::FingerUp(fe) => {
                     apply_hover(cx, COLOR_THREAD_SUMMARY_BG);
                     if fe.is_over && fe.is_primary_hit() && fe.was_tap() {
                         cx.widget_action(
-                            details.room_screen_widget_uid, 
+                            room_screen_widget_uid,
                             MessageAction::OpenThread(thread_root_event_id.clone()),
                         );
                     }
@@ -1370,25 +1387,29 @@ impl Widget for Message {
                 cx.set_key_focus(message_view_area);
                 // A right click means we should display the context menu.
                 if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) {
-                    cx.widget_action(
-                        details.room_screen_widget_uid, 
-                        MessageAction::OpenMessageContextMenu {
-                            details: details.clone(),
-                            abs_pos: fe.abs,
-                            opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
-                        }
-                    );
+                    if let Some(details) = self.details.clone() {
+                        cx.widget_action(
+                            room_screen_widget_uid,
+                            MessageAction::OpenMessageContextMenu {
+                                details,
+                                abs_pos: fe.abs,
+                                opening_gesture: ContextMenuOpenGesture::from_finger_down(&fe),
+                            }
+                        );
+                    }
                 }
             }
             Hit::FingerLongPress(lp) => {
-                cx.widget_action(
-                    details.room_screen_widget_uid, 
-                    MessageAction::OpenMessageContextMenu {
-                        details: details.clone(),
-                        abs_pos: lp.abs,
-                        opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
-                    }
-                );
+                if let Some(details) = self.details.clone() {
+                    cx.widget_action(
+                        room_screen_widget_uid,
+                        MessageAction::OpenMessageContextMenu {
+                            details,
+                            abs_pos: lp.abs,
+                            opening_gesture: ContextMenuOpenGesture::from_long_press(&lp),
+                        }
+                    );
+                }
             }
             Hit::FingerHoverIn(..) => {
                 self.animator_play(cx, ids!(hover.on));
@@ -1406,7 +1427,7 @@ impl Widget for Message {
                 && self.view.button(cx, ids!(content.download_section.download_button)).clicked(actions)
             {
                 cx.widget_action(
-                    details.room_screen_widget_uid,
+                    room_screen_widget_uid,
                     MessageAction::DownloadAttachment(info.clone()),
                 );
             }
@@ -1414,21 +1435,23 @@ impl Widget for Message {
                 && self.view.button(cx, ids!(content.download_section.downloading_view.cancel_button)).clicked(actions)
             {
                 cx.widget_action(
-                    details.room_screen_widget_uid,
+                    room_screen_widget_uid,
                     MessageAction::CancelDownload(media_source_mxc(&info.media_source).clone()),
                 );
             }
             if self.show_copy_button
                 && self.view.button(cx, ids!(content.message_action_bar.copy_button)).clicked(actions)
             {
-                cx.widget_action(
-                    details.room_screen_widget_uid,
-                    MessageAction::CopyText(details.clone()),
-                );
+                if let Some(details) = self.details.clone() {
+                    cx.widget_action(
+                        room_screen_widget_uid,
+                        MessageAction::CopyText(details),
+                    );
+                }
             }
             for action in actions {
-                match action.as_widget_action().widget_uid_eq(details.room_screen_widget_uid).cast_ref() {
-                    MessageAction::HighlightMessage(id) if id == &details.item_id => {
+                match action.as_widget_action().widget_uid_eq(room_screen_widget_uid).cast_ref() {
+                    MessageAction::HighlightMessage(id) if id == &item_id => {
                         self.animator_play(cx, ids!(highlight.on));
                         self.redraw(cx);
                     }
