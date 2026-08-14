@@ -71,6 +71,26 @@ cargo run
 cargo test
 ```
 
+### UX audit (headless)
+
+`tools/ux-harness` drives the real app through makepad's studio stdin protocol
+under the headless CPU renderer, captures the frames it draws, and scores eight
+UX dimensions with per-finding evidence. No display or screen-recording
+permission needed.
+
+```bash
+MAKEPAD=headless CARGO_TARGET_DIR=target-headless cargo build --profile fast
+cd tools/ux-harness
+cargo run -- run --repo ../.. --app ../../target-headless/fast/robrix --out ../../target/ux-audit
+```
+
+`cargo run -- static --repo ../..` scores the source-only rules (token contrast,
+token discipline, translation coverage) anywhere, without a build. See its
+README for the rules and their limits.
+
+Design-token contrast is additionally guarded by a unit test — `cargo test --lib
+shared::design_tokens` fails if a semantic colour pair drops below WCAG AA.
+
 ## Key Entry Points
 
 - `src/app.rs` — root app and global state
