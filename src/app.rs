@@ -543,7 +543,10 @@ pub struct App {
     /// Whether a nav-stack pop requested by `purge_room_ui_state` may have been
     /// swallowed by an in-flight transition animation (StackNavigation's `pop()`
     /// silently no-ops in that case) and must be retried once the current
-    /// transition finishes. Cleared when the user selects a room again.
+    /// transition finishes. Cleared only by an actual mobile-stack push
+    /// (`push_selected_room_view`) — NOT by `RoomFocused`, which the desktop
+    /// dock also emits when auto-refocusing another tab without touching the
+    /// mobile stack.
     #[rust] pending_room_nav_pop: bool,
     #[rust(Timer::empty())] room_filter_debounce_timer: Timer,
     #[rust] pending_room_filter_keywords: String,
@@ -1667,14 +1670,24 @@ impl MatchEvent for App {
             match action.downcast_ref() {
                 Some(AppStateAction::RoomFocused(selected_room)) => {
                     self.app_state.selected_room = Some(selected_room.clone());
-                    // The user deliberately navigated to a room; a still-pending
-                    // pop from an earlier room removal must not undo that.
-                    self.pending_room_nav_pop = false;
+                    // Deliberately do NOT clear `pending_room_nav_pop` here:
+                    // RoomFocused is also emitted by MainDesktopUi's automatic
+                    // re-focus after CloseRoomTabs closes the removed room's tab,
+                    // which does not touch the mobile view stack — the swallowed
+                    // pop must still be retried or the hidden stack would keep
+                    // the removed room as its current view. The flag is cleared
+                    // in `push_selected_room_view` instead, the one place that
+                    // actually pushes onto the mobile stack.
                     continue;
                 }
                 Some(AppStateAction::RetryPendingRoomNavPop) => {
-                    // Only retry if nothing was selected in the meantime.
-                    if self.pending_room_nav_pop && self.app_state.selected_room.is_none() {
+                    // No `selected_room` guard here: on Desktop, the dock's
+                    // automatic re-focus of another tab sets `selected_room`
+                    // without touching the mobile stack, and the pop must still
+                    // happen. Any *mobile-stack* navigation since the removal
+                    // would have cleared the flag (see `push_selected_room_view`),
+                    // so the retry can never undo a deliberate navigation.
+                    if self.pending_room_nav_pop {
                         self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
                         self.mobile_room_nav_stack.clear();
                     }
@@ -3092,6 +3105,15 @@ impl App {
         self.app_state.selected_room = Some(selected_room);
 
         // Push the view onto the mobile navigation stack.
+        // This is a genuine mobile-stack navigation, superseding any pending
+        // pop from an earlier room removal — that pop must not fire later and
+        // undo this navigation. Exception: if a transition is in flight (only
+        // reachable on Desktop; Mobile early-returned above), this push will
+        // itself be swallowed by StackNavigation, so a pending pop must remain
+        // pending to clean up whatever the hidden stack settles on.
+        if !view_stack.is_transitioning() {
+            self.pending_room_nav_pop = false;
+        }
         self.ui.stack_navigation(cx, ids!(view_stack)).push(cx, view_id);
         self.ui.redraw(cx);
     }
