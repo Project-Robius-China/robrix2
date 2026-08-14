@@ -36,4 +36,4 @@ Two caveats:
 
 Choose by four verifiable conditions: account provisioning, stable Client-Server APIs, bridge-compatible limits, and an acceptable storage location for unencrypted project data. Cross-homeserver collaboration additionally requires correct public DNS, TLS, and Matrix federation.
 
-For internet-facing dashboards, use an HTTPS reverse proxy, set `AGENT_CHAT_WEB_URL`, and keep the backend API loopback-only unless you deliberately add access control.
+For internet-facing dashboards, use an HTTPS reverse proxy, set `HAFLEET_WEB_URL`, and keep the backend API loopback-only unless you deliberately add access control.

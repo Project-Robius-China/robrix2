@@ -1,6 +1,6 @@
 # 运行验收与故障排查
 
-> **定位**：本章给出从 Matrix 入站到 tmux、再到审批回传的分层检查表。适用于“Agent 不回复、Thread 跑偏、卡片不出现、点击后仍过期”等问题。
+> **定位**：本章给出从 Matrix 入站、经 thread-session 路由与一次性 runner、再到审批回传的分层检查表。适用于“Agent 不回复、Thread 跑偏、卡片不出现、点击后仍过期”等问题。
 
 ## 发布前验收清单
 
@@ -8,10 +8,10 @@
 
 | 项目 | 需要记录 |
 |------|---------|
-| 版本 | Robrix2 commit、agent-chat commit、homeserver 版本与日期 |
+| 版本 | Robrix2 commit、HAFleet commit、homeserver 版本与日期 |
 | 账号 | human/bridge/每个 `@ac_*` 的完整 MXID |
 | 绑定 | room→group；每个 `(room, agent)→owner`；可选 group→project |
-| 运行时 | agent 名称、Claude/Codex、model、managed marker、project path/mode |
+| 运行时 | agent 名称、Claude/Codex、model、project path/mode、thread-session 开关状态 |
 | 房间 | 非加密项目房；每个 `(agent, owner)` 的 E2EE approval room |
 | workflow | skill 版本、四个角色命名、worktree/commit SHA |
 
@@ -36,20 +36,19 @@
 Matrix event
   → explicit mention / trusted room
   → bridge ingestion
-  → backend message
-  → push relay notification
-  → managed tmux
-  → Agent check_inbox
-  → backend post/reply
-  → Matrix puppet send
+  → backend 消息 → thread-session 路由(每 (Agent, Thread) 一个会话)
+  → dispatch 入队(queued → leased → started → completed)
+  → 孵化一次性 runner
+  → runner 回复 → reply outbox
+  → bridge 领取出站 → Matrix puppet send
 ```
 
 - 房间里是否真的 @ 了完整目标；`MATRIX_DEFAULT_WAKE` 是否为 `off`；
 - Agent 和 companion bridge 是否都 joined；邀请轮询默认可能约 60 秒；
-- `agentchat ls` 是否 online，dashboard heartbeat 是否新鲜；
-- backend inbox 已有消息但 tmux 没推进：查 push relay 与 idle gate；
-- tmux 内手工重开过 Claude/Codex：用 `agentchat down/up` 恢复受管启动；
-- Agent 发到错误位置：查其出站是否引用了原 backend `reply_to`。
+- `hafleet ls` 是否已注册；backend `/health` 的 agents 数是否非零（为 0 通常是 `HAFLEET_RUNTIME_DIR` 指错了数据目录）；
+- dispatch 一直停在 `queued`：看 backend 日志的 `[router-runner]` 行。`agent token is unavailable` = `HAFLEET_HOMEDIR` 与 Agent 家目录不符；模型 400 = `/thread model` 指定了与框架不兼容的模型；
+- dispatch 落入 `outcome_unknown`：runner 在可能已开始工作后异常终止（如模型报错、进程被杀），该会话 fail-closed 锁定，需要 operator 走 `POST /api/router/dispatches/:id/outcome-inspection` → `resolve-outcome`（action `continue` 附恢复说明）裁决后自动重跑；
+- Agent 回复说自己在 plan mode：预期行为——聊天回合只读，写权限走任务流或 `/thread mode auto`。
 
 ## Thread 回复掉到主时间线
 
@@ -65,14 +64,14 @@ Matrix event
 
 从入口向下确认：
 
-1. tmux 如果显示 runtime 自己的本地权限选择框，先确认这是否为 agent-chat 接管的等待 UI；backend 是否实际出现 pending approval 是判据；
-2. Claude 是否由 launcher 以 auto + Ask rules 启动；Codex hook 是否 trusted、hash 是否匹配；
+1. backend 是否实际出现 pending approval 是唯一判据（runner 的审批经 MCP 审批通道进 backend，不再有本地 tmux 弹框）；
+2. Claude runner 是否带审批 channel 启动（backend 固定注入）；Codex hook 是否 trusted、hash 是否匹配；
 3. approval store 是否找到唯一 `(room, agent)→owner`，否则是 `owner_binding_missing/ambiguous`；
 4. owner 是否已加入 approval room，否则是 `owner_invite_pending`；
-5. bridge 是否发送 `com.agentchat.approval.request.v1`；E2EE 是否有 queued UTD；
+5. bridge 是否发送 `com.hafleet.approval.request.v1`；E2EE 是否有 queued UTD；
 6. Robrix2 是否已同步、解密并渲染 custom event。
 
-不要用聊天文字“批准”代替卡片，不要在 tmux 里选 Yes 绕过 Matrix 验收。
+不要用聊天文字“批准”代替卡片，也不要以任何本地方式绕过 Matrix 验收。
 
 ## 点击批准但运行时仍显示过期/拒绝
 
@@ -84,9 +83,10 @@ Matrix event
 
 | 想知道什么 | 权威/主要证据 |
 |------------|---------------|
-| Agent 进程是否在线 | managed process/tmux + backend heartbeat |
+| Agent 是否可用 | `hafleet ls` 注册状态 + backend `/health`（thread-session 模式下空闲无进程是常态） |
 | 消息是否送达 backend | backend message/inbox |
-| workflow 到哪一步 | workflow state + durable task（若有）+ Thread；当前没有单一权威源 |
+| workflow 到哪一步 | workflow state + durable task + Thread；当前没有单一权威源 |
+| 某轮对话的执行状态 | router 的 dispatch 记录（queued/started/completed/outcome_unknown） |
 | 谁能审批 | bridge owner binding + 原始 Matrix invite sender |
 | 审批结果 | backend approval store/audit |
 | 代码是否完成 | Git commit/worktree + 实际测试结果 |
