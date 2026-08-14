@@ -6796,30 +6796,46 @@ fn clear_own_display_name() {
 /// (e.g. for every new room reported by sync). Fetch errors are not cached.
 async fn own_display_name(client: &Client) -> Option<String> {
     let user_id = client.user_id()?.to_owned();
-    if let Some((cached_user, cached)) = OWN_DISPLAY_NAME.lock().unwrap().as_ref() {
-        if cached_user == &user_id {
-            return cached.clone();
-        }
+    if let Some(cached) = cached_own_display_name_for(&user_id) {
+        return cached;
     }
     // Single-flight: whoever gets the lock first does the fetch; the rest
     // find the cache filled upon acquiring it.
     let _fetch_guard = OWN_DISPLAY_NAME_FETCH_LOCK.lock().await;
-    if let Some((cached_user, cached)) = OWN_DISPLAY_NAME.lock().unwrap().as_ref() {
-        if cached_user == &user_id {
-            return cached.clone();
-        }
+    if let Some(cached) = cached_own_display_name_for(&user_id) {
+        return cached;
     }
     match client.account().get_display_name().await {
         Ok(fetched) => {
-            // Only cache if this client's account is still the active one, so a
-            // detached task from before an account switch can never write back —
-            // even one that first *entered* this function after the switch.
-            if current_user_id().is_some_and(|current| current == user_id) {
-                *OWN_DISPLAY_NAME.lock().unwrap() = Some((user_id, fetched.clone()));
-            }
+            store_own_display_name_if_active(user_id, current_user_id(), fetched.clone());
             fetched
         }
         Err(_) => None,
+    }
+}
+
+/// Returns `user_id`'s cached display-name entry, or `None` if the cache
+/// holds no entry for that user (e.g. it belongs to a different account).
+fn cached_own_display_name_for(user_id: &UserId) -> Option<Option<String>> {
+    OWN_DISPLAY_NAME.lock().unwrap().as_ref()
+        .filter(|(cached_user, _)| cached_user == user_id)
+        .map(|(_, cached)| cached.clone())
+}
+
+/// Stores `value` as `user_id`'s cached display name — but only if `user_id`
+/// is still the active account (`active_user`), so a detached task from before
+/// an account switch can never write back, even one that first started its
+/// fetch after the switch. Returns whether the cache was written.
+fn store_own_display_name_if_active(
+    user_id: OwnedUserId,
+    active_user: Option<OwnedUserId>,
+    value: Option<String>,
+) -> bool {
+    if active_user.is_some_and(|active| active == user_id) {
+        *OWN_DISPLAY_NAME.lock().unwrap() = Some((user_id, value));
+        true
+    } else {
+        false
     }
 }
 
@@ -7597,10 +7613,10 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
             ALL_JOINED_ROOMS.lock().unwrap().clear();
             IGNORED_USERS.lock().unwrap().clear();
-            // Clear the cached display name too (and bump the account generation
-            // so any in-flight fetch from the old account can't write it back),
-            // otherwise the new account's room previews would briefly show the
-            // previous account's display name.
+            // Clear the cached display name too, so the new account's room
+            // previews can't briefly show the previous account's display name.
+            // (Correctness doesn't depend on this — the cache is keyed by user
+            // ID — this just evicts the stale entry early.)
             clear_own_display_name();
 
             // Clear the rooms list UI
@@ -10150,11 +10166,51 @@ mod tests {
     use super::{
         DeferredTimelineChanges, DeferredTimelineSnapshot, OidcFlowSlot,
         RestoreSessionFailureAction, build_discovery_http_client,
+        cached_own_display_name_for, clear_own_display_name,
         restore_session_failure_action, restore_session_failure_message,
         session_validation_failure_action, should_prebuild_default_sso_client,
-        worker_shutdown_is_unexpected,
+        store_own_display_name_if_active, worker_shutdown_is_unexpected,
     };
     use crate::persistence::RestoreSessionError;
+
+    /// The whole account-switch race in one sequential scenario, since the
+    /// cache is a process-global (parallel tests would interfere otherwise).
+    #[test]
+    fn own_display_name_cache_survives_account_switch_race() {
+        let old_user = user_id!("@old_account:example.org").to_owned();
+        let new_user = user_id!("@new_account:example.org").to_owned();
+        clear_own_display_name();
+
+        // Normal operation: the active account's fetch result is cached,
+        // including a "no display name" (None) result.
+        assert!(store_own_display_name_if_active(
+            old_user.clone(), Some(old_user.clone()), Some("Old Name".into())
+        ));
+        assert_eq!(cached_own_display_name_for(&old_user), Some(Some("Old Name".into())));
+
+        // Account switch happens: cache cleared, new account is now active.
+        clear_own_display_name();
+        assert_eq!(cached_own_display_name_for(&new_user), None);
+
+        // A detached task from the old account completes late (or even entered
+        // the fetch after the switch): the write must be rejected because the
+        // old account is no longer active.
+        assert!(!store_own_display_name_if_active(
+            old_user.clone(), Some(new_user.clone()), Some("Old Name".into())
+        ));
+        assert_eq!(cached_own_display_name_for(&new_user), None);
+        assert_eq!(cached_own_display_name_for(&old_user), None);
+
+        // The new account's own fetch is cached and reads back keyed by user;
+        // the old account's key still misses.
+        assert!(store_own_display_name_if_active(
+            new_user.clone(), Some(new_user.clone()), None
+        ));
+        assert_eq!(cached_own_display_name_for(&new_user), Some(None));
+        assert_eq!(cached_own_display_name_for(&old_user), None);
+
+        clear_own_display_name();
+    }
 
     fn message_event_with_msgtype(msgtype: &str) -> AnySyncTimelineEvent {
         serde_json::from_value(serde_json::json!({
