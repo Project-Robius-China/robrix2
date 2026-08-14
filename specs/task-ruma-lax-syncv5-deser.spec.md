@@ -77,6 +77,15 @@ estimate: 0.5d
   那么 该邀请无需重启即出现在 Invites 列表
   但是 日志不出现 "The room must exist since it has been joined"
 
+场景: main 与本分支 A-B 对照归因
+  测试: manual_test_ab_comparison_against_main
+  层级: manual
+  审核: human
+  假设 同一账号与同一 homeserver,分别运行 main 分支与本分支构建
+  当 在两个构建下重复执行 运行期邀请与服务端建房场景
+  那么 main 构建复现房间不显示,本分支构建房间即时显示
+  并且 归因成立的前提是失败响应确实含 name/avatar/hero 四字段之一的非法值(ruma#2510 仅宽松处理这四个字段;若两个构建行为一致,说明该场景未触发兼容分支,不能作为本修复的证据)
+
 场景: 运行期服务端建房即时显示
   测试: manual_test_server_created_room_materializes_without_restart
   层级: manual
