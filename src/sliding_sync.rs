@@ -42,7 +42,7 @@ use tokio::{
     sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify, Semaphore}, task::JoinHandle, time::error::Elapsed,
 };
 use url::Url;
-use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefault, DefaultHasher}, iter::Peekable, ops::{Deref, DerefMut, Not, Range}, path::{ Path, PathBuf }, sync::{Arc, LazyLock, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}}, time::Duration};
+use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefault, DefaultHasher}, iter::Peekable, ops::{Deref, DerefMut, Not, Range}, path::{ Path, PathBuf }, sync::{Arc, LazyLock, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 use std::io;
 use hashbrown::{HashMap, HashSet};
 use crate::{
@@ -6766,20 +6766,16 @@ pub fn current_user_id() -> Option<OwnedUserId> {
     )
 }
 
-/// The display name of the currently-logged-in user.
+/// The display name of the logged-in user it was fetched for.
 ///
-/// Three states: `None` = not fetched yet; `Some(None)` = fetched, and this
-/// account has no display name set; `Some(Some(name))` = fetched successfully.
-/// Caching the "no display name" answer matters too — otherwise an account
+/// The cache is keyed by the owning `OwnedUserId`: reads only hit when the
+/// requesting client's account matches, and writes only happen while that
+/// account is still the active one. This makes the cache immune to detached
+/// tasks from a previous account (which may still be running after an account
+/// switch) both on the read and the write side. The inner `Option<String>`
+/// caches the "account has no display name" answer too — otherwise an account
 /// without one would re-hit the profile endpoint on every call.
-static OWN_DISPLAY_NAME: Mutex<Option<Option<String>>> = Mutex::new(None);
-
-/// The account generation, bumped on every logout / account switch.
-///
-/// An in-flight profile fetch started under the previous account could
-/// otherwise complete *after* the caches were cleared and write the old
-/// account's display name back into `OWN_DISPLAY_NAME`.
-static ACCOUNT_GENERATION: AtomicU64 = AtomicU64::new(0);
+static OWN_DISPLAY_NAME: Mutex<Option<(OwnedUserId, Option<String>)>> = Mutex::new(None);
 
 /// Serializes concurrent `own_display_name` fetches (single-flight), so an
 /// initial sync's worth of concurrent per-room tasks results in at most one
@@ -6787,35 +6783,39 @@ static ACCOUNT_GENERATION: AtomicU64 = AtomicU64::new(0);
 static OWN_DISPLAY_NAME_FETCH_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-/// Clears the cached own-account display name and invalidates any in-flight
-/// fetch of it. Must be called on every logout or account switch.
+/// Clears the cached own-account display name.
+/// Called on logout / account switch; note that correctness does not depend on
+/// this (the cache is keyed by user ID), it just frees the stale entry early.
 fn clear_own_display_name() {
-    ACCOUNT_GENERATION.fetch_add(1, Ordering::Release);
     OWN_DISPLAY_NAME.lock().unwrap().take();
 }
 
-/// Returns the display name of the currently logged-in user, if any.
+/// Returns the display name of the account that `client` is logged in as.
 /// Fetches and caches the result (including a "no display name" result) if not
 /// yet known, avoiding a network round trip on every subsequent call
-/// (e.g. for every new room reported by sync). Fetch errors are not cached,
-/// and a fetch that started before a logout/account switch never writes back.
+/// (e.g. for every new room reported by sync). Fetch errors are not cached.
 async fn own_display_name(client: &Client) -> Option<String> {
-    let generation = ACCOUNT_GENERATION.load(Ordering::Acquire);
-    if let Some(cached) = OWN_DISPLAY_NAME.lock().unwrap().clone() {
-        return cached;
+    let user_id = client.user_id()?.to_owned();
+    if let Some((cached_user, cached)) = OWN_DISPLAY_NAME.lock().unwrap().as_ref() {
+        if cached_user == &user_id {
+            return cached.clone();
+        }
     }
     // Single-flight: whoever gets the lock first does the fetch; the rest
     // find the cache filled upon acquiring it.
     let _fetch_guard = OWN_DISPLAY_NAME_FETCH_LOCK.lock().await;
-    if let Some(cached) = OWN_DISPLAY_NAME.lock().unwrap().clone() {
-        return cached;
+    if let Some((cached_user, cached)) = OWN_DISPLAY_NAME.lock().unwrap().as_ref() {
+        if cached_user == &user_id {
+            return cached.clone();
+        }
     }
     match client.account().get_display_name().await {
         Ok(fetched) => {
-            // Only cache if no logout/account switch happened while fetching,
-            // otherwise this would poison the new account's cache.
-            if ACCOUNT_GENERATION.load(Ordering::Acquire) == generation {
-                *OWN_DISPLAY_NAME.lock().unwrap() = Some(fetched.clone());
+            // Only cache if this client's account is still the active one, so a
+            // detached task from before an account switch can never write back —
+            // even one that first *entered* this function after the switch.
+            if current_user_id().is_some_and(|current| current == user_id) {
+                *OWN_DISPLAY_NAME.lock().unwrap() = Some((user_id, fetched.clone()));
             }
             fetched
         }
