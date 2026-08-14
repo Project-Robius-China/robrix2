@@ -2241,7 +2241,7 @@ impl SpaceLobbyScreen {
     }
 
     pub fn set_displayed_space(&mut self, cx: &mut Cx, space_name_id: &RoomNameId) {
-        let space_name = space_name_id.to_string();
+        let space_name = space_name_id.display();
         let parent_name = self.view.label(cx, ids!(header.parent_space_row.parent_name));
         parent_name.set_text(cx, &space_name);
 

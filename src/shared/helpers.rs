@@ -23,7 +23,7 @@ script_mod! {
         flow: Right,
         draw_text +: {
             color: (COLOR_TEXT),
-            text_style: theme.font_bold { font_size: 13 },
+            text_style: BOLD_TEXT { font_size: 13 },
         }
     }
 

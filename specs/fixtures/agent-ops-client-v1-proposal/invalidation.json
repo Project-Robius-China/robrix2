@@ -1,0 +1,8 @@
+{
+  "schema": "io.robrix.agent_ops.proposal.r3",
+  "scope_id": "scope-room-agent-1",
+  "projection_id": "projection-1",
+  "stream_epoch": "bb47bc6e-9f02-41df-90f6-8bb83b924b88",
+  "auth_fence_generation": 3,
+  "seq": 43
+}

@@ -52,7 +52,7 @@ script_mod! {
             color_down: (RBX_FG_PRIMARY)
             color_active: (RBX_FG_PRIMARY)
             color_focus: (RBX_FG_PRIMARY)
-            text_style: theme.font_bold { font_size: 11.0 }
+            text_style: BOLD_TEXT { font_size: 11.0 }
         }
     }
 

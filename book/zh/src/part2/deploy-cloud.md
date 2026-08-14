@@ -36,4 +36,4 @@
 
 选择标准不是品牌，而是四个可验证条件：允许所需账号 provisioning、Client-Server API 稳定、限流能承受 bridge 轮询、你接受非加密项目数据的存储位置。跨 homeserver 协作还要求双方正确配置公网 DNS、TLS 与 Matrix federation。
 
-若把 dashboard 暴露到公网，应放在 HTTPS 反向代理后，设置 `AGENT_CHAT_WEB_URL`，并继续把 backend API 保持在 loopback，除非你明确部署了额外的访问控制。
+若把 dashboard 暴露到公网，应放在 HTTPS 反向代理后，设置 `HAFLEET_WEB_URL`，并继续把 backend API 保持在 loopback，除非你明确部署了额外的访问控制。

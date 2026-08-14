@@ -214,7 +214,7 @@ script_mod! {
         title := Label {
             width: Fill, height: Fit,
             draw_text +: {
-                text_style: theme.font_regular { font_size: 18 },
+                text_style: REGULAR_TEXT { font_size: 18 },
                 color: #000
             }
             text: "Create a new room"
@@ -404,7 +404,7 @@ script_mod! {
 
         validation_label := Label {
             width: Fill, height: Fit,
-            draw_text +: { color: #xa10000 }
+            draw_text +: { color: (RBX_DANGER_FG) }
             text: ""
         }
 

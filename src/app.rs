@@ -788,6 +788,12 @@ const MAX_LOG_FILES_TO_KEEP: usize = 10;
 
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
+        // Splash isolate VMs default to makepad's stock DARK theme; robrix2's
+        // surfaces are light, so agent splash-card content rendered near-white
+        // text on white — visually blank. Select the light theme for every
+        // isolate before any splash card evaluates.
+        cx.set_splash_isolate_theme(live_id!(light));
+
         // only init logging/tracing once
         let _ = tracing_subscriber::fmt()
             .with_max_level(tracing_subscriber::filter::LevelFilter::ERROR)
@@ -2472,6 +2478,11 @@ impl AppMain for App {
         crate::join_leave_room_modal::script_mod(vm);
         crate::verification_modal::script_mod(vm);
         crate::profile::script_mod(vm);
+        // HomeScreen's DSL references AgentOpsPanel, so it must be registered first.
+        #[cfg(feature = "agent_chat")]
+        crate::agent_ops::script_mod(vm);
+        #[cfg(not(feature = "agent_chat"))]
+        crate::agent_ops_dummy::script_mod(vm);
         crate::home::script_mod(vm);
         crate::login::script_mod(vm);
         crate::register::script_mod(vm);
@@ -2912,16 +2923,8 @@ impl App {
             room_to_close,
         );
 
-        // Before we navigate to the room, if a non-room tab is currently shown
-        // (AddRoom, or Settings — e.g. tapping "Open chat" on a registered agent
-        // in Settings ▸ Labs), programmatically navigate to the Home tab so the
-        // actual room becomes visible. On mobile the pushed StackNavigation view
-        // covers everything regardless; but on desktop the layout is driven by
-        // `selected_tab`, so without this the room opens in the dock *behind* the
-        // still-shown Settings page and nothing appears to happen.
-        if matches!(self.app_state.selected_tab, SelectedTab::AddRoom | SelectedTab::Settings) {
-            cx.action(NavigationBarAction::GoToHome);
-        }
+        // HomeScreen owns top-level navigation state and normalizes every
+        // RoomsListAction::Selected before the desktop Dock handles it.
         cx.widget_action(
             self.ui.widget_uid(), 
             RoomsListAction::Selected(new_selected_room),

@@ -2,7 +2,7 @@
 
 > **Scope**: This chapter establishes HAgency's most important collaboration habit — tasks live in Threads, and the main timeline keeps only the cover; it also gives the routing rule for "what goes in a Thread, what goes on the main timeline, and what goes to a DM". Prerequisite: Chapter 5.2.
 
-A board room quickly ends up with several things happening at once. If every bit of progress scrolled by on the main timeline, the room would become unreadable within a day. HAgency's convention: **one Thread per task** — process details go into the thread, and the main timeline keeps the task's "cover". This is a collaboration convention; whether a message actually returns to the Thread still depends on backend reply context.
+A board room quickly ends up with several things happening at once. If every bit of progress scrolled by on the main timeline, the room would become unreadable within a day. HAgency's convention: **one Thread per task** — process details go into the thread, and the main timeline keeps the task's "cover". Under thread-session mode this is more than a collaboration convention: on the backend, each Thread is an isolated agent session (see below).
 
 The complete journey of a message from your Thread, to the Agent, and back into the same Thread:
 
@@ -12,17 +12,39 @@ sequenceDiagram
     participant M as Matrix (Palpo)
     participant B as agent-chat bridge
     participant BE as backend :8090
-    participant A as Agent (tmux)
+    participant R as one-shot runner
 
-    H->>M: @wf_coordinator how's it going? (m.thread relation)
+    H->>M: @wf_coordinator how is it going? (m.thread relation)
     M->>B: room event
-    B->>BE: converted to an agent-chat message (thread context recorded)
-    BE->>A: notification advances tmux
-    A->>BE: structured reply with reply_to
-    BE->>B: outbound message
-    B->>M: rebuilds m.thread + m.in_reply_to from trusted matrixContext
-    M->>H: reply appears inside the Thread
+    B->>BE: converted to a backend message (thread context recorded)
+    BE->>BE: routed to this (agent, thread)'s isolated session
+    BE->>R: spawn a runner, feed it this thread's rebuilt context
+    R->>BE: reply (a runner cannot choose its own reply target)
+    BE->>B: outbound message (reply outbox; the target is derived by the backend)
+    B->>M: rebuild m.thread + m.in_reply_to
+    M->>H: the reply appears inside the Thread
 ```
+
+## One isolated session per Thread
+
+A Thread is not just a collapsed strand in the UI — on the backend, **every (agent, thread) pair is a persistent, isolated session**:
+
+- **Context isolation**: constraints, code words, and preferences stated in Thread A never leak into Thread B. Ask the same agent the same question in two threads and each answer draws only on that thread's own history.
+- **Processes are day labourers**: agents have no resident process. Each turn the backend spawns a one-shot runner (`claude -p` / `codex app-server`), feeds it this thread's context rebuilt from the database, and the runner exits after answering. A thread's "memory" lives in SQLite — restart the backend, ask again, and the agent still remembers what this thread discussed.
+- **Parallel, not queued**: while Thread A runs a long task, Thread B's question is handled by another runner in parallel.
+- **Reply targeting is a transport guarantee**: replies leave through the backend's reply outbox, and the thread attribution is derived by the backend from session records — the model cannot misdirect its own reply.
+- **What stays shared is identity**: the agent's name, Matrix puppet, working directory, and long-term memory remain one — like a human assistant who stays focused inside each strand but remembers who they are.
+
+### Configuring a session in-thread: `/thread` directives
+
+An operator (an account in `MATRIX_OPERATOR_MXIDS`) can adjust **this one thread's** session from inside it:
+
+```text
+/thread model claude-haiku-4-5   # switch this thread's model (default restores)
+/thread mode auto                # grant this thread write access (plan revokes)
+```
+
+Directive messages never enter the conversation context; the agent answers with a confirmation notice. Three caveats: nothing else may follow the directive on the same message (you get a usage hint otherwise); `mode auto` is an audited write grant — every later turn in that thread may write the workspace (concurrent writes stay serialized by the workspace lease); and the model must match the agent's framework — in a thread with several agents the directive applies to **all** of their sessions, and naming a Claude model for a Codex agent fails at runtime.
 
 ## Dispatch Goes into a Thread
 
@@ -40,7 +62,7 @@ Open the Thread (it becomes its own tab, `[Thread] robrix2-board`), and you can 
 
 In the screenshot alex sends just one line — `@wf_coordinator how's it going?` — and the coordinator gives structured status: who took the task, when the task went active, whether the branch has new commits, what the process looks like next, and a promise to post proactive updates.
 
-Proactive reporting is currently a **workflow skill convention, not a transport guarantee**. If the Agent is busy, the push relay does not advance, the session is interrupted, or a `post()` lacks `reply_to`, updates may not appear or may fall back onto the main timeline. Humans should still use `/status`, the Project Board, the dashboard's task/heartbeat, and Git status as fallbacks.
+Reply targeting is a transport guarantee (see the session model above); the **cadence of proactive reporting**, however, is still a workflow-skill convention — an agent busy with a long task may go quiet for a while. Humans should still use `/status`, the Project Board, the dashboard's task/heartbeat, and Git status as fallbacks.
 
 ## How Thread Continuity Actually Works
 

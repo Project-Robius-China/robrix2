@@ -206,7 +206,7 @@ pub struct RoomScreen {
     #[rust] app_language: AppLanguage,
     #[rust] app_language_initialized: bool,
     #[rust] pending_invited_users: HashSet<OwnedUserId>,
-    #[rust] octos_action_button_contexts: HashMap<WidgetUid, OctosActionButtonContext>,
+    #[rust] octos_action_button_contexts: HashMap<(OwnedEventId, usize), OctosActionButtonContext>,
     #[rust] disabled_octos_action_source_event_ids: HashSet<OwnedEventId>,
     #[rust] selected_octos_action_by_source_event_id: HashMap<OwnedEventId, SelectedOctosActionState>,
     /// Per-room state for the server-side search pane. Tracks the active

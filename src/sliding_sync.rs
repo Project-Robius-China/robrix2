@@ -3,7 +3,7 @@ use bitflags::bitflags;
 use clap::Parser;
 use eyeball::Subscriber;
 use eyeball_im::VectorDiff;
-use futures_util::{future::join_all, pin_mut, StreamExt};
+use futures_util::{pin_mut, stream, StreamExt};
 use imbl::Vector;
 use makepad_widgets::{error, log, warning, Cx, SignalToUI};
 use mime::{IMAGE_JPEG, IMAGE_PNG};
@@ -39,7 +39,7 @@ use robius_open::Uri;
 use ruma::{OwnedRoomOrAliasId, OwnedTransactionId, RoomId, events::tag::Tags, room::JoinRule, serde::Raw};
 use tokio::{
     runtime::Handle,
-    sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
+    sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify, Semaphore}, task::JoinHandle, time::error::Elapsed,
 };
 use url::Url;
 use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefault, DefaultHasher}, iter::Peekable, ops::{Deref, DerefMut, Not, Range}, path::{ Path, PathBuf }, sync::{Arc, LazyLock, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
@@ -367,6 +367,7 @@ async fn reset_runtime_state_for_relogin() {
     DEFAULT_SSO_CLIENT.lock().unwrap().take();
     IGNORED_USERS.lock().unwrap().clear();
     ALL_JOINED_ROOMS.lock().unwrap().clear();
+    clear_own_display_name();
 
     let on_clear_appstate = Arc::new(Notify::new());
     Cx::post_action(LogoutAction::ClearAppState { on_clear_appstate: on_clear_appstate.clone() });
@@ -1557,6 +1558,11 @@ pub enum MatrixRequest {
     FetchAvatar {
         mxc_uri: OwnedMxcUri,
         on_fetched: fn(AvatarUpdate),
+    },
+    /// Request to fetch or compute a joined room's avatar, e.g., upon its first
+    /// appearance in the rooms list. Response: [`RoomsListUpdate::UpdateRoomAvatar`].
+    FetchRoomAvatar {
+        room_name_id: RoomNameId,
     },
     /// Request to fetch media from the server.
     /// Upon completion of the async media request, the `on_fetched` function
@@ -5124,6 +5130,15 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::FetchRoomAvatar { room_name_id } => {
+                let Some(client) = get_client() else { continue };
+                let Some(room) = client.get_room(room_name_id.room_id()) else {
+                    log!("Skipping avatar fetch for unknown room {}", room_name_id.room_id());
+                    continue;
+                };
+                spawn_fetch_room_avatar_inner(room, room_name_id);
+            }
+
             MatrixRequest::DownloadAndSaveFile { mxc_uri, app_language, update_sender } => {
                 let Some(client) = get_client() else {
                     if let Some(sender) = update_sender.as_ref() {
@@ -6751,6 +6766,89 @@ pub fn current_user_id() -> Option<OwnedUserId> {
     )
 }
 
+/// The display name of the logged-in user it was fetched for.
+///
+/// The cache is keyed by the owning `OwnedUserId`: reads only hit when the
+/// requesting client's account matches, and writes only happen while that
+/// account is still the active one. This makes the cache immune to detached
+/// tasks from a previous account (which may still be running after an account
+/// switch) both on the read and the write side. The inner `Option<String>`
+/// caches the "account has no display name" answer too — otherwise an account
+/// without one would re-hit the profile endpoint on every call.
+static OWN_DISPLAY_NAME: Mutex<Option<(OwnedUserId, Option<String>)>> = Mutex::new(None);
+
+/// Serializes concurrent `own_display_name` fetches (single-flight), so an
+/// initial sync's worth of concurrent per-room tasks results in at most one
+/// profile request instead of one per room.
+static OWN_DISPLAY_NAME_FETCH_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Clears the cached own-account display name.
+/// Called on logout / account switch; note that correctness does not depend on
+/// this (the cache is keyed by user ID), it just frees the stale entry early.
+fn clear_own_display_name() {
+    OWN_DISPLAY_NAME.lock().unwrap().take();
+}
+
+/// Returns the display name of the account that `client` is logged in as.
+/// Fetches and caches the result (including a "no display name" result) if not
+/// yet known, avoiding a network round trip on every subsequent call
+/// (e.g. for every new room reported by sync). Fetch errors are not cached.
+async fn own_display_name(client: &Client) -> Option<String> {
+    let user_id = client.user_id()?.to_owned();
+    if let Some(cached) = cached_own_display_name_for(&user_id) {
+        return cached;
+    }
+    // Single-flight: whoever gets the lock first does the fetch; the rest
+    // find the cache filled upon acquiring it.
+    let _fetch_guard = OWN_DISPLAY_NAME_FETCH_LOCK.lock().await;
+    if let Some(cached) = cached_own_display_name_for(&user_id) {
+        return cached;
+    }
+    match client.account().get_display_name().await {
+        Ok(fetched) => {
+            store_own_display_name_if_active(user_id, current_user_id(), fetched.clone());
+            fetched
+        }
+        Err(_) => None,
+    }
+}
+
+/// Returns `user_id`'s cached display-name entry, or `None` if the cache
+/// holds no entry for that user (e.g. it belongs to a different account).
+fn cached_own_display_name_for(user_id: &UserId) -> Option<Option<String>> {
+    OWN_DISPLAY_NAME.lock().unwrap().as_ref()
+        .filter(|(cached_user, _)| cached_user == user_id)
+        .map(|(_, cached)| cached.clone())
+}
+
+/// Stores `value` as `user_id`'s cached display name — but only if `user_id`
+/// is still the active account (`active_user`), so a detached task from before
+/// an account switch can never write back, even one that first started its
+/// fetch after the switch. Returns whether the cache was written.
+fn store_own_display_name_if_active(
+    user_id: OwnedUserId,
+    active_user: Option<OwnedUserId>,
+    value: Option<String>,
+) -> bool {
+    if active_user.is_some_and(|active| active == user_id) {
+        *OWN_DISPLAY_NAME.lock().unwrap() = Some((user_id, value));
+        true
+    } else {
+        false
+    }
+}
+
+/// A cap on concurrent per-room async tasks (e.g. processing an initial sync's
+/// worth of new rooms, or fetching avatars) so a huge home server doesn't
+/// flood every CPU core and starve the main UI thread.
+static MAX_CONCURRENCY: LazyLock<usize> = LazyLock::new(||
+    std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .saturating_sub(2) // leave a core or two for the main UI thread, etc
+        .clamp(2, 16)
+);
+
 /// The singleton sync service.
 static SYNC_SERVICE: Mutex<Option<Arc<SyncService>>> = Mutex::new(None);
 static SYNC_SERVICE_DESIRED_RUNNING: AtomicBool = AtomicBool::new(true);
@@ -7066,18 +7164,23 @@ struct RoomListServiceRoomInfo {
     room: matrix_sdk::Room,
 }
 impl RoomListServiceRoomInfo {
-    async fn from_room(room: matrix_sdk::Room, current_user_id: &Option<OwnedUserId>) -> Self {
+    async fn from_room(
+        room: matrix_sdk::Room,
+        current_user_id: &Option<OwnedUserId>,
+        fetch_power_levels: bool,
+    ) -> Self {
         // Parallelize fetching of independent room data.
+        // Only joined rooms actually use tags and power levels; invited/left rooms don't.
         let (is_direct, tags, display_name, user_power_levels) = tokio::join!(
             room.is_direct(),
-            room.tags(),
+            async {
+                if room.state() == RoomState::Joined { room.tags().await } else { Ok(None) }
+            },
             room.display_name(),
             async {
-                if let Some(user_id) = current_user_id {
-                    UserPowerLevels::from_room(&room, user_id.deref()).await
-                } else {
-                    None
-                }
+                if !fetch_power_levels || room.state() != RoomState::Joined { return None; }
+                let Some(user_id) = current_user_id else { return None; };
+                UserPowerLevels::from_room(&room, user_id.deref()).await
             }
         );
 
@@ -7098,8 +7201,12 @@ impl RoomListServiceRoomInfo {
             room,
         }
     }
-    async fn from_room_ref(room: &matrix_sdk::Room, current_user_id: &Option<OwnedUserId>) -> Self {
-        Self::from_room(room.clone(), current_user_id).await
+    async fn from_room_ref(
+        room: &matrix_sdk::Room,
+        current_user_id: &Option<OwnedUserId>,
+        fetch_power_levels: bool,
+    ) -> Self {
+        Self::from_room(room.clone(), current_user_id, fetch_power_levels).await
     }
 }
 
@@ -7155,7 +7262,7 @@ fn add_room_invite_event_handler(client: Client) {
                 "Received stripped invite event for room {}; enqueueing invited room fallback.",
                 room.room_id(),
             );
-            let room_info = RoomListServiceRoomInfo::from_room(room, &None).await;
+            let room_info = RoomListServiceRoomInfo::from_room(room, &None, false).await;
             enqueue_invited_room(&room_info).await;
         },
     );
@@ -7506,6 +7613,11 @@ async fn start_matrix_client_login_and_sync(rt: Handle) {
             SYNC_SERVICE_ASSUMED_RUNNING.store(false, Ordering::Release);
             ALL_JOINED_ROOMS.lock().unwrap().clear();
             IGNORED_USERS.lock().unwrap().clear();
+            // Clear the cached display name too, so the new account's room
+            // previews can't briefly show the previous account's display name.
+            // (Correctness doesn't depend on this — the cache is keyed by user
+            // ID — this just evicts the stale entry early.)
+            clear_own_display_name();
 
             // Clear the rooms list UI
             enqueue_rooms_list_update(RoomsListUpdate::ClearRooms);
@@ -7739,15 +7851,17 @@ async fn room_list_service_loop(room_list_service: Arc<RoomListService>) -> Resu
 
                     // Parallelize creating each room's RoomListServiceRoomInfo and adding that new room.
                     // We combine `from_room` and `add_new_room` into a single async task per room.
-                    let new_room_infos: Vec<RoomListServiceRoomInfo> = join_all(
+                    // Concurrency is capped so a huge initial sync doesn't flood every CPU core;
+                    // power levels aren't needed yet here, so skip fetching them for now.
+                    let new_room_infos: Vec<RoomListServiceRoomInfo> = stream::iter(
                         new_rooms.into_iter().map(|room| async {
-                            let room_info = RoomListServiceRoomInfo::from_room(room.into_inner(), &current_user_id).await;
+                            let room_info = RoomListServiceRoomInfo::from_room(room.into_inner(), &current_user_id, false).await;
                             if let Err(e) = add_new_room(&room_info, &room_list_service, false).await {
                                 error!("Failed to add new room: {:?} ({}); error: {:?}", room_info.display_name, room_info.room_id, e);
                             }
                             room_info
                         })
-                    ).await;
+                    ).buffered(*MAX_CONCURRENCY).collect().await;
 
                     // Send room order update with the new room IDs
                     let (room_id_refs, room_ids) = {
@@ -7776,7 +7890,7 @@ async fn room_list_service_loop(room_list_service: Arc<RoomListService>) -> Resu
                 }
                 VectorDiff::PushFront { value: new_room } => {
                     if LOG_ROOM_LIST_DIFFS { log!("room_list: diff PushFront"); }
-                    let new_room = RoomListServiceRoomInfo::from_room(new_room.into_inner(), &current_user_id).await;
+                    let new_room = RoomListServiceRoomInfo::from_room(new_room.into_inner(), &current_user_id, true).await;
                     let room_id = new_room.room_id.clone();
                     add_new_room(&new_room, &room_list_service, true).await?;
                     enqueue_rooms_list_update(RoomsListUpdate::RoomOrderUpdate(
@@ -7786,7 +7900,7 @@ async fn room_list_service_loop(room_list_service: Arc<RoomListService>) -> Resu
                 }
                 VectorDiff::PushBack { value: new_room } => {
                     if LOG_ROOM_LIST_DIFFS { log!("room_list: diff PushBack"); }
-                    let new_room = RoomListServiceRoomInfo::from_room(new_room.into_inner(), &current_user_id).await;
+                    let new_room = RoomListServiceRoomInfo::from_room(new_room.into_inner(), &current_user_id, true).await;
                     let room_id = new_room.room_id.clone();
                     add_new_room(&new_room, &room_list_service, true).await?;
                     enqueue_rooms_list_update(RoomsListUpdate::RoomOrderUpdate(
@@ -7824,7 +7938,7 @@ async fn room_list_service_loop(room_list_service: Arc<RoomListService>) -> Resu
                 }
                 VectorDiff::Insert { index, value: new_room } => {
                     if LOG_ROOM_LIST_DIFFS { log!("room_list: diff Insert at {index}"); }
-                    let new_room = RoomListServiceRoomInfo::from_room(new_room.into_inner(), &current_user_id).await;
+                    let new_room = RoomListServiceRoomInfo::from_room(new_room.into_inner(), &current_user_id, true).await;
                     let room_id = new_room.room_id.clone();
                     add_new_room(&new_room, &room_list_service, true).await?;
                     enqueue_rooms_list_update(RoomsListUpdate::RoomOrderUpdate(
@@ -7834,7 +7948,7 @@ async fn room_list_service_loop(room_list_service: Arc<RoomListService>) -> Resu
                 }
                 VectorDiff::Set { index, value: changed_room } => {
                     if LOG_ROOM_LIST_DIFFS { log!("room_list: diff Set at {index}"); }
-                    let changed_room = RoomListServiceRoomInfo::from_room(changed_room.into_inner(), &current_user_id).await;
+                    let changed_room = RoomListServiceRoomInfo::from_room(changed_room.into_inner(), &current_user_id, true).await;
                     if let Some(old_room) = all_known_rooms.get(index) {
                         update_room(old_room, &changed_room, &room_list_service).await?;
                     } else {
@@ -7909,7 +8023,7 @@ async fn optimize_remove_then_add_into_update(
             if LOG_ROOM_LIST_DIFFS {
                 log!("Optimizing {remove_diff:?} + Insert({insert_index}) into Update for room {}", room.room_id);
             }
-            let new_room = RoomListServiceRoomInfo::from_room_ref(new_room.deref(), current_user_id).await;
+            let new_room = RoomListServiceRoomInfo::from_room_ref(new_room.deref(), current_user_id, true).await;
             update_room(room, &new_room, room_list_service).await?;
             // Send order update for the insert
             enqueue_rooms_list_update(RoomsListUpdate::RoomOrderUpdate(
@@ -7924,7 +8038,7 @@ async fn optimize_remove_then_add_into_update(
             if LOG_ROOM_LIST_DIFFS {
                 log!("Optimizing {remove_diff:?} + PushFront into Update for room {}", room.room_id);
             }
-            let new_room = RoomListServiceRoomInfo::from_room_ref(new_room.deref(), current_user_id).await;
+            let new_room = RoomListServiceRoomInfo::from_room_ref(new_room.deref(), current_user_id, true).await;
             update_room(room, &new_room, room_list_service).await?;
             // Send order update for the push front
             enqueue_rooms_list_update(RoomsListUpdate::RoomOrderUpdate(
@@ -7939,7 +8053,7 @@ async fn optimize_remove_then_add_into_update(
             if LOG_ROOM_LIST_DIFFS {
                 log!("Optimizing {remove_diff:?} + PushBack into Update for room {}", room.room_id);
             }
-            let new_room = RoomListServiceRoomInfo::from_room_ref(new_room.deref(), current_user_id).await;
+            let new_room = RoomListServiceRoomInfo::from_room_ref(new_room.deref(), current_user_id, true).await;
             update_room(room, &new_room, room_list_service).await?;
             // Send order update for the push back
             enqueue_rooms_list_update(RoomsListUpdate::RoomOrderUpdate(
@@ -8358,7 +8472,7 @@ async fn add_new_room(
         ),
         canonical_alias: new_room.room.canonical_alias(),
         alt_aliases: new_room.room.alt_aliases(),
-        has_been_paginated: false,
+        has_been_shown: false,
         is_selected: false,
         is_direct: new_room.is_direct,
         dm_target,
@@ -8383,7 +8497,8 @@ async fn add_new_room(
         room_name_id,
         is_invite: false,
     });
-    spawn_fetch_room_avatar(new_room);
+    // The room's avatar is fetched lazily, upon its first appearance in the rooms list
+    // (see `RoomsList::draw_walk()`), instead of eagerly here for every joined room.
     Ok(())
 }
 
@@ -9010,7 +9125,7 @@ async fn get_latest_event_details(
             let sender_username_opt = if let TimelineDetails::Ready(profile) = $profile {
                 profile.display_name.clone()
             } else if $is_own {
-                client.account().get_display_name().await.ok().flatten()
+                own_display_name(client).await
             } else {
                 None
             };
@@ -9508,11 +9623,20 @@ async fn timeline_subscriber_handler(
 
 /// Spawn a new async task to fetch the room's new avatar.
 fn spawn_fetch_room_avatar(room: &RoomListServiceRoomInfo) {
-    let room_id = room.room_id.clone();
     let room_name_id = RoomNameId::from((room.display_name.clone(), room.room_id.clone()));
-    let inner_room = room.room.clone();
+    spawn_fetch_room_avatar_inner(room.room.clone(), room_name_id);
+}
+
+/// Spawns an async task to fetch or compute the room's avatar and send it to the rooms list.
+fn spawn_fetch_room_avatar_inner(room: Room, room_name_id: RoomNameId) {
+    // Limit the number of concurrent room avatar fetches, as they can be expensive
+    // and max out the CPUs, e.g. when a huge initial sync reveals many rooms at once.
+    static ROOM_AVATAR_FETCH_LIMIT: Semaphore = Semaphore::const_new(8);
+
     Handle::current().spawn(async move {
-        let room_avatar = room_avatar(&inner_room, &room_name_id).await;
+        let Ok(_permit) = ROOM_AVATAR_FETCH_LIMIT.acquire().await else { return };
+        let room_id = room_name_id.room_id().clone();
+        let room_avatar = room_avatar(&room, &room_name_id).await;
         rooms_list::enqueue_rooms_list_update(RoomsListUpdate::UpdateRoomAvatar {
             room_id,
             room_avatar,
@@ -9523,21 +9647,23 @@ fn spawn_fetch_room_avatar(room: &RoomListServiceRoomInfo) {
 /// Fetches and returns the avatar image for the given room (if one exists),
 /// otherwise returns a text avatar string of the first character of the room name.
 async fn room_avatar(room: &Room, room_name_id: &RoomNameId) -> FetchedRoomAvatar {
-    match room.avatar(AVATAR_THUMBNAIL_FORMAT.into()).await {
-        Ok(Some(avatar)) => FetchedRoomAvatar::Image(avatar.into()),
-        _ => {
-            if let Ok(room_members) = room.members(RoomMemberships::ACTIVE).await {
-                if room_members.len() == 2 {
-                    if let Some(non_account_member) = room_members.iter().find(|m| !m.is_account_user()) {
-                        if let Ok(Some(avatar)) = non_account_member.avatar(AVATAR_THUMBNAIL_FORMAT.into()).await {
-                            return FetchedRoomAvatar::Image(avatar.into());
-                        }
-                    }
-                }
+    if let Ok(Some(avatar)) = room.avatar(AVATAR_THUMBNAIL_FORMAT.into()).await {
+        return FetchedRoomAvatar::Image(avatar.into());
+    }
+    // For rooms without an avatar that have only one hero (i.e., a 2-member DM),
+    // use that hero's avatar instead of fetching the full member list.
+    if let Ok([one_hero]) = <[_; 1]>::try_from(room.heroes()) {
+        if let Some(avatar_url) = one_hero.avatar_url {
+            let request = MediaRequestParameters {
+                source: MediaSource::Plain(avatar_url),
+                format: AVATAR_THUMBNAIL_FORMAT.into(),
+            };
+            if let Ok(avatar) = room.client().media().get_media_content(&request, true).await {
+                return FetchedRoomAvatar::Image(avatar.into());
             }
-            utils::avatar_from_room_name(room_name_id.name_for_avatar())
         }
     }
+    utils::avatar_from_room_name(room_name_id.name_for_avatar())
 }
 
 /// Spawn an async task to login to the given Matrix homeserver using the given SSO identity provider ID.
@@ -9859,6 +9985,7 @@ pub async fn clear_app_state(config: &LogoutConfig) -> Result<()> {
     REQUEST_SENDER.lock().unwrap().take();
     IGNORED_USERS.lock().unwrap().clear();
     ALL_JOINED_ROOMS.lock().unwrap().clear();
+    clear_own_display_name();
 
     let on_clear_appstate = Arc::new(Notify::new());
     Cx::post_action(LogoutAction::ClearAppState { on_clear_appstate: on_clear_appstate.clone() });
@@ -9951,9 +10078,18 @@ async fn discover_homeserver_capabilities(
 
     // Step 3: /v3/login — SSO providers (non-fatal on failure).
     let login_url = format!("{base_url}/_matrix/client/v3/login");
+    let mut sso_supported = false;
     let sso_providers = match http.get(&login_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = body_json(resp).await;
+            sso_supported = body
+                .get("flows")
+                .and_then(|f: &Value| f.as_array())
+                .is_some_and(|flows| {
+                    flows.iter().any(|f: &Value| {
+                        f.get("type").and_then(|t: &Value| t.as_str()) == Some("m.login.sso")
+                    })
+                });
             body.get("flows")
                 .and_then(|f: &Value| f.as_array())
                 .map(|flows| {
@@ -10016,6 +10152,7 @@ async fn discover_homeserver_capabilities(
         is_mas_native_oidc: is_mas,
         registration_enabled,
         uiaa_probe,
+        sso_supported,
         sso_providers,
         mas_signup_url,
         mas_issuer_url,
@@ -10029,11 +10166,51 @@ mod tests {
     use super::{
         DeferredTimelineChanges, DeferredTimelineSnapshot, OidcFlowSlot,
         RestoreSessionFailureAction, build_discovery_http_client,
+        cached_own_display_name_for, clear_own_display_name,
         restore_session_failure_action, restore_session_failure_message,
         session_validation_failure_action, should_prebuild_default_sso_client,
-        worker_shutdown_is_unexpected,
+        store_own_display_name_if_active, worker_shutdown_is_unexpected,
     };
     use crate::persistence::RestoreSessionError;
+
+    /// The whole account-switch race in one sequential scenario, since the
+    /// cache is a process-global (parallel tests would interfere otherwise).
+    #[test]
+    fn own_display_name_cache_survives_account_switch_race() {
+        let old_user = user_id!("@old_account:example.org").to_owned();
+        let new_user = user_id!("@new_account:example.org").to_owned();
+        clear_own_display_name();
+
+        // Normal operation: the active account's fetch result is cached,
+        // including a "no display name" (None) result.
+        assert!(store_own_display_name_if_active(
+            old_user.clone(), Some(old_user.clone()), Some("Old Name".into())
+        ));
+        assert_eq!(cached_own_display_name_for(&old_user), Some(Some("Old Name".into())));
+
+        // Account switch happens: cache cleared, new account is now active.
+        clear_own_display_name();
+        assert_eq!(cached_own_display_name_for(&new_user), None);
+
+        // A detached task from the old account completes late (or even entered
+        // the fetch after the switch): the write must be rejected because the
+        // old account is no longer active.
+        assert!(!store_own_display_name_if_active(
+            old_user.clone(), Some(new_user.clone()), Some("Old Name".into())
+        ));
+        assert_eq!(cached_own_display_name_for(&new_user), None);
+        assert_eq!(cached_own_display_name_for(&old_user), None);
+
+        // The new account's own fetch is cached and reads back keyed by user;
+        // the old account's key still misses.
+        assert!(store_own_display_name_if_active(
+            new_user.clone(), Some(new_user.clone()), None
+        ));
+        assert_eq!(cached_own_display_name_for(&new_user), Some(None));
+        assert_eq!(cached_own_display_name_for(&old_user), None);
+
+        clear_own_display_name();
+    }
 
     fn message_event_with_msgtype(msgtype: &str) -> AnySyncTimelineEvent {
         serde_json::from_value(serde_json::json!({

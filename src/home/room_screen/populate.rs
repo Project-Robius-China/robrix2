@@ -131,7 +131,7 @@ pub(super) fn populate_message_view(
     room_bot_user_ids: &[OwnedUserId],
     known_bot_user_ids: &[OwnedUserId],
     streaming_messages: &mut HashMap<OwnedEventId, crate::home::streaming_animation::StreamingAnimState>,
-    action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
+    action_button_contexts: &mut HashMap<(OwnedEventId, usize), OctosActionButtonContext>,
     disabled_action_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
     expanded_bot_body_event_ids: &HashSet<OwnedEventId>,
@@ -746,8 +746,8 @@ pub(super) fn populate_message_view(
         item.reaction_list(cx, ids!(content.reaction_list)).set_list(
             cx,
             event_tl_item.content().reactions(),
-            timeline_kind.clone(),
-            timeline_event_id.clone(),
+            timeline_kind,
+            &timeline_event_id,
             item_id,
         );
         populate_read_receipts(&item, cx, timeline_kind, event_tl_item);
@@ -1359,7 +1359,7 @@ pub(super) fn populate_audio_message_content(
                 .unwrap_or_default(),
             info.mimetype
                 .as_ref()
-                .map(|m| format!("  {m},"))
+                .map(|m| format!("  {},", htmlize::escape_text(m)))
                 .unwrap_or_default(),
             info.size
                 .map(|bytes| format!("  ({}),", ByteSize::b(bytes.into())))
@@ -1369,7 +1369,8 @@ pub(super) fn populate_audio_message_content(
     let caption = audio.formatted_caption()
         .filter(|fb| fb.format == MessageFormat::Html)
         .map(|fb| format!("<br><i>{}</i>", fb.body))
-        .or_else(|| audio.caption().map(|c| format!("<br><i>{c}</i>")))
+        // Escape caption to prevent HTML injection
+        .or_else(|| audio.caption().map(|c| format!("<br><i>{}</i>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
     message_content_widget.show_html(
@@ -1417,7 +1418,7 @@ pub(super) fn populate_video_message_content(
                 .unwrap_or_default(),
             info.mimetype
                 .as_ref()
-                .map(|m| format!("  {m},"))
+                .map(|m| format!("  {},", htmlize::escape_text(m)))
                 .unwrap_or_default(),
             info.size
                 .map(|bytes| format!("  ({}),", ByteSize::b(bytes.into())))
@@ -1430,7 +1431,8 @@ pub(super) fn populate_video_message_content(
     let caption = video.formatted_caption()
         .filter(|fb| fb.format == MessageFormat::Html)
         .map(|fb| format!("<br><i>{}</i>", fb.body))
-        .or_else(|| video.caption().map(|c| format!("<br><i>{c}</i>")))
+        // Escape caption to prevent HTML injection
+        .or_else(|| video.caption().map(|c| format!("<br><i>{}</i>", htmlize::escape_text(c))))
         .unwrap_or_default();
 
     // TODO: add an video to play the video file

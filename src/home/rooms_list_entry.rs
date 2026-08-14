@@ -162,7 +162,7 @@ script_mod! {
                     max_lines: 2
                     text_overflow: Ellipsis
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: 9.3, line_spacing: 1.32 },
+                        text_style: REGULAR_TEXT { font_size: 9.3, line_spacing: 1.32 },
                     }
                     text: "[No recent messages]"
                 }
@@ -183,19 +183,12 @@ script_mod! {
             color: instance(#0000)
             color_selected: instance(RBX_BG_SELECTED)
             border_color: instance(#0000)
-            // Teal accent outline that fades in on the selected/open room, so the
-            // soft-teal wash is unambiguous even on the light canvas sidebar.
-            border_color_selected: instance(RBX_ACCENT)
-            border_size: uniform(1.5)
+            border_size: uniform(0.0)
             border_radius: uniform(6.0)
             border_inset: uniform(vec4(0.0))
 
             get_color: fn() -> vec4 {
                 return mix(self.color, self.color_selected, self.active)
-            }
-
-            get_border_color: fn() -> vec4 {
-                return mix(self.border_color, self.border_color_selected, self.active)
             }
 
             pixel: fn() {
@@ -209,7 +202,7 @@ script_mod! {
                 )
                 sdf.fill_keep(self.get_color())
                 if self.border_size > 0.0 {
-                    sdf.stroke(self.get_border_color(), self.border_size)
+                    sdf.stroke(self.border_color, self.border_size)
                 }
                 return sdf.result;
             }
@@ -473,7 +466,7 @@ impl RoomsListEntryContent {
         room_info: &JoinedRoomInfo,
         show_agent_badge: bool,
     ) {
-        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
+        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.display());
         // Note: entries are recycled by the PortalList, so every field must be set
         // in every branch below — otherwise a reused entry keeps showing another
         // room's stale timestamp/message preview until that field happens to change.
@@ -511,7 +504,7 @@ impl RoomsListEntryContent {
         room_info: &InvitedRoomInfo,
         app_language: AppLanguage,
     ) {
-        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
+        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.display());
         // Hide the timestamp field, and use the latest message field to show the inviter.
         self.view.label(cx, ids!(timestamp)).set_text(cx, "");
         // Space invites get their own wording, because "joining" a space means
@@ -607,8 +600,8 @@ impl RoomsListEntryContent {
             RBX_BG_SUNKEN, RBX_FG_PRIMARY, RBX_FG_SECONDARY, RBX_FG_TERTIARY,
         };
 
-        // The selected row uses a soft teal wash (RBX_BG_SELECTED) plus a teal
-        // accent outline (see the draw_bg shader) to signal the active room, so
+        // The selected row uses a soft teal wash (RBX_BG_SELECTED) alone — no
+        // border outline (see the draw_bg shader) — to signal the active room, so
         // the text stays dark and fully legible in both states — i.e. the text
         // colors are identical for selected and unselected rows.
         let message_text_color = RBX_FG_SECONDARY;
