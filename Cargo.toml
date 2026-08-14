@@ -63,9 +63,13 @@ matrix-sdk-ui = { git = "https://github.com/Project-Robius-China/matrix-rust-sdk
 ## * "compat-optional" feature to allow missing body field in m.room.tombstone event.
 ## * "compat-unset-avatar" feature to allow deleting the user's avatar to work properly.
 ## * Note: we need a feature like "compat-unset-display-name" to unset display names, but that doesn't exist yet.
+## * "unstable-compat-lax-syncv5-deser" (ruma#2510) tolerates non-compliant/corrupt fields in
+##   sliding sync v5 responses instead of failing the whole per-room object, which caused
+##   invites/newly-created rooms to never materialize while the client was running.
 ruma = { git = "https://github.com/ruma/ruma", rev = "a0acf4187a7c7557d145db54bcb23b01f6295ce7", features = [
     "compat-optional",
     "compat-unset-avatar",
+    "unstable-compat-lax-syncv5-deser",
 ] }
 rand = "0.8.5"
 rangemap = "1.5.0"
@@ -188,7 +192,11 @@ askar-storage = { git = "https://github.com/openwallet-foundation/askar.git" }
 ## Note: matrix-sdk currently uses a git dependency for ruma,
 ## so we patch the git source, not crates-io.
 [patch."https://github.com/ruma/ruma"]
-ruma = { git = "https://github.com/project-robius/ruma.git", branch = "tsp" }
+## Same as the "tsp" branch (at the rev this repo was already locked to), plus a
+## cherry-pick of ruma#2510 ("unstable-compat-lax-syncv5-deser"): tolerate
+## non-compliant/corrupt fields in sliding sync v5 responses instead of dropping
+## the whole per-room object (suspected cause of invites/new rooms never appearing).
+ruma = { git = "https://github.com/Project-Robius-China/ruma.git", branch = "tsp-lax-syncv5-deser" }
 
 [build-dependencies]
 toml = "1"
