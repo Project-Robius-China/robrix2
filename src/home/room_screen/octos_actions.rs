@@ -785,87 +785,6 @@ pub(super) fn are_action_buttons_disabled(
     disabled_source_event_ids.contains(source_event_id)
 }
 
-pub(super) fn octos_action_button_paths(index: usize) -> (&'static [LiveId], &'static [LiveId], &'static [LiveId], &'static [LiveId]) {
-    match index {
-        0 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_0), live_id!(danger_button)],
-        ),
-        1 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_1), live_id!(danger_button)],
-        ),
-        2 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_2), live_id!(danger_button)],
-        ),
-        3 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_3), live_id!(danger_button)],
-        ),
-        4 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_4), live_id!(danger_button)],
-        ),
-        _ => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(action_button_row), live_id!(action_button_slot_5), live_id!(danger_button)],
-        ),
-    }
-}
-
-pub(super) fn approval_action_button_paths(index: usize) -> (&'static [LiveId], &'static [LiveId], &'static [LiveId], &'static [LiveId]) {
-    match index {
-        0 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_0)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_0), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_0), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_0), live_id!(danger_button)],
-        ),
-        1 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_1)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_1), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_1), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_1), live_id!(danger_button)],
-        ),
-        2 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_2)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_2), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_2), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_2), live_id!(danger_button)],
-        ),
-        3 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_3)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_3), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_3), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_3), live_id!(danger_button)],
-        ),
-        4 => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_4)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_4), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_4), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_4), live_id!(danger_button)],
-        ),
-        _ => (
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_5)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_5), live_id!(primary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_5), live_id!(secondary_button)],
-            &[live_id!(content), live_id!(action_buttons), live_id!(approval_request_view), live_id!(approval_action_button_row), live_id!(approval_button_slot_5), live_id!(danger_button)],
-        ),
-    }
-}
 
 pub(super) fn populate_octos_action_buttons(
     cx: &mut Cx,
@@ -876,7 +795,7 @@ pub(super) fn populate_octos_action_buttons(
     original_content: Option<&serde_json::Value>,
     source_event_id: Option<&OwnedEventId>,
     original_sender: &UserId,
-    action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
+    action_button_contexts: &mut HashMap<(OwnedEventId, usize), OctosActionButtonContext>,
     disabled_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
 ) {
@@ -937,65 +856,40 @@ pub(super) fn populate_octos_action_buttons(
             ));
     }
 
-    for index in 0..MAX_OCTOS_ACTION_BUTTONS {
-        let (slot_path, primary_path, secondary_path, danger_path) = octos_action_button_paths(index);
-        item.view(cx, slot_path).set_visible(cx, false);
+    // Dynamic action row: ONE Splash per message replaces the former pool of
+    // 6 slots x 3 style-variant buttons (doubled by the approval card) that
+    // every message carried as permanently-invisible widgets. The row is
+    // built inside the Splash isolate from the generated body below; clicks
+    // come back over `agent.notify` (handled in `handle_message_actions`),
+    // keyed by (source event id, slot index) instead of widget uids.
+    action_button_contexts.retain(|_, context| context.item_id != item_id);
 
-        let primary_button = item.button(cx, primary_path);
-        action_button_contexts.remove(&primary_button.widget_uid());
-        primary_button.set_visible(cx, false);
-        primary_button.set_enabled(cx, !is_disabled);
+    let regular_splash = item.splash(cx, ids!(content.action_buttons.actions_splash));
+    let approval_splash = item.splash(
+        cx,
+        ids!(content.action_buttons.approval_request_view.approval_actions_splash),
+    );
+    let (active_splash, inactive_splash) = if is_approval {
+        (approval_splash, regular_splash)
+    } else {
+        (regular_splash, approval_splash)
+    };
+    // A recycled item may still hold the other family's evaluated view;
+    // `set_text("")` alone would keep it (empty bodies skip re-eval).
+    inactive_splash.set_visible(cx, false);
 
-        let secondary_button = item.button(cx, secondary_path);
-        action_button_contexts.remove(&secondary_button.widget_uid());
-        secondary_button.set_visible(cx, false);
-        secondary_button.set_enabled(cx, !is_disabled);
+    if visible_slots.is_empty() {
+        active_splash.set_visible(cx, false);
+        return;
+    }
+    active_splash.set_visible(cx, true);
+    active_splash.set_text(
+        cx,
+        &build_octos_actions_splash_body(&visible_slots, !is_disabled, source_event_id.as_str()),
+    );
 
-        let danger_button = item.button(cx, danger_path);
-        action_button_contexts.remove(&danger_button.widget_uid());
-        danger_button.set_visible(cx, false);
-        danger_button.set_enabled(cx, !is_disabled);
-
-        let (approval_slot_path, approval_primary_path, approval_secondary_path, approval_danger_path) =
-            approval_action_button_paths(index);
-        item.view(cx, approval_slot_path).set_visible(cx, false);
-
-        let approval_primary_button = item.button(cx, approval_primary_path);
-        action_button_contexts.remove(&approval_primary_button.widget_uid());
-        approval_primary_button.set_visible(cx, false);
-        approval_primary_button.set_enabled(cx, !is_disabled);
-
-        let approval_secondary_button = item.button(cx, approval_secondary_path);
-        action_button_contexts.remove(&approval_secondary_button.widget_uid());
-        approval_secondary_button.set_visible(cx, false);
-        approval_secondary_button.set_enabled(cx, !is_disabled);
-
-        let approval_danger_button = item.button(cx, approval_danger_path);
-        action_button_contexts.remove(&approval_danger_button.widget_uid());
-        approval_danger_button.set_visible(cx, false);
-        approval_danger_button.set_enabled(cx, !is_disabled);
-
-        let Some(render_slot) = visible_slots.get(index) else { continue };
-        let active_button = if is_approval {
-            item.view(cx, approval_slot_path).set_visible(cx, true);
-            match render_slot.style {
-                OctosActionStyle::Primary => approval_primary_button,
-                OctosActionStyle::Secondary => approval_secondary_button,
-                OctosActionStyle::Danger => approval_danger_button,
-            }
-        } else {
-            item.view(cx, slot_path).set_visible(cx, true);
-            match render_slot.style {
-                OctosActionStyle::Primary => primary_button,
-                OctosActionStyle::Secondary => secondary_button,
-                OctosActionStyle::Danger => danger_button,
-            }
-        };
-        active_button.set_visible(cx, true);
-        active_button.set_enabled(cx, !is_disabled);
-        active_button.set_text(cx, &render_slot.label);
-
-        if !is_disabled {
+    if !is_disabled {
+        for (index, render_slot) in visible_slots.iter().enumerate() {
             let request = if let Some(approval_request) = parsed_payload.approval_request.as_ref() {
                 OctosActionButtonRequest::Approval {
                     protocol: approval_request.protocol.clone(),
@@ -1015,16 +909,71 @@ pub(super) fn populate_octos_action_buttons(
                 }
             };
 
-            action_button_contexts.insert(active_button.widget_uid(), OctosActionButtonContext {
-                item_id,
-                item_widget_uid: item.widget_uid(),
-                source_event_id: source_event_id.clone(),
-                original_sender: original_sender.to_owned(),
-                request,
-            });
+            action_button_contexts.insert(
+                (source_event_id.clone(), index),
+                OctosActionButtonContext {
+                    item_id,
+                    item_widget_uid: item.widget_uid(),
+                    source_event_id: source_event_id.clone(),
+                    original_sender: original_sender.to_owned(),
+                    request,
+                },
+            );
         }
     }
 }
+
+/// The `agent.notify` event id splash-built action buttons report through.
+pub(super) const OCTOS_SPLASH_NOTIFY_EVENT: &str = "octos_action";
+
+/// Escape a string for embedding inside a double-quoted splash script literal.
+/// Labels arrive from the network; without this a crafted label could break
+/// out of the string and run arbitrary script in the (sandboxed) isolate.
+fn escape_splash_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Build the splash body for a message's action row. Enabled slots become
+/// Buttons whose `on_click` reports (source event id, slot index) back to
+/// Rust via `agent.notify`; a disabled row (selected or expired) renders as
+/// plain labels so no dead controls are shown.
+///
+/// Styling note: buttons use the isolate's stock light-theme look for now.
+/// Matching the RBX_* primary/secondary/danger styling needs a themed widget
+/// kit registered into the isolate VM -- tracked as a follow-up.
+pub(super) fn build_octos_actions_splash_body(
+    slots: &[ActionButtonRenderSlot],
+    enabled: bool,
+    source_event_id: &str,
+) -> String {
+    use std::fmt::Write;
+    let mut body =
+        String::from("width: Fill\nheight: Fit\nflow: Flow.Right{wrap: true}\nspacing: 8\n");
+    let source = escape_splash_string(source_event_id);
+    for (index, slot) in slots.iter().enumerate() {
+        let label = escape_splash_string(&slot.label);
+        if enabled {
+            let _ = write!(
+                body,
+                "b{index} := Button {{ text: \"{label}\" on_click: || {{ agent.notify(\"{event}\", {{source: \"{source}\", slot: {index}}}) }} }}\n",
+                event = OCTOS_SPLASH_NOTIFY_EVENT,
+            );
+        } else {
+            let _ = write!(body, "s{index} := Label {{ text: \"{label}\" }}\n");
+        }
+    }
+    body
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -131,7 +131,7 @@ pub(super) fn populate_message_view(
     room_bot_user_ids: &[OwnedUserId],
     known_bot_user_ids: &[OwnedUserId],
     streaming_messages: &mut HashMap<OwnedEventId, crate::home::streaming_animation::StreamingAnimState>,
-    action_button_contexts: &mut HashMap<WidgetUid, OctosActionButtonContext>,
+    action_button_contexts: &mut HashMap<(OwnedEventId, usize), OctosActionButtonContext>,
     disabled_action_source_event_ids: &HashSet<OwnedEventId>,
     selected_actions: &HashMap<OwnedEventId, SelectedOctosActionState>,
     expanded_bot_body_event_ids: &HashSet<OwnedEventId>,

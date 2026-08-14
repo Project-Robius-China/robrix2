@@ -63,18 +63,18 @@ script_mod! {
         draw_bg +: {
             border_radius: 4.0
             border_size: 0.0
-            border_color: #x00000000
-            border_color_hover: #x00000000
-            border_color_down: #x00000000
-            color: #x00000000
-            color_hover: #x00000000
-            color_down: #x00000000
+            border_color: (RBX_TRANSPARENT)
+            border_color_hover: (RBX_TRANSPARENT)
+            border_color_down: (RBX_TRANSPARENT)
+            color: (RBX_TRANSPARENT)
+            color_hover: (RBX_TRANSPARENT)
+            color_down: (RBX_TRANSPARENT)
         }
         draw_text +: {
             text_style: SMALL_STATE_TEXT_STYLE { font_size: 11.0 }
-            color: #x232A31
-            color_hover: #x1A1F25
-            color_down: #x0E1217
+            color: (RBX_INK_TOGGLE)
+            color_hover: (RBX_INK_TOGGLE_HOVER)
+            color_down: (RBX_INK_TOGGLE_DOWN)
         }
         text: ""
     }
@@ -120,7 +120,7 @@ script_mod! {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
         }
-        text_style_bold: theme.font_bold {
+        text_style_bold: BOLD_TEXT {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
         }
@@ -182,23 +182,23 @@ script_mod! {
                         }
                     }
                     token_colors +: {
-                        whitespace: #x6a737d
-                        delimiter: #x24292e
-                        delimiter_highlight: #x005cc5
-                        error_decoration: #xcb2431
-                        warning_decoration: #xb08800
-                        unknown: #x24292e
-                        branch_keyword: #xd73a49
-                        constant: #x005cc5
-                        identifier: #x24292e
-                        loop_keyword: #xd73a49
-                        number: #x005cc5
-                        other_keyword: #xd73a49
-                        punctuator: #x24292e
-                        string: #x22863a
-                        function: #x6f42c1
-                        typename: #xe36209
-                        comment: #x6a737d
+                        whitespace: (RBX_SYNTAX_MUTED)
+                        delimiter: (RBX_SYNTAX_TEXT)
+                        delimiter_highlight: (RBX_SYNTAX_LITERAL)
+                        error_decoration: (RBX_SYNTAX_ERROR)
+                        warning_decoration: (RBX_SYNTAX_WARNING)
+                        unknown: (RBX_SYNTAX_TEXT)
+                        branch_keyword: (RBX_SYNTAX_KEYWORD)
+                        constant: (RBX_SYNTAX_LITERAL)
+                        identifier: (RBX_SYNTAX_TEXT)
+                        loop_keyword: (RBX_SYNTAX_KEYWORD)
+                        number: (RBX_SYNTAX_LITERAL)
+                        other_keyword: (RBX_SYNTAX_KEYWORD)
+                        punctuator: (RBX_SYNTAX_TEXT)
+                        string: (RBX_SYNTAX_STRING)
+                        function: (RBX_SYNTAX_FUNCTION)
+                        typename: (RBX_SYNTAX_TYPE)
+                        comment: (RBX_SYNTAX_MUTED)
                     }
                 }
             }
@@ -749,12 +749,12 @@ script_mod! {
                         flow: Flow.Right{wrap: true}
                         spacing: 8.0
 
-                        action_button_slot_0 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_1 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_2 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_3 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_4 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_5 := mod.widgets.MessageActionButtonSlot {}
+                        // Octos action buttons are built dynamically in this
+                        // Splash's isolate from the message's declared actions
+                        // (octos_actions.rs::build_octos_actions_splash_body).
+                        // This replaces a pool of 6 slots x 3 style buttons
+                        // that every message instantiated invisibly.
+                        actions_splash := Splash { width: Fill, height: Fit }
                     }
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
@@ -928,12 +928,12 @@ script_mod! {
                         flow: Flow.Right{wrap: true}
                         spacing: 8.0
 
-                        action_button_slot_0 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_1 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_2 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_3 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_4 := mod.widgets.MessageActionButtonSlot {}
-                        action_button_slot_5 := mod.widgets.MessageActionButtonSlot {}
+                        // Octos action buttons are built dynamically in this
+                        // Splash's isolate from the message's declared actions
+                        // (octos_actions.rs::build_octos_actions_splash_body).
+                        // This replaces a pool of 6 slots x 3 style buttons
+                        // that every message instantiated invisibly.
+                        actions_splash := Splash { width: Fill, height: Fit }
                     }
                 }
                 link_preview_view := mod.widgets.LinkPreview {}
