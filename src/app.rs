@@ -1633,31 +1633,14 @@ impl MatchEvent for App {
             // Handle actions that instruct us to update the top-level app state.
             if let Some(LeaveRoomResultAction::Left { room_id }) = action.downcast_ref() {
                 enqueue_rooms_list_update(RoomsListUpdate::HideRoom { room_id: room_id.clone() });
-                self.app_state
-                    .bot_settings
-                    .set_room_bound(room_id.clone(), None, false);
-
-                let removed_from_home = self.app_state.saved_dock_state_home.remove_room_id(room_id);
-                let removed_from_spaces: usize = self.app_state.saved_dock_state_per_space
-                    .values_mut()
-                    .map(|saved| saved.remove_room_id(room_id))
-                    .sum();
-                let removed_tabs = removed_from_home + removed_from_spaces;
-                let mut cleared_selected_room = false;
-
-                if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
-                    self.app_state.selected_room = None;
-                    cleared_selected_room = true;
-                }
-                if removed_tabs > 0 || cleared_selected_room {
-                    if let Some(user_id) = current_user_id() {
-                        if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
-                            error!("Failed to persist app state after leaving room {room_id}. Error: {e}");
-                        }
-                    }
-                }
-
-                cx.action(MainDesktopUiAction::CloseRoomTabs { room_id: room_id.clone() });
+                self.purge_room_ui_state(cx, room_id);
+                continue;
+            }
+            // A room was removed remotely (this user was kicked or banned by someone
+            // else), which never goes through the local `LeaveRoomResultAction::Left`
+            // path above; perform the same top-level UI cleanup for it.
+            if let Some(AppStateAction::RoomRemovedRemotely(room_id)) = action.downcast_ref() {
+                self.purge_room_ui_state(cx, room_id);
                 continue;
             }
 
@@ -2937,6 +2920,39 @@ impl App {
             .iter()
             .position(|candidate| *candidate == view_id)
             .map(|index| Self::ROOM_SCREEN_IDS[index])
+    }
+
+    /// Purges all top-level UI state for a room this user is no longer in,
+    /// whether they left it locally or were kicked/banned remotely:
+    /// unbinds bots, removes its tabs from all saved dock states, clears the
+    /// selected room if it was this one, persists the app state if anything
+    /// changed, and closes any open dock tabs for it.
+    fn purge_room_ui_state(&mut self, cx: &mut Cx, room_id: &OwnedRoomId) {
+        self.app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), None, false);
+
+        let removed_from_home = self.app_state.saved_dock_state_home.remove_room_id(room_id);
+        let removed_from_spaces: usize = self.app_state.saved_dock_state_per_space
+            .values_mut()
+            .map(|saved| saved.remove_room_id(room_id))
+            .sum();
+        let removed_tabs = removed_from_home + removed_from_spaces;
+        let mut cleared_selected_room = false;
+
+        if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
+            self.app_state.selected_room = None;
+            cleared_selected_room = true;
+        }
+        if removed_tabs > 0 || cleared_selected_room {
+            if let Some(user_id) = current_user_id() {
+                if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                    error!("Failed to persist app state after being removed from room {room_id}. Error: {e}");
+                }
+            }
+        }
+
+        cx.action(MainDesktopUiAction::CloseRoomTabs { room_id: room_id.clone() });
     }
 
     fn set_mobile_room_view_updates_enabled(
@@ -4421,6 +4437,9 @@ pub enum AppStateAction {
         room_to_close: Option<OwnedRoomId>,
         destination_room: BasicRoomDetails,
     },
+    /// The given room was removed remotely (this user was kicked or banned),
+    /// so all of its top-level UI state (dock tabs, selection) must be purged.
+    RoomRemovedRemotely(OwnedRoomId),
     None,
 }
 

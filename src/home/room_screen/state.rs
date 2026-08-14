@@ -235,8 +235,18 @@ thread_local! {
     /// The global set of all timeline states, one entry per room.
     ///
     /// This is only useful when accessed from the main UI thread.
-    pub(super) static TIMELINE_STATES: RefCell<HashMap<TimelineKind, TimelineUiState>> = 
+    pub(super) static TIMELINE_STATES: RefCell<HashMap<TimelineKind, TimelineUiState>> =
         RefCell::new(HashMap::new());
+
+    /// Rooms whose timeline states have been invalidated (left/kicked/banned)
+    /// and must not be re-saved into `TIMELINE_STATES`.
+    ///
+    /// A still-open RoomScreen saves its state back into `TIMELINE_STATES` when
+    /// it is hidden/closed, which can happen *after* the invalidation ran.
+    /// This set lets `store_timeline_state` reject such late re-insertions.
+    /// A room is removed from this set once it becomes joined again.
+    static INVALIDATED_TIMELINE_ROOMS: RefCell<HashSet<OwnedRoomId>> =
+        RefCell::new(HashSet::new());
 }
 
 /// The UI-side state of a single room's timeline, which is only accessed/updated by the UI thread.
@@ -442,6 +452,31 @@ pub fn invalidate_timeline_state_for_room(_cx: &mut Cx, room_id: &RoomId) {
     TIMELINE_STATES.with_borrow_mut(|states| {
         states.retain(|kind, _| kind.room_id() != room_id);
     });
+    // A RoomScreen currently displaying this room still holds its state and will
+    // try to save it back upon being hidden/closed; block that re-insertion.
+    INVALIDATED_TIMELINE_ROOMS.with_borrow_mut(|rooms| {
+        rooms.insert(room_id.to_owned());
+    });
+}
+
+/// Marks the given room as valid again, e.g., once it has been (re-)joined,
+/// such that its timeline states can be saved to `TIMELINE_STATES` once more.
+pub fn clear_timeline_invalidation_for_room(room_id: &RoomId) {
+    INVALIDATED_TIMELINE_ROOMS.with_borrow_mut(|rooms| {
+        rooms.remove(room_id);
+    });
+}
+
+/// Saves the given timeline state into the global `TIMELINE_STATES` map,
+/// unless its room has been invalidated (left/kicked/banned) in the meantime.
+pub(super) fn store_timeline_state(tl: TimelineUiState) {
+    let is_invalidated = INVALIDATED_TIMELINE_ROOMS
+        .with_borrow(|rooms| rooms.contains(tl.kind.room_id()));
+    if is_invalidated {
+        log!("Discarding timeline state for invalidated (left/banned) room {:?}", tl.kind);
+        return;
+    }
+    TIMELINE_STATES.with_borrow_mut(|ts| ts.insert(tl.kind.clone(), tl));
 }
 
 #[cfg(test)]

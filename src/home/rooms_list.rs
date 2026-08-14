@@ -30,7 +30,7 @@ use crate::{
         add_room::CreateRoomAction,
         navigation_tab_bar::{NavigationBarAction, SelectedTab},
         room_context_menu::RoomContextMenuDetails,
-        room_screen::invalidate_timeline_state_for_room,
+        room_screen::{clear_timeline_invalidation_for_room, invalidate_timeline_state_for_room},
         rooms_list_entry::RoomsListEntryAction,
         space_lobby::{SpaceLobbyAction, SpaceLobbyEntryWidgetExt},
     },
@@ -784,6 +784,8 @@ impl RoomsList {
                 }
                 RoomsListUpdate::AddJoinedRoom(joined_room) => {
                     let room_id = joined_room.room_name_id.room_id().clone();
+                    // (Re-)joining a room makes its timeline states storable again.
+                    clear_timeline_invalidation_for_room(&room_id);
                     let is_direct = joined_room.is_direct;
                     let has_favorite_tag = joined_room.tags.contains_key(&TagName::Favorite);
                     let has_low_priority_tag = joined_room.tags.contains_key(&TagName::LowPriority);
@@ -1040,9 +1042,12 @@ impl RoomsList {
                     // drop all of its saved timeline UI state. This also covers the
                     // case where the room state changed remotely (e.g. the user was
                     // kicked/banned by someone else), which never goes through the
-                    // local `LeaveRoomResultAction::Left` cleanup path in `app.rs`.
+                    // local `LeaveRoomResultAction::Left` cleanup path in `app.rs` —
+                    // so also ask the top-level App to purge this room's dock tabs
+                    // and selection state (idempotent if a local leave already did).
                     if matches!(new_state, RoomState::Left | RoomState::Banned) {
                         invalidate_timeline_state_for_room(cx, &room_id);
+                        cx.action(AppStateAction::RoomRemovedRemotely(room_id.clone()));
                     }
 
                     self.update_status();

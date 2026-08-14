@@ -85,7 +85,7 @@ use small_state::*;
 use state::*;
 pub use threads_pane::*;
 pub(crate) use bot_admin::is_known_or_likely_bot;
-pub use state::{RoomScreenProps, RoomScreenTooltipActions, TimelineUpdate, clear_timeline_states, invalidate_timeline_state_for_room};
+pub use state::{RoomScreenProps, RoomScreenTooltipActions, TimelineUpdate, clear_timeline_states, clear_timeline_invalidation_for_room, invalidate_timeline_state_for_room};
 
 /// The maximum number of timeline items to search through
 /// when looking for a particular event.
@@ -2290,8 +2290,9 @@ impl RoomScreen {
         // memory reclaim until the next room's info pane is built.
         self.room_info_members_cache = None;
         self.timeline_bot_context_cache = None;
-        // Store this Timeline's `TimelineUiState` in the global map of states.
-        TIMELINE_STATES.with_borrow_mut(|ts| ts.insert(tl.kind.clone(), tl));
+        // Store this Timeline's `TimelineUiState` in the global map of states,
+        // unless the room was invalidated (left/kicked/banned) while it was open.
+        state::store_timeline_state(tl);
     }
 
     /// Restores the previously-saved visual UI state of this room.
