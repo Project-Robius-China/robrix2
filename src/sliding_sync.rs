@@ -39,7 +39,7 @@ use robius_open::Uri;
 use ruma::{OwnedRoomOrAliasId, OwnedTransactionId, RoomId, events::tag::Tags, room::JoinRule, serde::Raw};
 use tokio::{
     runtime::Handle,
-    sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify}, task::JoinHandle, time::error::Elapsed,
+    sync::{broadcast, mpsc::{Sender, UnboundedReceiver, UnboundedSender}, oneshot, watch, Notify, Semaphore}, task::JoinHandle, time::error::Elapsed,
 };
 use url::Url;
 use std::{borrow::Cow, cmp::{max, min}, future::Future, hash::{BuildHasherDefault, DefaultHasher}, iter::Peekable, ops::{Deref, DerefMut, Not, Range}, path::{ Path, PathBuf }, sync::{Arc, LazyLock, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
@@ -9508,10 +9508,18 @@ async fn timeline_subscriber_handler(
 
 /// Spawn a new async task to fetch the room's new avatar.
 fn spawn_fetch_room_avatar(room: &RoomListServiceRoomInfo) {
+    // Limit the number of concurrent room avatar fetches, as they can be
+    // expensive and max out the CPUs. Login enumerates every joined room at
+    // once, so without a cap this spawns one decode task per room and
+    // saturates the machine exactly when the UI is trying to draw its first
+    // frames. Ported from upstream commit c43d154.
+    static ROOM_AVATAR_FETCH_LIMIT: Semaphore = Semaphore::const_new(8);
+
     let room_id = room.room_id.clone();
     let room_name_id = RoomNameId::from((room.display_name.clone(), room.room_id.clone()));
     let inner_room = room.room.clone();
     Handle::current().spawn(async move {
+        let Ok(_permit) = ROOM_AVATAR_FETCH_LIMIT.acquire().await else { return };
         let room_avatar = room_avatar(&inner_room, &room_name_id).await;
         rooms_list::enqueue_rooms_list_update(RoomsListUpdate::UpdateRoomAvatar {
             room_id,
@@ -9951,9 +9959,18 @@ async fn discover_homeserver_capabilities(
 
     // Step 3: /v3/login — SSO providers (non-fatal on failure).
     let login_url = format!("{base_url}/_matrix/client/v3/login");
+    let mut sso_supported = false;
     let sso_providers = match http.get(&login_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = body_json(resp).await;
+            sso_supported = body
+                .get("flows")
+                .and_then(|f: &Value| f.as_array())
+                .is_some_and(|flows| {
+                    flows.iter().any(|f: &Value| {
+                        f.get("type").and_then(|t: &Value| t.as_str()) == Some("m.login.sso")
+                    })
+                });
             body.get("flows")
                 .and_then(|f: &Value| f.as_array())
                 .map(|flows| {
@@ -10016,6 +10033,7 @@ async fn discover_homeserver_capabilities(
         is_mas_native_oidc: is_mas,
         registration_enabled,
         uiaa_probe,
+        sso_supported,
         sso_providers,
         mas_signup_url,
         mas_issuer_url,
