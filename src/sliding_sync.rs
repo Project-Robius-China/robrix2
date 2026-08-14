@@ -10062,9 +10062,18 @@ async fn discover_homeserver_capabilities(
 
     // Step 3: /v3/login — SSO providers (non-fatal on failure).
     let login_url = format!("{base_url}/_matrix/client/v3/login");
+    let mut sso_supported = false;
     let sso_providers = match http.get(&login_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = body_json(resp).await;
+            sso_supported = body
+                .get("flows")
+                .and_then(|f: &Value| f.as_array())
+                .is_some_and(|flows| {
+                    flows.iter().any(|f: &Value| {
+                        f.get("type").and_then(|t: &Value| t.as_str()) == Some("m.login.sso")
+                    })
+                });
             body.get("flows")
                 .and_then(|f: &Value| f.as_array())
                 .map(|flows| {
@@ -10127,6 +10136,7 @@ async fn discover_homeserver_capabilities(
         is_mas_native_oidc: is_mas,
         registration_enabled,
         uiaa_probe,
+        sso_supported,
         sso_providers,
         mas_signup_url,
         mas_issuer_url,

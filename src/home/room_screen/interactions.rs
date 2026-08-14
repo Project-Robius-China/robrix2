@@ -405,11 +405,25 @@ impl RoomScreen {
         loading_pane: &LoadingPaneRef,
         scope: &mut Scope,
     ) {
-        if let Some(clicked_context) = self.octos_action_button_contexts
+        // Splash-built action buttons report clicks via `agent.notify` from
+        // their isolate VM; the payload carries (source event id, slot index),
+        // which keys `octos_action_button_contexts`.
+        if let Some(clicked_context) = actions
             .iter()
-            .find_map(|(widget_uid, context)| {
-                actions.find_widget_action(*widget_uid)
-                    .and_then(|item| matches!(item.cast(), ButtonAction::Clicked(_)).then(|| context.clone()))
+            .find_map(|action| {
+                let SplashAction::Notify { event_id, payload } = action.cast() else {
+                    return None;
+                };
+                if event_id != OCTOS_SPLASH_NOTIFY_EVENT {
+                    return None;
+                }
+                let parsed: serde_json::Value = serde_json::from_str(&payload).ok()?;
+                let source_event_id =
+                    OwnedEventId::try_from(parsed.get("source")?.as_str()?).ok()?;
+                let slot = parsed.get("slot")?.as_u64()? as usize;
+                self.octos_action_button_contexts
+                    .get(&(source_event_id, slot))
+                    .cloned()
             })
         {
             if clicked_context.request.is_expired(current_unix_time_millis()) {

@@ -1,6 +1,6 @@
 # Operations Acceptance and Troubleshooting
 
-> **Scope**: This chapter provides layer-by-layer checklists from Matrix ingress to tmux and back through the approval return path. Use it for problems like "the agent doesn't reply, Threads go astray, cards don't appear, clicking still shows expired."
+> **Scope**: This chapter provides layer-by-layer checklists from Matrix ingress through thread-session routing and one-shot runners, and back through the approval return path. Use it for problems like "the agent doesn't reply, Threads go astray, cards don't appear, clicking still shows expired."
 
 ## Pre-Release Acceptance Checklist
 
@@ -36,20 +36,19 @@ Check the pipeline layer by layer; do not just restart everything:
 Matrix event
   → explicit mention / trusted room
   → bridge ingestion
-  → backend message
-  → push relay notification
-  → managed tmux
-  → Agent check_inbox
-  → backend post/reply
-  → Matrix puppet send
+  → backend message → thread-session routing (one session per (agent, thread))
+  → dispatch queued (queued → leased → started → completed)
+  → one-shot runner spawned
+  → runner reply → reply outbox
+  → bridge claims outbound → Matrix puppet send
 ```
 
 - Was the full target actually @-mentioned in the room; is `MATRIX_DEFAULT_WAKE` set to `off`;
 - Are both the agent and its companion bridge joined; invite polling may default to roughly 60 seconds;
-- Is `agentchat ls` showing online; is the dashboard heartbeat fresh;
-- Backend inbox has the message but tmux is not advancing: check the push relay and the idle gate;
-- Claude/Codex was manually restarted inside tmux: use `agentchat down/up` to restore a managed launch;
-- The agent posts to the wrong place: check whether its outbound message references the original backend `reply_to`.
+- Is the agent registered in `hafleet ls`; is the backend `/health` agents count non-zero (zero usually means `HAFLEET_RUNTIME_DIR` points at the wrong data directory);
+- Dispatches stuck in `queued`: read the backend log's `[router-runner]` lines. `agent token is unavailable` = `HAFLEET_HOMEDIR` disagrees with the agent home; a model 400 = `/thread model` named a model incompatible with the agent's framework;
+- A dispatch lands in `outcome_unknown`: the runner died after work may have started (model error, killed process). The session fail-closes until an operator adjudicates via `POST /api/router/dispatches/:id/outcome-inspection` → `resolve-outcome` (action `continue` with a recovery instruction), after which the turn re-runs automatically;
+- The agent says it is in plan mode: expected — chat turns are read-only; write access goes through the task flow or `/thread mode auto`.
 
 ## Thread Replies Fall Into the Main Timeline
 
@@ -65,14 +64,14 @@ If the project room has E2EE enabled, the current agent group outbound path does
 
 Confirm from the entry point downward:
 
-1. If tmux shows the runtime's own local permission selection box, first determine whether this is the waiting UI taken over by agent-chat; the criterion is whether a pending approval actually appears in the backend;
+1. The only criterion is whether a pending approval actually appears in the backend (runner approvals travel over the MCP approval channel into the backend; there is no local tmux prompt any more);
 2. Was Claude started by the launcher with auto + Ask rules; is the Codex hook trusted and its hash matching;
 3. Did the approval store find a unique `(room, agent)→owner`; otherwise it is `owner_binding_missing/ambiguous`;
 4. Has the owner joined the approval room; otherwise it is `owner_invite_pending`;
-5. Did the bridge send `com.agentchat.approval.request.v1`; is there a queued UTD in E2EE;
+5. Did the bridge send `com.hafleet.approval.request.v1`; is there a queued UTD in E2EE;
 6. Has Robrix2 synced, decrypted, and rendered the custom event.
 
-Do not substitute a chat-text "approve" for the card, and do not select Yes inside tmux to skip Matrix-side acceptance.
+Do not substitute a chat-text "approve" for the card, and do not bypass Matrix-side acceptance by any local means.
 
 ## Clicked Approve, but the Runtime Still Shows Expired/Denied
 
@@ -84,9 +83,10 @@ Check the final rejection code in the backend audit and the bridge's verdict log
 
 | What you want to know | Authoritative / primary evidence |
 |------------|---------------|
-| Is the agent process online | managed process/tmux + backend heartbeat |
+| Is the agent available | `hafleet ls` registration + backend `/health` (idle agents having zero processes is normal under thread-session mode) |
 | Did the message reach the backend | backend message/inbox |
 | Where the workflow stands | workflow state + durable task (if any) + Thread; there is currently no single authoritative source |
+| A turn's execution state | the router's dispatch records (queued/started/completed/outcome_unknown) |
 | Who can approve | bridge owner binding + the original Matrix invite sender |
 | Approval outcome | backend approval store/audit |
 | Is the code done | Git commit/worktree + actual test results |

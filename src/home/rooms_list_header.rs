@@ -56,8 +56,8 @@ script_mod! {
             }
 
             back_click_area := Button {
-                width: Fill,
-                height: Fill
+                width: (RBX_CONTROL_H_SM),
+                height: (RBX_CONTROL_H_SM)
                 padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
                 spacing: 0,
                 text: ""
@@ -92,7 +92,7 @@ script_mod! {
             draw_text +: {
                 color: (RBX_FG_PRIMARY)
                 // Regular weight (thinner) — reads as a title via size, not boldness.
-                text_style: theme.font_regular { font_size: 14 }
+                text_style: REGULAR_TEXT { font_size: 14 }
             }
         },
 
@@ -118,8 +118,8 @@ script_mod! {
             }
 
             add_click_area := Button {
-                width: Fill,
-                height: Fill
+                width: (RBX_CONTROL_H_SM),
+                height: (RBX_CONTROL_H_SM)
                 padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
                 spacing: 0,
                 text: ""
@@ -144,11 +144,15 @@ script_mod! {
             }
         }
 
+        // Sized rather than Fit so the transparent click_area below fills a
+        // real hit target instead of shrink-wrapping the 18px icon (spec §7.1
+        // touch/pointer targets).
         open_directory_button := View {
-            width: Fit,
-            height: Fit
+            width: (RBX_CONTROL_H_SM),
+            height: (RBX_CONTROL_H_SM)
             margin: Inset{right: 1}
             flow: Overlay,
+            align: Align{x: 0.5, y: 0.5}
 
             Icon {
                 draw_icon +: {
@@ -159,8 +163,10 @@ script_mod! {
             }
 
             directory_click_area := Button {
-                width: Fill,
-                height: Fill
+                // Explicit size: the parent is Fit-shrunk by the header row, so Fill
+                // resolves smaller than the 32dp minimum target.
+                width: (RBX_CONTROL_H_SM),
+                height: (RBX_CONTROL_H_SM)
                 padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
                 spacing: 0,
                 text: ""
@@ -186,10 +192,11 @@ script_mod! {
         }
 
         open_room_filter_modal_button := View {
-            width: Fit,
-            height: Fit
+            width: (RBX_CONTROL_H_SM),
+            height: (RBX_CONTROL_H_SM)
             margin: Inset{right: 1}
             flow: Overlay,
+            align: Align{x: 0.5, y: 0.5}
 
             Icon {
                 draw_icon +: {
@@ -200,8 +207,8 @@ script_mod! {
             }
 
             click_area := Button {
-                width: Fill,
-                height: Fill
+                width: (RBX_CONTROL_H_SM),
+                height: (RBX_CONTROL_H_SM)
                 padding: Inset{top: 6, bottom: 6, left: 6, right: 6}
                 spacing: 0,
                 text: ""

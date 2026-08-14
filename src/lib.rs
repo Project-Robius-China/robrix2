@@ -55,6 +55,12 @@ pub mod register;
 pub mod logout;
 /// Core UI content: the main home screen (rooms list), room screen.
 pub mod home;
+/// Agent Operations Panel: a fail-closed client-contract status screen.
+#[cfg(feature = "agent_chat")]
+pub mod agent_ops;
+/// Inert stand-in so the panel's DSL name resolves without the feature.
+#[cfg(not(feature = "agent_chat"))]
+pub mod agent_ops_dummy;
 /// User profile info and a user profile sliding pane.
 pub mod profile;
 /// A modal/dialog popup for interactive verification of users/devices.

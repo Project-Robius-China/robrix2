@@ -2,7 +2,10 @@ use makepad_widgets::*;
 
 use crate::{
     app::AppState,
-    home::navigation_tab_bar::{NavigationBarAction, SelectedTab},
+    home::{
+        navigation_tab_bar::{NavigationBarAction, SelectedTab},
+        rooms_list::RoomsListAction,
+    },
     settings::app_preferences::{AppPreferencesAction, ViewModeOverride},
     settings::settings_screen::SettingsScreenWidgetRefExt,
     shared::room_filter_input_bar::{MainFilterAction, RoomFilterInputBarWidgetExt},
@@ -212,7 +215,7 @@ script_mod! {
                         max_lines: 1
                         text_overflow: Ellipsis
                         draw_text +: {
-                            text_style: theme.font_bold { font_size: 13.0 }
+                            text_style: BOLD_TEXT { font_size: 13.0 }
                             color: (ROOM_NAME_TEXT_COLOR)
                         }
                     }
@@ -222,7 +225,7 @@ script_mod! {
                         max_lines: 1
                         text_overflow: Ellipsis
                         draw_text +: {
-                            text_style: theme.font_regular { font_size: 9.5 }
+                            text_style: REGULAR_TEXT { font_size: 9.5 }
                             color: (RBX_FG_SECONDARY)
                         }
                         text: ""
@@ -274,7 +277,7 @@ script_mod! {
                 show: AnimatorState{
                     redraw: true
                     from: { all: Forward { duration: (mod.widgets.SPACES_BAR_ANIMATION_DURATION_SECS) } }
-                    apply: { height: (NAVIGATION_TAB_BAR_SIZE),  draw_bg: { shadow_color: #x00000055 } }
+                    apply: { height: (NAVIGATION_TAB_BAR_SIZE),  draw_bg: { shadow_color: (RBX_SHADOW_NAV) } }
                 }
                 hide: AnimatorState{
                     redraw: true
@@ -359,6 +362,16 @@ script_mod! {
                             directory_screen := mod.widgets.DirectoryScreen {}
                         }
                     }
+
+                    agent_ops_page := SolidView {
+                        width: Fill, height: Fill
+                        show_bg: true,
+                        draw_bg.color: (COLOR_PRIMARY)
+
+                        CachedWidget {
+                            agent_ops_panel := mod.widgets.AgentOpsPanel {}
+                        }
+                    }
                 }
             }
 
@@ -412,6 +425,14 @@ script_mod! {
 
                                 CachedWidget {
                                     directory_screen := mod.widgets.DirectoryScreen {}
+                                }
+                            }
+
+                            agent_ops_page := View {
+                                width: Fill, height: Fill
+
+                                CachedWidget {
+                                    agent_ops_panel := mod.widgets.AgentOpsPanel {}
                                 }
                             }
                         }
@@ -522,6 +543,25 @@ impl Widget for HomeScreen {
 
             let app_state = scope.data.get_mut::<AppState>().unwrap();
             for action in actions {
+                // A room selection can originate from the sidebar or from any
+                // programmatic navigation path. Normalize the top-level page
+                // here, before forwarding the action to the desktop Dock, so
+                // the focused room can never open behind an overlay page.
+                if matches!(
+                    action.as_widget_action().cast_ref(),
+                    RoomsListAction::Selected(_),
+                ) {
+                    let next_selection = selection_after_opening_room(&app_state.selected_tab);
+                    if next_selection != app_state.selected_tab {
+                        self.previous_selection = app_state.selected_tab.clone();
+                        app_state.selected_tab = next_selection;
+                        cx.action(NavigationBarAction::TabSelected(app_state.selected_tab.clone()));
+                        self.update_active_page_from_selection(cx, app_state);
+                        self.view.redraw(cx);
+                    }
+                    continue;
+                }
+
                 if let Some(AppPreferencesAction::ViewModeChanged(new_mode)) = action.downcast_ref() {
                     if *new_mode != self.applied_view_mode {
                         self.apply_view_mode(cx, *new_mode);
@@ -555,6 +595,18 @@ impl Widget for HomeScreen {
                             self.view.redraw(cx);
                         }
                     }
+                    Some(NavigationBarAction::GoToAgentOps) => {
+                        #[cfg(feature = "agent_chat")]
+                        if app_state.app_prefs.agent_chat_enabled
+                            && !matches!(app_state.selected_tab, SelectedTab::AgentOps)
+                        {
+                            self.previous_selection = app_state.selected_tab.clone();
+                            app_state.selected_tab = SelectedTab::AgentOps;
+                            cx.action(NavigationBarAction::TabSelected(app_state.selected_tab.clone()));
+                            self.update_active_page_from_selection(cx, app_state);
+                            self.view.redraw(cx);
+                        }
+                    }
                     Some(NavigationBarAction::GoToSpace { space_name_id }) => {
                         let new_space_selection = SelectedTab::Space { space_name_id: space_name_id.clone() };
                         if app_state.selected_tab != new_space_selection {
@@ -581,7 +633,11 @@ impl Widget for HomeScreen {
                     }
                     Some(NavigationBarAction::CloseSettings) => {
                         if matches!(app_state.selected_tab, SelectedTab::Settings) {
-                            app_state.selected_tab = self.previous_selection.clone();
+                            let next_selection = selection_after_closing_settings(
+                                &self.previous_selection,
+                                app_state,
+                            );
+                            app_state.selected_tab = next_selection;
                             cx.action(NavigationBarAction::TabSelected(app_state.selected_tab.clone()));
                             self.update_active_page_from_selection(cx, app_state);
                             self.view.redraw(cx);
@@ -631,6 +687,12 @@ impl HomeScreen {
         cx: &mut Cx,
         app_state: &mut AppState,
     ) -> Option<WidgetRef> {
+        if matches!(app_state.selected_tab, SelectedTab::AgentOps)
+            && (!cfg!(feature = "agent_chat") || !app_state.app_prefs.agent_chat_enabled)
+        {
+            app_state.selected_tab = SelectedTab::Home;
+        }
+
         self.view
             .page_flip(cx, ids!(home_screen_page_flip))
             .set_active_page(
@@ -641,7 +703,111 @@ impl HomeScreen {
                     SelectedTab::Settings => id!(settings_page),
                     SelectedTab::AddRoom => id!(add_room_page),
                     SelectedTab::Directory => id!(directory_page),
+                    SelectedTab::AgentOps => id!(agent_ops_page),
                 },
             )
+    }
+}
+
+fn selection_after_opening_room(current_selection: &SelectedTab) -> SelectedTab {
+    if current_selection.shows_room_workspace() {
+        current_selection.clone()
+    } else {
+        SelectedTab::Home
+    }
+}
+
+fn selection_after_closing_settings(
+    previous_selection: &SelectedTab,
+    app_state: &AppState,
+) -> SelectedTab {
+    if matches!(previous_selection, SelectedTab::AgentOps)
+        && (!cfg!(feature = "agent_chat") || !app_state.app_prefs.agent_chat_enabled)
+    {
+        SelectedTab::Home
+    } else {
+        previous_selection.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn space_selection() -> SelectedTab {
+        let room_id: matrix_sdk::ruma::OwnedRoomId =
+            "!agent-ops-space:example.org".try_into().unwrap();
+        SelectedTab::Space {
+            space_name_id: crate::utils::RoomNameId::empty(room_id),
+        }
+    }
+
+    #[test]
+    fn opening_room_preserves_pages_that_show_the_room_workspace() {
+        for selection in [SelectedTab::Home, space_selection()] {
+            assert_eq!(selection_after_opening_room(&selection), selection);
+        }
+    }
+
+    #[test]
+    fn opening_room_leaves_every_overlay_page_for_home() {
+        for selection in [
+            SelectedTab::AddRoom,
+            SelectedTab::Settings,
+            SelectedTab::Directory,
+            SelectedTab::AgentOps,
+        ] {
+            assert_eq!(
+                selection_after_opening_room(&selection),
+                SelectedTab::Home,
+                "room selected while {selection:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn production_navigation_actions_use_the_tested_transitions() {
+        let source = include_str!("home_screen.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        assert!(
+            production.contains("RoomsListAction::Selected(_)")
+                && production.matches("selection_after_opening_room(").count() == 2,
+            "the room-selection action must call the tested page transition",
+        );
+        assert_eq!(
+            production.matches("selection_after_closing_settings(").count(),
+            2,
+            "the CloseSettings action must call the tested page transition",
+        );
+    }
+
+    #[test]
+    fn closing_settings_never_returns_to_disabled_agent_ops() {
+        let app_state = AppState::default();
+        assert_eq!(
+            selection_after_closing_settings(&SelectedTab::AgentOps, &app_state),
+            SelectedTab::Home,
+        );
+    }
+
+    #[test]
+    fn closing_settings_preserves_other_previous_pages() {
+        let app_state = AppState::default();
+        assert_eq!(
+            selection_after_closing_settings(&SelectedTab::Directory, &app_state),
+            SelectedTab::Directory,
+        );
+    }
+
+    #[cfg(feature = "agent_chat")]
+    #[test]
+    fn closing_settings_may_return_to_enabled_agent_ops() {
+        let mut app_state = AppState::default();
+        app_state.app_prefs.agent_chat_enabled = true;
+        assert_eq!(
+            selection_after_closing_settings(&SelectedTab::AgentOps, &app_state),
+            SelectedTab::AgentOps,
+        );
     }
 }

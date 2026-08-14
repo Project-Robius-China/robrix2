@@ -1,0 +1,23 @@
+[package]
+name = "ux-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Headless UX audit harness for Robrix2: drives the app through makepad's internal event protocol, captures frames, and scores the result."
+
+# Detached from the robrix2 crate on purpose: the harness is a *driver*, it
+# never links the app. Keeping it out of the parent package means
+# `cargo build` at the repo root is completely unaffected by this directory.
+[workspace]
+
+[[bin]]
+name = "ux-harness"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+png = "0.18"
+
+[profile.release]
+opt-level = 2

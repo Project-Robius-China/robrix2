@@ -110,6 +110,24 @@ pub fn is_animated_image_filename(name: &str) -> bool {
 /// PNG or JPEG, using the `imghdr` library to determine which format it is.
 ///
 /// Returns an error if either load fails or if the image format is unknown.
+/// Loads an avatar image into `img`, decoding OFF the UI thread via makepad's
+/// async image cache (ported from upstream robrix 6d2563a). The cache key is
+/// the data allocation's address: avatar bytes live in `Arc<[u8]>`s held by
+/// the avatar cache, so the same avatar re-shown on scroll recycling hits the
+/// already-decoded texture instead of re-decoding synchronously per row.
+pub fn load_avatar_image_async(
+    img: &ImageRef,
+    cx: &mut Cx,
+    data: &std::sync::Arc<[u8]>,
+) -> Result<(), ImageError> {
+    let key = format!("avatar://{:p}", data.as_ptr());
+    img.load_image_from_data_async(
+        cx,
+        std::path::Path::new(&key),
+        std::sync::Arc::new(data.to_vec()),
+    )
+}
+
 pub fn load_png_or_jpg(img: &ImageRef, cx: &mut Cx, data: &[u8]) -> Result<(), ImageError> {
 
     fn attempt_both(img: &ImageRef, cx: &mut Cx, data: &[u8]) -> Result<(), ImageError> {

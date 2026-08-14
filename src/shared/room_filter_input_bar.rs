@@ -57,7 +57,7 @@ script_mod! {
                 color_empty: (RBX_BG_SURFACE_SUBTLE)
             }
             draw_text +: {
-                text_style: theme.font_regular { font_size: 10 },
+                text_style: REGULAR_TEXT { font_size: 10 },
             }
         }
 

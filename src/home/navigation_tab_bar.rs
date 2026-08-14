@@ -125,7 +125,7 @@ script_mod! {
             color_active: (RBX_NAV_FG_ACTIVE)
             color_focus: (RBX_NAV_FG)
 
-            text_style: theme.font_bold {font_size: 9}
+            text_style: BOLD_TEXT {font_size: 9}
         }
 
         draw_icon +: {
@@ -267,7 +267,7 @@ script_mod! {
                 draw_bg.color: (COLOR_FG_DISABLED),
                 text +: {
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
+                        text_style: REGULAR_TEXT { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
                         color: (COLOR_PRIMARY),
                     }
                 }
@@ -849,8 +849,24 @@ pub enum SelectedTab {
     /// Entered from the sidebar header's compass button; no dedicated tab in the
     /// navigation bar (so no button to keep selected here).
     Directory,
+    /// The Agent Operations Panel (`AgentOpsPanel`).
+    /// Like `Directory`, it has no dedicated navigation-bar button.
+    ///
+    /// The variant is declared unconditionally so the shared navigation state
+    /// has one shape across feature configurations. `HomeScreen` normalizes it
+    /// back to Home whenever agent-chat support is unavailable or disabled.
+    AgentOps,
     // AlertsInbox,
     Space { space_name_id: RoomNameId },
+}
+
+impl SelectedTab {
+    /// Whether selecting a room can make that room visible without changing
+    /// the top-level page. Every other page overlays the room workspace on
+    /// desktop and must return to Home before the room is focused.
+    pub fn shows_room_workspace(&self) -> bool {
+        matches!(self, Self::Home | Self::Space { .. })
+    }
 }
 
 
@@ -890,6 +906,8 @@ pub enum NavigationBarAction {
     GoToAddRoom,
     /// Go to the public room directory browser view (`DirectoryScreen`).
     GoToDirectory,
+    /// Go to the Agent Operations Panel (`AgentOpsPanel`).
+    GoToAgentOps,
     /// Go to the Settings view (open the `SettingsScreen`).
     OpenSettings,
     /// Close the Settings view (`SettingsScreen`), returning to the previous view.

@@ -86,7 +86,7 @@ script_mod! {
                 flow: Flow.Right{wrap: true}
                 draw_text +: {
                     color: (COLOR_FG_ACCEPT_GREEN),
-                    text_style: theme.font_bold { font_size: 11.5 },
+                    text_style: BOLD_TEXT { font_size: 11.5 },
                 }
                 text: "This device is verified and can access encrypted messages."
             }
@@ -113,7 +113,7 @@ script_mod! {
                 flow: Flow.Right{wrap: true}
                 draw_text +: {
                     color: (COLOR_FG_DANGER_RED),
-                    text_style: theme.font_bold { font_size: 11.5 },
+                    text_style: BOLD_TEXT { font_size: 11.5 },
                 }
                 text: "This device is not verified and can't view encrypted messages."
             }
@@ -123,7 +123,7 @@ script_mod! {
                 margin: Inset{top: 4, bottom: 1}
                 draw_text +: {
                     color: (MESSAGE_TEXT_COLOR),
-                    text_style: theme.font_regular { font_size: 11.5 },
+                    text_style: REGULAR_TEXT { font_size: 11.5 },
                 }
                 text: "Verify it from another client using this info:"
             }
@@ -133,7 +133,7 @@ script_mod! {
                 flow: Flow.Right{wrap: true}
                 draw_text +: {
                     color: (MESSAGE_TEXT_COLOR),
-                    text_style: theme.font_regular { font_size: 11.5 },
+                    text_style: REGULAR_TEXT { font_size: 11.5 },
                 }
                 text: ""
             }
@@ -175,7 +175,7 @@ script_mod! {
                     text_view +: {
                         text +: {
                             draw_text +: {
-                                text_style: theme.font_regular { font_size: 30.0 }
+                                text_style: REGULAR_TEXT { font_size: 30.0 }
                             }
                         }
                     }
@@ -432,7 +432,7 @@ script_mod! {
                         width: Fit, height: Fit
                         draw_text +: {
                             color: (RBX_FG_ON_ACCENT),
-                            text_style: theme.font_bold { font_size: 9 },
+                            text_style: BOLD_TEXT { font_size: 9 },
                         }
                         text: "Active"
                     }
@@ -573,7 +573,7 @@ script_mod! {
                     width: Fill, height: Fit
                     draw_text +: {
                         color: (RBX_FG_PRIMARY)
-                        text_style: theme.font_bold { font_size: 12.0 }
+                        text_style: BOLD_TEXT { font_size: 12.0 }
                     }
                     text: "Change Password"
                 }

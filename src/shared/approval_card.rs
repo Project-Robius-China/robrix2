@@ -162,12 +162,10 @@ script_mod! {
             flow: Flow.Right{wrap: true}
             spacing: 8.0
 
-            approval_button_slot_0 := mod.widgets.AgentApprovalButtonSlot {}
-            approval_button_slot_1 := mod.widgets.AgentApprovalButtonSlot {}
-            approval_button_slot_2 := mod.widgets.AgentApprovalButtonSlot {}
-            approval_button_slot_3 := mod.widgets.AgentApprovalButtonSlot {}
-            approval_button_slot_4 := mod.widgets.AgentApprovalButtonSlot {}
-            approval_button_slot_5 := mod.widgets.AgentApprovalButtonSlot {}
+            // Approval decision buttons are built dynamically in this
+            // Splash's isolate (see octos_actions.rs); replaces 6 static
+            // slots x 3 style-variant buttons per message.
+            approval_actions_splash := Splash { width: Fill, height: Fit }
         }
     }
 }

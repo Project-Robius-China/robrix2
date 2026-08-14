@@ -94,7 +94,7 @@ script_mod! {
                     text: "",
                     draw_text +: {
                         color: #ffffff,
-                        text_style: theme.font_regular {font_size: 8.0},
+                        text_style: REGULAR_TEXT {font_size: 8.0},
                     }
                 }
             }
