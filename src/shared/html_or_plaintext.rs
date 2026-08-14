@@ -137,7 +137,7 @@ script_mod! {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
         }
-        text_style_bold: theme.font_bold {
+        text_style_bold: BOLD_TEXT {
             font_size: (MESSAGE_FONT_SIZE)
             line_spacing: (MESSAGE_TEXT_LINE_SPACING)
         }
