@@ -372,11 +372,10 @@ used_underscore_binding = "allow"
 ## sandbox dirs, mobile-layout detection, ArkUI native inputs), with the legacy
 ## `old/` crate copies removed so the repo resolves as a cargo git dependency.
 [patch."https://github.com/makepad/makepad"]
-## Pinned to ymote/makepad `robrix2-fixes` (ZhangHanDong/makepad dev @ e40c5c6
-## plus the fixes robrix2 depends on: Splash-isolate shader identity, headless
-## renderer correctness, ttf-parser gvar-alloc for Apple variable fonts, the
-## CoreText outline fallback for hvgl-only system fonts like PingFang, and the
-## closed-Modal overdraw fix). PR'd upstream as ZhangHanDong/makepad#6 —
-## switch back to the upstream branch once that merges.
-makepad-widgets = { git = "https://github.com/ymote/makepad", rev = "1199cace4da2d0f9f2d53f5c08a256e7ac8de378", features = ["serde"] }
-makepad-code-editor = { git = "https://github.com/ymote/makepad", rev = "1199cace4da2d0f9f2d53f5c08a256e7ac8de378" }
+## Pinned to ZhangHanDong/makepad dev at the merge of PR #6 (Splash-isolate
+## shader identity, headless renderer correctness, ttf-parser gvar-alloc for
+## Apple variable fonts, the CoreText outline fallback for hvgl-only system
+## fonts like PingFang, and the closed-Modal overdraw fix), plus the
+## selectable-Html fix from PR #5.
+makepad-widgets = { git = "https://github.com/ZhangHanDong/makepad", rev = "1dd8d372cfb65b20160a3782586ed4d593cf8193", features = ["serde"] }
+makepad-code-editor = { git = "https://github.com/ZhangHanDong/makepad", rev = "1dd8d372cfb65b20160a3782586ed4d593cf8193" }
