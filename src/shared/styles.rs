@@ -598,28 +598,69 @@ mod cjk_font_tests {
     /// LXGWWenKai everywhere else.
     const CJK_FONT: &str = "resources/fonts/system_cjk.ttc";
 
+    /// Same for the Latin UI face (`system_latin.ttf`).
+    const LATIN_FONT: &str = "resources/fonts/system_latin.ttf";
+
+    /// `path` must exist (following symlinks) and start with a font magic
+    /// `ttf_parser::Face::parse` accepts: a collection (`ttcf`), TrueType
+    /// outlines (0x00010000), or CFF (`OTTO`).
+    fn assert_is_real_font(path: &str) {
+        let p = Path::new(path);
+        assert!(
+            p.exists(),
+            "{path} missing or dangling — build.rs should have linked it; the DSL \
+             references this path and font loading would panic",
+        );
+        let data = std::fs::read(p).expect("font should be readable");
+        assert!(data.len() > 4, "{path} is empty");
+        let magic = &data[..4];
+        assert!(
+            magic == b"ttcf" || magic == b"OTTO" || magic == [0x00, 0x01, 0x00, 0x00],
+            "unrecognised font magic {magic:?} at {path}",
+        );
+    }
+
     /// Font loading in makepad is lazy and panics on a bad face
     /// (`.expect("font face should load")`), so a broken link would not
     /// surface until the first Chinese glyph is drawn — potentially in front
     /// of a user. Check the wiring here instead.
     #[test]
     fn cjk_font_link_resolves_to_a_real_font() {
-        let path = Path::new(CJK_FONT);
-        assert!(
-            path.exists(),
-            "{CJK_FONT} missing — build.rs should have linked it; the DSL \
-             references this path and font loading would panic",
-        );
+        assert_is_real_font(CJK_FONT);
+    }
 
-        let data = std::fs::read(path).expect("CJK font should be readable");
-        assert!(data.len() > 4, "font file is empty");
-        // A collection (`ttcf`), TrueType outlines (0x00010000), or CFF
-        // (`OTTO`) — all of which `ttf_parser::Face::parse` accepts.
-        let magic = &data[..4];
-        assert!(
-            magic == b"ttcf" || magic == b"OTTO" || magic == [0x00, 0x01, 0x00, 0x00],
-            "unrecognised font magic {magic:?} at {CJK_FONT}",
-        );
+    /// The Latin face is used by every label, so a dangling link here is a
+    /// fully blank UI (seen on Arch/Omarchy: build.rs once wrote a
+    /// crate-relative fallback path into the symlink, which then resolved
+    /// relative to `resources/fonts/` and pointed nowhere).
+    #[test]
+    fn latin_font_link_resolves_to_a_real_font() {
+        assert_is_real_font(LATIN_FONT);
+    }
+
+    /// On unix these are symlinks, and their targets must be absolute: a
+    /// relative target is resolved against the link's *own* directory, so
+    /// `resources/fonts/X.ttf` would silently become
+    /// `resources/fonts/resources/fonts/X.ttf`. This is exactly the bug that
+    /// blanked the UI on distros whose system-font paths didn't match the
+    /// hardcoded candidates.
+    #[cfg(unix)]
+    #[test]
+    fn font_symlink_targets_are_absolute() {
+        for link in [CJK_FONT, LATIN_FONT] {
+            let target = std::fs::read_link(link)
+                .unwrap_or_else(|e| panic!("{link} should be a symlink: {e}"));
+            assert!(
+                target.is_absolute(),
+                "{link} -> {} : symlink target must be absolute",
+                target.display(),
+            );
+            assert!(
+                target.is_file(),
+                "{link} -> {} : symlink target does not exist",
+                target.display(),
+            );
+        }
     }
 
     /// On macOS the whole point is that this resolves to a *system* Chinese
