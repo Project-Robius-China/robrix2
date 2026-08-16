@@ -153,12 +153,15 @@ const BUNDLED_FONTS_ENV: &str = "ROBRIX_BUNDLED_FONTS";
 /// faces, so a distributable ships exactly one copy of each and nothing
 /// proprietary. `cargo run` from a checkout keeps using the system fonts.
 ///
-/// The bundled CJK fallback lives in `fonts/bundled/`, *outside* `resources/`,
+/// The bundled CJK fallback lives in `bundled_fonts/`, *outside* `resources/`,
 /// precisely so that packagers do not ship it a second time under its own
-/// name next to the materialised `system_cjk.ttc`.
+/// name next to the materialised `system_cjk.ttc`. The directory is
+/// deliberately not called `fonts/`: cargo-makepad also packages a crate's
+/// top-level `fonts/` dir (`add_font_assets_dir_to_apk` / apple
+/// `add_font_assets_dir`), which would reintroduce the duplicate.
 fn link_system_cjk_font(target_os: &str) {
     println!("cargo:rerun-if-changed=resources/fonts");
-    println!("cargo:rerun-if-changed=fonts/bundled");
+    println!("cargo:rerun-if-changed=bundled_fonts");
     println!("cargo:rerun-if-env-changed={BUNDLED_FONTS_ENV}");
 
     let bundled_only = std::env::var_os(BUNDLED_FONTS_ENV)
@@ -265,7 +268,7 @@ fn link_system_cjk_font(target_os: &str) {
     link_font(
         "resources/fonts/system_cjk.ttc",
         &cjk_candidates,
-        "fonts/bundled/LXGWWenKaiRegular.ttf",
+        "bundled_fonts/LXGWWenKaiRegular.ttf",
         allow_hvgl,
     );
     link_font(
