@@ -303,10 +303,16 @@ For posterity, these instructions have been tested on `cargo-packager` version 0
 cargo install --locked --git https://github.com/project-robius/robius-packaging-commands.git
 ```
 
-3. Then run the packaging command, which must build in release mode:
+3. Then run the packaging command, which must build in release mode, with
+   `ROBRIX_BUNDLED_FONTS=1` set so the package ships only the bundled
+   OFL-licensed fonts and never copies your machine's system fonts
+   (PingFang, Microsoft YaHei, …) into the bundle:
 ```sh
-cargo packager --release ## --verbose is optional
+ROBRIX_BUNDLED_FONTS=1 cargo packager --release ## --verbose is optional
 ```
+   (On Windows PowerShell: `$env:ROBRIX_BUNDLED_FONTS="1"; cargo packager --release`.)
+   The same variable is set by CI for Android/iOS builds and by
+   `packaging/build-macos-dmg.sh`.
   * If you want to hide the default cmd prompt console on Windows, use the following config:
     ```sh
     RUSTFLAGS="--cfg hide_windows_console" cargo packager --release

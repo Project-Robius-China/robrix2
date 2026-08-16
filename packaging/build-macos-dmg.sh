@@ -47,6 +47,10 @@
 
 set -euo pipefail
 
+# Distributable build: never link the host's PingFang / San Francisco into
+# resources/ (cargo packager copies them by value). Bundled OFL fonts only.
+export ROBRIX_BUNDLED_FONTS=1
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CARGO_TOML="$PROJECT_DIR/Cargo.toml"

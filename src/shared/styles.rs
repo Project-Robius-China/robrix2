@@ -594,9 +594,13 @@ mod cjk_font_tests {
     use std::path::Path;
 
     /// The single path the DSL's `chinese` font members point at. `build.rs`
-    /// links it to the system PingFang on macOS, or to the bundled
-    /// LXGWWenKai everywhere else.
+    /// links it to a system CJK font where one is found (PingFang on macOS,
+    /// YaHei on Windows, fontconfig's answer on Linux), or to the bundled
+    /// LXGWWenKai in `fonts/bundled/` otherwise — and always to the bundled
+    /// face when `ROBRIX_BUNDLED_FONTS=1` was set at build time.
     const CJK_FONT: &str = "resources/fonts/system_cjk.ttc";
+    const CJK_BUNDLED: &str = "fonts/bundled/LXGWWenKaiRegular.ttf";
+    const LATIN_BUNDLED: &str = "resources/fonts/LiberationMono-Regular.ttf";
 
     /// Same for the Latin UI face (`system_latin.ttf`).
     const LATIN_FONT: &str = "resources/fonts/system_latin.ttf";
@@ -663,6 +667,39 @@ mod cjk_font_tests {
         }
     }
 
+    /// `ROBRIX_BUNDLED_FONTS=1` is the packaging switch: packagers copy
+    /// `resources/` by value (dereferencing symlinks), so a build meant for
+    /// distribution must never resolve these to a host font — that would ship
+    /// PingFang / Microsoft YaHei inside the package. build.rs re-exports the
+    /// switch via `cargo:rustc-env` so this test sees the same value the
+    /// build saw. Run with `ROBRIX_BUNDLED_FONTS=1 cargo test` to exercise it.
+    #[test]
+    fn bundled_mode_never_resolves_to_a_host_font() {
+        if env!("ROBRIX_BUNDLED_FONTS") != "1" {
+            eprintln!("ROBRIX_BUNDLED_FONTS not set for this build, skipping");
+            return;
+        }
+        for (link, bundled) in [(CJK_FONT, CJK_BUNDLED), (LATIN_FONT, LATIN_BUNDLED)] {
+            let resolved = std::fs::canonicalize(link)
+                .unwrap_or_else(|e| panic!("{link} should resolve: {e}"));
+            let expected = std::fs::canonicalize(bundled)
+                .unwrap_or_else(|e| panic!("{bundled} should exist: {e}"));
+            // On unix the link is a symlink to the bundled file; on Windows it
+            // is a copy, so compare bytes as well as the resolved path.
+            let same_path = resolved == expected;
+            let link_bytes = std::fs::read(link)
+                .unwrap_or_else(|e| panic!("{link} should be readable: {e}"));
+            let bundled_bytes = std::fs::read(bundled)
+                .unwrap_or_else(|e| panic!("{bundled} should be readable: {e}"));
+            let same_bytes = link_bytes == bundled_bytes;
+            assert!(
+                same_path || same_bytes,
+                "{link} resolves to {} but bundled mode requires {bundled}",
+                resolved.display(),
+            );
+        }
+    }
+
     /// On macOS the whole point is that this resolves to a *system* Chinese
     /// sans rather than the bundled fallback — the system PingFang where
     /// present. Symlinked, never copied: the bytes stay Apple's and nothing
@@ -674,6 +711,10 @@ mod cjk_font_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_links_to_a_system_cjk_font_with_renderable_outlines() {
+        if env!("ROBRIX_BUNDLED_FONTS") == "1" {
+            eprintln!("ROBRIX_BUNDLED_FONTS set: system fonts intentionally not linked, skipping");
+            return;
+        }
         let target = std::fs::read_link(CJK_FONT)
             .expect("on macOS the CJK font should be a symlink, not a copy");
         assert!(
