@@ -80,6 +80,11 @@ permissions:
 env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
+  # Every job here produces a distributable. Packagers copy `resources/` by
+  # value (symlinks dereferenced), so builds must never link host system
+  # fonts — that would ship PingFang / Microsoft YaHei inside the package.
+  # See build.rs `link_system_cjk_font`.
+  ROBRIX_BUNDLED_FONTS: "1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}

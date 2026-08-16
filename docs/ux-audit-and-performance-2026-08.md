@@ -181,9 +181,16 @@ resources/fonts/system_latin.ttf -> /System/Library/Fonts/SFNS.ttf
 resources/fonts/system_cjk.ttc   -> /System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc
 ```
 
-with Windows (`segoeui.ttf`, `msyh.ttc`) and Linux (DejaVu, Noto CJK)
-candidates and bundled fallbacks, so the DSL path always resolves — makepad
-panics on a font face it cannot load.
+with Windows (`segoeui.ttf`, `msyh.ttc`) and Linux (fontconfig, then distro
+paths) candidates and bundled fallbacks, so the DSL path always resolves —
+makepad panics on a font face it cannot load.
+
+**Packaged builds** (`cargo packager`, `cargo makepad android|apple`) copy
+`resources/` by value, dereferencing these links, so they must be built with
+`ROBRIX_BUNDLED_FONTS=1`: host fonts are then never considered and both links
+resolve to the bundled OFL faces (LiberationMono, and LXGWWenKai from
+`fonts/bundled/` — kept outside `resources/` so it is not shipped twice).
+CI and `packaging/build-macos-dmg.sh` set it. See issue #303.
 
 **`styles.rs`** declares `APP_FONT_REGULAR` / `APP_FONT_BOLD`;
 **`design_tokens.rs`** declares its own `RBX_FONT_REGULAR` / `RBX_FONT_BOLD`;

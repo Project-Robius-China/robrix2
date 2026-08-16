@@ -119,6 +119,10 @@ fn read_matrix_sdk_info() -> (String, String, String) {
     (version, git_rev, url)
 }
 
+/// Set (non-empty, not "0") to forbid host system fonts and link only the
+/// bundled OFL fallbacks. Required for every packaged/distributable build.
+const BUNDLED_FONTS_ENV: &str = "ROBRIX_BUNDLED_FONTS";
+
 /// Resolve the CJK face the UI should use into one stable path,
 /// `resources/fonts/system_cjk.ttc`, which the DSL then references.
 ///
@@ -138,8 +142,37 @@ fn read_matrix_sdk_info() -> (String, String, String) {
 /// targeting macOS; everywhere else `outline_format_supported` skips them —
 /// they would silently render blank — and the next candidate (Hiragino Sans
 /// GB, the pre-PingFang system Chinese sans, CFF) is used instead.
+///
+/// **Packaged builds must set `ROBRIX_BUNDLED_FONTS=1`.** Every packager in
+/// use (`cargo makepad android|apple`, `cargo packager` via
+/// robius-packaging-commands) copies `resources/` *by value*, dereferencing
+/// symlinks — and on Windows the link is already a real copy. Without the
+/// switch a macOS `.app` would carry PingFang and a Windows installer
+/// Microsoft YaHei: redistribution of proprietary fonts. With it, host fonts
+/// are never considered and both links resolve to the OFL-licensed bundled
+/// faces, so a distributable ships exactly one copy of each and nothing
+/// proprietary. `cargo run` from a checkout keeps using the system fonts.
+///
+/// The bundled CJK fallback lives in `fonts/bundled/`, *outside* `resources/`,
+/// precisely so that packagers do not ship it a second time under its own
+/// name next to the materialised `system_cjk.ttc`.
 fn link_system_cjk_font(target_os: &str) {
     println!("cargo:rerun-if-changed=resources/fonts");
+    println!("cargo:rerun-if-changed=fonts/bundled");
+    println!("cargo:rerun-if-env-changed={BUNDLED_FONTS_ENV}");
+
+    let bundled_only = std::env::var_os(BUNDLED_FONTS_ENV)
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false);
+    // Surface the decision to the crate (tests assert on it) — build.rs is
+    // the only place that sees the build-time environment.
+    println!(
+        "cargo:rustc-env={BUNDLED_FONTS_ENV}={}",
+        if bundled_only { "1" } else { "" }
+    );
+    if bundled_only {
+        println!("cargo:warning=font: {BUNDLED_FONTS_ENV} set — using bundled fonts only");
+    }
 
     // Apple keeps PingFang inside a private framework rather than in
     // /System/Library/Fonts. The path is private API surface, so treat its
@@ -160,6 +193,7 @@ fn link_system_cjk_font(target_os: &str) {
     let mut cjk_candidates: Vec<String> = Vec::new();
     let mut latin_candidates: Vec<String> = Vec::new();
     match target_os {
+        _ if bundled_only => {}
         "macos" => {
             cjk_candidates.extend(
                 [
@@ -231,7 +265,7 @@ fn link_system_cjk_font(target_os: &str) {
     link_font(
         "resources/fonts/system_cjk.ttc",
         &cjk_candidates,
-        "resources/fonts/LXGWWenKaiRegular.ttf",
+        "fonts/bundled/LXGWWenKaiRegular.ttf",
         allow_hvgl,
     );
     link_font(
@@ -401,7 +435,25 @@ fn link_font(link: &str, candidates: &[String], fallback: &str, allow_hvgl: bool
         println!("cargo:warning={} not linked: no font found", link.display());
         return;
     }
-    if std::fs::read_link(&link).ok().as_deref() == Some(target.as_path()) {
+
+    // Already correct? Two shapes must be recognised, and either may be left
+    // over from a previous build in the *other* mode (or, on Windows, from a
+    // checkout where the file is a plain copy):
+    //   - a symlink whose target is exactly `target` (unix), or
+    //   - a regular file whose bytes equal `target` (Windows copy mode).
+    // Anything else — dangling link, link to another font, stale copy — is
+    // removed and rebuilt. `remove_file` unlinks a symlink itself (never its
+    // target) and deletes a regular file, so one call covers both shapes.
+    let up_to_date = match std::fs::symlink_metadata(&link) {
+        Err(_) => false,
+        Ok(meta) if meta.file_type().is_symlink() => {
+            std::fs::read_link(&link).ok().as_deref() == Some(target.as_path())
+        }
+        Ok(meta) => {
+            !cfg!(unix) && meta.is_file() && same_contents(&link, &target)
+        }
+    };
+    if up_to_date {
         return;
     }
     let _ = std::fs::remove_file(&link);
@@ -414,6 +466,21 @@ fn link_font(link: &str, candidates: &[String], fallback: &str, allow_hvgl: bool
     match linked {
         Ok(()) => println!("cargo:warning=font: {} -> {}", link.display(), target.display()),
         Err(e) => println!("cargo:warning=could not link {}: {e}", link.display()),
+    }
+}
+
+/// Byte-for-byte equality of two files (used only where the link is a real
+/// copy, i.e. Windows). Sizes are compared first so a mismatch is cheap;
+/// fonts are tens of MB at most, so a full read on match is acceptable for
+/// a build script that only reaches this when the file already exists.
+fn same_contents(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else { return false };
+    if ma.len() != mb.len() {
+        return false;
+    }
+    match (std::fs::read(a), std::fs::read(b)) {
+        (Ok(da), Ok(db)) => da == db,
+        _ => false,
     }
 }
 

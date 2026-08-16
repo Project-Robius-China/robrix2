@@ -193,6 +193,8 @@ jobs:
       - name: Build for iOS targets
         env:
           AWS_LC_SYS_CMAKE_BUILDER: 1
+          # Package build: bundled OFL fonts only, never the host's (see build.rs).
+          ROBRIX_BUNDLED_FONTS: "1"
         run: |
           # Install iOS targets
           rustup target add aarch64-apple-ios
@@ -235,6 +237,8 @@ jobs:
       - name: Build Android APK
         env:
           AWS_LC_SYS_CMAKE_BUILDER: 1
+          # Package build: bundled OFL fonts only, never the host's (see build.rs).
+          ROBRIX_BUNDLED_FONTS: "1"
         run: |
           cargo makepad android build -p robrix \
           --config profile.dev.opt-level=0 \
@@ -270,6 +274,8 @@ jobs:
       - name: Build Android APK
         env:
           AWS_LC_SYS_CMAKE_BUILDER: 1
+          # Package build: bundled OFL fonts only, never the host's (see build.rs).
+          ROBRIX_BUNDLED_FONTS: "1"
         run: |
           cargo makepad android build -p robrix \
           --config profile.dev.opt-level=0 \
@@ -312,6 +318,8 @@ jobs:
       - name: Build Android APK
         env:
           AWS_LC_SYS_CMAKE_BUILDER: 1
+          # Package build: bundled OFL fonts only, never the host's (see build.rs).
+          ROBRIX_BUNDLED_FONTS: "1"
           CMAKE_GENERATOR: Ninja
         run: |
           ## Note: we can't use the profile here because cargo-makepad doesn't support custom profiles.
