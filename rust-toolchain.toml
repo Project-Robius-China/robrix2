@@ -14,4 +14,4 @@
 # actions-rust-lang/setup-rust-toolchain@v1, which reads this file.
 
 [toolchain]
-channel = "1.94.0"
+channel = "1.97.1"

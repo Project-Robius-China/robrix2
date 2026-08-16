@@ -150,42 +150,212 @@ fn link_system_cjk_font(target_os: &str) {
     // SFNS.ttf is San Francisco, the macOS UI face. Single-face (so makepad's
     // hardcoded face index 0 is right) and variable, so one file serves both
     // regular and bold via the `wght` axis.
-    let cjk_candidates: &[&str] = match target_os {
-        "macos" => &[
-            MACOS_PINGFANG,
-            "/System/Library/Fonts/Hiragino Sans GB.ttc",
-            "/System/Library/Fonts/STHeiti Light.ttc",
-        ],
-        "windows" => &["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf"],
-        _ => &[
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        ],
-    };
-    let latin_candidates: &[&str] = match target_os {
-        "macos" => &["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/HelveticaNeue.ttc"],
-        "windows" => &["C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf"],
-        _ => &[
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ],
-    };
+    //
+    // On Linux, font layout under /usr/share/fonts is distro-specific
+    // (Debian: `truetype/<pkg>/`, `opentype/<pkg>/`; Arch: `<pkg>/` or `TTF/`;
+    // Fedora: `<pkg>/`; NixOS: elsewhere entirely), so hardcoded paths alone
+    // are only ever right on one family of distros. Ask fontconfig first —
+    // it is the one thing every desktop Linux agrees on — and keep the
+    // hardcoded paths as a second line for machines without `fc-match`.
+    let mut cjk_candidates: Vec<String> = Vec::new();
+    let mut latin_candidates: Vec<String> = Vec::new();
+    match target_os {
+        "macos" => {
+            cjk_candidates.extend(
+                [
+                    MACOS_PINGFANG,
+                    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                    "/System/Library/Fonts/STHeiti Light.ttc",
+                ]
+                .map(String::from),
+            );
+            latin_candidates.extend(
+                ["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/HelveticaNeue.ttc"]
+                    .map(String::from),
+            );
+        }
+        "windows" => {
+            cjk_candidates
+                .extend(["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf"].map(String::from));
+            latin_candidates
+                .extend(["C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf"].map(String::from));
+        }
+        // Only the host's own desktop Linux may borrow host fonts. build.rs
+        // runs on the host but `target_os` is the *target*: for android /
+        // ios / ohos cross-builds (CI does Android on Ubuntu) a fontconfig
+        // query here would write the host's font path into the symlink and
+        // either ship a host font in the package or ship a dangling link.
+        // Those targets get an empty candidate list and always take the
+        // bundled fallback.
+        "linux" => {
+            cjk_candidates.extend(fc_match(&["sans-serif:lang=zh-cn", "sans-serif:lang=zh"], Some("zh-cn")));
+            cjk_candidates.extend(
+                [
+                    // Debian / Ubuntu
+                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                    // Arch (noto-fonts-cjk, wqy-microhei)
+                    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
+                    // Fedora (google-noto-sans-cjk-fonts)
+                    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJK-Regular.ttc",
+                ]
+                .map(String::from),
+            );
+            latin_candidates.extend(fc_match(&["sans-serif:lang=en", "sans-serif"], Some("en")));
+            latin_candidates.extend(
+                [
+                    // Debian / Ubuntu
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                    // Arch (ttf-dejavu, ttf-liberation, noto-fonts)
+                    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+                    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+                    // Fedora
+                    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+                    "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+                    "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+                ]
+                .map(String::from),
+            );
+        }
+        _ => {}
+    }
 
     // Makepad's CoreText fallback makes hvgl-only fonts renderable, but only
     // on macOS builds.
     let allow_hvgl = target_os == "macos";
     link_font(
         "resources/fonts/system_cjk.ttc",
-        cjk_candidates,
+        &cjk_candidates,
         "resources/fonts/LXGWWenKaiRegular.ttf",
         allow_hvgl,
     );
     link_font(
         "resources/fonts/system_latin.ttf",
-        latin_candidates,
+        &latin_candidates,
         "resources/fonts/LiberationMono-Regular.ttf",
         allow_hvgl,
     );
+}
+
+/// Ask fontconfig which file it would use for each `pattern`, in order,
+/// then — if `required_lang` is set — every installed font that actually
+/// covers that language (`fc-list :lang=<x>`), best-looking first.
+///
+/// `fc-match` treats `:lang=` as a preference, not a constraint: a user
+/// fontconfig that pins `sans-serif` to one family (Omarchy binds it to
+/// Liberation Sans) makes it return that family for `sans-serif:lang=zh-cn`
+/// too, even though it has no CJK glyphs. So each `fc-match` answer is
+/// checked against its own `%{lang}` coverage and dropped if it lacks
+/// `required_lang`; the `fc-list` sweep then finds a real match by coverage.
+///
+/// Returns whatever resolved (deduplicated, possibly empty) — fontconfig
+/// missing or failing is normal on minimal systems and simply yields nothing,
+/// leaving the hardcoded candidates to try. Only sfnt-looking files are kept
+/// (bitmap / Type1 fonts are useless to makepad); `outline_format_supported`
+/// filters the rest downstream.
+fn fc_match(patterns: &[&str], required_lang: Option<&str>) -> Vec<String> {
+    use std::process::Command;
+
+    fn is_sfnt(file: &str) -> bool {
+        let lower = file.to_ascii_lowercase();
+        lower.ends_with(".ttf") || lower.ends_with(".ttc") || lower.ends_with(".otf")
+    }
+    fn covers(lang_list: &str, lang: Option<&str>) -> bool {
+        match lang {
+            None => true,
+            Some(lang) => lang_list.split('|').any(|l| l.trim().eq_ignore_ascii_case(lang)),
+        }
+    }
+    fn push(out: &mut Vec<String>, file: &str) {
+        if !file.is_empty() && is_sfnt(file) && !out.iter().any(|f| f == file) {
+            out.push(file.to_string());
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    for pattern in patterns {
+        let Ok(output) = Command::new("fc-match")
+            .args(["-f", "%{file}\t%{lang}", pattern])
+            .output()
+        else {
+            return out; // fc-match not installed; fontconfig is unavailable
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut parts = text.trim().splitn(2, '\t');
+        let file = parts.next().unwrap_or("").trim();
+        let langs = parts.next().unwrap_or("");
+        if covers(langs, required_lang) {
+            push(&mut out, file);
+        }
+    }
+
+    // Coverage sweep: every font that really has glyphs for the language.
+    // Prefer well-known UI sans faces in a Regular weight; makepad only
+    // reads face 0 of a collection and has no synthetic bold, so a face that
+    // is Light/Bold-only would render every label in that weight.
+    if let Some(lang) = required_lang {
+        if let Ok(output) = Command::new("fc-list")
+            .args(["-f", "%{file}\t%{family}\t%{style}\n", &format!(":lang={lang}")])
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let mut scored: Vec<(u32, String)> = Vec::new();
+                for line in text.lines() {
+                    let mut cols = line.split('\t');
+                    let file = cols.next().unwrap_or("").trim();
+                    let family = cols.next().unwrap_or("").to_ascii_lowercase();
+                    let style = cols.next().unwrap_or("").to_ascii_lowercase();
+                    if !is_sfnt(file) {
+                        continue;
+                    }
+                    let styles: Vec<&str> = style.split(',').map(str::trim).collect();
+                    // "Regular" alone, not "Medium,Regular" (fontconfig's alias
+                    // for a weight's un-styled name).
+                    let regular = styles.contains(&"regular") && styles.len() == 1
+                        || styles == ["regular", "regular"];
+                    if !regular {
+                        continue;
+                    }
+                    let mut score = 0u32;
+                    if family.contains("serif") && !family.contains("sans") {
+                        continue; // serif faces are not a UI font
+                    }
+                    if family.contains("mono") {
+                        continue;
+                    }
+                    if family.contains("noto sans cjk") || family.contains("source han sans") {
+                        score += 30;
+                    }
+                    if family.contains("noto sans") || family.contains("dejavu sans")
+                        || family.contains("liberation sans") || family.contains("wenquanyi")
+                        || family.contains("wqy")
+                    {
+                        score += 20;
+                    }
+                    if family.contains(" sc") || family.contains("simplified") {
+                        score += 5;
+                    }
+                    if !scored.iter().any(|(_, f)| f == file) {
+                        scored.push((score, file.to_string()));
+                    }
+                }
+                scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+                for (_, file) in scored {
+                    push(&mut out, &file);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Point `link` at the first usable `candidates` entry, else at `fallback`.
@@ -201,29 +371,45 @@ fn link_system_cjk_font(target_os: &str) {
 /// disk, so nothing here redistributes a system font. The link always resolves
 /// to *something*, because the DSL references it unconditionally and makepad
 /// panics on a font face it cannot load.
-fn link_font(link: &str, candidates: &[&str], fallback: &str, allow_hvgl: bool) {
-    use std::path::Path;
+///
+/// The link target is always made absolute. A symlink's target is resolved
+/// relative to the *link's own directory*, so writing the crate-relative
+/// `resources/fonts/X.ttf` verbatim would produce a link that resolves to
+/// `resources/fonts/resources/fonts/X.ttf` — a dangling link, and a blank UI.
+fn link_font(link: &str, candidates: &[String], fallback: &str, allow_hvgl: bool) {
+    use std::path::{Path, PathBuf};
 
-    let link = Path::new(link);
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
+    let absolute = |p: &Path| -> PathBuf {
+        let p = if p.is_absolute() { p.to_path_buf() } else { manifest_dir.join(p) };
+        // Canonicalize when possible so `read_link == target` below stays
+        // stable across builds; keep the joined path if the file is missing.
+        std::fs::canonicalize(&p).unwrap_or(p)
+    };
+
+    // The link itself must NOT be canonicalized: that follows an existing
+    // symlink and would make `link` the system font path itself.
+    let link = manifest_dir.join(link);
     let target = candidates
         .iter()
-        .map(Path::new)
-        .find(|p| p.exists() && outline_format_supported(p, allow_hvgl))
-        .unwrap_or_else(|| Path::new(fallback));
+        .map(|c| absolute(Path::new(c)))
+        .find(|p| p.is_file() && outline_format_supported(p, allow_hvgl))
+        .unwrap_or_else(|| absolute(Path::new(fallback)));
 
-    if !target.exists() {
+    if !target.is_file() {
         println!("cargo:warning={} not linked: no font found", link.display());
         return;
     }
-    if std::fs::read_link(link).ok().as_deref() == Some(target) {
+    if std::fs::read_link(&link).ok().as_deref() == Some(target.as_path()) {
         return;
     }
-    let _ = std::fs::remove_file(link);
+    let _ = std::fs::remove_file(&link);
 
     #[cfg(unix)]
-    let linked = std::os::unix::fs::symlink(target, link);
+    let linked = std::os::unix::fs::symlink(&target, &link);
     #[cfg(not(unix))]
-    let linked = std::fs::copy(target, link).map(|_| ());
+    let linked = std::fs::copy(&target, &link).map(|_| ());
 
     match linked {
         Ok(()) => println!("cargo:warning=font: {} -> {}", link.display(), target.display()),
