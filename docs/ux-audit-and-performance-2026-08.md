@@ -189,7 +189,7 @@ makepad panics on a font face it cannot load.
 `resources/` by value, dereferencing these links, so they must be built with
 `ROBRIX_BUNDLED_FONTS=1`: host fonts are then never considered and both links
 resolve to the bundled OFL faces (LiberationMono, and LXGWWenKai from
-`fonts/bundled/` — kept outside `resources/` so it is not shipped twice).
+`bundled_fonts/` — kept outside `resources/` so it is not shipped twice).
 CI and `packaging/build-macos-dmg.sh` set it. See issue #303.
 
 **`styles.rs`** declares `APP_FONT_REGULAR` / `APP_FONT_BOLD`;

@@ -63,7 +63,7 @@ packager copies that tree by value. Symlinks are an adequate mechanism for
 ## Implemented resolution (no makepad change)
 
 1. **The bundled CJK fallback was moved out of `resources/`** to
-   `fonts/bundled/LXGWWenKaiRegular.ttf`, and `build.rs` now points its fallback
+   `bundled_fonts/LXGWWenKaiRegular.ttf`, and `build.rs` now points its fallback
    there. Only the resolved `system_cjk.ttc` is packaged → fixes B
    (38 MB → 19 MB). The new directory is covered by `cargo:rerun-if-changed`.
    `LiberationMono-Regular.ttf` stays.

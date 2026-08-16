@@ -284,6 +284,41 @@ jobs:
           --config profile.dev.strip=true \
           --config profile.dev.debug-assertions=false
 
+      # Guard against #303: packagers copy resources/ by value, so the APK must
+      # contain exactly one copy of the bundled OFL CJK font (as system_cjk.ttc)
+      # and never a host system font. Fails the job if the manifest drifts.
+      - name: Check APK ships only bundled fonts
+        run: |
+          set -euo pipefail
+          apk=$(ls target/makepad-android-apk/robrix/apk/*.apk | grep -v unaligned | head -1)
+          echo "APK: $apk ($(stat -c %s "$apk") bytes)"
+          echo "--- font entries ---"
+          unzip -l "$apk" | grep -E 'assets/makepad/robrix/(resources/fonts|fonts)/' | tee fonts.txt
+          fail=0
+          # The bundled CJK fallback must not ship under its own name (it lives
+          # in bundled_fonts/, outside resources/), only as system_cjk.ttc.
+          if grep -q 'LXGWWenKaiRegular.ttf' fonts.txt; then echo "::error::LXGWWenKaiRegular.ttf shipped under its own name (duplicate)"; fail=1; fi
+          # No host system fonts, ever.
+          if grep -qiE 'PingFang|Hiragino|STHeiti|SFNS|HelveticaNeue|msyh|simhei|segoeui|arial|NotoSansCJK|DejaVu|LiberationSans' fonts.txt; then echo "::error::host system font found in APK"; fail=1; fi
+          # system_cjk.ttc must be byte-identical to the bundled LXGWWenKai,
+          # system_latin.ttf to the bundled LiberationMono.
+          mkdir -p apk_fonts && unzip -o -q "$apk" 'assets/makepad/robrix/resources/fonts/system_*' -d apk_fonts
+          for pair in "system_cjk.ttc:bundled_fonts/LXGWWenKaiRegular.ttf" "system_latin.ttf:resources/fonts/LiberationMono-Regular.ttf"; do
+            name=${pair%%:*}; src=${pair#*:}
+            got=$(sha256sum "apk_fonts/assets/makepad/robrix/resources/fonts/$name" | cut -d' ' -f1)
+            want=$(sha256sum "$src" | cut -d' ' -f1)
+            if [ "$got" = "$want" ]; then echo "OK  $name == $src"; else echo "::error::$name differs from $src"; fail=1; fi
+          done
+          exit $fail
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: robrix-android-debug-apk
+          path: target/makepad-android-apk/robrix/apk/*.apk
+          retention-days: 7
+          if-no-files-found: error
+
   build_android_on_windows:
     name: Build Android (Windows Host)
     runs-on: windows-2022
