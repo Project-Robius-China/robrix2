@@ -3275,6 +3275,20 @@ pub struct AppState {
     /// invalidating the entire persisted `AppState`.
     #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub selected_room: Option<SelectedRoom>,
+    /// The room ID of the currently-selected Space, if the user is currently
+    /// viewing a Space's Lobby (i.e., `selected_tab` is `SelectedTab::Space`).
+    ///
+    /// This mirrors `selected_tab`'s `Space` variant so that the selected
+    /// space can be restored across app restarts, since `selected_tab` itself
+    /// is transient (`#[serde(skip)]`). On startup, restoration is applied
+    /// only after the list of joined spaces has (asynchronously) reported
+    /// this space as joined; if the space is never reported (e.g., the user
+    /// left/was removed from it while the app was closed), the app safely
+    /// stays on the default `Home` tab.
+    ///
+    /// Tolerant of per-field deser failures, like `selected_room` above.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
+    pub selected_space_id: Option<OwnedRoomId>,
     /// The currently-selected navigation tab: defines which top-level view is shown.
     ///
     /// This field is only updated by the `HomeScreen` widget, which has the
@@ -4305,6 +4319,16 @@ mod tests {
             r#"{"logged_in":true,"bot_settings":{"enabled":true,"known_bot_user_ids":["@botA:example.org"]}}"#;
         let app_state: AppState = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(app_state.agent_registry.len(), 0);
+        assert!(app_state.logged_in);
+    }
+
+    #[test]
+    fn app_state_without_selected_space_deserializes() {
+        // A previously-saved AppState JSON that predates the selected_space_id field.
+        let legacy_json =
+            r#"{"logged_in":true,"bot_settings":{"enabled":true,"known_bot_user_ids":["@botA:example.org"]}}"#;
+        let app_state: AppState = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(app_state.selected_space_id, None);
         assert!(app_state.logged_in);
     }
 

@@ -13,7 +13,7 @@ use matrix_sdk::{RoomDisplayName, RoomState};
 use ruma::{OwnedRoomAliasId, OwnedRoomId, room::JoinRuleSummary};
 
 use crate::{
-    app::AppState, home::{add_room::CreateRoomAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef}, i18n::{AppLanguage, tr_fmt, tr_key}, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, settings::app_preferences::{effective_is_desktop, AppPreferencesAction, ViewModeOverride}, shared::{avatar::AvatarWidgetRefExt, design_tokens::{RBX_FG_SECONDARY, RBX_NAV_FG}, room_filter_input_bar::MainFilterAction, unread_badge::UnreadBadgeWidgetRefExt}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
+    app::{AppState, AppStateAction}, home::{add_room::CreateRoomAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, rooms_list::RoomsListRef}, i18n::{AppLanguage, tr_fmt, tr_key}, logout::logout_confirm_modal::LogoutAction, room::{FetchedRoomAvatar, room_display_filter::{RoomDisplayFilter, RoomDisplayFilterBuilder, RoomFilterCriteria}}, settings::app_preferences::{effective_is_desktop, AppPreferencesAction, ViewModeOverride}, shared::{avatar::AvatarWidgetRefExt, design_tokens::{RBX_FG_SECONDARY, RBX_NAV_FG}, room_filter_input_bar::MainFilterAction, unread_badge::UnreadBadgeWidgetRefExt}, sliding_sync::AccountSwitchAction, utils::{self, RoomNameId}
 };
 
 script_mod! {
@@ -660,6 +660,15 @@ pub struct SpacesBar {
     /// A top-level space the user just created, which we jump to as soon as the
     /// space service reports it as joined (it cannot be selected before that).
     #[rust] pending_created_space: Option<OwnedRoomId>,
+
+    /// The persisted `selected_space_id` from a restored `AppState`, which we
+    /// jump to as soon as the space service reports it as joined (it may not
+    /// yet be in `all_joined_spaces` when the app state is restored, since
+    /// the spaces list arrives asynchronously). If this space is never
+    /// reported as joined (e.g., the user left/was removed from it while the
+    /// app was closed), this is simply left unset and the app safely stays
+    /// on its default `Home` tab.
+    #[rust] pending_restored_space: Option<OwnedRoomId>,
     #[rust] applied_view_mode: ViewModeOverride,
 }
 
@@ -689,6 +698,7 @@ impl Widget for SpacesBar {
                     self.is_filtered = false;
                     self.selected_space = None;
                     self.pending_created_space = None;
+                    self.pending_restored_space = None;
                     self.redraw(cx);
                     continue;
                 }
@@ -708,6 +718,30 @@ impl Widget for SpacesBar {
                     = action.downcast_ref()
                 {
                     self.pending_created_space = Some(room_name_id.room_id().clone());
+                    continue;
+                }
+
+                // A persisted `AppState` was just restored on startup: if it recorded a
+                // previously-selected space, jump back to it. The joined-spaces list is
+                // populated asynchronously and may have already finished (common on a
+                // restored session, since it's driven by the sync diff stream) or may
+                // still be in flight, so handle both orderings: navigate immediately if
+                // the space is already known, otherwise remember it and wait for
+                // `AddJoinedSpace` to report it. If it's never reported (e.g., the user
+                // left/was removed from the space while the app was closed), this is
+                // simply left unset and the app safely stays on its default `Home` tab.
+                if let Some(AppStateAction::RestoreAppStateFromPersistentState(restored)) = action.downcast_ref() {
+                    if let Some(space_id) = restored.selected_space_id.clone() {
+                        if let Some(joined_space) = self.all_joined_spaces.get(&space_id) {
+                            let space_name_id = joined_space.space_name_id.clone();
+                            self.selected_space = Some(space_id.clone());
+                            self.redraw(cx);
+                            enqueue_spaces_list_update(SpacesListUpdate::ScrollToSpace(space_id));
+                            cx.action(NavigationBarAction::GoToSpace { space_name_id });
+                        } else {
+                            self.pending_restored_space = Some(space_id);
+                        }
+                    }
                     continue;
                 }
 
@@ -1000,6 +1034,15 @@ impl SpacesBar {
                     // rather than happening at creation time.
                     if self.pending_created_space.as_ref() == Some(&space_id) {
                         self.pending_created_space = None;
+                        self.selected_space = Some(space_id.clone());
+                        enqueue_spaces_list_update(SpacesListUpdate::ScrollToSpace(space_id.clone()));
+                        cx.action(NavigationBarAction::GoToSpace { space_name_id: space_name_id.clone() });
+                    }
+                    // Same idea, for a space restored from a persisted `AppState` on
+                    // startup that wasn't yet in `all_joined_spaces` when the restore
+                    // action was handled.
+                    if self.pending_restored_space.as_ref() == Some(&space_id) {
+                        self.pending_restored_space = None;
                         self.selected_space = Some(space_id.clone());
                         enqueue_spaces_list_update(SpacesListUpdate::ScrollToSpace(space_id));
                         cx.action(NavigationBarAction::GoToSpace { space_name_id });
