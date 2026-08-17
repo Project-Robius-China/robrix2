@@ -23,6 +23,7 @@ depends: [task-space-tree-hardening]
 
 ### Allowed Changes
 - src/app.rs
+- src/home/home_screen.rs
 - src/home/room_screen/interactions.rs
 - src/space_service_sync.rs
 - src/home/directory_screen.rs
