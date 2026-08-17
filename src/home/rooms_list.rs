@@ -1632,13 +1632,31 @@ impl RoomsList {
     /// Returns whether the given target room or space is indirectly within the given parent space.
     ///
     /// This will recursively search all nested spaces within the given `parent_space`.
+    ///
+    /// Cycle-safe: `m.space.child` relationships can legally form cycles (the Matrix
+    /// spec does not forbid them), so this guards against infinite recursion via a
+    /// `visited` set of subspace IDs already walked, rather than a depth limit
+    /// (which would incorrectly truncate legitimately deep hierarchies).
     fn is_room_indirectly_in_space(&self, parent_space: &OwnedRoomId, target: &OwnedRoomId) -> bool {
+        let mut visited = HashSet::new();
+        visited.insert(parent_space.clone());
+        self.is_room_indirectly_in_space_inner(parent_space, target, &mut visited)
+    }
+
+    fn is_room_indirectly_in_space_inner(
+        &self,
+        parent_space: &OwnedRoomId,
+        target: &OwnedRoomId,
+        visited: &mut HashSet<OwnedRoomId>,
+    ) -> bool {
         if let Some(smv) = self.space_map.get(parent_space) {
             if smv.direct_child_rooms.contains(target) {
                 return true;
             }
             for subspace in smv.direct_subspaces.iter() {
-                if self.is_room_indirectly_in_space(subspace, target) {
+                if visited.insert(subspace.clone())
+                    && self.is_room_indirectly_in_space_inner(subspace, target, visited)
+                {
                     return true;
                 }
             }
