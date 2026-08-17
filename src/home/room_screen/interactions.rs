@@ -3,6 +3,11 @@
 //! the translation language popup.
 
 use super::*;
+use matrix_sdk::RoomState;
+use crate::{
+    home::navigation_tab_bar::NavigationBarAction,
+    join_leave_room_modal::{JoinLeaveModalKind, JoinLeaveRoomModalAction},
+};
 
 pub(super) const TRANSLATION_LANG_POPUP_WIDTH: f64 = 220.0;
 pub(super) const TRANSLATION_LANG_POPUP_SCROLL_HEIGHT: f64 = 288.0;
