@@ -596,10 +596,10 @@ mod cjk_font_tests {
     /// The single path the DSL's `chinese` font members point at. `build.rs`
     /// links it to a system CJK font where one is found (PingFang on macOS,
     /// YaHei on Windows, fontconfig's answer on Linux), or to the bundled
-    /// LXGWWenKai in `fonts/bundled/` otherwise — and always to the bundled
+    /// LXGWWenKai in `bundled_fonts/` otherwise — and always to the bundled
     /// face when `ROBRIX_BUNDLED_FONTS=1` was set at build time.
     const CJK_FONT: &str = "resources/fonts/system_cjk.ttc";
-    const CJK_BUNDLED: &str = "fonts/bundled/LXGWWenKaiRegular.ttf";
+    const CJK_BUNDLED: &str = "bundled_fonts/LXGWWenKaiRegular.ttf";
     const LATIN_BUNDLED: &str = "resources/fonts/LiberationMono-Regular.ttf";
 
     /// Same for the Latin UI face (`system_latin.ttf`).
