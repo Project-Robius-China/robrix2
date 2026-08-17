@@ -1647,7 +1647,15 @@ impl Widget for SpaceLobbyScreen {
                         ),
                     };
                     enqueue_popup_notification(message, kind, Some(5.0));
-                    if error.is_none() {
+                    // `Added` always refreshes, even on a reported failure: attaching a
+                    // room is best-effort (the primary `m.space.child` write can succeed
+                    // while the advisory `m.space.parent` backlink write fails and gets
+                    // reported as an `error` here), so the UI must reconcile with
+                    // whatever the server actually ended up with rather than trusting a
+                    // partial-failure error to mean nothing changed. `Removed` keeps the
+                    // original success-only refresh, since it has no such partial-failure
+                    // case (detach is already fully best-effort at the request layer).
+                    if was_added || error.is_none() {
                         // The homeserver's hierarchy view is what the tree renders, so
                         // re-fetch that space's children rather than editing it locally.
                         refresh_space_children(cx, space_id);
