@@ -8,6 +8,7 @@ use std::{
     cell::RefCell,
     collections::{hash_map::DefaultHasher, BTreeMap, HashMap},
     hash::{Hash, Hasher},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 use makepad_widgets::*;
@@ -789,6 +790,25 @@ pub fn cleanup_old_logs(max_logs_to_keep: usize) {
 /// Maximum number of log files to keep
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const MAX_LOG_FILES_TO_KEEP: usize = 10;
+
+/// Thread-safe cache of the current app-wide UI language preference, so that
+/// background tasks (e.g., `space_service_sync`, which has no UI/widget
+/// access) can localize a message without needing a request-scoped
+/// `AppLanguage` param. Kept in sync with `AppState::app_language` by
+/// `App::sync_app_language()`, which runs on startup and on every actions
+/// batch, so this may lag a genuinely-concurrent in-UI language change by at
+/// most one event loop tick.
+static CURRENT_APP_LANGUAGE_IS_CHINESE: AtomicBool = AtomicBool::new(false);
+
+/// Returns the most recently observed app-wide UI language; see
+/// [`CURRENT_APP_LANGUAGE_IS_CHINESE`] for the freshness caveat.
+pub fn current_app_language() -> AppLanguage {
+    if CURRENT_APP_LANGUAGE_IS_CHINESE.load(Ordering::Relaxed) {
+        AppLanguage::ChineseSimplified
+    } else {
+        AppLanguage::English
+    }
+}
 
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
@@ -2888,6 +2908,10 @@ impl App {
             return;
         }
         self.synced_app_language = Some(app_language);
+        CURRENT_APP_LANGUAGE_IS_CHINESE.store(
+            matches!(app_language, AppLanguage::ChineseSimplified),
+            Ordering::Relaxed,
+        );
         self.ui.label(cx, ids!(room_filter_modal_inner.search_results_title))
             .set_text(cx, tr_key(app_language, "app.room_filter.search_results_title"));
         self.ui.label(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.search_results_empty))

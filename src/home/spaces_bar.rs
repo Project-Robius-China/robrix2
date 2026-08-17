@@ -1139,7 +1139,15 @@ impl SpacesBar {
 
                 SpacesListUpdate::RemoveSpace { space_id, .. } => {
                     self.all_joined_spaces.remove(&space_id);
-                    adjust_displayed_spaces(true, false, space_id, &mut self.displayed_spaces);
+                    adjust_displayed_spaces(true, false, space_id.clone(), &mut self.displayed_spaces);
+                    // If the user is currently viewing this space's Lobby, its removal
+                    // (e.g., the user was banned/kicked, or left it from another
+                    // client) would otherwise leave them staring at a now-dead view.
+                    // Send them back to Home instead.
+                    if self.selected_space.as_ref() == Some(&space_id) {
+                        self.selected_space = None;
+                        cx.action(NavigationBarAction::GoToHome);
+                    }
                 }
 
                 SpacesListUpdate::ClearSpaces => {

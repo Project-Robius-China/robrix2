@@ -762,6 +762,8 @@
   "spaces_bar.status.n_joined": "找到 {count} 个\n已加入的空间。",
   "spaces_bar.status.many_matching": "找到 99+ 个\n匹配的空间。",
   "spaces_bar.status.many_joined": "找到 99+ 个\n已加入的空间。",
+  "space_service_sync.popup.banned_from_space": "你已被移出空间“{space_name}”。",
+  "space_service_sync.popup.left_space": "你已不再是空间“{space_name}”的成员。",
   "tsp.settings.title": "TSP 钱包设置",
   "tsp.settings.section.active_identity": "当前活跃身份：",
   "tsp.settings.section.wallets": "你的钱包：",

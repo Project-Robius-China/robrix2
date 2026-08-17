@@ -762,6 +762,8 @@
   "spaces_bar.status.n_joined": "Found {count}\njoined spaces.",
   "spaces_bar.status.many_matching": "Found 99+\nmatching spaces.",
   "spaces_bar.status.many_joined": "Found 99+\njoined spaces.",
+  "space_service_sync.popup.banned_from_space": "You have been removed from the space \"{space_name}\".",
+  "space_service_sync.popup.left_space": "You are no longer a member of the space \"{space_name}\".",
   "tsp.settings.title": "TSP Wallet Settings",
   "tsp.settings.section.active_identity": "Your active identity:",
   "tsp.settings.section.wallets": "Your Wallets:",
