@@ -207,6 +207,34 @@ impl RoomScreen {
                         );
                         return true;
                     }
+
+                    // If the client's local store already knows this room and it's a
+                    // Space, route it to the Space Lobby (if joined) or a
+                    // space-flavored join modal (if not), instead of falling through
+                    // to the normal-room navigation path below. A room the client
+                    // doesn't know about at all (`get_room()` returns `None`) keeps
+                    // the pre-existing normal-room behavior unchanged: we deliberately
+                    // do not send a preview request to probe its room type.
+                    if let Some(space_room) = get_client()
+                        .and_then(|c| c.get_room(room_id))
+                        .filter(|room| room.is_space())
+                    {
+                        if space_room.state() == RoomState::Joined {
+                            let space_name_id = cx.get_global::<RoomsListRef>().get_room_name(room_id)
+                                .unwrap_or_else(|| RoomNameId::empty(room_id.clone()));
+                            cx.action(NavigationBarAction::GoToSpace { space_name_id });
+                        } else {
+                            let details = cx.get_global::<RoomsListRef>().get_room_name(room_id)
+                                .map(BasicRoomDetails::Name)
+                                .unwrap_or_else(|| BasicRoomDetails::RoomId(RoomNameId::empty(room_id.clone())));
+                            cx.action(JoinLeaveRoomModalAction::Open {
+                                kind: JoinLeaveModalKind::JoinRoom { details, is_space: true },
+                                show_tip: false,
+                            });
+                        }
+                        return true;
+                    }
+
                     if let Some(room_name_id) = cx.get_global::<RoomsListRef>().get_room_name(room_id) {
                         cx.action(AppStateAction::NavigateToRoom {
                             room_to_close: None,
