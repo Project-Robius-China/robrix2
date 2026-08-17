@@ -243,7 +243,7 @@ script_mod! {
 
             View {
                 width: Fill, height: Fit
-                flow: Right
+                flow: Flow.Right{wrap: true}
                 align: Align{y: 0.5}
                 spacing: 8
 
@@ -378,6 +378,32 @@ script_mod! {
 
             agent_chat_description := mod.widgets.SettingsSectionDescription {
                 text: ""
+            }
+
+            agent_ops_contract_notice := mod.widgets.SettingsSectionDescription {
+                margin: Inset{left: 0.5, top: (SPACE_SM), bottom: 0, right: 5}
+                text: ""
+            }
+
+            View {
+                width: Fill, height: Fit
+                flow: Flow.Right{wrap: true}
+                spacing: (SPACE_SM)
+                margin: Inset{left: 6.5, top: 8}
+
+                // This opens an inert integration-status screen. Runtime
+                // controls remain unavailable until canonical contract bytes
+                // are released, vendored, and verified.
+                agent_ops_open_button := RobrixIconButton {
+                    width: Fit, height: Fit
+                    padding: Inset{left: 12, right: 12, top: 8, bottom: 8}
+                    draw_bg +: { color: (RBX_BG_SURFACE_SUBTLE) }
+                    draw_text +: {
+                        color: (RBX_FG_PRIMARY)
+                        text_style: (RBX_TEXT_BODY)
+                    }
+                    text: ""
+                }
             }
         }
 
@@ -579,6 +605,13 @@ impl AppSettings {
                         Some(3.0),
                     );
                 }
+                self.view.button(cx, ids!(agent_ops_open_button)).set_enabled(cx, enabled);
+            }
+
+            if app_state.app_prefs.agent_chat_enabled
+                && self.view.button(cx, ids!(agent_ops_open_button)).clicked(actions)
+            {
+                cx.action(crate::home::navigation_tab_bar::NavigationBarAction::GoToAgentOps);
             }
         }
 
@@ -677,6 +710,8 @@ impl AppSettings {
             self.view.view(cx, ids!(agent_chat_section)).set_visible(cx, true);
             self.view.check_box(cx, ids!(agent_chat_enable_toggle))
                 .set_active(cx, prefs.agent_chat_enabled, Animate::No);
+            self.view.button(cx, ids!(agent_ops_open_button))
+                .set_enabled(cx, prefs.agent_chat_enabled);
         }
 
         let (small, medium, unlimited, custom, custom_text) = match prefs.thumbnail_max_height {
@@ -721,6 +756,12 @@ impl AppSettings {
         self.view
             .label(cx, ids!(agent_chat_description))
             .set_text(cx, tr_key(self.app_language, "settings.preferences.app.agent_chat.description"));
+        self.view
+            .label(cx, ids!(agent_ops_contract_notice))
+            .set_text(cx, tr_key(self.app_language, "settings.preferences.app.agent_ops.contract_notice"));
+        self.view
+            .button(cx, ids!(agent_ops_open_button))
+            .set_text(cx, tr_key(self.app_language, "settings.preferences.app.agent_ops.open_status"));
         self.view
             .label(cx, ids!(preferences_thumb_height_label))
             .set_text(cx, tr_key(self.app_language, "settings.preferences.app.thumbnail.label"));
@@ -796,6 +837,7 @@ impl AppSettings {
         view.text_input(cx, ids!(thumb_custom_input))
             .set_disabled(cx, !enabled);
     }
+
 }
 
 impl AppSettingsRef {

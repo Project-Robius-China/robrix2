@@ -127,7 +127,7 @@ script_mod! {
                 width: Fit, height: Fit,
                 draw_text +: {
                     color: #888
-                    text_style: theme.font_regular { font_size: 9.0 }
+                    text_style: REGULAR_TEXT { font_size: 9.0 }
                 }
                 text: ""
             }
@@ -158,7 +158,7 @@ script_mod! {
             height: Fill
             visible: false,
             show_bg: true
-            draw_bg.color: #000000BB
+            draw_bg.color: (RBX_SCRIM)
         }
 
         main_content := SolidView {
@@ -234,7 +234,7 @@ script_mod! {
                     empty_text: "Search messages..."
                     draw_bg.border_size: 0.0
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: 10 },
+                        text_style: REGULAR_TEXT { font_size: 10 },
                     }
                 }
 
@@ -536,6 +536,7 @@ impl Widget for SearchMessagesSlidingPane {
         // Fire the debounced QueryChanged action when the timer elapses.
         if let Event::Timer(te) = event {
             if self.debounce_timer.is_timer(te).is_some() {
+                self.debounce_timer = Timer::empty();
                 cx.widget_action(
                     self.widget_uid(),
                     SearchMessagesAction::QueryChanged(self.pending_query.clone()),
@@ -612,6 +613,27 @@ impl Widget for SearchMessagesSlidingPane {
                 } else {
                     self.debounce_timer = cx.start_timeout(SEARCH_INPUT_DEBOUNCE_SECS);
                 }
+            }
+
+            // Enter searches now instead of waiting out the debounce. Without
+            // this the key did nothing at all: `TextInput` reports Return
+            // separately from `changed`, so the only path to a search was to
+            // stop typing for `SEARCH_INPUT_DEBOUNCE_SECS` — which reads as
+            // "the search box ignores Enter". Mirrors the public directory
+            // search (`directory_screen.rs`).
+            if let Some((text, _)) = input.returned(actions) {
+                let trimmed = text.trim().to_string();
+                clear_button.set_visible(cx, !trimmed.is_empty());
+                clear_button.reset_hover(cx);
+                self.pending_query = trimmed.clone();
+                // A pending debounce would otherwise re-fire the same query a
+                // moment later, costing a second server round-trip.
+                cx.stop_timer(self.debounce_timer);
+                self.debounce_timer = Timer::empty();
+                cx.widget_action(
+                    self.widget_uid(),
+                    SearchMessagesAction::QueryChanged(trimmed),
+                );
             }
 
             if clear_button.clicked(actions) {

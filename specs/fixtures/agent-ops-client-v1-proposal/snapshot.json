@@ -1,0 +1,135 @@
+{
+  "schema": "io.robrix.agent_ops.proposal.r3",
+  "scope": {
+    "scope_id": "scope-room-agent-1",
+    "project_room_id": "!project-room:example.org",
+    "agent_id": "reviewer",
+    "owner_mxid": "@owner:example.org",
+    "owner_dm_room_id": "!owner-room:example.org"
+  },
+  "projection_id": "projection-1",
+  "stream_epoch": "bb47bc6e-9f02-41df-90f6-8bb83b924b88",
+  "auth_fence_generation": 3,
+  "seq": 42,
+  "attention": [
+    {
+      "id": "attention-1",
+      "kind": "outcome_unknown",
+      "summary": "Runner outcome is unknown; inspect the workspace",
+      "task_id": "task-1",
+      "dispatch_id": "dispatch-1",
+      "resource_id": "resource-1",
+      "agent": "reviewer",
+      "waiting_ms": 61000,
+      "thread": {
+        "room_id": "!owner-room:example.org",
+        "thread_root_event_id": "$task-thread:example.org"
+      },
+      "available_actions": [
+        {
+          "action_id": "action-inspect-1",
+          "kind": "begin_outcome_inspection",
+          "target": {
+            "entity_kind": "dispatch",
+            "entity_id": "dispatch-1",
+            "entity_version": 7
+          },
+          "resource_precondition": {
+            "resource_id": "resource-1",
+            "dirty_generation": 2
+          },
+          "expires_at_unix_ms": 1785946500000,
+          "capability": "fixture-action-capability-inspect"
+        }
+      ]
+    },
+    {
+      "id": "attention-2",
+      "kind": "workspace_dirty",
+      "summary": "Released workspace has uncommitted changes",
+      "task_id": "task-2",
+      "resource_id": "resource-2",
+      "available_actions": [
+        {
+          "action_id": "action-resource-2",
+          "kind": "mark_resource_inspected",
+          "target": {
+            "entity_kind": "resource",
+            "entity_id": "resource-2",
+            "entity_version": 4
+          },
+          "resource_precondition": {
+            "resource_id": "resource-2",
+            "dirty_generation": 1
+          },
+          "expires_at_unix_ms": 1785946500000,
+          "capability": "fixture-action-capability-resource"
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "task-1",
+      "entity_version": 5,
+      "title": "Review Agent Operations contract",
+      "agent": "reviewer",
+      "state": "blocked",
+      "dispatch_state": "outcome_unknown",
+      "elapsed_ms": 125000,
+      "thread": {
+        "room_id": "!owner-room:example.org",
+        "thread_root_event_id": "$task-thread:example.org"
+      }
+    }
+  ],
+  "queue": [
+    {
+      "dispatch_id": "dispatch-2",
+      "entity_version": 3,
+      "task_id": "task-2",
+      "agent": "implementer",
+      "state": "queued",
+      "waiting_on": "shared workspace lease",
+      "held_by_dispatch_id": "dispatch-3"
+    }
+  ],
+  "worktrees": [
+    {
+      "resource_id": "resource-1",
+      "entity_version": 9,
+      "label": "robrix2 · task-1",
+      "branch": "agentchat/task-1",
+      "dirty": true,
+      "dirty_generation": 2,
+      "task_id": "task-1",
+      "available_actions": []
+    },
+    {
+      "resource_id": "resource-2",
+      "entity_version": 4,
+      "label": "robrix2 · task-2",
+      "branch": "agentchat/task-2",
+      "dirty": true,
+      "dirty_generation": 1,
+      "task_id": "task-2",
+      "available_actions": [
+        {
+          "action_id": "action-resource-2",
+          "kind": "mark_resource_inspected",
+          "target": {
+            "entity_kind": "resource",
+            "entity_id": "resource-2",
+            "entity_version": 4
+          },
+          "resource_precondition": {
+            "resource_id": "resource-2",
+            "dirty_generation": 1
+          },
+          "expires_at_unix_ms": 1785946500000,
+          "capability": "fixture-action-capability-resource"
+        }
+      ]
+    }
+  ]
+}

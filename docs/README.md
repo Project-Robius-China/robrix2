@@ -87,6 +87,18 @@ For users who want to connect [Hermes Agent](https://github.com/NousResearch/Her
 
 ---
 
+## Robrix + agent-chat (HAgency)
+
+For maintainers and developers testing local coding agents, owner-scoped approvals, Matrix Threads, and multi-agent workflows:
+
+| Guide | Goal |
+|-------|------|
+| [Robrix × agent-chat demo guide](robrix-with-agentchat/README.md) | Reproduce the original local software-factory demo and inspect its artifacts. |
+| [Current known issues and roadmap](robrix-with-agentchat/current-known-issues-and-roadmap.md) | Track release blockers, productization gaps, completed fixes, and the recommended PR order. |
+| [Historical Agent Operations model experiment](robrix-with-agentchat/agent-ops-client-contract-v1-proposal.md) | Review the non-canonical R3 design experiment; it is test-only and does not define agent-chat's V1 wire contract. |
+
+---
+
 ## Palpo and Octos Deployment Files
 
 The [`palpo-and-octos-deploy/`](../palpo-and-octos-deploy/) directory (at the repository root) holds the runnable lightweight-mode deployment — see its [README](../palpo-and-octos-deploy/README.md) for the 3-step Quickstart.

@@ -69,26 +69,90 @@ script_mod! {
     mod.widgets.ICON_PEOPLE           = crate_resource("self://resources/icons/people.svg")
     mod.widgets.ICON_DEVICE           = crate_resource("self://resources/icons/device.svg")
 
-    mod.widgets.TITLE_TEXT = theme.font_regular {
+    // App-owned base text styles, so no text font ships in the bundle.
+    //
+    // These replace `theme.font_regular` / `theme.font_bold` everywhere in
+    // Robrix. They are *new* styles rather than assignments back into the
+    // `theme` namespace: assigning to `theme.font_*` from an app `script_mod!`
+    // compiles and runs but leaves the font members unresolved, and all text
+    // renders as nothing. Declaring a fresh `TextStyle` with an explicit
+    // `FontFamily` into `mod.widgets` is the form that works — it is how the
+    // code-block styles below already load their fonts. (A bare
+    // `APP_FONT_REGULAR = ...` is an assignment to a nonexistent variable,
+    // not a declaration, and fails scope resolution entirely.)
+    //
+    // `system_latin.ttf` and `system_cjk.ttc` are symlinks that build.rs
+    // resolves per platform (San Francisco + PingFang on macOS — including
+    // macOS 26+'s hvgl-only PingFang, which makepad renders through its
+    // CoreText outline fallback), so the bytes stay the operating system's
+    // and nothing here is redistributed. Emoji stays on the bundled Noto,
+    // which is already in this repo.
+    mod.widgets.APP_FONT_REGULAR = TextStyle{
+        font_family: FontFamily{
+            latin := FontMember{
+                res: crate_resource("self://resources/fonts/system_latin.ttf")
+                asc: -0.1
+                desc: 0.0
+            }
+            chinese := FontMember{
+                res: crate_resource("self://resources/fonts/system_cjk.ttc")
+                asc: 0.0
+                desc: 0.0
+            }
+            emoji := FontMember{
+                res: crate_resource("self://resources/fonts/NotoColorEmoji.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+        }
+    }
+
+    // Both system faces are variable, so bold comes from the `wght` axis of
+    // the same files (`weight: 700` below) — San Francisco natively via
+    // ttf_parser, PingFang via makepad's CoreText fallback which carries the
+    // variation onto its CTFont.
+    mod.widgets.APP_FONT_BOLD = TextStyle{
+        font_family: FontFamily{
+            latin := FontMember{
+                res: crate_resource("self://resources/fonts/system_latin.ttf")
+                asc: -0.1
+                desc: 0.0
+                weight: 700
+            }
+            chinese := FontMember{
+                res: crate_resource("self://resources/fonts/system_cjk.ttc")
+                asc: 0.0
+                desc: 0.0
+                weight: 700
+            }
+            emoji := FontMember{
+                res: crate_resource("self://resources/fonts/NotoColorEmoji.ttf")
+                asc: 0.0
+                desc: 0.0
+            }
+        }
+    }
+
+    mod.widgets.TITLE_TEXT = mod.widgets.APP_FONT_REGULAR {
         font_size: (13),
     }
 
-    mod.widgets.REGULAR_TEXT = theme.font_regular {
+    mod.widgets.REGULAR_TEXT = mod.widgets.APP_FONT_REGULAR {
         font_size: (10),
     }
 
-    mod.widgets.BOLD_TEXT = theme.font_bold {
+    mod.widgets.BOLD_TEXT = mod.widgets.APP_FONT_BOLD {
         font_size: (13),
     }
 
-    mod.widgets.TEXT_SUB = theme.font_regular {
+    mod.widgets.TEXT_SUB = mod.widgets.APP_FONT_REGULAR {
         font_size: (10),
     }
 
     mod.widgets.USERNAME_FONT_SIZE = 11
 
     mod.widgets.USERNAME_TEXT_COLOR = #x2
-    mod.widgets.USERNAME_TEXT_STYLE = theme.font_bold {
+    mod.widgets.USERNAME_TEXT_STYLE = mod.widgets.APP_FONT_BOLD {
         font_size: (mod.widgets.USERNAME_FONT_SIZE),
     }
 
@@ -108,7 +172,7 @@ script_mod! {
     mod.widgets.MESSAGE_TEXT_LINE_SPACING = 1.3
     // This font should only be used for plaintext labels. Don't use this for Html content,
     // as the Html widget sets different fonts for different text styles (e.g., bold, italic).
-    mod.widgets.MESSAGE_TEXT_STYLE = theme.font_regular {
+    mod.widgets.MESSAGE_TEXT_STYLE = mod.widgets.APP_FONT_REGULAR {
         font_size: (mod.widgets.MESSAGE_FONT_SIZE),
         line_spacing: (mod.widgets.MESSAGE_TEXT_LINE_SPACING),
     }
@@ -123,7 +187,7 @@ script_mod! {
                 desc: 0.0
             }
             chinese := FontMember{
-                res: crate_resource("self://resources/fonts/LXGWWenKaiRegular.ttf")
+                res: crate_resource("self://resources/fonts/system_cjk.ttc")
                 asc: 0.0
                 desc: 0.0
             }
@@ -148,7 +212,7 @@ script_mod! {
                 desc: 0.0
             }
             chinese := FontMember{
-                res: crate_resource("self://resources/fonts/LXGWWenKaiRegular.ttf")
+                res: crate_resource("self://resources/fonts/system_cjk.ttc")
                 asc: 0.0
                 desc: 0.0
             }
@@ -171,14 +235,14 @@ script_mod! {
 
 
     mod.widgets.SMALL_STATE_TEXT_COLOR = #x888
-    mod.widgets.SMALL_STATE_TEXT_STYLE = theme.font_regular {
+    mod.widgets.SMALL_STATE_TEXT_STYLE = mod.widgets.APP_FONT_REGULAR {
         font_size: (mod.widgets.SMALL_STATE_FONT_SIZE),
     }
 
     mod.widgets.TIMESTAMP_FONT_SIZE = 8.5
 
     mod.widgets.TIMESTAMP_TEXT_COLOR = #x999
-    mod.widgets.TIMESTAMP_TEXT_STYLE = theme.font_regular {
+    mod.widgets.TIMESTAMP_TEXT_STYLE = mod.widgets.APP_FONT_REGULAR {
         font_size: (mod.widgets.TIMESTAMP_FONT_SIZE),
     }
 
@@ -196,7 +260,11 @@ script_mod! {
     mod.widgets.COLOR_BG_DANGER_RED = #FFF0F0
     mod.widgets.COLOR_FG_DISABLED = #B3B3B3
     mod.widgets.COLOR_BG_DISABLED = #E0E0E0
-    mod.widgets.COLOR_INFO_BLUE = #0f88fe
+    // Informational accent — it only ever shared a value with the retired legacy
+    // primary. Now the system's own info blue (literal mirroring RBX_INFO_FG;
+    // see the registration-order note further down), so it stays blue while the
+    // primary moves to teal.
+    mod.widgets.COLOR_INFO_BLUE = #1C67B0
     mod.widgets.COLOR_WARNING_YELLOW = #fcdb03
     mod.widgets.COLOR_TEXT_WARNING_NOT_FOUND = #953800
 
@@ -211,13 +279,29 @@ script_mod! {
 
     mod.widgets.COLOR_PRIMARY = #ffffff
 
-    mod.widgets.COLOR_PRIMARY_DARKER = #fefefe
+    // Was a stray `#fefefe` that belonged to no ramp; every use is a near-white
+    // panel background or border, so it takes the surface value instead (a 0.4%
+    // shift, invisible in place).
+    // NOTE: this file is registered BEFORE design_tokens.rs (see shared/mod.rs),
+    // so it cannot reference `RBX_*` — doing so silently fails to resolve at
+    // runtime and the property falls back to a grey default. Keep the literal,
+    // mirroring RBX_BG_SURFACE.
+    mod.widgets.COLOR_PRIMARY_DARKER = #ffffff
     mod.widgets.COLOR_SECONDARY = #E3E3E3
     mod.widgets.COLOR_SECONDARY_DARKER = #C8C8C8
 
-    mod.widgets.COLOR_ACTIVE_PRIMARY = #0f88fe
+    // The primary/CTA/focus colour. Was the legacy bright blue `#0f88fe`; now the
+    // accent teal, completing the migration design_tokens.rs describes. Every one
+    // of the ~40 call sites means "primary", "active" or "focus", which is
+    // exactly what the accent is defined to be, so they all move together —
+    // migrating a screen at a time would have left blue and teal side by side for
+    // as long as the migration ran.
+    // Literals mirroring RBX_ACCENT / RBX_ACCENT_HOVER: this file is registered
+    // before design_tokens.rs, so `RBX_*` is not resolvable here (see the note on
+    // COLOR_PRIMARY_DARKER above).
+    mod.widgets.COLOR_ACTIVE_PRIMARY = #0D7988
 
-    mod.widgets.COLOR_ACTIVE_PRIMARY_DARKER = #106fcc
+    mod.widgets.COLOR_ACTIVE_PRIMARY_DARKER = #0A6675
 
     mod.widgets.COLOR_BG_PREVIEW = #F0F5FF
 
@@ -228,11 +312,18 @@ script_mod! {
     mod.widgets.COLOR_AVATAR_BG_IDLE = #d8d8d8
 
 
-    mod.widgets.COLOR_UNREAD_BADGE_MENTIONS = #FF0000;
-
-
-    mod.widgets.COLOR_UNREAD_BADGE_MARKED = (mod.widgets.COLOR_ROBRIX_CYAN);
-    mod.widgets.COLOR_UNREAD_BADGE_MESSAGES = #AAAAAA
+    // Unread badge fills. A mention keeps the conventional red, but the
+    // system's red rather than pure #FF0000 — the latter was the most saturated
+    // pixel in the app and appeared nowhere else. "Marked unread" is a user
+    // action, so it takes the functional accent instead of the logo cyan (the
+    // brand ramp is reserved for brand entry points, per design_tokens.rs).
+    // Literals mirroring RBX_DANGER_FG / RBX_ACCENT / RBX_FG_TERTIARY — this file
+    // is registered before design_tokens.rs, so `RBX_*` is not resolvable here
+    // (see the note on COLOR_PRIMARY_DARKER above). The Rust consts below do
+    // reference the tokens directly, which keeps the two sides tied together.
+    mod.widgets.COLOR_UNREAD_BADGE_MENTIONS = #B93429;
+    mod.widgets.COLOR_UNREAD_BADGE_MARKED = #0D7988;
+    mod.widgets.COLOR_UNREAD_BADGE_MESSAGES = #687283
 
 
     mod.widgets.COLOR_TEXT_IDLE = #d8d8d8
@@ -293,7 +384,7 @@ script_mod! {
     // within any settings screen (e.g., dropdown labels, radio/toggle
     // labels, inline helper text inside a control).
     mod.widgets.SETTINGS_REGULAR_FONT_SIZE = 11
-    mod.widgets.SETTINGS_REGULAR_TEXT_STYLE = theme.font_regular {
+    mod.widgets.SETTINGS_REGULAR_TEXT_STYLE = mod.widgets.APP_FONT_REGULAR {
         font_size: (mod.widgets.SETTINGS_REGULAR_FONT_SIZE),
     }
 
@@ -377,10 +468,11 @@ script_mod! {
 
 /// #FFFFFF
 pub const COLOR_PRIMARY:               Vec4 = vec4(1.0, 1.0, 1.0, 1.0);
-/// #0F88FE
-pub const COLOR_ACTIVE_PRIMARY:        Vec4 = vec4(0.059, 0.533, 0.996, 1.0);
-/// #106FCC
-pub const COLOR_ACTIVE_PRIMARY_DARKER: Vec4 = vec4(0.063, 0.435, 0.682, 1.0);
+/// The primary/CTA/focus colour, now the accent teal (was the legacy `#0F88FE`).
+/// The Rust side has no registration-order constraint, so it names the tokens
+/// directly and stays tied to the DSL literals above by construction.
+pub const COLOR_ACTIVE_PRIMARY:        Vec4 = crate::shared::design_tokens::RBX_ACCENT;
+pub const COLOR_ACTIVE_PRIMARY_DARKER: Vec4 = crate::shared::design_tokens::RBX_ACCENT_HOVER;
 /// #138808
 pub const COLOR_FG_ACCEPT_GREEN:       Vec4 = vec4(0.074, 0.533, 0.031, 1.0);
 /// #F0FFF0
@@ -397,12 +489,13 @@ pub const COLOR_BG_DANGER_RED:         Vec4 = vec4(1.0, 0.941, 0.941, 1.0);
 pub const COLOR_ROBRIX_PURPLE:         Vec4 = vec4(0.341, 0.176, 0.8, 1.0);
 /// #05CDC7
 pub const COLOR_ROBRIX_CYAN:           Vec4 = vec4(0.031, 0.804, 0.78, 1.0);
-/// #FF0000
-pub const COLOR_UNREAD_BADGE_MENTIONS: Vec4 = vec4(1.0, 0.0, 0.0, 1.0);
-/// #572DCC
-pub const COLOR_UNREAD_BADGE_MARKED:   Vec4 = COLOR_ROBRIX_CYAN;
-/// #AAAAAA
-pub const COLOR_UNREAD_BADGE_MESSAGES: Vec4 = vec4(0.667, 0.667, 0.667, 1.0);
+// Keep these in sync with the DSL definitions above.
+/// #B93429 — mention badge (`RBX_DANGER_FG`).
+pub const COLOR_UNREAD_BADGE_MENTIONS: Vec4 = crate::shared::design_tokens::RBX_DANGER_FG;
+/// #0D7988 — marked-unread badge (`RBX_ACCENT`).
+pub const COLOR_UNREAD_BADGE_MARKED:   Vec4 = crate::shared::design_tokens::RBX_ACCENT;
+/// #687283 — plain unread-count badge (`RBX_FG_TERTIARY`).
+pub const COLOR_UNREAD_BADGE_MESSAGES: Vec4 = crate::shared::design_tokens::RBX_FG_TERTIARY;
 /// #FF6e00
 pub const COLOR_UNKNOWN_ROOM_AVATAR:   Vec4 = vec4(1.0, 0.431, 0.0, 1.0);
 /// #888888
@@ -494,4 +587,156 @@ pub fn apply_primary_button_style(cx: &mut Cx, button: &mut ButtonRef) {
             color: mod.widgets.COLOR_PRIMARY,
         }
     });
+}
+
+#[cfg(test)]
+mod cjk_font_tests {
+    use std::path::Path;
+
+    /// The single path the DSL's `chinese` font members point at. `build.rs`
+    /// links it to a system CJK font where one is found (PingFang on macOS,
+    /// YaHei on Windows, fontconfig's answer on Linux), or to the bundled
+    /// LXGWWenKai in `fonts/bundled/` otherwise — and always to the bundled
+    /// face when `ROBRIX_BUNDLED_FONTS=1` was set at build time.
+    const CJK_FONT: &str = "resources/fonts/system_cjk.ttc";
+    const CJK_BUNDLED: &str = "fonts/bundled/LXGWWenKaiRegular.ttf";
+    const LATIN_BUNDLED: &str = "resources/fonts/LiberationMono-Regular.ttf";
+
+    /// Same for the Latin UI face (`system_latin.ttf`).
+    const LATIN_FONT: &str = "resources/fonts/system_latin.ttf";
+
+    /// `path` must exist (following symlinks) and start with a font magic
+    /// `ttf_parser::Face::parse` accepts: a collection (`ttcf`), TrueType
+    /// outlines (0x00010000), or CFF (`OTTO`).
+    fn assert_is_real_font(path: &str) {
+        let p = Path::new(path);
+        assert!(
+            p.exists(),
+            "{path} missing or dangling — build.rs should have linked it; the DSL \
+             references this path and font loading would panic",
+        );
+        let data = std::fs::read(p).expect("font should be readable");
+        assert!(data.len() > 4, "{path} is empty");
+        let magic = &data[..4];
+        assert!(
+            magic == b"ttcf" || magic == b"OTTO" || magic == [0x00, 0x01, 0x00, 0x00],
+            "unrecognised font magic {magic:?} at {path}",
+        );
+    }
+
+    /// Font loading in makepad is lazy and panics on a bad face
+    /// (`.expect("font face should load")`), so a broken link would not
+    /// surface until the first Chinese glyph is drawn — potentially in front
+    /// of a user. Check the wiring here instead.
+    #[test]
+    fn cjk_font_link_resolves_to_a_real_font() {
+        assert_is_real_font(CJK_FONT);
+    }
+
+    /// The Latin face is used by every label, so a dangling link here is a
+    /// fully blank UI (seen on Arch/Omarchy: build.rs once wrote a
+    /// crate-relative fallback path into the symlink, which then resolved
+    /// relative to `resources/fonts/` and pointed nowhere).
+    #[test]
+    fn latin_font_link_resolves_to_a_real_font() {
+        assert_is_real_font(LATIN_FONT);
+    }
+
+    /// On unix these are symlinks, and their targets must be absolute: a
+    /// relative target is resolved against the link's *own* directory, so
+    /// `resources/fonts/X.ttf` would silently become
+    /// `resources/fonts/resources/fonts/X.ttf`. This is exactly the bug that
+    /// blanked the UI on distros whose system-font paths didn't match the
+    /// hardcoded candidates.
+    #[cfg(unix)]
+    #[test]
+    fn font_symlink_targets_are_absolute() {
+        for link in [CJK_FONT, LATIN_FONT] {
+            let target = std::fs::read_link(link)
+                .unwrap_or_else(|e| panic!("{link} should be a symlink: {e}"));
+            assert!(
+                target.is_absolute(),
+                "{link} -> {} : symlink target must be absolute",
+                target.display(),
+            );
+            assert!(
+                target.is_file(),
+                "{link} -> {} : symlink target does not exist",
+                target.display(),
+            );
+        }
+    }
+
+    /// `ROBRIX_BUNDLED_FONTS=1` is the packaging switch: packagers copy
+    /// `resources/` by value (dereferencing symlinks), so a build meant for
+    /// distribution must never resolve these to a host font — that would ship
+    /// PingFang / Microsoft YaHei inside the package. build.rs re-exports the
+    /// switch via `cargo:rustc-env` so this test sees the same value the
+    /// build saw. Run with `ROBRIX_BUNDLED_FONTS=1 cargo test` to exercise it.
+    #[test]
+    fn bundled_mode_never_resolves_to_a_host_font() {
+        if env!("ROBRIX_BUNDLED_FONTS") != "1" {
+            eprintln!("ROBRIX_BUNDLED_FONTS not set for this build, skipping");
+            return;
+        }
+        for (link, bundled) in [(CJK_FONT, CJK_BUNDLED), (LATIN_FONT, LATIN_BUNDLED)] {
+            let resolved = std::fs::canonicalize(link)
+                .unwrap_or_else(|e| panic!("{link} should resolve: {e}"));
+            let expected = std::fs::canonicalize(bundled)
+                .unwrap_or_else(|e| panic!("{bundled} should exist: {e}"));
+            // On unix the link is a symlink to the bundled file; on Windows it
+            // is a copy, so compare bytes as well as the resolved path.
+            let same_path = resolved == expected;
+            let link_bytes = std::fs::read(link)
+                .unwrap_or_else(|e| panic!("{link} should be readable: {e}"));
+            let bundled_bytes = std::fs::read(bundled)
+                .unwrap_or_else(|e| panic!("{bundled} should be readable: {e}"));
+            let same_bytes = link_bytes == bundled_bytes;
+            assert!(
+                same_path || same_bytes,
+                "{link} resolves to {} but bundled mode requires {bundled}",
+                resolved.display(),
+            );
+        }
+    }
+
+    /// On macOS the whole point is that this resolves to a *system* Chinese
+    /// sans rather than the bundled fallback — the system PingFang where
+    /// present. Symlinked, never copied: the bytes stay Apple's and nothing
+    /// here redistributes them.
+    ///
+    /// Face 0 must carry outlines the text stack can render: `glyf`/`CFF`/
+    /// `CFF2` via ttf_parser, or Apple's `hvgl` (PingFang on macOS 26+),
+    /// which makepad decodes on macOS through its CoreText outline fallback.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_links_to_a_system_cjk_font_with_renderable_outlines() {
+        if env!("ROBRIX_BUNDLED_FONTS") == "1" {
+            eprintln!("ROBRIX_BUNDLED_FONTS set: system fonts intentionally not linked, skipping");
+            return;
+        }
+        let target = std::fs::read_link(CJK_FONT)
+            .expect("on macOS the CJK font should be a symlink, not a copy");
+        assert!(
+            target.starts_with("/System/Library/"),
+            "CJK font should point at a system font, got {}",
+            target.display(),
+        );
+        let data = std::fs::read(&target).expect("system CJK font should be readable");
+        let face_off = if &data[..4] == b"ttcf" {
+            u32::from_be_bytes([data[12], data[13], data[14], data[15]]) as usize
+        } else {
+            0
+        };
+        let num_tables = u16::from_be_bytes([data[face_off + 4], data[face_off + 5]]) as usize;
+        let has_outlines = (0..num_tables).any(|i| {
+            let rec = face_off + 12 + 16 * i;
+            matches!(&data[rec..rec + 4], b"glyf" | b"CFF " | b"CFF2" | b"hvgl")
+        });
+        assert!(
+            has_outlines,
+            "{} has no renderable outline table — build.rs should have skipped it",
+            target.display(),
+        );
+    }
 }

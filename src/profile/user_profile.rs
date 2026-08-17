@@ -91,7 +91,7 @@ script_mod! {
                 text_view +: {
                     text +: {
                         draw_text +: {
-                            text_style: theme.font_regular { font_size: 40.0 }
+                            text_style: REGULAR_TEXT { font_size: 40.0 }
                         }
                     }
                 }
@@ -279,7 +279,7 @@ script_mod! {
             height: Fill
             visible: false,
             show_bg: true
-            draw_bg.color: #000000BB
+            draw_bg.color: (RBX_SCRIM)
         }
 
         main_content := SolidView {

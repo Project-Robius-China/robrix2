@@ -1,4 +1,4 @@
-# Issue 012: Room aliases can be read but not managed from the client
+# Issue 013: Room aliases can be read but not managed from the client
 
 **Date:** 2026-07-23
 **Type:** Feature

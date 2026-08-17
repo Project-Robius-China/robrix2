@@ -34,7 +34,7 @@ use crate::{
     app::AppState, avatar_cache::{self, AvatarCacheEntry}, i18n::{AppLanguage, tr_fmt, tr_key}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
         user_profile::UserProfile,
         user_profile_cache::{self, UserProfileUpdate},
-    }, home::{spaces_bar::SpacesBarWidgetExt, add_menu::AddMenuAction}, shared::{
+    }, home::{spaces_bar::SpacesBarWidgetExt, add_menu::AddMenuAction, account_menu::AccountMenuAction}, shared::{
         avatar::{AvatarState, AvatarWidgetExt}, styles::*, verification_badge::VerificationBadgeWidgetExt
     }, settings::app_preferences::{effective_is_desktop, AppPreferencesGlobal, AppPreferencesAction, ViewModeOverride}, sliding_sync::{current_user_id, AccountDataAction, AccountSwitchAction}, utils::{self, RoomNameId}
 };
@@ -55,10 +55,13 @@ script_mod! {
         flow: Down,
         text: "",
 
+        // Match the app-wide icon scale (RBX_ICON_LG) so the rail's Tabler icons carry the
+        // same visual stroke weight as icons everywhere else. Rendering them at ~34px made
+        // the 24px-viewBox / stroke-2 glyphs look noticeably heavier than the rest of the UI.
         icon_walk: Walk{
             margin: 0,
-            width: (NAVIGATION_TAB_BAR_SIZE / 2.2),
-            height: (NAVIGATION_TAB_BAR_SIZE / 2.2)
+            width: (RBX_ICON_LG),
+            height: (RBX_ICON_LG)
         }
         // Fully hide the text with zero size, zero margin, and zero spacing
         label_walk: Walk{margin: 0, width: 0, height: 0}
@@ -122,7 +125,7 @@ script_mod! {
             color_active: (RBX_NAV_FG_ACTIVE)
             color_focus: (RBX_NAV_FG)
 
-            text_style: theme.font_bold {font_size: 9}
+            text_style: BOLD_TEXT {font_size: 9}
         }
 
         draw_icon +: {
@@ -264,7 +267,7 @@ script_mod! {
                 draw_bg.color: (COLOR_FG_DISABLED),
                 text +: {
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
+                        text_style: REGULAR_TEXT { font_size: mod.widgets.NAVIGATION_TAB_BAR_AVATAR_FONT_SIZE },
                         color: (COLOR_PRIMARY),
                     }
                 }
@@ -276,6 +279,36 @@ script_mod! {
             margin: Inset{ left: (mod.widgets.NAVIGATION_TAB_BAR_AVATAR_SIZE * 0.9) }
             verification_badge := VerificationBadge {}
         }
+    }
+
+    // The bottom rail item that opens the account switcher. A plain icon button (NOT a
+    // second ProfileIcon): the switcher is an action, not the user's avatar, and this
+    // keeps the rail's icon language consistent with Home / "+". It also avoids the
+    // runtime show/hide juggling that a shared avatar template needed.
+    mod.widgets.AccountSwitcherButton = RobrixIconButton {
+        width: Fill,
+        height: (NAVIGATION_TAB_BAR_SIZE - 5),
+        margin: (SPACE_XS),
+        padding: (SPACE_XS),
+        align: Align{x: 0.5, y: 0.5}
+        spacing: 0,
+        text: "",
+        // Hide the label entirely so only the icon shows (mirrors NavigationTabButton).
+        label_walk: Walk{margin: 0, width: 0, height: 0}
+        icon_walk: Walk{margin: 0, width: (RBX_ICON_LG), height: (RBX_ICON_LG)}
+
+        draw_bg +: {
+            color: #0000
+            color_hover: (RBX_NAV_ITEM_HOVER_BG)
+            color_down: (RBX_NAV_ITEM_HOVER_BG)
+            color_disabled: #0000
+            border_size: 0.0
+            border_radius: (RBX_RADIUS_SM)
+            border_color: #0000
+            border_color_hover: #0000
+            border_color_down: #0000
+        }
+        draw_icon +: { svg: (ICON_PEOPLE), color: (RBX_NAV_FG) }
     }
 
     mod.widgets.HomeButton = mod.widgets.NavigationTabButton {
@@ -303,6 +336,7 @@ script_mod! {
             // stray hairline gap on either side.
             draw_bg.color: (RBX_NAV_BG)
 
+            // Top profile avatar — clicking it opens Settings (unchanged).
             CachedWidget {
                 profile_icon := mod.widgets.ProfileIcon {}
             }
@@ -315,8 +349,18 @@ script_mod! {
 
             mod.widgets.Separator {}
 
+            // The spaces bar takes the flexible middle (height: Fill), which pins the
+            // account switcher below it to the very bottom of the rail (Feishu-style).
             CachedWidget {
                 root_spaces_bar := mod.widgets.SpacesBar {}
+            }
+
+            mod.widgets.Separator {}
+
+            // Bottom-left account switcher: an icon button that opens the AccountMenu
+            // (quick account switcher / add account), leaving the top avatar for Settings.
+            CachedWidget {
+                account_switcher_button := mod.widgets.AccountSwitcherButton {}
             }
 
         }
@@ -377,9 +421,10 @@ script_mod! {
     }
 }
 
-/// The icon in the NavigationTabBar that show the user's avatar.
+/// The icon in the NavigationTabBar that shows the user's avatar.
 ///
-/// Clicking on this icon will open the settings screen.
+/// Clicking it opens the settings screen. (The account switcher is a separate
+/// `AccountSwitcherButton` at the bottom of the rail — it is an action, not an avatar.)
 #[derive(Script, Widget)]
 pub struct ProfileIcon {
     #[deref] view: View,
@@ -750,8 +795,20 @@ impl Widget for NavigationTabBar {
                 }
             }
 
+            // The bottom account-switcher button opens the AccountMenu, anchored so the
+            // card's BOTTOM-left sits at the button's bottom-right (the App grows it upward).
+            // Same recipe as the desktop rail "+" opening the AddMenu above.
+            if effective_is_desktop(cx)
+                && self.view.button(cx, ids!(account_switcher_button)).clicked(actions)
+            {
+                let rect = self.view.widget(cx, ids!(account_switcher_button)).area().rect(cx);
+                cx.action(AccountMenuAction::Open {
+                    pos: dvec2(rect.pos.x + rect.size.x + 4.0, rect.pos.y + rect.size.y),
+                });
+            }
+
             for action in actions {
-                // On Desktop, clicking the profile avatar opens Settings.
+                // The top profile avatar opens Settings.
                 if let ProfileIconAction::Clicked = action.as_widget_action().cast() {
                     cx.action(NavigationBarAction::OpenSettings);
                     continue;
@@ -792,8 +849,24 @@ pub enum SelectedTab {
     /// Entered from the sidebar header's compass button; no dedicated tab in the
     /// navigation bar (so no button to keep selected here).
     Directory,
+    /// The Agent Operations Panel (`AgentOpsPanel`).
+    /// Like `Directory`, it has no dedicated navigation-bar button.
+    ///
+    /// The variant is declared unconditionally so the shared navigation state
+    /// has one shape across feature configurations. `HomeScreen` normalizes it
+    /// back to Home whenever agent-chat support is unavailable or disabled.
+    AgentOps,
     // AlertsInbox,
     Space { space_name_id: RoomNameId },
+}
+
+impl SelectedTab {
+    /// Whether selecting a room can make that room visible without changing
+    /// the top-level page. Every other page overlays the room workspace on
+    /// desktop and must return to Home before the room is focused.
+    pub fn shows_room_workspace(&self) -> bool {
+        matches!(self, Self::Home | Self::Space { .. })
+    }
 }
 
 
@@ -833,6 +906,8 @@ pub enum NavigationBarAction {
     GoToAddRoom,
     /// Go to the public room directory browser view (`DirectoryScreen`).
     GoToDirectory,
+    /// Go to the Agent Operations Panel (`AgentOpsPanel`).
+    GoToAgentOps,
     /// Go to the Settings view (open the `SettingsScreen`).
     OpenSettings,
     /// Close the Settings view (`SettingsScreen`), returning to the previous view.

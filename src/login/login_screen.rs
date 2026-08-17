@@ -258,7 +258,8 @@ script_mod! {
                             align: Align{x: 0.5, y: 0.5}
 
                             show_password_button := RobrixNeutralIconButton {
-                                width: Fit, height: Fit,
+                                // Icon stays 14px; the box is a full touch target (spec §7.1, RBX_TAP_MIN).
+                                width: (RBX_TAP_MIN), height: (RBX_TAP_MIN),
                                 align: Align{x: 0.5, y: 0.5}
                                 padding: 5
                                 spacing: 0
@@ -277,7 +278,7 @@ script_mod! {
                             hide_password_button := RobrixNeutralIconButton {
                                 visible: false,
                                 align: Align{x: 0.5, y: 0.5}
-                                width: Fit, height: Fit,
+                                width: (RBX_TAP_MIN), height: (RBX_TAP_MIN),
                                 padding: 5
                                 spacing: 0
                                 margin: 0
@@ -616,7 +617,7 @@ script_mod! {
                         }
 
                         mode_toggle_button := RobrixIconButton {
-                            width: Fit, height: Fit
+                            width: Fit, height: (RBX_TAP_MIN)
                             padding: Inset{left: 4, right: 4, top: 4, bottom: 4}
                             align: Align{x: 0.5, y: 0.5}
                             draw_bg +: {
@@ -1011,7 +1012,7 @@ script_mod! {
                 }
 
                 proxy_settings_button := RobrixNeutralIconButton {
-                    width: Fit, height: Fit
+                    width: (RBX_TAP_MIN), height: (RBX_TAP_MIN)
                     spacing: 0
                     padding: 8
                     text: ""
@@ -1061,9 +1062,170 @@ pub struct LoginScreen {
     /// Cached responsive layout mode. None means the first window geometry
     /// event still needs to apply either desktop or mobile styling.
     #[rust] mobile_layout_active: Option<bool>,
+    /// Drives the one-shot "put the caret in the first field" pass below.
+    #[rust] initial_focus_frame: NextFrame,
+    /// Whether that pass has already run for this appearance of the screen.
+    #[rust] initial_focus_placed: bool,
+    /// Frames spent waiting for the User ID field to become focusable.
+    #[rust] initial_focus_attempts: u32,
+    /// What the last capability probe said about SSO on this homeserver.
+    /// `None` until a probe lands, which is why the SSO row starts visible:
+    /// hiding it before we know would flicker it away on servers that do
+    /// support SSO.
+    #[rust] sso_availability: Option<SsoAvailability>,
 }
 
+/// What the homeserver told us about SSO, reduced to what the login screen
+/// needs to decide which buttons are real.
+#[derive(Clone, Debug, Default)]
+struct SsoAvailability {
+    /// The server advertises an `m.login.sso` flow at all.
+    supported: bool,
+    /// Provider ids the server named, lowercased. Empty is meaningful: it
+    /// means "SSO works, but the server does not enumerate providers"
+    /// (delegated OIDC), so we cannot say which brands are real.
+    provider_ids: Vec<String>,
+}
+
+/// Which parts of the SSO row a homeserver can actually service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SsoVisibility {
+    row_visible: bool,
+    /// Aligned with the brand list passed in.
+    brand_visible: Vec<bool>,
+}
+
+/// Decide what the SSO row shows, given what the homeserver advertised.
+///
+/// Split out from the widget so the rule is testable: the previous behaviour
+/// drew all six provider buttons on every homeserver, including ones with no
+/// `m.login.sso` flow at all, where every button could only fail.
+///
+/// `None` means no probe has landed yet — show everything rather than flicker
+/// the row away and back on a server that does support SSO.
+fn sso_visibility(availability: Option<&SsoAvailability>, brands: &[&str]) -> SsoVisibility {
+    let all = |v: bool| SsoVisibility { row_visible: v, brand_visible: vec![v; brands.len()] };
+
+    let Some(availability) = availability else { return all(true) };
+    if !availability.supported {
+        return all(false);
+    }
+    if availability.provider_ids.is_empty() {
+        // SSO works but the server names no providers (delegated OIDC, as on
+        // matrix.org). We cannot narrow the list, and hiding the row would
+        // remove a login path that does work.
+        return all(true);
+    }
+
+    let brand_visible: Vec<bool> = brands
+        .iter()
+        .map(|brand| {
+            let guessed = format!("oidc-{brand}");
+            availability
+                .provider_ids
+                .iter()
+                .any(|id| id == &guessed || id.contains(brand))
+        })
+        .collect();
+    SsoVisibility {
+        // The server does SSO, but with no provider this build can draw.
+        row_visible: brand_visible.iter().any(|v| *v),
+        brand_visible,
+    }
+}
+
+/// How long `place_initial_focus` keeps trying before giving up — two seconds
+/// at 60fps. Long enough for a cold first layout, short enough that a screen
+/// which never appears stops asking for frames.
+const MAX_INITIAL_FOCUS_FRAMES: u32 = 120;
+
 impl LoginScreen {
+    /// Puts the caret in the User ID field the first time the screen is drawn.
+    ///
+    /// Without this the app opens with *nothing* holding keyboard focus, and
+    /// makepad's `NavControl` only advances Tab from an existing focus — with
+    /// no anchor it walks the nav stops, finds none focused, and returns
+    /// without setting one. The result is that Tab does nothing at all, so
+    /// someone arriving by keyboard cannot reach a single control on the first
+    /// screen of the app. Claiming the first field fixes both halves: typing
+    /// works immediately, and Tab now has somewhere to advance from.
+    ///
+    /// Runs on a `NextFrame` because the input has no area to focus until it
+    /// has been laid out. `set_key_focus` only stages the change — it lands
+    /// when the event loop next cycles focus — so each attempt checks whether
+    /// the *previous* one took, and re-arms if not. The attempt count is
+    /// bounded: a login screen that never draws (because a session restored
+    /// straight into the room list) must not leave a next-frame request
+    /// pending forever, which would keep the app repainting at full rate.
+    fn place_initial_focus(&mut self, cx: &mut Cx) {
+        if self.initial_focus_placed {
+            return;
+        }
+        let area = self.view.text_input(cx, ids!(user_id_input)).area();
+        // An area only becomes valid once the widget has been drawn, and
+        // focusing `Area::Empty` would just clear focus. Note that
+        // `has_key_focus(Empty)` is *true* while nothing is focused, so the
+        // area check has to come first or it reads as "already done".
+        if !area.is_valid(cx) {
+            self.initial_focus_attempts += 1;
+            if self.initial_focus_attempts > MAX_INITIAL_FOCUS_FRAMES {
+                // Give up asking for frames, but stay un-placed: if the screen
+                // was simply never shown (a restored session went straight to
+                // the room list), it can still claim focus when the user logs
+                // out and comes back. `handle_event` re-arms on the geometry
+                // change that accompanies showing it again.
+                self.initial_focus_attempts = 0;
+            } else {
+                self.initial_focus_frame = cx.new_next_frame();
+            }
+            return;
+        }
+        cx.set_key_focus(area);
+        self.initial_focus_placed = true;
+    }
+
+    /// The brand buttons hardcoded in the DSL, paired with the id this client
+    /// guesses for each. Kept next to `apply_sso_availability` because the two
+    /// have to agree on the brand list.
+    const SSO_BRANDS: [&'static str; 6] =
+        ["apple", "facebook", "github", "gitlab", "google", "twitter"];
+
+    /// Show the SSO row only when the homeserver can actually service it.
+    ///
+    /// Before this, six provider buttons were drawn unconditionally, on every
+    /// homeserver. On a password-only server (Palpo advertises exactly
+    /// `m.login.password` + `m.login.application_service`) each one started a
+    /// flow that could only end in a generic "SSO login failed" — an
+    /// affordance the backend had no way to honor.
+    ///
+    /// Three cases, because "no providers listed" does not mean "no SSO":
+    /// - no `m.login.sso` flow → hide the row outright;
+    /// - flow with named providers → show only the brands the server named;
+    /// - flow without named providers (delegated OIDC, as on matrix.org) →
+    ///   leave the row as-is, since generic SSO does work there.
+    fn apply_sso_availability(&mut self, cx: &mut Cx) {
+        let decision = sso_visibility(self.sso_availability.as_ref(), &Self::SSO_BRANDS);
+
+        self.view.view(cx, ids!(sso_view)).set_visible(cx, decision.row_visible);
+        self.view.label(cx, ids!(sso_prompt_label)).set_visible(cx, decision.row_visible);
+
+        let button_set: &[&[LiveId]] = ids_array!(
+            apple_button,
+            facebook_button,
+            github_button,
+            gitlab_button,
+            google_button,
+            twitter_button
+        );
+        for (view_ref, visible) in self
+            .view_set(cx, button_set)
+            .iter()
+            .zip(&decision.brand_visible)
+        {
+            view_ref.set_visible(cx, *visible);
+        }
+    }
+
     fn sync_proxy_settings_modal_layout(&mut self, cx: &mut Cx) {
         let rect = self.view.area().rect(cx);
         let available_width = (rect.size.x - 24.0).max(260.0);
@@ -1535,6 +1697,10 @@ impl LoginScreen {
         self.login_mode = None;
         self.last_discovery_input_url = None;
         self.discovery_pending = false;
+        // The SSO answer belonged to the previous homeserver. Dropping it
+        // restores the full row until the next probe says otherwise, which is
+        // the same "we don't know yet" state the screen starts in.
+        self.sso_availability = None;
     }
 
     fn show_password_login_branch(&mut self, cx: &mut Cx) {
@@ -1542,8 +1708,7 @@ impl LoginScreen {
         self.view.text_input(cx, ids!(user_id_input)).set_visible(cx, true);
         self.view.text_input(cx, ids!(password_input)).set_visible(cx, true);
         self.view.button(cx, ids!(login_button)).set_visible(cx, true);
-        self.view.view(cx, ids!(sso_view)).set_visible(cx, true);
-        self.view.label(cx, ids!(sso_prompt_label)).set_visible(cx, true);
+        self.apply_sso_availability(cx);
         self.view.label(cx, ids!(oidc_info_title))
             .set_text(cx, tr_key(self.app_language, "login.oidc.info_title"));
         self.view.label(cx, ids!(oidc_info_body))
@@ -1588,6 +1753,9 @@ impl ScriptHook for LoginScreen {
             self.set_app_language(cx, self.app_language);
             self.sync_proxy_settings_modal_layout(cx);
             self.sync_login_responsive_layout(cx);
+            // Claim the caret once the first frame has been laid out — see
+            // `place_initial_focus`.
+            self.initial_focus_frame = cx.new_next_frame();
         });
     }
 }
@@ -1601,10 +1769,20 @@ impl Widget for LoginScreen {
         if self.app_language != app_language {
             self.set_app_language(cx, app_language);
         }
+        if self.initial_focus_frame.is_event(event).is_some() {
+            self.place_initial_focus(cx);
+        }
         self.view.handle_event(cx, event, scope);
         if matches!(event, Event::WindowGeomChange(_)) {
+            // `sync_login_responsive_layout` measures `self.view.area()`, which
+            // still holds the pre-resize rect at this point in the event — so
+            // do a first pass now (it keeps the proxy modal from lagging a
+            // frame) and a decisive one next frame, once layout has run.
             self.sync_proxy_settings_modal_layout(cx);
             self.sync_login_responsive_layout(cx);
+            if !self.initial_focus_placed {
+                self.initial_focus_frame = cx.new_next_frame();
+            }
         }
         self.widget_match_event(cx, event, scope);
     }
@@ -1915,9 +2093,12 @@ impl WidgetMatchEvent for LoginScreen {
             submit_async_request(MatrixRequest::CancelOidcLogin);
         }
 
-        let provider_brands = ["apple", "facebook", "github", "gitlab", "google", "twitter"];
+        // Same list the visibility rule zips against — both pair positionally
+        // with `button_set` below, so a second copy could drift and silently
+        // mismatch a button with another brand's provider id.
+        let provider_brands = Self::SSO_BRANDS;
         let button_set: &[&[LiveId]] = ids_array!(
-            apple_button, 
+            apple_button,
             facebook_button, 
             github_button, 
             gitlab_button, 
@@ -1948,6 +2129,14 @@ impl WidgetMatchEvent for LoginScreen {
                     self.discovery_pending = false;
                     self.view.button(cx, ids!(login_button))
                         .set_text(cx, tr_key(self.app_language, "login.button.sign_in_securely"));
+                    self.sso_availability = Some(SsoAvailability {
+                        supported: caps.sso_supported,
+                        provider_ids: caps
+                            .sso_providers
+                            .iter()
+                            .map(|p| p.id.to_lowercase())
+                            .collect(),
+                    });
                     let resolved = login_mode(caps.as_ref());
                     self.login_mode = Some(resolved);
                     match resolved {
@@ -2190,8 +2379,23 @@ impl WidgetMatchEvent for LoginScreen {
                 if let Err(e) = crate::proxy_config::save_proxy_url(proxy.as_deref()) {
                     warning!("Failed to persist proxy configuration from SSO login flow: {e}");
                 }
+                // Prefer the id the homeserver actually advertised. The
+                // `oidc-<brand>` guess below is only a convention: a server
+                // that names its GitHub provider anything else would silently
+                // fall through to generic SSO and sign the user in with the
+                // wrong provider.
+                let identity_provider_id = self
+                    .sso_availability
+                    .as_ref()
+                    .and_then(|a| {
+                        a.provider_ids
+                            .iter()
+                            .find(|id| *id == &format!("oidc-{brand}") || id.contains(brand))
+                            .cloned()
+                    })
+                    .unwrap_or_else(|| format!("oidc-{brand}"));
                 submit_async_request(MatrixRequest::SpawnSSOServer{
-                    identity_provider_id: format!("oidc-{}",brand),
+                    identity_provider_id,
                     brand: brand.to_string(),
                     homeserver_url: homeserver_input.text(),
                     proxy,
@@ -2526,5 +2730,77 @@ mod tests {
         assert!(src.contains("mobile_status_footer"));
         assert!(src.contains("mobile_version_label"));
         assert!(src.contains("desktop_status_footer"));
+    }
+}
+
+#[cfg(test)]
+mod sso_visibility_tests {
+    use super::{sso_visibility, SsoAvailability};
+
+    const BRANDS: [&str; 6] = ["apple", "facebook", "github", "gitlab", "google", "twitter"];
+
+    fn availability(supported: bool, ids: &[&str]) -> SsoAvailability {
+        SsoAvailability {
+            supported,
+            provider_ids: ids.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// Before a probe lands we know nothing, so nothing is hidden — otherwise
+    /// the row would flicker away and back on a server that does support SSO.
+    #[test]
+    fn unprobed_homeserver_shows_everything() {
+        let v = sso_visibility(None, &BRANDS);
+        assert!(v.row_visible);
+        assert_eq!(v.brand_visible, vec![true; 6]);
+    }
+
+    /// Palpo advertises only `m.login.password` + `m.login.application_service`.
+    /// Every SSO button there could only end in "SSO login failed", so the row
+    /// goes away entirely. This is the bug the fix exists for.
+    #[test]
+    fn password_only_homeserver_hides_the_whole_row() {
+        let v = sso_visibility(Some(&availability(false, &[])), &BRANDS);
+        assert!(!v.row_visible);
+        assert_eq!(v.brand_visible, vec![false; 6]);
+    }
+
+    /// matrix.org advertises `m.login.sso` with delegated OIDC and names no
+    /// individual providers. Generic SSO genuinely works there, so hiding the
+    /// row would remove a working login path.
+    #[test]
+    fn sso_without_named_providers_keeps_the_row() {
+        let v = sso_visibility(Some(&availability(true, &[])), &BRANDS);
+        assert!(v.row_visible);
+        assert_eq!(v.brand_visible, vec![true; 6]);
+    }
+
+    /// A server that names its providers gets exactly those buttons.
+    #[test]
+    fn named_providers_show_only_what_the_server_offers() {
+        let v = sso_visibility(Some(&availability(true, &["oidc-github", "oidc-google"])), &BRANDS);
+        assert!(v.row_visible);
+        assert_eq!(
+            v.brand_visible,
+            vec![false, false, true, false, true, false],
+            "only github and google should survive",
+        );
+    }
+
+    /// Provider ids are server-chosen; `oidc-<brand>` is only a convention.
+    #[test]
+    fn provider_ids_need_not_match_the_guessed_convention() {
+        let v = sso_visibility(Some(&availability(true, &["github-enterprise"])), &BRANDS);
+        assert!(v.row_visible);
+        assert_eq!(v.brand_visible, vec![false, false, true, false, false, false]);
+    }
+
+    /// SSO is on, but for providers this build has no button for. Showing an
+    /// empty row with a "Or continue with" heading would be worse than none.
+    #[test]
+    fn sso_with_only_unknown_providers_hides_the_row() {
+        let v = sso_visibility(Some(&availability(true, &["oidc-keycloak", "saml"])), &BRANDS);
+        assert!(!v.row_visible);
+        assert_eq!(v.brand_visible, vec![false; 6]);
     }
 }

@@ -98,7 +98,7 @@ script_mod! {
                 header_label := Label{
                     draw_text +: {
                         color: theme.color_label_inner
-                        text_style: theme.font_regular{
+                        text_style: REGULAR_TEXT{
                             font_size: theme.font_size_4
                         }
                     }

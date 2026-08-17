@@ -47,6 +47,25 @@ script_mod! {
         }
     }
 
+    // A hierarchy icon shown next to the name of an invited *space*, so a space
+    // invite is distinguishable at a glance from the room invites around it.
+    // Joined spaces never appear in this list (the SpacesBar owns them), so this
+    // is only ever shown on invites.
+    mod.widgets.SpaceIcon = View {
+        width: Fit, height: Fit,
+        visible: false,
+
+        Icon {
+            width: 17, height: 17,
+            align: Align{x: 0.5, y: 0.5}
+            draw_icon +: {
+                svg: (ICON_HIERARCHY)
+                color: (RBX_ACCENT)
+            }
+            icon_walk: Walk{ width: 14, height: 14 }
+        }
+    }
+
     mod.widgets.RoomName = Label {
         width: Fill, height: Fit
         flow: Flow.Right{wrap: false},
@@ -60,9 +79,10 @@ script_mod! {
         text: "[Room name unknown]"
     }
 
-    // A small blue "bot" pill shown after the room name for agent-bound rooms.
+    // A small "bot" pill shown after the room name for agent-bound rooms.
     // Reproduces the timeline's bot badge look (room_screen.rs) locally so this
-    // file doesn't depend on room_screen's private constants/widgets.
+    // file doesn't depend on room_screen's private constants/widgets — so it
+    // must use the same soft-accent chip, not a solid legacy-blue block.
     mod.widgets.RoomsListBotPill = RoundedView {
         visible: false
         width: Fit
@@ -72,14 +92,14 @@ script_mod! {
         show_bg: true
         new_batch: true
         draw_bg +: {
-            color: (COLOR_ACTIVE_PRIMARY)
+            color: (RBX_ACCENT_SOFT)
             border_radius: 3.0
         }
         Label {
             width: Fit, height: Fit, padding: 0
             draw_text +: {
                 text_style: REGULAR_TEXT { font_size: 8.5, top_drop: -0.08 }
-                color: (RBX_FG_ON_ACCENT)
+                color: (RBX_ACCENT)
             }
             text: "bot"
         }
@@ -142,7 +162,7 @@ script_mod! {
                     max_lines: 2
                     text_overflow: Ellipsis
                     draw_text +: {
-                        text_style: theme.font_regular { font_size: 9.3, line_spacing: 1.32 },
+                        text_style: REGULAR_TEXT { font_size: 9.3, line_spacing: 1.32 },
                     }
                     text: "[No recent messages]"
                 }
@@ -163,19 +183,12 @@ script_mod! {
             color: instance(#0000)
             color_selected: instance(RBX_BG_SELECTED)
             border_color: instance(#0000)
-            // Teal accent outline that fades in on the selected/open room, so the
-            // soft-teal wash is unambiguous even on the light canvas sidebar.
-            border_color_selected: instance(RBX_ACCENT)
-            border_size: uniform(1.5)
+            border_size: uniform(0.0)
             border_radius: uniform(6.0)
             border_inset: uniform(vec4(0.0))
 
             get_color: fn() -> vec4 {
                 return mix(self.color, self.color_selected, self.active)
-            }
-
-            get_border_color: fn() -> vec4 {
-                return mix(self.border_color, self.border_color_selected, self.active)
             }
 
             pixel: fn() {
@@ -189,7 +202,7 @@ script_mod! {
                 )
                 sdf.fill_keep(self.get_color())
                 if self.border_size > 0.0 {
-                    sdf.stroke(self.get_border_color(), self.border_size)
+                    sdf.stroke(self.border_color, self.border_size)
                 }
                 return sdf.result;
             }
@@ -255,6 +268,7 @@ script_mod! {
                     // is only shown at sidebar widths <= 200px, so a smaller cap
                     // than FullPreview leaves room for the pill.
                     room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.70}} }
+                    space_icon := mod.widgets.SpaceIcon {}
                     bot_pill := mod.widgets.RoomsListBotPill {}
                 }
                 unread_badge := UnreadBadge {}
@@ -280,6 +294,7 @@ script_mod! {
                             // Same fix as IconAndName above, but with a larger cap since
                             // FullPreview is shown on desktop/wider sidebars.
                             room_name := mod.widgets.RoomName { width: Fit{max: FitBound.Rel{base: Base.Full, factor: 0.78}} }
+                            space_icon := mod.widgets.SpaceIcon {}
                             bot_pill := mod.widgets.RoomsListBotPill {}
                         }
                         timestamp := mod.widgets.RoomsListEntryTimestamp { }
@@ -451,16 +466,18 @@ impl RoomsListEntryContent {
         room_info: &JoinedRoomInfo,
         show_agent_badge: bool,
     ) {
-        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
+        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.display());
+        // Note: entries are recycled by the PortalList, so every field must be set
+        // in every branch below — otherwise a reused entry keeps showing another
+        // room's stale timestamp/message preview until that field happens to change.
+        let timestamp = self.view.label(cx, ids!(timestamp));
+        let latest_message = self.view.html_or_plaintext(cx, ids!(latest_message));
         if let Some((ts, msg)) = room_info.latest.as_ref() {
-            if let Some(human_readable_date) = relative_format(*ts) {
-                self.view
-                    .label(cx, ids!(timestamp))
-                    .set_text(cx, &human_readable_date);
-            }
-            self.view
-                .html_or_plaintext(cx, ids!(latest_message))
-                .show_html(cx, msg);
+            timestamp.set_text(cx, relative_format(*ts).as_deref().unwrap_or(""));
+            latest_message.show_html(cx, msg);
+        } else {
+            timestamp.set_text(cx, "");
+            latest_message.show_plaintext(cx, "[No recent messages]");
         }
 
         self.view.unread_badge(cx, ids!(unread_badge)).update_counts(
@@ -475,6 +492,9 @@ impl RoomsListEntryContent {
         );
         self.view.view(cx, ids!(bot_pill)).set_visible(cx, show_agent_badge);
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, room_info.is_tombstoned);
+        // Entries are recycled between invited and joined rooms, so the space
+        // marker must be cleared here rather than only set in `draw_invited_room`.
+        self.view.view(cx, ids!(space_icon)).set_visible(cx, false);
     }
 
     /// Populates this RoomsListEntry with info about an invited room.
@@ -484,28 +504,39 @@ impl RoomsListEntryContent {
         room_info: &InvitedRoomInfo,
         app_language: AppLanguage,
     ) {
-        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.to_string());
+        self.view.label(cx, ids!(room_name)).set_text(cx, &room_info.room_name_id.display());
         // Hide the timestamp field, and use the latest message field to show the inviter.
         self.view.label(cx, ids!(timestamp)).set_text(cx, "");
-        let inviter_string = match &room_info.inviter_info {
-            Some(InviterInfo { user_id, display_name: Some(dn), .. }) => {
+        // Space invites get their own wording, because "joining" a space means
+        // gaining access to a set of rooms rather than opening a conversation.
+        let inviter_string = match (&room_info.inviter_info, room_info.is_space) {
+            (Some(InviterInfo { user_id, display_name: Some(dn), .. }), is_space) => {
                 let display_name = htmlize::escape_text(dn);
                 let user_id = htmlize::escape_text(user_id.as_str());
                 tr_fmt(
                     app_language,
-                    "rooms_list_entry.invited.by_name_and_user",
+                    if is_space {
+                        "rooms_list_entry.invited.space.by_name_and_user"
+                    } else {
+                        "rooms_list_entry.invited.by_name_and_user"
+                    },
                     &[("display_name", display_name.as_ref()), ("user_id", user_id.as_ref())],
                 )
             }
-            Some(InviterInfo { user_id, .. }) => {
+            (Some(InviterInfo { user_id, .. }), is_space) => {
                 let user_id = htmlize::escape_text(user_id.as_str());
                 tr_fmt(
                     app_language,
-                    "rooms_list_entry.invited.by_user",
+                    if is_space {
+                        "rooms_list_entry.invited.space.by_user"
+                    } else {
+                        "rooms_list_entry.invited.by_user"
+                    },
                     &[("user_id", user_id.as_ref())],
                 )
             }
-            None => tr_key(app_language, "rooms_list_entry.invited.generic").to_string(),
+            (None, true) => tr_key(app_language, "rooms_list_entry.invited.space.generic").to_string(),
+            (None, false) => tr_key(app_language, "rooms_list_entry.invited.generic").to_string(),
         };
         self.view.html_or_plaintext(cx, ids!(latest_message)).show_html(cx, &inviter_string);
 
@@ -529,6 +560,7 @@ impl RoomsListEntryContent {
         self.view.view(cx, ids!(encryption_icon)).set_visible(cx, false);
         self.view.view(cx, ids!(bot_pill)).set_visible(cx, false);
         self.view.view(cx, ids!(tombstone_icon)).set_visible(cx, false);
+        self.view.view(cx, ids!(space_icon)).set_visible(cx, room_info.is_space);
         self.draw_common(cx, &room_info.room_avatar, room_info.is_selected);
     }
 
@@ -568,8 +600,8 @@ impl RoomsListEntryContent {
             RBX_BG_SUNKEN, RBX_FG_PRIMARY, RBX_FG_SECONDARY, RBX_FG_TERTIARY,
         };
 
-        // The selected row uses a soft teal wash (RBX_BG_SELECTED) plus a teal
-        // accent outline (see the draw_bg shader) to signal the active room, so
+        // The selected row uses a soft teal wash (RBX_BG_SELECTED) alone — no
+        // border outline (see the draw_bg shader) — to signal the active room, so
         // the text stays dark and fully legible in both states — i.e. the text
         // colors are identical for selected and unselected rows.
         let message_text_color = RBX_FG_SECONDARY;

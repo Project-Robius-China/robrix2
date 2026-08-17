@@ -76,9 +76,15 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
+  # Every job here produces a distributable. Packagers copy `resources/` by
+  # value (symlinks dereferenced), so builds must never link host system
+  # fonts — that would ship PingFang / Microsoft YaHei inside the package.
+  # See build.rs `link_system_cjk_font`.
+  ROBRIX_BUNDLED_FONTS: "1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -209,23 +215,24 @@ jobs:
             const macos = [];
             const windows = [];
 
-            const addLinux = (os, arch) => linux.push({ os, arch });
+            const addLinux = (os, arch, artifact_platform) =>
+              linux.push({ os, arch, artifact_platform });
             const addMacos = (os, arch) => macos.push({ os, arch });
             const addWindows = () => windows.push({ os: 'windows-2022', arch: 'x86_64' });
 
             if (isPush) {
-              addLinux('ubuntu-24.04', 'x86_64');
-              addLinux('ubuntu-24.04-arm', 'aarch64');
-              addLinux('ubuntu-22.04', 'x86_64');
-              addLinux('ubuntu-22.04-arm', 'aarch64');
+              addLinux('ubuntu-24.04', 'x86_64', 'ubuntu-24.04');
+              addLinux('ubuntu-24.04-arm', 'aarch64', 'ubuntu-24.04');
+              addLinux('ubuntu-22.04', 'x86_64', 'ubuntu-22.04');
+              addLinux('ubuntu-22.04-arm', 'aarch64', 'ubuntu-22.04');
               addMacos('macos-14', 'aarch64');
               addMacos('macos-15-intel', 'x86_64');
               addWindows();
             } else {
-              if (enabled(inputs.build_ubuntu_24_x86_64)) addLinux('ubuntu-24.04', 'x86_64');
-              if (enabled(inputs.build_ubuntu_24_aarch64)) addLinux('ubuntu-24.04-arm', 'aarch64');
-              if (enabled(inputs.build_ubuntu_22_x86_64)) addLinux('ubuntu-22.04', 'x86_64');
-              if (enabled(inputs.build_ubuntu_22_aarch64)) addLinux('ubuntu-22.04-arm', 'aarch64');
+              if (enabled(inputs.build_ubuntu_24_x86_64)) addLinux('ubuntu-24.04', 'x86_64', 'ubuntu-24.04');
+              if (enabled(inputs.build_ubuntu_24_aarch64)) addLinux('ubuntu-24.04-arm', 'aarch64', 'ubuntu-24.04');
+              if (enabled(inputs.build_ubuntu_22_x86_64)) addLinux('ubuntu-22.04', 'x86_64', 'ubuntu-22.04');
+              if (enabled(inputs.build_ubuntu_22_aarch64)) addLinux('ubuntu-22.04-arm', 'aarch64', 'ubuntu-22.04');
               if (enabled(inputs.build_macos_14_aarch64)) addMacos('macos-14', 'aarch64');
               if (enabled(inputs.build_macos_15_x86_64)) addMacos('macos-15-intel', 'x86_64');
               if (enabled(inputs.build_windows_2022_x86_64)) addWindows();
@@ -258,17 +265,22 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       release_id: ${{ steps.create_release.outputs.id }}
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Resolve release metadata
         id: resolve
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            resolved_tag="${{ github.ref_name }}"
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            resolved_tag="$REF_NAME"
           else
-            resolved_tag="${{ github.event.inputs.release_tag }}"
+            resolved_tag="$INPUT_RELEASE_TAG"
             if [[ -z "$resolved_tag" ]]; then
               resolved_version="$(awk '
                 /^\[package\]$/ { in_package=1; next }
@@ -354,6 +366,7 @@ jobs:
         with:
           github_token: ${{ secrets.ROBRIX_RELEASE }}
           packager_formats: deb
+          asset_name_template: __APP__-__VERSION__-${{ matrix.artifact_platform }}-__ARCH__-__MODE__.__EXT__
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
           releaseId: ${{ needs.create_release.outputs.release_id }}
@@ -496,3 +509,231 @@ jobs:
           upload_to_testflight: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.upload_testflight == 'true' }}
           args: --target aarch64-apple-ios
           releaseId: ${{ needs.create_release.outputs.release_id }}
+
+  publish_distribution:
+    name: Publish installers and package metadata
+    needs: [create_release, for_linux, for_macos, for_windows]
+    if: >-
+      ${{
+        always() &&
+        needs.create_release.result == 'success' &&
+        needs.for_linux.result == 'success' &&
+        needs.for_macos.result == 'success' &&
+        needs.for_windows.result == 'success'
+      }}
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve distribution metadata
+        id: metadata
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.create_release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksum-pinned distribution assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ROBRIX_RELEASE }}
+          RELEASE_ID: ${{ needs.create_release.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.create_release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          generated=false
+          for attempt in $(seq 1 12); do
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+              --jq '.assets' > release-assets.json
+            rm -rf distribution
+            if ./scripts/generate-distribution-assets.sh \
+              --repository "$GITHUB_REPOSITORY" \
+              --tag "$RELEASE_TAG" \
+              --assets-json release-assets.json \
+              --output distribution; then
+              generated=true
+              break
+            fi
+            echo "attempt ${attempt}/12: waiting for GitHub asset digests..."
+            sleep 10
+          done
+          if [[ "$generated" != true ]]; then
+            echo "::error::Could not generate distribution assets after waiting for release uploads."
+            exit 1
+          fi
+          ./scripts/test-distribution.sh
+
+      - name: Upload installers and package metadata to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ROBRIX_RELEASE }}
+          RELEASE_TAG: ${{ needs.create_release.outputs.tag }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            distribution/robrix-installer.sh \
+            distribution/robrix-installer.ps1 \
+            distribution/SHA256SUMS \
+            distribution/robrix-dist-manifest.json \
+            "distribution/robrix-${VERSION}-npm-package.tgz" \
+            "distribution/robrix-${VERSION}-winget-manifests.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Preserve distribution assets for registry jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: robrix-distribution-assets
+          path: distribution/
+          retention-days: 14
+
+  publish_npm:
+    name: Publish npm installer wrapper
+    needs: publish_distribution
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check npm publishing credentials
+        id: credentials
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -n "$NPM_TOKEN" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is not configured; the npm package remains attached to the GitHub release."
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: ${{ steps.credentials.outputs.enabled == 'true' }}
+        with:
+          name: robrix-distribution-assets
+          path: distribution
+
+      - uses: actions/setup-node@v4
+        if: ${{ steps.credentials.outputs.enabled == 'true' }}
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish stable to latest and prerelease to next
+        if: ${{ steps.credentials.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.publish_distribution.outputs.version }}
+          RELEASE_TAG: ${{ needs.publish_distribution.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            npm_tag=next
+          else
+            npm_tag=latest
+          fi
+          npm publish "distribution/robrix-${VERSION}-npm-package.tgz" \
+            --access public \
+            --tag "$npm_tag"
+
+  publish_homebrew:
+    name: Update the Homebrew cask
+    needs: publish_distribution
+    if: ${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.ROBRIX_RELEASE }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: robrix-distribution-assets
+          path: distribution
+
+      - name: Stage the release cask
+        id: cask
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Casks
+          cp distribution/Casks/robrix.rb Casks/robrix.rb
+          if git diff --quiet -- Casks/robrix.rb; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open a cask update pull request
+        if: ${{ steps.cask.outputs.changed == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ROBRIX_RELEASE }}
+          RELEASE_TAG: ${{ needs.publish_distribution.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="distribution/homebrew-${RELEASE_TAG}"
+          git config user.name "robrix-release-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add Casks/robrix.rb
+          git commit -m "release: update Homebrew cask for ${RELEASE_TAG}"
+          git push --force origin "$branch"
+
+          existing_url=$(gh pr list --head "$branch" --json url --jq '.[0].url // empty')
+          if [[ -n "$existing_url" ]]; then
+            echo "Updated existing Homebrew pull request: $existing_url"
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "release: update Homebrew cask for ${RELEASE_TAG}" \
+              --body "Automated checksum and version update for the Robrix Homebrew cask."
+          fi
+
+  publish_winget:
+    name: Submit the Winget manifest
+    needs: publish_distribution
+    if: ${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
+    runs-on: windows-2022
+    steps:
+      - name: Check Winget publishing credentials
+        id: credentials
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          if ($env:WINGET_CREATE_GITHUB_TOKEN) {
+            "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Output "::notice::WINGET_CREATE_GITHUB_TOKEN is not configured; manifests remain attached to the GitHub release."
+          }
+
+      - uses: actions/download-artifact@v4
+        if: ${{ steps.credentials.outputs.enabled == 'true' }}
+        with:
+          name: robrix-distribution-assets
+          path: distribution
+
+      - name: Submit manifests to microsoft/winget-pkgs
+        if: ${{ steps.credentials.outputs.enabled == 'true' }}
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+          VERSION: ${{ needs.publish_distribution.outputs.version }}
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          $manifestPath = "distribution/winget/ProjectRobiusChina.Robrix/$env:VERSION"
+          ./wingetcreate.exe submit `
+            --prtitle "New version: ProjectRobiusChina.Robrix version $env:VERSION" `
+            --no-open `
+            $manifestPath

@@ -64,6 +64,9 @@ impl Widget for MainMobileUI {
                     RoomsListAction::InviteAccepted { room_name_id: room_name } => {
                         cx.action(AppStateAction::UpgradedInviteToJoinedRoom(room_name.room_id().clone()));
                     }
+                    RoomsListAction::SpaceInviteAccepted { space_name_id } => {
+                        cx.action(AppStateAction::UpgradedInviteToSpace(space_name_id.clone()));
+                    }
                     RoomsListAction::OpenRoomContextMenu { .. } => {}
                     RoomsListAction::None => {}
                 }

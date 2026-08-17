@@ -132,7 +132,7 @@ script_mod! {
 
         close_button: mod.widgets.RobrixTabCloseButton {}
         draw_text +: {
-            text_style: theme.font_regular {}
+            text_style: REGULAR_TEXT {}
 
             // Unified palette: dark text on the neutral unselected tab, white on the
             // teal selected tab. (No more orange hover text.)
@@ -144,7 +144,7 @@ script_mod! {
         draw_bg +: {
             // Unselected tabs: subtle neutral surface. Selected tab: teal accent
             // (RBX_ACCENT) — the unified UI selection color, replacing the legacy
-            // bright blue COLOR_ACTIVE_PRIMARY.
+            // COLOR_ACTIVE_PRIMARY (the accent teal).
             color: (RBX_BG_SURFACE_SUBTLE)
             color_hover: (RBX_BG_HOVER)
             color_active: (RBX_ACCENT)
@@ -263,7 +263,7 @@ script_mod! {
             // grey notches at the panel corners (e.g. the tab bar's top-right corner
             // against navy). Drawing nothing keeps every corner clean on any backdrop.
             pixel: fn() {
-                return #x00000000
+                return (RBX_TRANSPARENT)
             }
         }
 

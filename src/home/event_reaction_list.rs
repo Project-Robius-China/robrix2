@@ -4,41 +4,26 @@ use crate::sliding_sync::{current_user_id, submit_async_request, MatrixRequest, 
 use indexmap::IndexMap;
 use makepad_widgets::*;
 use crate::{LivePtr, widget_ref_from_live_ptr};
+use crate::shared::design_tokens::{
+    RBX_ACCENT, RBX_ACCENT_SOFT, RBX_BG_SURFACE_SUBTLE, RBX_STROKE_STRONG,
+};
 use matrix_sdk::ruma::{OwnedRoomId, OwnedUserId};
 use matrix_sdk_ui::timeline::{ReactionInfo, ReactionsByKeyBySender, TimelineEventItemId};
 
-const EMOJI_BORDER_COLOR_INCLUDE_SELF: Vec4 = Vec4 {
-    x: 0.0,
-    y: 0.6,
-    z: 0.47,
-    w: 1.0,
-}; // DarkGreen
-const EMOJI_BORDER_COLOR_NOT_INCLUDE_SELF: Vec4 = Vec4 {
-    x: 0.714,
-    y: 0.73,
-    z: 0.75,
-    w: 1.0,
-}; // Grey
+// A reaction the local user has joined reads as a *selected* chip, so it takes
+// the accent pair the rest of the app already uses for selection, rather than a
+// one-off green that appears nowhere else.
+const EMOJI_BORDER_COLOR_INCLUDE_SELF: Vec4 = RBX_ACCENT;
+const EMOJI_BORDER_COLOR_NOT_INCLUDE_SELF: Vec4 = RBX_STROKE_STRONG;
 
-const EMOJI_BG_COLOR_INCLUDE_SELF: Vec4 = Vec4 {
-    x: 0.89,
-    y: 0.967,
-    z: 0.929,
-    w: 1.0,
-}; // LightGreen
-const EMOJI_BG_COLOR_NOT_INCLUDE_SELF: Vec4 = Vec4 {
-    x: 0.968,
-    y: 0.976,
-    z: 0.98,
-    w: 1.0,
-}; // LightGrey
+const EMOJI_BG_COLOR_INCLUDE_SELF: Vec4 = RBX_ACCENT_SOFT;
+const EMOJI_BG_COLOR_NOT_INCLUDE_SELF: Vec4 = RBX_BG_SURFACE_SUBTLE;
 
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
 
-    mod.widgets.COLOR_BUTTON_GREY = #B6BABF
     mod.widgets.REACTION_LIST_PADDING_RIGHT = 30.0;
 
     mod.widgets.ReactionList = #(ReactionList::register_widget(vm)) {
@@ -60,10 +45,15 @@ script_mod! {
             draw_bg +: {
                 // Anything that we apply over must be an `instance`,
                 // and their names must be distinct from the base Button type.
-                reaction_bg_color: instance(mod.widgets.COLOR_BUTTON_GREY)
-                reaction_border_color: instance(#001A11)
-                // Override values from the base Button type.
-                color_hover: #fef65b
+                // Both instances are overwritten per reaction from Rust (see
+                // EMOJI_BG_COLOR_* / EMOJI_BORDER_COLOR_*); these are just the
+                // unreacted defaults.
+                reaction_bg_color: instance(mod.widgets.RBX_BG_SURFACE_SUBTLE)
+                reaction_border_color: instance(mod.widgets.RBX_STROKE_STRONG)
+                // Override values from the base Button type. `get_color` mixes
+                // 20% of this into the chip on hover, so the accent gives a
+                // subtle on-brand tint instead of the old highlighter yellow.
+                color_hover: (mod.widgets.RBX_ACCENT)
                 hover: 0.0
                 border_size: 1.5
                 border_radius: 3.0
@@ -90,7 +80,7 @@ script_mod! {
             }
             draw_text +: {
                 text_style: REGULAR_TEXT {font_size: 10},
-                color: #000000
+                color: (mod.widgets.RBX_FG_PRIMARY)
                 get_color: fn() -> vec4 {
                     return self.color;
                 }
@@ -249,8 +239,8 @@ impl ReactionListRef {
         &mut self,
         cx: &mut Cx,
         event_tl_item_reactions: Option<&ReactionsByKeyBySender>,
-        timeline_kind: TimelineKind,
-        timeline_event_item_id: TimelineEventItemId,
+        timeline_kind: &TimelineKind,
+        timeline_event_item_id: &TimelineEventItemId,
         _id: usize,
     ) {
         let Some(client_user_id) = current_user_id() else {
@@ -306,8 +296,8 @@ impl ReactionListRef {
             });
             inner.children.push((button, reaction_data));
         }
-        inner.timeline_kind = Some(timeline_kind);
-        inner.timeline_event_id = Some(timeline_event_item_id);
+        inner.timeline_kind = Some(timeline_kind.clone());
+        inner.timeline_event_id = Some(timeline_event_item_id.clone());
     }
 
     /// Returns any `RoomScreenTooltipActions` that occurred in the given list of `actions`.

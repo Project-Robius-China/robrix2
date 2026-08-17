@@ -356,7 +356,7 @@ script_mod! {
         align: Align{y: 0.5}
         show_bg: true
         draw_bg +: {
-            color: #xf3f4f6
+            color: (RBX_BG_SURFACE_SUBTLE)
             border_radius: 8.0
         }
 
@@ -404,14 +404,14 @@ script_mod! {
                 }
                 draw_icon +: {
                     svg: (mod.widgets.ICON_AUDIO_PLAY)
-                    color: #xffffff
+                    color: (RBX_BG_SURFACE)
                 }
                 draw_bg +: {
                     border_radius: 5.0
-                    color: #x111827
-                    color_hover: #x374151
-                    color_down: #x111827
-                    color_disabled: #737A85
+                    color: (RBX_FG_PRIMARY)
+                    color_hover: (RBX_FG_SECONDARY)
+                    color_down: (RBX_FG_PRIMARY)
+                    color_disabled: (RBX_FG_DISABLED)
                 }
             }
 
@@ -445,14 +445,14 @@ script_mod! {
                 }
                 draw_icon +: {
                     svg: (mod.widgets.ICON_AUDIO_PAUSE)
-                    color: #xffffff
+                    color: (RBX_BG_SURFACE)
                 }
                 draw_bg +: {
                     border_radius: 5.0
-                    color: #x111827
-                    color_hover: #x374151
-                    color_down: #x111827
-                    color_disabled: #737A85
+                    color: (RBX_FG_PRIMARY)
+                    color_hover: (RBX_FG_SECONDARY)
+                    color_down: (RBX_FG_PRIMARY)
+                    color_disabled: (RBX_FG_DISABLED)
                 }
             }
         }
@@ -469,7 +469,7 @@ script_mod! {
                 flow: Flow.Right{wrap: true}
                 draw_text +: {
                     text_style: MESSAGE_TEXT_STYLE { font_size: 12.0 }
-                    color: #x111827
+                    color: (RBX_FG_PRIMARY)
                 }
             }
 
@@ -479,7 +479,7 @@ script_mod! {
                 flow: Flow.Right{wrap: true}
                 draw_text +: {
                     text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                    color: #x6b7280
+                    color: (RBX_FG_SECONDARY)
                 }
             }
 
@@ -502,8 +502,8 @@ script_mod! {
                     draw_bg +: {
                         offset_y: uniform(8.0)
                         handle_size: uniform(8.0)
-                        val_color: #x111827
-                        handle_color: #x111827
+                        val_color: (RBX_FG_PRIMARY)
+                        handle_color: (RBX_FG_PRIMARY)
                     }
                     // Hide the slider's own numeric value label (it overlaps
                     // the track at this height and is redundant with the
@@ -537,7 +537,7 @@ script_mod! {
                     text: "00:00"
                     draw_text +: {
                         text_style: MESSAGE_TEXT_STYLE { font_size: 10.0 }
-                        color: #x374151
+                        color: (RBX_FG_SECONDARY)
                     }
                 }
             }

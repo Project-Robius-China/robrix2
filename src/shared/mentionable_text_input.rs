@@ -424,6 +424,11 @@ const WORKFLOW_SLASH_COMMANDS: &[SlashCommand] = &[
         description_key: "slash_command.status.description",
         needs_args: false,
     },
+    SlashCommand {
+        command: "/thread",
+        description_key: "slash_command.thread.description",
+        needs_args: true,
+    },
 ];
 
 pub(crate) fn is_management_bot_room(
@@ -1036,7 +1041,7 @@ script_mod! {
     use mod.widgets.*
 
     let FOCUS_HOVER_COLOR = #C
-    let KEYBOARD_FOCUS_OR_COLOR_HOVER = #x1C274C
+    let KEYBOARD_FOCUS_OR_COLOR_HOVER = (RBX_MENTION_FOCUS)
 
     // Template for user list items in the mention dropdown
     mod.widgets.UserListItem = View {
@@ -1054,7 +1059,8 @@ script_mod! {
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 sdf.box(0. 0. self.rect_size.x self.rect_size.y self.border_radius)
-                let highlight = #x1E90FF30
+                // Selected row uses the app's selection tint, not a one-off blue.
+                let highlight = RBX_BG_SELECTED
                 sdf.fill(Pal.premul(self.color.mix(highlight self.selected)))
                 return sdf.result
             }
@@ -1118,7 +1124,8 @@ script_mod! {
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 sdf.box(0. 0. self.rect_size.x self.rect_size.y self.border_radius)
-                let highlight = #x1E90FF30
+                // Selected row uses the app's selection tint, not a one-off blue.
+                let highlight = RBX_BG_SELECTED
                 sdf.fill(Pal.premul(self.color.mix(highlight self.selected)))
                 return sdf.result
             }
@@ -1181,7 +1188,8 @@ script_mod! {
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 sdf.box(0. 0. self.rect_size.x self.rect_size.y self.border_radius)
-                let highlight = #x1E90FF30
+                // Selected row uses the app's selection tint, not a one-off blue.
+                let highlight = RBX_BG_SELECTED
                 sdf.fill(Pal.premul(self.color.mix(highlight self.selected)))
                 return sdf.result
             }
@@ -2273,13 +2281,17 @@ impl MentionableTextInput {
             room_props.resolved_parent_bot_user_id.as_ref(),
             &room_props.known_bot_user_ids,
         );
-        let bot_enabled = bot_context != SlashCommandDiscoveryContext::None;
+        // Management/bot commands and the invite picker are main-timeline-only;
+        // inside a thread the popup offers only the workflow commands (which the
+        // in-thread agent interprets, e.g. `/thread model|mode`).
+        let in_thread = room_props.timeline_kind.thread_root_event_id().is_some();
+        let bot_enabled = !in_thread && bot_context != SlashCommandDiscoveryContext::None;
         // `/invitebot` is a client-side command gated on the user's invite
         // permission — independent of the appservice/BotFather management
         // gating. Additionally requires loaded room members (so already-present
         // bots can be filtered from the picker) and is suppressed entirely for
         // instances that opt out (the message-editing pane).
-        let invite_enabled = invitebot_picker_ready(
+        let invite_enabled = !in_thread && invitebot_picker_ready(
             room_props.can_invite,
             room_props.room_members.is_some(),
             room_props.room_members_sync_pending,

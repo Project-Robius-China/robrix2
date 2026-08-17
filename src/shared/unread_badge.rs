@@ -1,5 +1,9 @@
-//! This module defines a badge that shows the count of unread mentions (in red)
-//! or unread messages (in gray).
+//! This module defines a badge that shows the count of unread mentions
+//! (`@`-prefixed, in red) or unread messages (bare count, in gray).
+//!
+//! Color alone does not carry the mention/message distinction: the `@` prefix
+//! is the redundant channel that keeps the two readable for color-blind users
+//! and in isolation, where there is no neighbouring badge to compare against.
 
 use makepad_widgets::*;
 
@@ -47,7 +51,7 @@ script_mod! {
             text: "",
             draw_text +: {
                 color: #ffffff,
-                text_style: theme.font_regular {font_size: 8.0},
+                text_style: REGULAR_TEXT {font_size: 8.0},
             }
         }
     }
@@ -73,8 +77,12 @@ impl Widget for UnreadBadge {
         /// Helper function to format the badge's rounded rectangle.
         ///
         /// The rounded rectangle needs to be wider for longer text.
-        /// It also adds a plus sign at the end if the unread count is greater than 99. 
-        fn format_border_and_truncation(count: u64) -> (f64, &'static str) {
+        /// It also adds a plus sign at the end if the unread count is greater than 99.
+        ///
+        /// `extra_glyphs` accounts for characters drawn beyond the digits
+        /// themselves — the mention badge's leading `@` — so the pill grows to
+        /// fit them instead of clipping.
+        fn format_border_and_truncation(count: u64, extra_glyphs: u64) -> (f64, &'static str) {
             let (border_size, plus_sign) = if count > 99 {
                 (0.0, "+")
             } else if count > 9 {
@@ -82,14 +90,25 @@ impl Widget for UnreadBadge {
             } else {
                 (5.0, "")
             };
-            (border_size, plus_sign)
+            // Each extra glyph costs roughly one digit's worth of width, which
+            // the border insets by ~3px per step.
+            (
+                (border_size - 3.0 * extra_glyphs as f64).max(0.0),
+                plus_sign,
+            )
         }
 
-        // If there are unread mentions, show red badge and the number of unread mentions
+        // If there are unread mentions, show red badge and the number of unread mentions.
+        //
+        // The `@` matters: mentions and plain unreads were previously identical
+        // glyphs distinguished only by badge color, so a red "3" and a gray "3"
+        // are the same badge to anyone who can't separate the two hues — and to
+        // anyone glancing at a list where no gray badge is nearby to compare
+        // against. The prefix carries the same signal in a second channel.
         if self.unread_mentions > 0 {
-            let (border_size, plus_sign) = format_border_and_truncation(self.unread_mentions);
+            let (border_size, plus_sign) = format_border_and_truncation(self.unread_mentions, 1);
             self.label(cx, ids!(label_count))
-                .set_text(cx, &format!("{}{plus_sign}", std::cmp::min(self.unread_mentions, 99)));
+                .set_text(cx, &format!("@{}{plus_sign}", std::cmp::min(self.unread_mentions, 99)));
             let mut rounded_view = self.view(cx, ids!(rounded_view));
             script_apply_eval!(cx, rounded_view, {
                 draw_bg +: {
@@ -113,7 +132,7 @@ impl Widget for UnreadBadge {
         }
         // If there are no unread mentions but there are unread messages, show gray badge and the number of unread messages
         else if self.unread_messages > 0 {
-            let (border_size, plus_sign) = format_border_and_truncation(self.unread_messages);
+            let (border_size, plus_sign) = format_border_and_truncation(self.unread_messages, 0);
             self.label(cx, ids!(label_count))
                 .set_text(cx, &format!("{}{plus_sign}", std::cmp::min(self.unread_messages, 99)));
             let mut rounded_view = self.view(cx, ids!(rounded_view));

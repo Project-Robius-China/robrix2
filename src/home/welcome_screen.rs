@@ -384,7 +384,7 @@ impl Widget for WelcomeScreen {
             let qa_create_room = self.view.button(cx, ids!(qa_create_room));
             if qa_create_room.clicked(actions) {
                 qa_create_room.reset_hover(cx);
-                cx.action(CreateRoomModalAction::Open { parent_space_id: None });
+                cx.action(CreateRoomModalAction::Open { parent_space_id: None, create_space: false });
             }
             let qa_start_chat = self.view.button(cx, ids!(qa_start_chat));
             if qa_start_chat.clicked(actions) {

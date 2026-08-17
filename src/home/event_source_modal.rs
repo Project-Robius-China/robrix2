@@ -17,10 +17,10 @@ script_mod! {
         height: Fit
         padding: 0.0
         font_size: 11.0
-        font_color: #x24292e
+        font_color: (RBX_SYNTAX_TEXT)
 
         draw_text +: {
-            color: #x24292e
+            color: (RBX_SYNTAX_TEXT)
         }
         text_style_normal: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
         text_style_italic: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
@@ -28,11 +28,11 @@ script_mod! {
         text_style_bold_italic: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
         text_style_fixed: mod.widgets.EVENT_SOURCE_CODE_TEXT_STYLE { }
         draw_block +: {
-            line_color: #x24292e
+            line_color: (RBX_SYNTAX_TEXT)
             sep_color: (COLOR_SECONDARY)
-            quote_bg_color: #xF7F9FC
-            quote_fg_color: #x24292e
-            code_color: #xF7F9FC
+            quote_bg_color: (RBX_BG_CANVAS)
+            quote_fg_color: (RBX_SYNTAX_TEXT)
+            code_color: (RBX_BG_CANVAS)
         }
         code_layout: Layout{
             flow: Flow.Right{wrap: true}

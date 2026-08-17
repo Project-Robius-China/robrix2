@@ -58,7 +58,7 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
-    mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE = theme.font_regular {
+    mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE = REGULAR_TEXT {
         font_size: (16),
         line_spacing: (1.2),
     }
@@ -176,8 +176,8 @@ script_mod! {
                             text_style: mod.widgets.LINK_PREVIEW_MESSAGE_TEXT_STYLE {
                                 font_size: 12.0,
                             },
-                            color: #x0000EE,
-                            color_hover: (COLOR_LINK_HOVER),
+                            color: (RBX_LINK),
+                            color_hover: (RBX_LINK_HOVER),
                         }
                     }
 
@@ -231,10 +231,6 @@ pub struct LinkPreview {
     is_expanded: bool,
     #[rust]
     hidden_links_count: usize,
-    /// Tracks the URLs that were last used to populate this widget's children,
-    /// so we can skip expensive widget recreation when the same links are shown.
-    #[rust]
-    last_populated_links: Vec<String>,
 }
 
 impl Widget for LinkPreview {
@@ -423,8 +419,16 @@ impl LinkPreviewRef {
         if let Some(description) = &link_preview_data.description {
             let mut description = description.clone();
             description = description.replace("\n\n", " ");
-            let truncated_description = if description.len() > MAX_DESCRIPTION_LENGTH {
-                format!("{}...", &description[..(MAX_DESCRIPTION_LENGTH - 3)])
+            // Truncate by characters, not bytes. `MAX_DESCRIPTION_LENGTH` counted
+            // bytes and the slice cut at a fixed byte offset, which panics
+            // whenever that offset lands inside a multi-byte character — routine
+            // for any description mixing CJK with ASCII.
+            let truncated_description = if description.chars().count() > MAX_DESCRIPTION_LENGTH {
+                let head: String = description
+                    .chars()
+                    .take(MAX_DESCRIPTION_LENGTH - 3)
+                    .collect();
+                format!("{head}...")
             } else {
                 description
             };
@@ -500,18 +504,22 @@ impl LinkPreviewRef {
                     continue;
                 }
             }
+            // The homeserver — not this client — fetches previews, so a loopback/private
+            // URL is unreachable for it and would leave a permanently empty card.
+            if !is_previewable_url(link) {
+                continue;
+            }
             seen_urls.insert(url_string.clone());
             accepted_urls.push(url_string);
         }
 
-        // If the links haven't changed and children are already populated,
-        // skip the expensive widget recreation entirely.
-        if let Some(inner) = self.borrow() {
-            if accepted_urls == inner.last_populated_links && !inner.children.is_empty() {
-                return true;
-            }
-        }
-
+        // NOTE: do NOT skip repopulation when the links are unchanged. `children` holds
+        // views built with `widget_ref_from_live_ptr` in an earlier draw pass; once the
+        // PortalList recycles this item and hands it back for the same message, those
+        // ViewRefs no longer draw anything, so reusing them renders an EMPTY preview card
+        // (only the item_template's rounded background). Rebuilding is bounded work: this
+        // runs on content-draw passes, not per frame, and while a preview is still
+        // `Requested` the timeline already re-populates on each pass by design.
         let mut fully_drawn_count = 0;
         let accepted_link_count = accepted_urls.len();
         let mut views = Vec::with_capacity(accepted_link_count);
@@ -519,9 +527,21 @@ impl LinkPreviewRef {
         for (url_string, link) in accepted_urls.iter().zip(
             links.iter().filter(|l| accepted_urls.contains(&l.to_string()))
         ) {
+            let cache_entry = link_preview_cache.get_or_fetch_link_preview(url_string.clone());
+            // A preview that could not be fetched has nothing to show. Whole homeservers
+            // may refuse every URL (matrix.palpo.im answers `403 M_FORBIDDEN "URL is not
+            // allowed to be previewed"` for public and private URLs alike), and rendering
+            // a card regardless leaves an empty box under every link. The URL is already a
+            // clickable link in the message body, so drop the card entirely instead.
+            // Counted as drawn: nothing is still pending, so the timeline must not keep
+            // re-drawing this item forever.
+            if matches!(cache_entry, LinkPreviewCacheEntry::Failed(_)) {
+                fully_drawn_count += 1;
+                continue;
+            }
             let (view_ref, was_image_drawn) = self.populate_view(
                 cx,
-                link_preview_cache.get_or_fetch_link_preview(url_string.clone()),
+                cache_entry,
                 link,
                 media_cache,
                 |cx, text_or_image_ref, image_info_source, original_source, body, media_cache| {
@@ -534,9 +554,6 @@ impl LinkPreviewRef {
         if views.len() > MAX_LINK_PREVIEWS_BY_EXPAND {
             let hidden_count = views.len() - MAX_LINK_PREVIEWS_BY_EXPAND;
             self.show_collapsible_buttons(cx, hidden_count);
-        }
-        if let Some(mut inner) = self.borrow_mut() {
-            inner.last_populated_links = accepted_urls;
         }
         self.set_children(views);
         fully_drawn_count == accepted_link_count
@@ -715,6 +732,45 @@ impl LinkPreviewCache {
     }
 }
 
+/// Returns `true` if the homeserver could plausibly fetch this URL to build a preview.
+///
+/// Previews are resolved by the **homeserver** (`GET /_matrix/client/v1/media/preview_url`),
+/// not by this client — so a loopback or private-network URL names a host on the *server's*
+/// network, never ours. Homeservers reject those for SSRF safety (matrix.palpo.im answers
+/// `403 M_FORBIDDEN "URL is not allowed to be previewed"`), which lands in the cache as
+/// `Failed` and leaves a permanently empty preview card under the message. Filtering them
+/// out up front avoids both the doomed request and the empty card.
+///
+/// This matters for agent/bot bridges that stamp machine-local permalinks (e.g.
+/// `http://127.0.0.1:8090/msg/...`) into a shared room: such a link only resolves on the
+/// machine that produced it, so it is never previewable — for its author or anyone else.
+fn is_previewable_url(link: &Url) -> bool {
+    if !matches!(link.scheme(), "http" | "https") {
+        return false;
+    }
+    match link.host() {
+        Some(url::Host::Domain(domain)) => {
+            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+            domain != "localhost"
+                && !domain.ends_with(".localhost")
+                && !domain.ends_with(".local")
+                && !domain.ends_with(".internal")
+        }
+        Some(url::Host::Ipv4(ip)) => {
+            !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified())
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            // `is_unique_local` / `is_unicast_link_local` are still unstable, so match the
+            // fc00::/7 and fe80::/10 prefixes directly.
+            let segments = ip.segments();
+            let is_unique_local = (segments[0] & 0xfe00) == 0xfc00;
+            let is_link_local = (segments[0] & 0xffc0) == 0xfe80;
+            !(ip.is_loopback() || ip.is_unspecified() || is_unique_local || is_link_local)
+        }
+        None => false,
+    }
+}
+
 /// Insert data into a previously-requested media cache entry.
 fn insert_into_cache(
     url: String,
@@ -755,4 +811,45 @@ fn insert_into_cache(
         let _ = sender.send(TimelineUpdate::LinkPreviewFetched);
     }
     SignalToUI::set_ui_signal();
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::MAX_DESCRIPTION_LENGTH;
+
+    /// Mirrors the truncation in `populate_view`. The previous byte-slice form
+    /// panicked whenever byte `MAX_DESCRIPTION_LENGTH - 3` landed inside a
+    /// multi-byte character.
+    fn truncate(description: String) -> String {
+        if description.chars().count() > MAX_DESCRIPTION_LENGTH {
+            let head: String = description.chars().take(MAX_DESCRIPTION_LENGTH - 3).collect();
+            format!("{head}...")
+        } else {
+            description
+        }
+    }
+
+    #[test]
+    fn mixed_script_description_does_not_panic() {
+        // The byte offset lands mid-character for this mix — the old code panicked.
+        let d = "Robrix 是一个 Matrix 客户端,支持多 agent 协作工作流。".repeat(6);
+        assert!(!d.is_char_boundary(MAX_DESCRIPTION_LENGTH - 3));
+        let out = truncate(d);
+        assert!(out.ends_with("..."));
+        assert_eq!(out.chars().count(), MAX_DESCRIPTION_LENGTH);
+    }
+
+    #[test]
+    fn cjk_and_emoji_truncate_by_characters() {
+        for d in ["中文描述内容测试".repeat(40), "📋 项目说明 mixed ".repeat(30)] {
+            let out = truncate(d);
+            assert_eq!(out.chars().count(), MAX_DESCRIPTION_LENGTH);
+        }
+    }
+
+    #[test]
+    fn short_description_is_untouched() {
+        let d = "短描述".to_string();
+        assert_eq!(truncate(d.clone()), d);
+    }
 }

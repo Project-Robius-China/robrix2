@@ -17,7 +17,7 @@ script_mod! {
         align: Align{x: 0.0, y: 0.5}
         show_bg: true
         draw_bg +: {
-            color: #xF0F2F5
+            color: (RBX_BG_DISABLED)
             border_radius: 6.0
         }
 

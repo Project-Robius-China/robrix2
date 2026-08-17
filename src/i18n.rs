@@ -137,6 +137,90 @@ mod tests {
     }
 
     #[test]
+    fn space_invite_i18n_keys_exist_in_all_locales() {
+        for key in [
+            "rooms_list_entry.invited.space.by_name_and_user",
+            "rooms_list_entry.invited.space.by_user",
+            "rooms_list_entry.invited.space.generic",
+            "invite_screen.message.invited_by_space",
+            "invite_screen.message.invited_generic_space",
+            "invite_screen.button.join_space",
+            "invite_screen.popup.joined_space_success",
+            "join_leave_modal.title.confirm_accept_space_invite",
+            "join_leave_modal.description.confirm_accept_space_invite",
+            "join_leave_modal.title.confirm_reject_space_invite",
+            "join_leave_modal.description.confirm_reject_space_invite",
+            "join_leave_modal.popup.joined_space_success",
+            "join_leave_modal.title.joined_space",
+            "join_leave_modal.title.error_joining_space",
+        ] {
+            for language in AppLanguage::ALL {
+                assert!(
+                    dictionary(language).contains_key(key),
+                    "missing i18n key {key:?} for language {language:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn create_space_i18n_keys_exist_in_all_locales() {
+        for key in [
+            "add_menu.item.new_space",
+            "add_room.create_space.help.default",
+            "add_room.create_space.help.fixed_parent",
+            "add_room.create_space.input.placeholder",
+            "add_room.create_space.visibility.option.private",
+            "add_room.create_space.visibility.option.public",
+            "add_room.create_space.visibility.hint.private",
+            "add_room.create_space.visibility.hint.public",
+            "add_room.create_space.button.create",
+            "add_room.create_space.modal.title",
+            "add_room.create_space.modal.subtitle",
+            "add_room.popup.created_space_success",
+            "add_room.feedback.creating_space",
+            "space_lobby.header.button.new_subspace",
+        ] {
+            for language in AppLanguage::ALL {
+                assert!(
+                    dictionary(language).contains_key(key),
+                    "missing i18n key {key:?} for language {language:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn space_membership_i18n_keys_exist_in_all_locales() {
+        for key in [
+            "space_lobby.header.button.add_existing_room",
+            "space_lobby.item.button.remove_from_space",
+            "space_lobby.item.button.cancel",
+            "space_lobby.remove_from_space.confirm.title_room",
+            "space_lobby.remove_from_space.confirm.title_space",
+            "space_lobby.remove_from_space.confirm.body_room",
+            "space_lobby.remove_from_space.confirm.body_space",
+            "space_lobby.remove_from_space.confirm.accept",
+            "space_lobby.popup.added_to_space",
+            "space_lobby.popup.removed_from_space",
+            "space_lobby.popup.add_to_space_failed",
+            "space_lobby.popup.remove_from_space_failed",
+            "add_existing_room.title",
+            "add_existing_room.subtitle",
+            "add_existing_room.filter.placeholder",
+            "add_existing_room.status.no_rooms",
+            "add_existing_room.status.no_matches",
+        ] {
+            for language in AppLanguage::ALL {
+                assert!(
+                    dictionary(language).contains_key(key),
+                    "missing i18n key {key:?} for language {language:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn message_action_bar_i18n_keys_exist_in_all_locales() {
         for key in [
             "room_screen.popup.message.copied",
@@ -210,5 +294,50 @@ mod tests {
             tr_key(AppLanguage::ChineseSimplified, "room_input_bar.input.placeholder"),
             "输入消息（支持 Markdown）...",
         );
+    }
+
+    #[test]
+    fn agent_ops_status_and_detail_keys_exist_in_all_locales() {
+        for suffix in [
+            "status.no_manifest",
+            "status.unreadable_manifest",
+            "status.contract_mismatch",
+            "status.not_released",
+            "status.unbound_commit",
+            "status.invalid_source_commit",
+            "status.empty_artifacts",
+            "status.invalid_artifact_manifest",
+            "status.incomplete_artifact_manifest",
+            "status.artifact_set_mismatch",
+            "status.artifact_digest_mismatch",
+            "status.contract_ready",
+            "detail.no_manifest",
+            "detail.unreadable_manifest",
+            "detail.contract_mismatch",
+            "detail.not_released",
+            "detail.unbound_commit",
+            "detail.invalid_source_commit",
+            "detail.empty_artifacts",
+            "detail.invalid_artifact_manifest",
+            "detail.incomplete_artifact_manifest",
+            "detail.artifact_set_mismatch",
+            "detail.artifact_digest_mismatch",
+            "detail.contract_ready",
+            "status.next_step_release",
+            "status.next_step_runtime",
+        ] {
+            let key = format!("agent_ops.{suffix}");
+            for language in AppLanguage::ALL {
+                assert!(
+                    dictionary(language).contains_key(&key),
+                    "missing i18n key {key:?} for language {language:?}",
+                );
+            }
+            assert_ne!(
+                dictionary(AppLanguage::English).get(&key),
+                dictionary(AppLanguage::ChineseSimplified).get(&key),
+                "Chinese Agent Operations text must not fall back to English for {key}",
+            );
+        }
     }
 }

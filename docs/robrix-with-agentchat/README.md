@@ -6,6 +6,10 @@
 >
 > 本文档从**环境搭建**到**使用方法**,用我们真实跑通的案例(让 agent 把一个 hello
 > 种子做成一个最小 Makepad 2.0 计数器 app)作为示例,配实测截图。
+>
+> **注意：** 本文记录的是早期 demo 搭建路径，部分“零代码改动”和宽松 audit 配置
+> 已不再代表当前生产安全基线。当前能力、发布缺陷与安全门以
+> [当前已知问题与后续路线](current-known-issues-and-roadmap.md)为准。
 
 ---
 
@@ -23,7 +27,9 @@
 10. [附录:文件清单 / 命令速查](#10-附录文件清单--命令速查)
 
 后续产品化需求见：[软件工厂需求文档](software-factory-requirements.md)。
-中午验收切片见：[软件工厂 MVP 文档](software-factory-mvp.md)。
+中期验收切片见：[软件工厂 MVP 文档](software-factory-mvp.md)。
+截至 2026-07-24 的发布缺陷、产品化缺口与后续 PR 顺序见：
+[当前已知问题与后续路线](current-known-issues-and-roadmap.md)。
 
 ---
 

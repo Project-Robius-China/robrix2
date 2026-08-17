@@ -51,6 +51,46 @@ script_mod! {
                 src: (mod.widgets.DEFAULT_IMAGE)
             }
         }
+        // Shown when the image could not be fetched. Separate from `text_view`
+        // because a failure is the one case the user can act on, and a bare
+        // label offers nothing to act with.
+        error_view := View {
+            visible: false,
+            width: Fill, height: Fit,
+            flow: Down,
+            spacing: (SPACE_SM),
+            padding: (SPACE_MD),
+            show_bg: true,
+            draw_bg.color: (RBX_BG_SUNKEN)
+
+            error_label := Label {
+                width: Fill, height: Fit,
+                flow: Flow.Right{wrap: true},
+                draw_text +: {
+                    text_style: MESSAGE_TEXT_STYLE { }
+                    color: (RBX_FG_SECONDARY),
+                }
+            }
+            retry_button := RobrixIconButton {
+                width: Fit, height: Fit,
+                padding: Inset{left: 10, right: 10, top: 5, bottom: 5}
+                draw_bg +: {
+                    color: (RBX_BG_SURFACE)
+                    color_hover: (RBX_BG_HOVER)
+                    color_focus: (RBX_BG_SURFACE)
+                    border_size: 1.0
+                    border_color: (RBX_STROKE_SOFT)
+                    border_color_hover: (RBX_STROKE_SOFT)
+                    border_color_down: (RBX_STROKE_SOFT)
+                }
+                draw_text +: {
+                    color: (RBX_FG_PRIMARY)
+                    color_hover: (RBX_FG_PRIMARY)
+                    color_down: (RBX_FG_PRIMARY)
+                }
+                text: "Retry"
+            }
+        }
     }
 }
 
@@ -70,6 +110,16 @@ pub struct TextOrImage {
 
 impl Widget for TextOrImage {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        if let (TextOrImageStatus::Error(source), Event::Actions(actions)) = (&self.status, event) {
+            if self.view.button(cx, ids!(error_view.retry_button)).clicked(actions) {
+                let source = source.clone();
+                cx.widget_action(
+                    self.widget_uid(),
+                    TextOrImageAction::RetryRequested(source),
+                );
+            }
+        }
+
         // We handle hit events if the status is `Image`.
         if let TextOrImageStatus::Image(mxc_uri) = &self.status {
             let image_area = self.view.image(cx, ids!(image_view.image)).area();
@@ -109,9 +159,28 @@ impl TextOrImage {
     pub fn show_text<T: AsRef<str>>(&mut self, cx: &mut Cx, text: T) {
         self.view(cx, ids!(image_view)).set_visible(cx, false);
         self.view(cx, ids!(default_image_view)).set_visible(cx, false);
+        self.view(cx, ids!(error_view)).set_visible(cx, false);
         self.view(cx, ids!(text_view)).set_visible(cx, true);
         self.view.label(cx, ids!(text_view.label)).set_text(cx, text.as_ref());
         self.status = TextOrImageStatus::Text;
+    }
+
+    /// Shows `message` alongside a Retry button that re-requests `source`.
+    ///
+    /// ## Arguments
+    /// * `message`: what to tell the user. Keep it human — the `mxc://` URI is
+    ///   a server-internal identifier that means nothing to the reader and
+    ///   cannot be opened, copied anywhere useful, or acted on.
+    /// * `source`: the media source to re-request, carried on
+    ///   [`TextOrImageAction::RetryRequested`] when the button is clicked.
+    pub fn show_error<T: AsRef<str>>(&mut self, cx: &mut Cx, message: T, source: MediaSource) {
+        self.view(cx, ids!(image_view)).set_visible(cx, false);
+        self.view(cx, ids!(default_image_view)).set_visible(cx, false);
+        self.view(cx, ids!(text_view)).set_visible(cx, false);
+        self.view(cx, ids!(error_view)).set_visible(cx, true);
+        self.view.label(cx, ids!(error_view.error_label)).set_text(cx, message.as_ref());
+        self.view.button(cx, ids!(error_view.retry_button)).reset_hover(cx);
+        self.status = TextOrImageStatus::Error(source);
     }
 
     /// Sets the image content, which will be displayed on future draw operations.
@@ -134,6 +203,7 @@ impl TextOrImage {
                 self.view(cx, ids!(image_view)).set_visible(cx, true);
                 self.view(cx, ids!(text_view)).set_visible(cx, false);
                 self.view(cx, ids!(default_image_view)).set_visible(cx, false);
+                self.view(cx, ids!(error_view)).set_visible(cx, false);
                 Ok(())
             }
             Err(e) => {
@@ -153,6 +223,7 @@ impl TextOrImage {
         self.view(cx, ids!(default_image_view)).set_visible(cx, true);
         self.view(cx, ids!(text_view)).set_visible(cx, false);
         self.view(cx, ids!(image_view)).set_visible(cx, false);
+        self.view(cx, ids!(error_view)).set_visible(cx, false);
     }
 }
 
@@ -184,6 +255,13 @@ impl TextOrImageRef {
         }
     }
 
+    /// See [TextOrImage::show_error()].
+    pub fn show_error<T: AsRef<str>>(&self, cx: &mut Cx, message: T, source: MediaSource) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.show_error(cx, message, source);
+        }
+    }
+
     /// See [TextOrImage::show_default_image()].
     pub fn show_default_image(&self, cx: &mut Cx) {
         if let Some(inner) = self.borrow() {
@@ -212,8 +290,11 @@ impl TextOrImageRef {
 pub enum TextOrImageStatus {
     #[default]
     Text,
-    /// Image source URL stored in this variant to be used 
+    /// Image source URL stored in this variant to be used
     Image(Option<MediaSource>),
+    /// The fetch failed; the retry button is showing. Carries the source to
+    /// re-request.
+    Error(MediaSource),
 }
 
 /// Actions emitted by the `TextOrImage` based on user interaction with it.
@@ -221,6 +302,8 @@ pub enum TextOrImageStatus {
 pub enum TextOrImageAction {
     /// The user has clicked the `TextOrImage`, with source URL stored in this variant.
     Clicked(Option<MediaSource>),
+    /// The user asked to re-fetch a media source whose download failed.
+    RetryRequested(MediaSource),
     #[default]
     None
 }

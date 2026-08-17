@@ -30,6 +30,7 @@ use crate::{
         add_room::CreateRoomAction,
         navigation_tab_bar::{NavigationBarAction, SelectedTab},
         room_context_menu::RoomContextMenuDetails,
+        room_screen::invalidate_timeline_state_for_room,
         rooms_list_entry::RoomsListEntryAction,
         space_lobby::{SpaceLobbyAction, SpaceLobbyEntryWidgetExt},
     },
@@ -255,6 +256,20 @@ pub fn enqueue_rooms_list_update(update: RoomsListUpdate) {
     SignalToUI::set_ui_signal();
 }
 
+fn set_room_id_displayed(
+    displayed_room_ids: &mut Vec<OwnedRoomId>,
+    room_id: &OwnedRoomId,
+    should_display: bool,
+) {
+    if should_display {
+        if !displayed_room_ids.contains(room_id) {
+            displayed_room_ids.push(room_id.clone());
+        }
+    } else {
+        displayed_room_ids.retain(|displayed_room_id| displayed_room_id != room_id);
+    }
+}
+
 /// Actions related to a single room in the RoomsList widget.
 #[derive(Debug, Clone, Default)]
 pub enum RoomsListAction {
@@ -265,6 +280,14 @@ pub enum RoomsListAction {
     /// to a `RoomScreen` to display the now-joined room.
     InviteAccepted {
         room_name_id: RoomNameId,
+    },
+    /// A space was joined from an accepted invite, meaning that the existing
+    /// `InviteScreen` should be converted to a `SpaceLobbyScreen` for that space.
+    ///
+    /// Unlike [`RoomsListAction::InviteAccepted`], the joined space itself never
+    /// enters the rooms list; it is owned by the SpacesBar from here on.
+    SpaceInviteAccepted {
+        space_name_id: RoomNameId,
     },
     /// Instructs the top-level app to show the context menu for the given room.
     ///
@@ -316,11 +339,11 @@ pub struct JoinedRoomInfo {
     /// The avatar for this room: either an array of bytes holding the avatar image
     /// or a string holding the first Unicode character of the room name.
     pub room_avatar: FetchedRoomAvatar,
-    /// Whether this room has been paginated at least once.
-    /// We pre-paginate visible rooms at least once in order to
-    /// be able to display the latest message in the RoomsListEntry
-    /// and to have something to immediately show when a user first opens a room.
-    pub has_been_paginated: bool,
+    /// Whether this room has been shown in the rooms list yet.
+    /// Determines whether we perform first-time actions like pre-paginating
+    /// its timeline and fetching its avatar, deferred until the room is
+    /// actually scrolled into view rather than done eagerly for every room.
+    pub has_been_shown: bool,
     /// Whether this room is currently selected in the UI.
     pub is_selected: bool,
     /// Whether this a direct room.
@@ -406,6 +429,11 @@ pub struct InvitedRoomInfo {
     pub is_selected: bool,
     /// Whether this is an invite to a direct room.
     pub is_direct: bool,
+    /// Whether this is an invite to a space rather than a regular room.
+    ///
+    /// Accepting such an invite hands the space over to the SpacesBar
+    /// instead of opening a room timeline.
+    pub is_space: bool,
 }
 
 /// Info about the user who invited us to a room.
@@ -423,7 +451,7 @@ pub fn build_room_search_text(
 ) -> String {
     let mut search_text = format!(
         "{} {}",
-        room_name_id.to_string().to_lowercase(),
+        room_name_id.display().to_lowercase(),
         room_name_id.room_id().as_str().to_lowercase(),
     );
     if let Some(alias) = canonical_alias {
@@ -694,7 +722,7 @@ impl RoomsList {
                     tags: Tags::default(),
                     latest: None,
                     room_avatar,
-                    has_been_paginated: false,
+                    has_been_shown: false,
                     is_selected: false,
                     is_direct: false,
                     dm_target: None,
@@ -746,9 +774,11 @@ impl RoomsList {
                     let room_id = invited_room.room_name_id.room_id().clone();
                     let should_display = should_display_room!(self, &room_id, &invited_room);
                     let _replaced = self.invited_rooms.borrow_mut().insert(room_id.clone(), invited_room);
-                    if should_display {
-                        self.displayed_invited_rooms.push(room_id);
-                    }
+                    set_room_id_displayed(
+                        &mut self.displayed_invited_rooms,
+                        &room_id,
+                        should_display,
+                    );
                     self.update_status();
                     SignalToUI::set_ui_signal(); // signal the InviteScreen to update itself
                 }
@@ -984,14 +1014,40 @@ impl RoomsList {
                             .position(|r| r == &room_id)
                             .map(|index| list_to_remove_from.remove(index));
                     }
-                    else if let Some(_removed) = self.invited_rooms.borrow_mut().remove(&room_id) {
+                    else if let Some(removed) = self.invited_rooms.borrow_mut().remove(&room_id) {
                         log!("Removed room {room_id} from the list of all invited rooms");
                         self.displayed_invited_rooms.iter()
                             .position(|r| r == &room_id)
                             .map(|index| self.displayed_invited_rooms.remove(index));
+
+                        // An accepted invite to a space leaves the rooms list as `Joined`,
+                        // because a joined space is owned by the SpacesBar, not this list.
+                        // Tell the rest of the app to swap the open InviteScreen for that
+                        // space's lobby, mirroring what `InviteAccepted` does for rooms.
+                        if removed.is_space && matches!(new_state, RoomState::Joined) {
+                            cx.widget_action(
+                                self.widget_uid(),
+                                RoomsListAction::SpaceInviteAccepted {
+                                    space_name_id: removed.room_name_id.clone(),
+                                }
+                            );
+                        }
                     }
 
                     self.hidden_rooms.remove(&room_id);
+
+                    // If the removed room is no longer joined (left/kicked/banned),
+                    // drop all of its saved timeline UI state. This also covers the
+                    // case where the room state changed remotely (e.g. the user was
+                    // kicked/banned by someone else), which never goes through the
+                    // local `LeaveRoomResultAction::Left` cleanup path in `app.rs` —
+                    // so also ask the top-level App to purge this room's dock tabs
+                    // and selection state (idempotent if a local leave already did).
+                    if matches!(new_state, RoomState::Left | RoomState::Banned) {
+                        invalidate_timeline_state_for_room(cx, &room_id);
+                        cx.action(AppStateAction::RoomRemovedRemotely(room_id.clone()));
+                    }
+
                     self.update_status();
                 }
                 RoomsListUpdate::ClearRooms => {
@@ -1251,15 +1307,12 @@ impl RoomsList {
     /// If `false`, the scroll position is preserved, unless it exceeds the new list length,
     /// in which case the logic in `draw_walk()` will limit it to the max valid index.
     fn update_displayed_rooms(&mut self, cx: &mut Cx, reset_scroll: bool) {
-        let (mut invited, mut favorites, mut direct, mut regular, mut low_priority) = self.generate_displayed_rooms();
-        if self.display_filter.is_some()
-            && invited.is_empty() && favorites.is_empty()
-            && direct.is_empty() && regular.is_empty() && low_priority.is_empty()
-        {
-            self.display_filter = RoomDisplayFilter::default();
-            self.sort_fn = None;
-            (invited, favorites, direct, regular, low_priority) = self.generate_displayed_rooms();
-        }
+        // A filter that matches nothing must show nothing. Clearing the filter
+        // here instead brought the whole room list back while the user's text
+        // was still in the box, which reads as the filter being broken — and it
+        // also made the "no matching rooms" status below unreachable, since
+        // `display_filter` was already None by the time it ran.
+        let (invited, favorites, direct, regular, low_priority) = self.generate_displayed_rooms();
         self.displayed_invited_rooms = invited;
         self.displayed_favorite_rooms = favorites;
         self.displayed_direct_rooms = direct;
@@ -1591,6 +1644,51 @@ impl RoomsList {
             }
         }
         false
+    }
+
+    /// Sums the unread counts of every joined room inside the given space,
+    /// including rooms nested in its subspaces.
+    ///
+    /// `visited` guards against `m.space.child` cycles, which the spec does not
+    /// forbid, and against a space that is reachable through two paths being
+    /// counted twice.
+    fn accumulate_space_unread(
+        &self,
+        space_id: &OwnedRoomId,
+        visited: &mut HashSet<OwnedRoomId>,
+        counted_rooms: &mut HashSet<OwnedRoomId>,
+        totals: &mut SpaceUnreadCounts,
+    ) {
+        if !visited.insert(space_id.clone()) {
+            return;
+        }
+        let Some(smv) = self.space_map.get(space_id) else { return };
+        for room_id in smv.direct_child_rooms.iter() {
+            if !counted_rooms.insert(room_id.clone()) {
+                continue;
+            }
+            let Some(room) = self.all_joined_rooms.get(room_id) else { continue };
+            totals.num_unread_messages += room.num_unread_messages;
+            totals.num_unread_mentions += room.num_unread_mentions;
+            totals.has_marked_unread |= room.is_marked_unread;
+        }
+        for subspace in smv.direct_subspaces.iter() {
+            self.accumulate_space_unread(subspace, visited, counted_rooms, totals);
+        }
+    }
+}
+
+/// The unread totals of all joined rooms within a space.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpaceUnreadCounts {
+    pub num_unread_messages: u64,
+    pub num_unread_mentions: u64,
+    pub has_marked_unread: bool,
+}
+impl SpaceUnreadCounts {
+    /// Whether anything in the space warrants showing a badge at all.
+    pub fn is_unread(&self) -> bool {
+        self.has_marked_unread || self.num_unread_messages > 0 || self.num_unread_mentions > 0
     }
 }
 
@@ -1949,14 +2047,19 @@ impl Widget for RoomsList {
                         let item = list.item(cx, portal_list_index, id!(rooms_list_entry));
                         favorite_room.is_selected = self.current_active_room.as_ref()
                             .is_some_and(|sel_room| sel_room.room_id() == favorite_room_id);
-                        if PREPAGINATE_VISIBLE_ROOMS && !favorite_room.has_been_paginated {
-                            favorite_room.has_been_paginated = true;
-                            submit_async_request(MatrixRequest::PaginateTimeline {
-                                timeline_kind: TimelineKind::MainRoom {
-                                    room_id: favorite_room.room_name_id.room_id().clone(),
-                                },
-                                num_events: 50,
-                                direction: PaginationDirection::Backwards,
+                        if !favorite_room.has_been_shown {
+                            favorite_room.has_been_shown = true;
+                            if PREPAGINATE_VISIBLE_ROOMS {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: TimelineKind::MainRoom {
+                                        room_id: favorite_room.room_name_id.room_id().clone(),
+                                    },
+                                    num_events: 50,
+                                    direction: PaginationDirection::Backwards,
+                                });
+                            }
+                            submit_async_request(MatrixRequest::FetchRoomAvatar {
+                                room_name_id: favorite_room.room_name_id.clone(),
                             });
                         }
                         item_scope.override_props(&*favorite_room, |scope| {
@@ -2009,15 +2112,20 @@ impl Widget for RoomsList {
                         direct_room.is_selected = self.current_active_room.as_ref()
                             .is_some_and(|sel_room| sel_room.room_id() == direct_room_id);
 
-                        // Paginate the room if it hasn't been paginated yet.
-                        if PREPAGINATE_VISIBLE_ROOMS && !direct_room.has_been_paginated {
-                            direct_room.has_been_paginated = true;
-                            submit_async_request(MatrixRequest::PaginateTimeline {
-                                timeline_kind: TimelineKind::MainRoom {
-                                    room_id: direct_room.room_name_id.room_id().clone(),
-                                },
-                                num_events: 50,
-                                direction: PaginationDirection::Backwards,
+                        // Paginate and fetch the avatar the first time this room is shown.
+                        if !direct_room.has_been_shown {
+                            direct_room.has_been_shown = true;
+                            if PREPAGINATE_VISIBLE_ROOMS {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: TimelineKind::MainRoom {
+                                        room_id: direct_room.room_name_id.room_id().clone(),
+                                    },
+                                    num_events: 50,
+                                    direction: PaginationDirection::Backwards,
+                                });
+                            }
+                            submit_async_request(MatrixRequest::FetchRoomAvatar {
+                                room_name_id: direct_room.room_name_id.clone(),
                             });
                         }
                         // Pass the room info down to the RoomsListEntry widget via Scope.
@@ -2047,15 +2155,20 @@ impl Widget for RoomsList {
                         regular_room.is_selected = self.current_active_room.as_ref()
                             .is_some_and(|sel_room| sel_room.room_id() == regular_room_id);
 
-                        // Paginate the room if it hasn't been paginated yet.
-                        if PREPAGINATE_VISIBLE_ROOMS && !regular_room.has_been_paginated {
-                            regular_room.has_been_paginated = true;
-                            submit_async_request(MatrixRequest::PaginateTimeline {
-                                timeline_kind: TimelineKind::MainRoom {
-                                    room_id: regular_room.room_name_id.room_id().clone(),
-                                },
-                                num_events: 50,
-                                direction: PaginationDirection::Backwards,
+                        // Paginate and fetch the avatar the first time this room is shown.
+                        if !regular_room.has_been_shown {
+                            regular_room.has_been_shown = true;
+                            if PREPAGINATE_VISIBLE_ROOMS {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: TimelineKind::MainRoom {
+                                        room_id: regular_room.room_name_id.room_id().clone(),
+                                    },
+                                    num_events: 50,
+                                    direction: PaginationDirection::Backwards,
+                                });
+                            }
+                            submit_async_request(MatrixRequest::FetchRoomAvatar {
+                                room_name_id: regular_room.room_name_id.clone(),
                             });
                         }
                         // Pass the room info down to the RoomsListEntry widget via Scope.
@@ -2081,14 +2194,19 @@ impl Widget for RoomsList {
                         let item = list.item(cx, portal_list_index, id!(rooms_list_entry));
                         low_priority_room.is_selected = self.current_active_room.as_ref()
                             .is_some_and(|sel_room| sel_room.room_id() == low_priority_room_id);
-                        if PREPAGINATE_VISIBLE_ROOMS && !low_priority_room.has_been_paginated {
-                            low_priority_room.has_been_paginated = true;
-                            submit_async_request(MatrixRequest::PaginateTimeline {
-                                timeline_kind: TimelineKind::MainRoom {
-                                    room_id: low_priority_room.room_name_id.room_id().clone(),
-                                },
-                                num_events: 50,
-                                direction: PaginationDirection::Backwards,
+                        if !low_priority_room.has_been_shown {
+                            low_priority_room.has_been_shown = true;
+                            if PREPAGINATE_VISIBLE_ROOMS {
+                                submit_async_request(MatrixRequest::PaginateTimeline {
+                                    timeline_kind: TimelineKind::MainRoom {
+                                        room_id: low_priority_room.room_name_id.room_id().clone(),
+                                    },
+                                    num_events: 50,
+                                    direction: PaginationDirection::Backwards,
+                                });
+                            }
+                            submit_async_request(MatrixRequest::FetchRoomAvatar {
+                                room_name_id: low_priority_room.room_name_id.clone(),
                             });
                         }
                         item_scope.override_props(&*low_priority_room, |scope| {
@@ -2210,6 +2328,23 @@ impl RoomsListRef {
             )
     }
 
+    /// Returns the combined unread counts of every joined room inside the given
+    /// space, including rooms nested in its subspaces.
+    ///
+    /// Only counts rooms this client has actually loaded, so the total settles
+    /// as the space's hierarchy finishes paginating.
+    pub fn get_space_unread_counts(&self, space_id: &OwnedRoomId) -> SpaceUnreadCounts {
+        let Some(inner) = self.borrow() else { return SpaceUnreadCounts::default() };
+        let mut totals = SpaceUnreadCounts::default();
+        inner.accumulate_space_unread(
+            space_id,
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+            &mut totals,
+        );
+        totals
+    }
+
     /// Returns the canonical alias of the given room, if it is known and loaded.
     pub fn get_room_canonical_alias(&self, room_id: &OwnedRoomId) -> Option<ruma::OwnedRoomAliasId> {
         let inner = self.borrow()?;
@@ -2321,6 +2456,27 @@ mod tests {
             iterated_room_ids,
             vec![first_room_id, second_room_id],
         );
+    }
+
+    #[test]
+    fn invited_room_display_insertion_is_idempotent() {
+        let room_id = owned_room_id!("!invite:example.com");
+        let mut displayed_room_ids = Vec::new();
+
+        set_room_id_displayed(&mut displayed_room_ids, &room_id, true);
+        set_room_id_displayed(&mut displayed_room_ids, &room_id, true);
+
+        assert_eq!(displayed_room_ids, vec![room_id]);
+    }
+
+    #[test]
+    fn invited_room_display_update_removes_filtered_room() {
+        let room_id = owned_room_id!("!invite:example.com");
+        let mut displayed_room_ids = vec![room_id.clone(), room_id.clone()];
+
+        set_room_id_displayed(&mut displayed_room_ids, &room_id, false);
+
+        assert!(displayed_room_ids.is_empty());
     }
 
     #[test]

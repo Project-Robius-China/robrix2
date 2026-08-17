@@ -16,17 +16,21 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
+        account_menu::{AccountMenuAction, AccountMenuWidgetRefExt},
+        add_existing_room_modal::{AddExistingRoomModalAction, AddExistingRoomModalWidgetRefExt},
         add_menu::{AddMenuAction, AddMenuWidgetRefExt},
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, JoinRoomModalAction, JoinRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
         event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, set_room_info_action_modal_open}, room_settings_modal::{PendingAliasWrites, RoomSettingsAction, RoomSettingsFetchReason, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
-        JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
-    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
+        report_orphaned_join_leave_results, JoinLeaveModalKind, JoinLeaveRoomModalAction,
+        JoinLeaveRoomModalWidgetRefExt
+    }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalAction, ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification, enqueue_notification, NotificationItem, NotificationAction, NotifActionStyle}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomMemberListFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender, end_account_switch_guard}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
     }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom, effective_is_desktop}
 };
+use crate::shared::keyboard_activation::activate_focused_button;
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
 use crate::shared::video_message_player_modal::WindowFullscreenAction;
@@ -135,6 +139,10 @@ script_mod! {
                         // it is a self-positioning overlay in front of the content.
                         add_menu := AddMenu { }
 
+                        // The account switcher popup, anchored at the desktop rail's
+                        // bottom-left avatar. Same self-positioning overlay pattern.
+                        account_menu := AccountMenu { }
+
                         // A modal to confirm sending out an invite to a room.
                         invite_confirmation_modal := Modal {
                             content +: {
@@ -157,6 +165,15 @@ script_mod! {
                             }
                         }
 
+                        // A modal to link one of the user's existing rooms into a space.
+                        add_existing_room_modal := Modal {
+                            content +: {
+                                width: Fill, height: Fill,
+                                align: Align{x: 0.5, y: 0.5},
+                                add_existing_room_modal_inner := AddExistingRoomModal {}
+                            }
+                        }
+
                         // The "Add an agent" bottom sheet (Agent Registry). Hosted at the
                         // app root so its scrim covers the whole screen — including the
                         // bottom navigation bar — preventing taps from leaking through.
@@ -173,7 +190,7 @@ script_mod! {
                             content +: {
                                 height: Fill,
                                 width: Fill,
-                                align: Align{x: 0.5, y: 0.1},
+                                align: Align{x: 0.5, y: 0.5},
                                 room_settings_modal_inner := RoomSettingsModal {}
                             }
                         }
@@ -513,11 +530,35 @@ pub struct App {
     /// The room a globally-hosted report modal is currently collecting a reason
     /// for, so `ReportRoomModalAction::Submit` can target the right room.
     #[rust] pending_report_room_id: Option<OwnedRoomId>,
+    /// Join/leave requests whose modal was dismissed before they finished.
+    ///
+    /// `Modal` stops delivering events to its content once closed, so the
+    /// dismissed modal cannot see its own result. It hands the request over
+    /// here instead, and `report_orphaned_join_leave_results` reports the
+    /// outcome by popup from this always-live context.
+    #[rust] orphaned_join_leave: Vec<JoinLeaveModalKind>,
     /// A stack of previously-selected rooms for mobile navigation.
     /// When a view is popped off the stack, the previous `selected_room` is restored from here.
     #[rust] mobile_room_nav_stack: Vec<SelectedRoom>,
+    /// Whether a nav-stack pop requested by `purge_room_ui_state` may have been
+    /// swallowed by an in-flight transition animation (StackNavigation's `pop()`
+    /// silently no-ops in that case) and must be retried once the current
+    /// transition finishes. Cleared only by an actual mobile-stack push
+    /// (`push_selected_room_view`) — NOT by `RoomFocused`, which the desktop
+    /// dock also emits when auto-refocusing another tab without touching the
+    /// mobile stack.
+    #[rust] pending_room_nav_pop: bool,
     #[rust(Timer::empty())] room_filter_debounce_timer: Timer,
     #[rust] pending_room_filter_keywords: String,
+    /// The last server-side directory search: `(query, results)`.
+    ///
+    /// Local matches are cheap to recompute from the rooms list, but a
+    /// directory search is a network round-trip the user had to ask for by
+    /// hand. Clicking a result closes the modal, and reopening it used to
+    /// rebuild the list from local rooms alone — so the hits vanished and the
+    /// only way back was to run the same search again. Keyed by query so it
+    /// self-invalidates the moment the text changes.
+    #[rust] last_remote_search: Option<(String, Vec<RoomFilterResultTarget>)>,
     #[rust] auto_update_check_started: bool,
     #[rust] skipped_update_version: Option<String>,
     #[rust] update_prompt_versions: Option<(String, String)>,
@@ -751,6 +792,12 @@ const MAX_LOG_FILES_TO_KEEP: usize = 10;
 
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
+        // Splash isolate VMs default to makepad's stock DARK theme; robrix2's
+        // surfaces are light, so agent splash-card content rendered near-white
+        // text on white — visually blank. Select the light theme for every
+        // isolate before any splash card evaluates.
+        cx.set_splash_isolate_theme(live_id!(light));
+
         // only init logging/tracing once
         let _ = tracing_subscriber::fmt()
             .with_max_level(tracing_subscriber::filter::LevelFilter::ERROR)
@@ -813,6 +860,15 @@ impl MatchEvent for App {
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         self.sync_app_language(cx);
+
+        // Results for join/leave requests whose modal was dismissed before they
+        // came back. Handled here rather than in the modal because a closed
+        // `Modal` no longer forwards events to its content.
+        report_orphaned_join_leave_results(
+            self.app_state.app_language,
+            &mut self.orphaned_join_leave,
+            actions,
+        );
 
         // Pre-scan this actions batch for the *types* of events the blocks below
         // care about, before paying for any widget lookups. Casting an action's
@@ -1172,6 +1228,16 @@ impl MatchEvent for App {
             match action.downcast_ref() {
                 Some(AccountSwitchAction::Starting(user_id)) => {
                     log!("Account switch starting to: {}", user_id);
+                    // Show a loading toast so the heavy client teardown + rebuild + resync
+                    // doesn't look frozen. The popup list is append-only (no dismiss-by-key),
+                    // so this Info toast just auto-dismisses on its own timer; the Switched
+                    // success toast then confirms completion. A short duration keeps the two
+                    // from overlapping for long on a fast switch.
+                    enqueue_popup_notification(
+                        tr_key(self.app_state.app_language, "account_menu.switching"),
+                        PopupKind::Info,
+                        Some(4.0),
+                    );
                     // Clear UI state during account switch
                     clear_all_app_state(cx);
                     self.app_state.selected_room = None;
@@ -1185,8 +1251,14 @@ impl MatchEvent for App {
                 }
                 Some(AccountSwitchAction::Switched(user_id)) => {
                     log!("Account switch completed to: {}", user_id);
+                    // Release the UI-thread switch guard so the next switch can proceed.
+                    end_account_switch_guard();
                     enqueue_popup_notification(
-                        format!("Switched to account {}", user_id),
+                        tr_fmt(
+                            self.app_state.app_language,
+                            "account_menu.switched",
+                            &[("user", user_id.as_str())],
+                        ),
                         PopupKind::Success,
                         Some(3.0),
                     );
@@ -1195,6 +1267,8 @@ impl MatchEvent for App {
                 }
                 Some(AccountSwitchAction::Failed(error)) => {
                     log!("Account switch failed: {}", error);
+                    // Release the UI-thread switch guard so the user can retry.
+                    end_account_switch_guard();
                     let error_text = error.to_string();
                     let error_for_copy = error_text.clone();
                     enqueue_notification(NotificationItem {
@@ -1398,6 +1472,9 @@ impl MatchEvent for App {
                     } else {
                         self.set_room_filter_modal_empty_state(cx, "", false);
                     }
+                    // Remember them so reopening the modal doesn't throw away a
+                    // search the user had to request explicitly.
+                    self.last_remote_search = Some((query.trim().to_owned(), new_results.clone()));
                     search_results_list.set_results(cx, new_results);
                     continue;
                 }
@@ -1509,6 +1586,27 @@ impl MatchEvent for App {
                 continue;
             }
 
+            // Handle an action requesting to open the account switcher menu. Unlike the
+            // add menu, `pos` is the desired BOTTOM-left corner of the card (the avatar
+            // sits low in the rail), so we subtract the card height to grow it upward.
+            if let Some(AccountMenuAction::Open { pos }) = action.downcast_ref::<AccountMenuAction>() {
+                self.ui.callout_tooltip(cx, ids!(app_tooltip)).hide(cx);
+                let account_menu = self.ui.account_menu(cx, ids!(account_menu));
+                let expected_dimensions = account_menu.show(cx, self.app_state.app_language);
+                let rect = self.ui.view(cx, ids!(overlay_container)).area().rect(cx);
+                let pos_x = (pos.x - rect.pos.x).min(rect.size.x - expected_dimensions.x).max(0.0);
+                let pos_y = (pos.y - expected_dimensions.y - rect.pos.y)
+                    .min(rect.size.y - expected_dimensions.y)
+                    .max(0.0);
+                let margin = Inset { left: pos_x, top: pos_y, right: 0.0, bottom: 0.0 };
+                let mut main_content_view = account_menu.view(cx, ids!(main_content));
+                script_apply_eval!(cx, main_content_view, {
+                    margin: #(margin)
+                });
+                self.ui.redraw(cx);
+                continue;
+            }
+
             // A new room has been selected; push the appropriate view onto the mobile
             // StackNavigation and update the app state.
             // In Desktop mode, MainDesktopUI also handles this action to manage dock tabs;
@@ -1524,6 +1622,12 @@ impl MatchEvent for App {
                     cx.action(AppStateAction::UpgradedInviteToJoinedRoom(room_name_id.room_id().clone()));
                     continue;
                 }
+                // A space invite was accepted; upgrade the selected room from invite
+                // to that space's lobby. Same duplicate-handling note as above.
+                RoomsListAction::SpaceInviteAccepted { space_name_id } => {
+                    cx.action(AppStateAction::UpgradedInviteToSpace(space_name_id.clone()));
+                    continue;
+                }
                 _ => {}
             }
 
@@ -1536,40 +1640,68 @@ impl MatchEvent for App {
                 // Don't `continue` — let StackNavigation also process this Pop.
             }
 
+            // A released static mobile room slot is no longer drawn, so pause
+            // its room-specific subscriptions even if the breakpoint changed mid-transition.
+            if let StackNavigationTransitionAction::ViewReleased(view_id) =
+                action.as_widget_action().cast()
+            {
+                self.set_mobile_room_view_updates_enabled(cx, view_id, false);
+            }
+
+            // If a nav pop requested by `purge_room_ui_state` was swallowed by an
+            // in-flight transition animation, retry it once a transition finishes.
+            // The retry is deferred to a fresh Actions pass (via `cx.action`) so it
+            // runs after StackNavigation has cleared its transition state,
+            // regardless of intra-pass handler ordering.
+            if self.pending_room_nav_pop {
+                if matches!(
+                    action.as_widget_action().cast(),
+                    StackNavigationTransitionAction::ShowDone
+                        | StackNavigationTransitionAction::HideEnd(_)
+                ) {
+                    cx.action(AppStateAction::RetryPendingRoomNavPop);
+                }
+            }
+
             // Handle actions that instruct us to update the top-level app state.
             if let Some(LeaveRoomResultAction::Left { room_id }) = action.downcast_ref() {
                 enqueue_rooms_list_update(RoomsListUpdate::HideRoom { room_id: room_id.clone() });
-                self.app_state
-                    .bot_settings
-                    .set_room_bound(room_id.clone(), None, false);
-
-                let removed_from_home = self.app_state.saved_dock_state_home.remove_room_id(room_id);
-                let removed_from_spaces: usize = self.app_state.saved_dock_state_per_space
-                    .values_mut()
-                    .map(|saved| saved.remove_room_id(room_id))
-                    .sum();
-                let removed_tabs = removed_from_home + removed_from_spaces;
-                let mut cleared_selected_room = false;
-
-                if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
-                    self.app_state.selected_room = None;
-                    cleared_selected_room = true;
-                }
-                if removed_tabs > 0 || cleared_selected_room {
-                    if let Some(user_id) = current_user_id() {
-                        if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
-                            error!("Failed to persist app state after leaving room {room_id}. Error: {e}");
-                        }
-                    }
-                }
-
-                cx.action(MainDesktopUiAction::CloseRoomTabs { room_id: room_id.clone() });
+                self.purge_room_ui_state(cx, room_id);
+                continue;
+            }
+            // A room was removed remotely (this user was kicked or banned by someone
+            // else), which never goes through the local `LeaveRoomResultAction::Left`
+            // path above; perform the same top-level UI cleanup for it.
+            if let Some(AppStateAction::RoomRemovedRemotely(room_id)) = action.downcast_ref() {
+                self.purge_room_ui_state(cx, room_id);
                 continue;
             }
 
             match action.downcast_ref() {
                 Some(AppStateAction::RoomFocused(selected_room)) => {
                     self.app_state.selected_room = Some(selected_room.clone());
+                    // Deliberately do NOT clear `pending_room_nav_pop` here:
+                    // RoomFocused is also emitted by MainDesktopUi's automatic
+                    // re-focus after CloseRoomTabs closes the removed room's tab,
+                    // which does not touch the mobile view stack — the swallowed
+                    // pop must still be retried or the hidden stack would keep
+                    // the removed room as its current view. The flag is cleared
+                    // in `push_selected_room_view` instead, the one place that
+                    // actually pushes onto the mobile stack.
+                    continue;
+                }
+                Some(AppStateAction::RetryPendingRoomNavPop) => {
+                    // No `selected_room` guard here: on Desktop, the dock's
+                    // automatic re-focus of another tab sets `selected_room`
+                    // without touching the mobile stack, and the pop must still
+                    // happen. Any *mobile-stack* navigation since the removal
+                    // would have cleared the flag (see `push_selected_room_view`),
+                    // so the retry can never undo a deliberate navigation.
+                    if self.pending_room_nav_pop {
+                        self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+                        self.mobile_room_nav_stack.clear();
+                    }
+                    self.pending_room_nav_pop = false;
                     continue;
                 }
                 Some(AppStateAction::FocusNone) => {
@@ -1584,6 +1716,33 @@ impl MatchEvent for App {
                         if did_upgrade {
                             self.ui.redraw(cx);
                         }
+                    }
+                    continue;
+                }
+                Some(AppStateAction::UpgradedInviteToSpace(space_name_id)) => {
+                    // Keep the mobile back stack consistent: an entry that was pushed
+                    // as an invite must not send the user back to a dead InviteScreen.
+                    for stacked_room in self.mobile_room_nav_stack.iter_mut() {
+                        stacked_room.upgrade_invite_to_space(space_name_id);
+                    }
+                    let was_viewing_this_invite = self.app_state.selected_room.as_mut()
+                        .is_some_and(|selected_room| selected_room.upgrade_invite_to_space(space_name_id));
+                    if was_viewing_this_invite {
+                        // On Desktop, MainDesktopUI has already swapped the dock tab for a
+                        // SpaceLobbyScreen. Mobile has no dock, so the now-dead InviteScreen
+                        // must come off the stack; we then go to the space itself, the same
+                        // destination that tapping it in the SpacesBar would reach.
+                        if !effective_is_desktop(cx) {
+                            // Note: `pop()` pops all the way back to the root view,
+                            // so the logical nav stack must be emptied to match.
+                            self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+                            self.mobile_room_nav_stack.clear();
+                            self.app_state.selected_room = None;
+                            cx.action(NavigationBarAction::GoToSpace {
+                                space_name_id: space_name_id.clone(),
+                            });
+                        }
+                        self.ui.redraw(cx);
                     }
                     continue;
                 }
@@ -1738,6 +1897,10 @@ impl MatchEvent for App {
                     }
                     continue;
                 }
+                Some(JoinLeaveRoomModalAction::DismissedWhilePending(kind)) => {
+                    self.orphaned_join_leave.push(kind.clone());
+                    continue;
+                }
                 _ => {}
             }
 
@@ -1867,6 +2030,25 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            // Handle the modal that links an existing room into a space.
+            match action.downcast_ref() {
+                Some(AddExistingRoomModalAction::Open { space_name_id, existing_children }) => {
+                    self.ui.add_existing_room_modal(cx, ids!(add_existing_room_modal_inner)).show(
+                        cx,
+                        space_name_id.clone(),
+                        existing_children.clone(),
+                        self.app_state.app_language,
+                    );
+                    self.ui.modal(cx, ids!(add_existing_room_modal)).open(cx);
+                    continue;
+                }
+                Some(AddExistingRoomModalAction::Close) => {
+                    self.ui.modal(cx, ids!(add_existing_room_modal)).close(cx);
+                    continue;
+                }
+                _ => {}
+            }
+
             // Handle the GLOBAL report-room modal (moved out of RoomScreen so it
             // survives mobile<->desktop AdaptiveView rebuilds). RoomScreen emits
             // Open{room_id,...}; the modal widget emits Close/Submit.
@@ -1922,23 +2104,25 @@ impl MatchEvent for App {
 
             // Handle RoomSettingsAction.
             match action.downcast_ref::<RoomSettingsAction>() {
-                Some(RoomSettingsAction::Open { room_id }) => {
+                Some(RoomSettingsAction::Open { room_id, room_name, is_space }) => {
                     let room_id = room_id.clone();
+                    let is_space = *is_space;
                     let rooms_list = cx.get_global::<RoomsListRef>().clone();
-                    let room_name = rooms_list.get_room_name(&room_id)
-                        .map(|rni| rni.to_string())
+                    // Spaces aren't in the rooms list, so their name is passed in.
+                    let room_name = room_name.clone()
+                        .or_else(|| rooms_list.get_room_name(&room_id).map(|rni| rni.to_string()))
                         .unwrap_or_else(|| room_id.as_str().to_string());
                     let canonical_alias = rooms_list.get_room_canonical_alias(&room_id);
                     let alias_str = canonical_alias.as_ref().map(|a| a.as_str());
                     // P1-2: open locked (in the matching stage) if this room has
                     // an alias write still settling.
                     let alias_stage = self.pending_alias_writes.stage(&room_id);
-                    log!("RoomSettingsAction::Open for {} (name: {})", room_id, room_name);
+                    log!("RoomSettingsAction::Open for {} (name: {}, is_space: {})", room_id, room_name, is_space);
                     // `show_settings` returns the freshness epoch to tag this
                     // open-fetch with, so a slow earlier open can't repaint over a
                     // newer one or over a post-write reconcile (P1-1).
                     let open_epoch = self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
-                        .show_settings(cx, room_id.clone(), &room_name, "", alias_str, alias_stage);
+                        .show_settings(cx, room_id.clone(), &room_name, "", alias_str, alias_stage, is_space);
                     self.ui.modal(cx, ids!(room_settings_modal)).open(cx);
                     // Open-fetch: not tied to any write, so it can never consume a
                     // write reconcile (purpose = Open).
@@ -1967,17 +2151,24 @@ impl MatchEvent for App {
                     self.ui.modal(cx, ids!(room_settings_modal)).close(cx);
                     continue;
                 }
-                Some(RoomSettingsAction::LeaveRoom { room_id }) => {
+                Some(RoomSettingsAction::LeaveRoom { room_id, is_space }) => {
                     let room_id = room_id.clone();
                     let rooms_list = cx.get_global::<RoomsListRef>().clone();
                     let room_name_id = rooms_list.get_room_name(&room_id)
                         .unwrap_or_else(|| RoomNameId::from(
                             (matrix_sdk::RoomDisplayName::Empty, room_id.clone())
                         ));
-                    cx.action(JoinLeaveRoomModalAction::Open {
-                        kind: JoinLeaveModalKind::LeaveRoom(BasicRoomDetails::Name(room_name_id)),
-                        show_tip: false,
-                    });
+                    let details = BasicRoomDetails::Name(room_name_id);
+                    // Leaving a space also leaves the rooms joined inside it, which is
+                    // a different backend path than leaving a single room.
+                    let kind = match (*is_space, rooms_list.get_space_request_sender()) {
+                        (true, Some(space_request_sender)) => JoinLeaveModalKind::LeaveSpace {
+                            details,
+                            space_request_sender,
+                        },
+                        _ => JoinLeaveModalKind::LeaveRoom(details),
+                    };
+                    cx.action(JoinLeaveRoomModalAction::Open { kind, show_tip: false });
                     self.ui.modal(cx, ids!(room_settings_modal)).close(cx);
                     continue;
                 }
@@ -2062,7 +2253,14 @@ impl MatchEvent for App {
                 // response if `fetched.room_id` isn't the room it currently shows
                 // (P1-B: stale/out-of-order fetch guard).
                 self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
-                    .apply_fetched_settings(cx, &fetched.room_id, fetched.topic.clone(), fetched.is_public);
+                    .apply_fetched_settings(
+                        cx,
+                        &fetched.room_id,
+                        fetched.topic.clone(),
+                        fetched.is_public,
+                        fetched.join_rule,
+                        fetched.can_change_join_rule,
+                    );
                 self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
                     .apply_alias_settings(
                         cx,
@@ -2134,6 +2332,13 @@ impl MatchEvent for App {
             }
 
             // Handle RoomAvatarUploadedAction — refresh the avatar widget.
+            // Handle the settings dialog's member list arriving.
+            if let Some(fetched) = action.downcast_ref::<RoomMemberListFetchedAction>() {
+                self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
+                    .apply_member_list(cx, fetched.members.clone());
+                continue;
+            }
+
             if let Some(uploaded) = action.downcast_ref::<RoomAvatarUploadedAction>() {
                 self.ui.room_settings_modal(cx, ids!(room_settings_modal_inner))
                     .apply_avatar(cx, &uploaded.image_data);
@@ -2142,7 +2347,11 @@ impl MatchEvent for App {
 
             // Handle RoomContextMenuAction::OpenRoomSettings.
             if let Some(RoomContextMenuAction::OpenRoomSettings(room_id)) = action.downcast_ref::<RoomContextMenuAction>() {
-                cx.action(RoomSettingsAction::Open { room_id: room_id.clone() });
+                cx.action(RoomSettingsAction::Open {
+                    room_id: room_id.clone(),
+                    room_name: None,
+                    is_space: false,
+                });
                 continue;
             }
 
@@ -2168,8 +2377,9 @@ impl MatchEvent for App {
             }
 
             match action.downcast_ref() {
-                Some(CreateRoomModalAction::Open { parent_space_id }) => {
-                    self.ui.create_room_modal(cx, ids!(create_room_modal_inner)).show(cx, parent_space_id.clone());
+                Some(CreateRoomModalAction::Open { parent_space_id, create_space }) => {
+                    self.ui.create_room_modal(cx, ids!(create_room_modal_inner))
+                        .show(cx, parent_space_id.clone(), *create_space);
                     self.ui.modal(cx, ids!(create_room_modal)).open(cx);
                     continue;
                 }
@@ -2407,6 +2617,11 @@ impl AppMain for App {
         crate::join_leave_room_modal::script_mod(vm);
         crate::verification_modal::script_mod(vm);
         crate::profile::script_mod(vm);
+        // HomeScreen's DSL references AgentOpsPanel, so it must be registered first.
+        #[cfg(feature = "agent_chat")]
+        crate::agent_ops::script_mod(vm);
+        #[cfg(not(feature = "agent_chat"))]
+        crate::agent_ops_dummy::script_mod(vm);
         crate::home::script_mod(vm);
         crate::login::script_mod(vm);
         crate::register::script_mod(vm);
@@ -2426,6 +2641,11 @@ impl AppMain for App {
         }
 
         self.handle_ui_zoom_shortcuts(cx, event);
+
+        // Space/Enter on a Tab-focused button. Must run before the tree handles
+        // the event, so the synthesized click lands in the same `Event::Actions`
+        // batch a real click would have.
+        activate_focused_button(cx, &self.ui, event);
 
         // Forward events to the MatchEvent trait implementation.
         self.match_event(cx, event);
@@ -2752,6 +2972,17 @@ impl App {
             for (room_name_id, avatar) in room_items {
                 results.push(RoomFilterResultTarget::LocalRoom { room_name_id, avatar });
             }
+
+            // Re-attach the directory hits for this exact query. Local matches
+            // are recomputed every time (rooms may have been joined or left),
+            // but the remote ones are carried over rather than silently
+            // dropped — the user asked for them, and asking again costs another
+            // round-trip.
+            if let Some((query, remote)) = self.last_remote_search.as_ref() {
+                if query == keywords {
+                    results.extend(remote.iter().cloned());
+                }
+            }
         }
 
         if keywords.is_empty() {
@@ -2831,16 +3062,8 @@ impl App {
             room_to_close,
         );
 
-        // Before we navigate to the room, if a non-room tab is currently shown
-        // (AddRoom, or Settings — e.g. tapping "Open chat" on a registered agent
-        // in Settings ▸ Labs), programmatically navigate to the Home tab so the
-        // actual room becomes visible. On mobile the pushed StackNavigation view
-        // covers everything regardless; but on desktop the layout is driven by
-        // `selected_tab`, so without this the room opens in the dock *behind* the
-        // still-shown Settings page and nothing appears to happen.
-        if matches!(self.app_state.selected_tab, SelectedTab::AddRoom | SelectedTab::Settings) {
-            cx.action(NavigationBarAction::GoToHome);
-        }
+        // HomeScreen owns top-level navigation state and normalizes every
+        // RoomsListAction::Selected before the desktop Dock handles it.
         cx.widget_action(
             self.ui.widget_uid(), 
             RoomsListAction::Selected(new_selected_room),
@@ -2879,6 +3102,78 @@ impl App {
         (Self::ROOM_VIEW_IDS[index], Self::ROOM_SCREEN_IDS[index])
     }
 
+    fn room_screen_id_for_view(view_id: LiveId) -> Option<LiveId> {
+        Self::ROOM_VIEW_IDS
+            .iter()
+            .position(|candidate| *candidate == view_id)
+            .map(|index| Self::ROOM_SCREEN_IDS[index])
+    }
+
+    /// Purges all top-level UI state for a room this user is no longer in,
+    /// whether they left it locally or were kicked/banned remotely:
+    /// unbinds bots, removes its tabs from all saved dock states, clears the
+    /// selected room if it was this one, persists the app state if anything
+    /// changed, and closes any open dock tabs for it.
+    fn purge_room_ui_state(&mut self, cx: &mut Cx, room_id: &OwnedRoomId) {
+        self.app_state
+            .bot_settings
+            .set_room_bound(room_id.clone(), None, false);
+
+        let removed_from_home = self.app_state.saved_dock_state_home.remove_room_id(room_id);
+        let removed_from_spaces: usize = self.app_state.saved_dock_state_per_space
+            .values_mut()
+            .map(|saved| saved.remove_room_id(room_id))
+            .sum();
+        let removed_tabs = removed_from_home + removed_from_spaces;
+        let mut cleared_selected_room = false;
+
+        // Drop the room from the mobile back stack too, so navigating back
+        // can never land on a room this user is no longer in.
+        self.mobile_room_nav_stack.retain(|stacked| stacked.room_id() != room_id);
+
+        if self.app_state.selected_room.as_ref().is_some_and(|selected| selected.room_id() == room_id) {
+            // The user may be viewing this room right now (on Mobile), or the
+            // hidden mobile view stack may still contain it (on Desktop after a
+            // breakpoint change); pop the navigation stack back to the root
+            // regardless of breakpoint — at root, `pop()` is a harmless no-op.
+            // (`pop()` pops all the way back to the root view, matching the
+            // logical stack clear.)
+            //
+            // StackNavigation's `pop()` silently no-ops while a transition
+            // animation is in flight, which would leave the removed room as the
+            // current view indefinitely; mark the pop as pending so it gets
+            // retried once the current transition finishes.
+            self.ui.stack_navigation(cx, ids!(view_stack)).pop(cx);
+            self.pending_room_nav_pop = true;
+            self.mobile_room_nav_stack.clear();
+            self.app_state.selected_room = None;
+            cleared_selected_room = true;
+        }
+        if removed_tabs > 0 || cleared_selected_room {
+            if let Some(user_id) = current_user_id() {
+                if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
+                    error!("Failed to persist app state after being removed from room {room_id}. Error: {e}");
+                }
+            }
+        }
+
+        cx.action(MainDesktopUiAction::CloseRoomTabs { room_id: room_id.clone() });
+    }
+
+    fn set_mobile_room_view_updates_enabled(
+        &mut self,
+        cx: &mut Cx,
+        view_id: LiveId,
+        enabled: bool,
+    ) {
+        let Some(room_screen_id) = Self::room_screen_id_for_view(view_id) else {
+            return;
+        };
+        self.ui
+            .room_screen(cx, &[room_screen_id])
+            .set_timeline_updates_enabled(enabled);
+    }
+
     /// Pushes the appropriate StackNavigationView for the given `SelectedRoom`,
     /// configuring the view's content widget and header title.
     ///
@@ -2889,8 +3184,12 @@ impl App {
     /// screen configuration are effectively no-ops — MainDesktopUI handles
     /// room display via dock tabs instead.
     fn push_selected_room_view(&mut self, cx: &mut Cx, selected_room: SelectedRoom) {
+        let view_stack = self.ui.stack_navigation(cx, ids!(view_stack));
+        if !effective_is_desktop(cx) && view_stack.is_transitioning() {
+            return;
+        }
         // Use the actual StackNavigation depth to pick the next room view slot.
-        let new_depth = self.ui.stack_navigation(cx, ids!(view_stack)).depth();
+        let new_depth = view_stack.depth();
         let same_selected_room = self.app_state.selected_room.as_ref()
             .is_some_and(|current| current == &selected_room);
         if same_selected_room && new_depth > 0 {
@@ -2948,6 +3247,15 @@ impl App {
         self.app_state.selected_room = Some(selected_room);
 
         // Push the view onto the mobile navigation stack.
+        // This is a genuine mobile-stack navigation, superseding any pending
+        // pop from an earlier room removal — that pop must not fire later and
+        // undo this navigation. Exception: if a transition is in flight (only
+        // reachable on Desktop; Mobile early-returned above), this push will
+        // itself be swallowed by StackNavigation, so a pending pop must remain
+        // pending to clean up whatever the hidden stack settles on.
+        if !view_stack.is_transitioning() {
+            self.pending_room_nav_pop = false;
+        }
         self.ui.stack_navigation(cx, ids!(view_stack)).push(cx, view_id);
         self.ui.redraw(cx);
     }
@@ -2961,6 +3269,11 @@ impl App {
 pub struct AppState {
     /// The currently-selected room, which is highlighted (selected) in the RoomsList
     /// and considered "active" in the main rooms screen.
+    ///
+    /// Tolerant of per-field deser failures (e.g. an incompatible format from a
+    /// previous version): a bad value here falls back to `None` instead of
+    /// invalidating the entire persisted `AppState`.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub selected_room: Option<SelectedRoom>,
     /// The currently-selected navigation tab: defines which top-level view is shown.
     ///
@@ -2972,31 +3285,36 @@ pub struct AppState {
     #[serde(skip)]
     pub selected_tab: SelectedTab,
     /// The saved "snapshot" of the dock's UI layout/state for the main "all rooms" home view.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub saved_dock_state_home: SavedDockState,
     /// The saved "snapshot" of the dock's UI layout/state for each space,
     /// keyed by the space ID.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub saved_dock_state_per_space: HashMap<OwnedRoomId, SavedDockState>,
     /// Whether a user is currently logged in to Robrix or not.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub logged_in: bool,
     /// The preferred app language.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub app_language: AppLanguage,
     /// App-wide UI/behavior preferences.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub app_prefs: AppPreferences,
     /// Whether the app is currently showing the login screen for adding another account.
     /// This is transient state and not persisted.
     #[serde(skip)]
     pub adding_account: bool,
     /// Local configuration and UI state for bot-assisted room binding.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub bot_settings: BotSettingsState,
     /// Global source of truth for agent identities, keyed by agent MXID.
     ///
     /// Persisted per Matrix account. Old saved states that predate this field
     /// deserialize to an empty registry via `#[serde(default)]`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub agent_registry: AgentRegistry,
     /// Translation API configuration.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub translation: crate::room::translation::TranslationConfig,
 }
 
@@ -3656,6 +3974,25 @@ impl SelectedRoom {
         }
     }
 
+    /// Upgrades this room from an invite to a joined space
+    /// if its `room_id` matches that of the given `space_name_id`.
+    ///
+    /// Returns `true` if the room was an `InvitedRoom` with the same `room_id`
+    /// that was successfully upgraded to a `Space`; otherwise, returns `false`.
+    pub fn upgrade_invite_to_space(&mut self, space_name_id: &RoomNameId) -> bool {
+        match self {
+            SelectedRoom::InvitedRoom { room_name_id }
+                if room_name_id.room_id() == space_name_id.room_id() =>
+            {
+                *self = SelectedRoom::Space {
+                    space_name_id: space_name_id.clone(),
+                };
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Returns the `LiveId` of the room tab corresponding to this `SelectedRoom`.
     pub fn tab_id(&self) -> LiveId {
         match self {
@@ -3781,11 +4118,27 @@ impl Eq for SelectedRoom {}
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentCapability, AgentEntry, AgentFramework, AgentRegistry, AppState, BotSettingsState,
-        RoomBotBindingState, SavedDockState, SelectedRoom, TrustTier,
+        AgentCapability, AgentEntry, AgentFramework, AgentRegistry, App, AppState,
+        BotSettingsState, RoomBotBindingState, SavedDockState, SelectedRoom, TrustTier,
     };
     use crate::utils::RoomNameId;
     use matrix_sdk::{RoomDisplayName, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, UserId}};
+
+    #[test]
+    fn mobile_room_view_ids_map_to_their_room_screens() {
+        assert_eq!(
+            App::room_screen_id_for_view(App::ROOM_VIEW_IDS[0]),
+            Some(App::ROOM_SCREEN_IDS[0]),
+        );
+        assert_eq!(
+            App::room_screen_id_for_view(App::ROOM_VIEW_IDS[1]),
+            Some(App::ROOM_SCREEN_IDS[1]),
+        );
+        assert_eq!(
+            App::room_screen_id_for_view(App::ROOM_SCREEN_IDS[0]),
+            None,
+        );
+    }
 
     #[test]
     fn test_agent_registry_serde_roundtrip() {
@@ -4263,6 +4616,9 @@ pub enum AppStateAction {
     /// The given room has successfully been upgraded from being displayed
     /// as an InviteScreen to a RoomScreen.
     UpgradedInviteToJoinedRoom(OwnedRoomId),
+    /// The given space has successfully been upgraded from being displayed
+    /// as an InviteScreen to a SpaceLobbyScreen.
+    UpgradedInviteToSpace(RoomNameId),
     /// The given app state was loaded from persistent storage
     /// and is ready to be restored.
     RestoreAppStateFromPersistentState(Box<AppState>),
@@ -4295,6 +4651,13 @@ pub enum AppStateAction {
         room_to_close: Option<OwnedRoomId>,
         destination_room: BasicRoomDetails,
     },
+    /// The given room was removed remotely (this user was kicked or banned),
+    /// so all of its top-level UI state (dock tabs, selection) must be purged.
+    RoomRemovedRemotely(OwnedRoomId),
+    /// Retry a mobile nav-stack pop that was swallowed by an in-flight
+    /// transition animation. Posted (deferred) when a transition finishes
+    /// while `pending_room_nav_pop` is set.
+    RetryPendingRoomNavPop,
     None,
 }
 

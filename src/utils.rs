@@ -16,6 +16,23 @@ use crate::{
 /// The scheme for GEO links, used for location messages in Matrix.
 pub const GEO_URI_SCHEME: &str = "geo:";
 
+/// serde `deserialize_with` helper: falls back to `T::default()` if the stored
+/// value for this field is present but unparseable/incompatible (e.g. a removed
+/// enum variant, or a type that changed shape across versions), instead of
+/// failing the deserialization of the entire enclosing struct.
+///
+/// Pair this with `#[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]`
+/// on a field so that one corrupt/outdated field can't cause the whole
+/// persisted struct (e.g. `AppState`) to be discarded on load.
+pub fn deserialize_or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
 
 /// A wrapper type that implements the `Debug` trait for non-`Debug` types.
 pub struct DebugWrapper<T>(T);
@@ -110,6 +127,24 @@ pub fn is_animated_image_filename(name: &str) -> bool {
 /// PNG or JPEG, using the `imghdr` library to determine which format it is.
 ///
 /// Returns an error if either load fails or if the image format is unknown.
+/// Loads an avatar image into `img`, decoding OFF the UI thread via makepad's
+/// async image cache (ported from upstream robrix 6d2563a). The cache key is
+/// the data allocation's address: avatar bytes live in `Arc<[u8]>`s held by
+/// the avatar cache, so the same avatar re-shown on scroll recycling hits the
+/// already-decoded texture instead of re-decoding synchronously per row.
+pub fn load_avatar_image_async(
+    img: &ImageRef,
+    cx: &mut Cx,
+    data: &std::sync::Arc<[u8]>,
+) -> Result<(), ImageError> {
+    let key = format!("avatar://{:p}", data.as_ptr());
+    img.load_image_from_data_async(
+        cx,
+        std::path::Path::new(&key),
+        std::sync::Arc::new(data.to_vec()),
+    )
+}
+
 pub fn load_png_or_jpg(img: &ImageRef, cx: &mut Cx, data: &[u8]) -> Result<(), ImageError> {
 
     fn attempt_both(img: &ImageRef, cx: &mut Cx, data: &[u8]) -> Result<(), ImageError> {
@@ -911,6 +946,20 @@ impl RoomNameId {
             room.display_name().await.unwrap_or(RoomDisplayName::Empty),
             room.room_id().to_owned(),
         )
+    }
+
+    /// Returns an efficient displayable/string representation.
+    ///
+    /// Prefer this over `.to_string()` in hot paths (e.g. per-item draw calls),
+    /// since it borrows the underlying name instead of always allocating a new `String`.
+    pub fn display(&self) -> Cow<'_, str> {
+        match &self.display_name {
+            RoomDisplayName::Named(n)
+            | RoomDisplayName::Aliased(n)
+            | RoomDisplayName::Calculated(n) => Cow::Borrowed(n.as_str()),
+            RoomDisplayName::Empty => Cow::Owned(format!("Room ID {}", self.room_id)),
+            RoomDisplayName::EmptyWas(name) => Cow::Owned(format!("Empty Room (was \"{name}\")")),
+        }
     }
 
     /// Get a reference to the underlying display name.

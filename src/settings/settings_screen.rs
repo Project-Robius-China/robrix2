@@ -646,7 +646,7 @@ script_mod! {
                                 draw_text +: {
                                     text_style: REGULAR_TEXT { font_size: 10.5 }
                                     color: (RBX_LINK),
-                                    color_hover: (COLOR_LINK_HOVER),
+                                    color_hover: (RBX_LINK_HOVER),
                                 }
                                 text: "https://github.com/Project-Robius-China/robrix2"
                             }

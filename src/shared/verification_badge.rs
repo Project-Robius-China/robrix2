@@ -64,7 +64,7 @@ script_mod! {
             draw_icon +: {
                 svg: (mod.widgets.VERIFICATION_UNK),
                 get_color: fn() -> vec4 {
-                    return #x888888;
+                    return (RBX_ICON_NEUTRAL);
                 }
             }
         }

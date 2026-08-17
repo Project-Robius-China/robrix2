@@ -1,0 +1,17 @@
+# Robrix
+
+This package installs the native Robrix desktop application from the
+[`@TAG@` GitHub release](https://github.com/@REPOSITORY@/releases/tag/@TAG@).
+The downloaded DMG, DEB, or NSIS installer is verified with a release-pinned
+SHA-256 checksum before it runs.
+
+```sh
+npm install --global robrix
+```
+
+The package supports macOS on Apple Silicon and Intel, Debian/Ubuntu on arm64
+and x86-64, and Windows on x86-64 (including Windows on ARM emulation).
+
+Set `ROBRIX_NPM_SKIP_INSTALL=1` to install only the npm wrapper. You can then
+run `robrix-install` later. Run `robrix-install --dry-run` to inspect the
+artifact selected for the current machine without downloading or installing it.

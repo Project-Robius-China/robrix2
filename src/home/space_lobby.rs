@@ -6,6 +6,7 @@
 //!    that allows the user to click on it to show the `SpaceLobby`.
 //!
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use imbl::Vector;
@@ -13,7 +14,7 @@ use makepad_widgets::*;
 use makepad_widgets::animator::Animate;
 use matrix_sdk::{RoomDisplayName, RoomState, ruma::OwnedRoomId};
 use matrix_sdk_ui::spaces::SpaceRoom;
-use ruma::{OwnedRoomAliasId, room::JoinRuleSummary};
+use ruma::{OwnedRoomAliasId, room::{JoinRuleSummary, RoomType}};
 use tokio::sync::mpsc::UnboundedSender;
 use crate::shared::avatar::AvatarState;
 use crate::shared::expand_arrow::ExpandArrow;
@@ -24,9 +25,12 @@ const TREE_INDENT_WIDTH: f64 = 44.0;
 use crate::{
     app::{AppState, AppStateAction},
     avatar_cache::{self, AvatarCacheEntry},
+    app::ConfirmDeleteAction,
     home::{
-        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomModalAction},
+        add_existing_room_modal::AddExistingRoomModalAction,
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomModalAction, refresh_space_children},
         invite_modal::InviteModalAction,
+        room_settings_modal::RoomSettingsAction,
         rooms_list::RoomsListRef,
     },
     i18n::{AppLanguage, tr_fmt, tr_key},
@@ -34,6 +38,8 @@ use crate::{
     room::BasicRoomDetails,
     shared::{
         avatar::{AvatarWidgetExt, AvatarWidgetRefExt},
+        confirmation_modal::ConfirmationModalContent,
+        popup_list::{PopupKind, enqueue_popup_notification},
         room_filter_input_bar::RoomFilterInputBarWidgetExt,
     },
     sliding_sync::{MatrixRequest, submit_async_request},
@@ -64,11 +70,11 @@ script_mod! {
             hover: instance(0.0)
             active: instance(0.0)
 
-            color: instance(COLOR_NAVIGATION_TAB_BG)
-            color_hover: instance(COLOR_NAVIGATION_TAB_BG_HOVER)
-            color_active: instance(COLOR_ACTIVE_PRIMARY)
+            color: instance(RBX_BG_SURFACE)
+            color_hover: instance(RBX_BG_HOVER)
+            color_active: instance(RBX_BG_SELECTED)
             border_size: uniform(0.0)
-            border_color: instance(#0000)
+            border_color: instance(RBX_TRANSPARENT)
             border_radius: uniform(4.0)
             border_inset: uniform(vec4(0.0))
 
@@ -113,9 +119,9 @@ script_mod! {
                 hover: instance(0.0)
                 down: instance(0.0)
 
-                color: (COLOR_TEXT)
-                color_hover: instance(COLOR_TEXT)
-                color_active: instance(COLOR_TEXT)
+                color: (RBX_FG_PRIMARY)
+                color_hover: instance(RBX_FG_PRIMARY)
+                color_active: instance(RBX_FG_PRIMARY)
 
                 get_color: fn() -> vec4 {
                     return mix(
@@ -142,9 +148,9 @@ script_mod! {
                 hover: instance(0.0)
                 down: instance(0.0)
 
-                color: (COLOR_TEXT)
-                color_hover: instance(COLOR_TEXT)
-                color_active: instance(COLOR_TEXT)
+                color: (RBX_FG_PRIMARY)
+                color_hover: instance(RBX_FG_PRIMARY)
+                color_active: instance(RBX_FG_PRIMARY)
 
                 text_style: REGULAR_TEXT {font_size: 11},
 
@@ -226,6 +232,7 @@ script_mod! {
             level: 0.0
             is_last: 0.0
             parent_mask: 0.0
+            line_color: (RBX_DIVIDER)
 
             pixel: fn() {
                 let pos = self.pos * self.rect_size;
@@ -249,7 +256,7 @@ script_mod! {
                         if mask_bit > 0.5 {
                             // Draw full vertical line
                             if abs(pos.x - (f32(i) * indent + half_indent)) < half_line && pos.y < self.rect_size.y {
-                                c = #888;
+                                c = self.line_color;
                                 break;
                             }
                         }
@@ -264,13 +271,13 @@ script_mod! {
                         // Extend horizontal line to the center of the expand_icon:
                         // spacer_end + left_padding(8) - expand_margin_left(6) + expand_width(16)/2 = +10
                         if abs(pos.y - hy) < half_line && pos.x > (f32(i) * indent + half_indent) && pos.x < ((f32(i) + 1.0) * indent + 10.0) {
-                            c = #888;
+                            c = self.line_color;
                             break;
                         }
                         
                         // Vertical line (L shape)
                         if abs(pos.x - (f32(i) * indent + half_indent)) < half_line && pos.y < (self.rect_size.y * (1.0 - 0.5 * self.is_last)) {
-                            c = #888;
+                            c = self.line_color;
                             break;
                         }
                     }
@@ -290,8 +297,8 @@ script_mod! {
         show_bg: true
         draw_bg +: {
             hover: instance(0.0)
-            color: instance(#fff)
-            color_hover: instance(#f5f5f5)
+            color: instance(RBX_BG_SURFACE)
+            color_hover: instance(RBX_BG_HOVER)
             pixel: fn() {
                 return mix(self.color, self.color_hover, self.hover);
             }
@@ -314,7 +321,7 @@ script_mod! {
                 width: 16,
                 height: 16,
                 margin: Inset{ left: -6, right: 4 }
-                draw_bg.color: #888
+                draw_bg.color: (RBX_FG_TERTIARY)
                 draw_bg.border_radius: 1.5 // less rounded
             }
 
@@ -334,26 +341,25 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     max_lines: 2
                     text_overflow: Ellipsis
-                    draw_text +: { text_style: REGULAR_TEXT {font_size: 10.5}, color: #1a1a1a }
+                    draw_text +: { text_style: RBX_TEXT_BODY {}, color: (RBX_FG_PRIMARY) }
                 }
 
                 suggested_tag := RoundedView {
                     visible: false
                     width: Fit, height: Fit,
-                    padding: Inset { left: 6, right: 6, top: 3, bottom: 3 }
+                    padding: Inset { left: 9, right: 9, top: 3, bottom: 3 }
                     show_bg: true
                     draw_bg +: {
-                        color: #E8F4FD
-                        border_radius: 3.0
-                        border_size: 0.75
-                        border_color: (COLOR_INFO_BLUE)
+                        color: (RBX_ACCENT_SOFT)
+                        border_radius: (RBX_RADIUS_PILL)
+                        border_size: 0.0
                     }
                     suggested_label := Label {
                         padding: 0
                         margin: 0
                         width: Fit, height: Fit,
                         text: "Suggested"
-                        draw_text +: { text_style: REGULAR_TEXT {font_size: 8.5}, color: (COLOR_INFO_BLUE) }
+                        draw_text +: { text_style: RBX_TEXT_BADGE {}, color: (RBX_ACCENT) }
                     }
                 }
 
@@ -364,7 +370,7 @@ script_mod! {
                     flow: Flow.Right{wrap: true}
                     max_lines: 2
                     text_overflow: Ellipsis
-                    draw_text +: { text_style: REGULAR_TEXT {font_size: 8.5}, color: #737373 }
+                    draw_text +: { text_style: RBX_TEXT_META {}, color: (RBX_FG_SECONDARY) }
                 }
             }
         }
@@ -381,9 +387,10 @@ script_mod! {
 
             show_bg: true
             draw_bg +: {
-                color: #f5f5f5
-                border_radius: 4.0
-                border_size: 0
+                color: (RBX_BG_SURFACE)
+                border_radius: (RBX_RADIUS_SM)
+                border_size: 1.0
+                border_color: (RBX_STROKE_SOFT)
             }
 
             join_button := RobrixPositiveIconButton {
@@ -405,6 +412,17 @@ script_mod! {
             }
 
             leave_button := RobrixNegativeIconButton {
+                width: Fit,
+                padding: 8
+                spacing: 0
+                icon_walk: Walk{width: 0, height: 0}
+                draw_text.text_style: REGULAR_TEXT {font_size: 9.5}
+                text: ""
+            }
+
+            // Unlinks this child from the space. Only shown to users who are
+            // allowed to change the parent space's children.
+            remove_from_space_button := RobrixNegativeIconButton {
                 width: Fit,
                 padding: 8
                 spacing: 0
@@ -449,7 +467,7 @@ script_mod! {
             width: 18,
             height: 18,
             draw_bg +: {
-                color: (COLOR_ACTIVE_PRIMARY)
+                color: (RBX_ACCENT)
                 border_size: 2.5
             }
         }
@@ -460,8 +478,8 @@ script_mod! {
             flow: Flow.Right{wrap: true},
             align: Align{ x: 0.5, y: 0.5 }
             draw_text +: {
-                color: #737373,
-                text_style: REGULAR_TEXT {font_size: 10}
+                color: (RBX_FG_SECONDARY),
+                text_style: RBX_TEXT_BODY {}
             }
             text: ""
         }
@@ -489,7 +507,7 @@ script_mod! {
                 height: 14,
                 margin: Inset{left: 10, right: 4}
                 draw_bg +: {
-                    color: (COLOR_ACTIVE_PRIMARY)
+                    color: (RBX_ACCENT)
                     border_size: 2.0
                 }
             }
@@ -498,8 +516,8 @@ script_mod! {
                 width: Fit,
                 height: Fit,
                 draw_text +: {
-                    text_style: REGULAR_TEXT {font_size: 9},
-                    color: #888,
+                    text_style: RBX_TEXT_META {},
+                    color: (RBX_FG_TERTIARY),
                 }
                 text: "Loading..."
             }
@@ -513,7 +531,7 @@ script_mod! {
             height: 14,
             margin: Inset{left: 8, right: 10}
             draw_bg +: {
-                color: (COLOR_ACTIVE_PRIMARY)
+                color: (RBX_ACCENT)
                 border_size: 2.0
             }
         }
@@ -522,8 +540,8 @@ script_mod! {
             width: Fit,
             height: Fit,
             draw_text +: {
-                text_style: REGULAR_TEXT {font_size: 9},
-                color: #888,
+                text_style: RBX_TEXT_META {},
+                color: (RBX_FG_TERTIARY),
             }
             text: ""
         }
@@ -538,7 +556,7 @@ script_mod! {
 
         show_bg: true
         draw_bg +: {
-            color: COLOR_PRIMARY
+            color: (RBX_BG_SURFACE)
         }
 
         // Header with parent space info
@@ -549,7 +567,7 @@ script_mod! {
             padding: Inset{left: 16, right: 16, top: 16, bottom: 8}
 
             show_bg: true,
-            draw_bg.color: (COLOR_BG_PREVIEW)
+            draw_bg.color: (RBX_BG_SURFACE)
 
             space_info_row := View {
                 width: Fill,
@@ -564,8 +582,8 @@ script_mod! {
                     flow: Right, // do not wrap
                     margin: Inset{left: 2}
                     draw_text +: {
-                        text_style: REGULAR_TEXT {font_size: 10},
-                        color: #737373,
+                        text_style: RBX_TEXT_META {},
+                        color: (RBX_FG_SECONDARY),
                     }
                     text: "Welcome to the space:"
                 }
@@ -597,8 +615,8 @@ script_mod! {
                     flow: Right, // do not wrap
                     margin: Inset{top: 4} // vertically center-align with the avatar
                     draw_text +: {
-                        text_style: TITLE_TEXT {font_size: 14},
-                        color: #1a1a1a,
+                        text_style: RBX_TEXT_SECTION_TITLE {},
+                        color: (RBX_FG_PRIMARY),
                     }
                     text: ""
                 }
@@ -613,7 +631,39 @@ script_mod! {
                     text: ""
                 }
 
-                invite_button := RobrixPositiveIconButton {
+                // Links one of the user's existing rooms into this space.
+                add_existing_room_button := RobrixNeutralIconButton {
+                    width: Fit
+                    align: Align{x: 0.5, y: 0.5}
+                    margin: Inset{left: 6}
+                    padding: 12,
+                    draw_icon.svg: (ICON_LINK)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
+                    text: ""
+                }
+
+                // Creates a nested space under the space this lobby is showing.
+                create_subspace_button := RobrixNeutralIconButton {
+                    width: Fit
+                    align: Align{x: 0.5, y: 0.5}
+                    margin: Inset{left: 6}
+                    padding: 12,
+                    draw_icon.svg: (ICON_HIERARCHY)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
+                    text: ""
+                }
+
+                settings_button := RobrixNeutralIconButton {
+                    width: Fit
+                    align: Align{x: 0.5, y: 0.5}
+                    margin: Inset{left: 6}
+                    padding: 12,
+                    draw_icon.svg: (ICON_SETTINGS)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
+                    text: ""
+                }
+
+                invite_button := RobrixNeutralIconButton {
                     width: Fit
                     align: Align{x: 0.5, y: 0.5}
                     margin: Inset{left: 6}
@@ -622,7 +672,29 @@ script_mod! {
                     icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
                     text: ""
                 }
+
+                // Leaving is available to every member, not just those who can
+                // administer the space — otherwise a plain member who joined has
+                // no way back out. Extra left margin separates it from the
+                // constructive actions so it isn't hit by accident.
+                leave_space_button := RobrixNegativeIconButton {
+                    width: Fit
+                    align: Align{x: 0.5, y: 0.5}
+                    margin: Inset{left: 16}
+                    padding: 12,
+                    draw_icon.svg: (ICON_LOGOUT)
+                    icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -1} }
+                    text: ""
+                }
             }
+        }
+
+        // Hairline under the header: it shares the tree's surface colour, so
+        // without this the two areas bleed into one another.
+        header_divider := SolidView {
+            width: Fill, height: 1.0
+            show_bg: true
+            draw_bg.color: (RBX_DIVIDER)
         }
 
         // The hierarchical tree list
@@ -739,6 +811,8 @@ pub struct DrawTreeLine {
     #[live] level: f32,
     #[live] is_last: f32,
     #[live] parent_mask: f32,
+    /// The colour of the connector lines, so the shader doesn't hard-code grey.
+    #[live] line_color: Vec4,
 }
 
 #[derive(Script, ScriptHook, Widget)]
@@ -788,6 +862,24 @@ pub struct SubspaceEntry {
     #[rust] is_expanded: bool,
 }
 
+/// The result of changing which rooms a space contains, i.e. of adding or
+/// removing an `m.space.child` link.
+///
+/// `error` is `None` on success; these are emitted by the background Matrix task.
+#[derive(Debug)]
+pub enum SpaceChildAction {
+    Added {
+        space_id: OwnedRoomId,
+        child: RoomNameId,
+        error: Option<String>,
+    },
+    Removed {
+        space_id: OwnedRoomId,
+        child: RoomNameId,
+        error: Option<String>,
+    },
+}
+
 /// Actions emitted when a `SubspaceEntry` or its buttons are clicked.
 ///
 /// These *are* all widget actions.
@@ -798,6 +890,9 @@ pub enum SubspaceEntryAction {
     JoinClicked  { room_id: OwnedRoomId, is_space: bool },
     LeaveClicked { room_id: OwnedRoomId, is_space: bool },
     ViewClicked  { room_id: OwnedRoomId },
+    /// Unlink this child from the space whose lobby is being shown.
+    /// This does not leave the room; it only removes it from the space.
+    RemoveFromSpaceClicked { room_id: OwnedRoomId, is_space: bool },
     #[default]
     None,
 }
@@ -947,6 +1042,18 @@ impl Widget for SubspaceEntry {
                     );
                 }
             }
+            let remove_from_space_button = self.view
+                .child_by_path(ids!(buttons_view.remove_from_space_button))
+                .as_button();
+            if remove_from_space_button.clicked(actions) {
+                if let Some(room_id) = self.room_id.clone() {
+                    remove_from_space_button.reset_hover(cx);
+                    cx.widget_action(
+                        self.widget_uid(),
+                        SubspaceEntryAction::RemoveFromSpaceClicked { room_id, is_space: self.is_space },
+                    );
+                }
+            }
         }
     }
 
@@ -1039,6 +1146,9 @@ enum TreeEntry {
     Item {
         /// The info needed to display this space or room.
         info: SpaceRoomInfo,
+        /// The space this entry is a direct child of. Needed to unlink it from
+        /// the right parent, since the tree can nest several spaces deep.
+        parent_space_id: OwnedRoomId,
         /// The nesting level (0 = direct child of the displayed space).
         level: usize,
         /// Whether this entry is the last child of its parent.
@@ -1089,7 +1199,10 @@ pub struct SpaceLobbyScreen {
 
     /// The current filter keywords entered by the user, if any.
     #[rust] filter_keywords: String,
+    /// Spaces where this user may add or remove children.
     #[rust] creatable_spaces: HashSet<OwnedRoomId>,
+    /// Spaces whose own settings (name/topic/avatar) this user may edit.
+    #[rust] manageable_spaces: HashSet<OwnedRoomId>,
 }
 
 impl Widget for SpaceLobbyScreen {
@@ -1113,8 +1226,11 @@ impl Widget for SpaceLobbyScreen {
 
         if let Event::Actions(actions) = event {
             for action in actions {
-                if let Some(CreatableSpacesAction::Loaded { spaces }) = action.downcast_ref() {
+                if let Some(CreatableSpacesAction::Loaded { spaces, manageable_spaces }) = action.downcast_ref() {
                     self.creatable_spaces = spaces.iter()
+                        .map(|space| space.room_id().clone())
+                        .collect();
+                    self.manageable_spaces = manageable_spaces.iter()
                         .map(|space| space.room_id().clone())
                         .collect();
                     self.sync_header_action_buttons(cx);
@@ -1155,11 +1271,45 @@ impl Widget for SpaceLobbyScreen {
                     _ => { }
                 }
 
-                if let Some(CreateRoomAction::Created { room_name_id, parent_space_id, space_link_error, .. }) = action.downcast_ref() {
+                // A space's children changed as a result of us adding or removing one.
+                if let Some(space_child_action) = action.downcast_ref::<SpaceChildAction>() {
+                    let (space_id, child, error, was_added) = match space_child_action {
+                        SpaceChildAction::Added { space_id, child, error } => (space_id, child, error, true),
+                        SpaceChildAction::Removed { space_id, child, error } => (space_id, child, error, false),
+                    };
+                    let child_name = child.to_string();
+                    let (message, kind) = match error {
+                        None => (
+                            tr_fmt(app_language, if was_added {
+                                "space_lobby.popup.added_to_space"
+                            } else {
+                                "space_lobby.popup.removed_from_space"
+                            }, &[("child_name", child_name.as_str())]),
+                            PopupKind::Success,
+                        ),
+                        Some(error) => (
+                            tr_fmt(app_language, if was_added {
+                                "space_lobby.popup.add_to_space_failed"
+                            } else {
+                                "space_lobby.popup.remove_from_space_failed"
+                            }, &[("child_name", child_name.as_str()), ("error", error.as_str())]),
+                            PopupKind::Error,
+                        ),
+                    };
+                    enqueue_popup_notification(message, kind, Some(5.0));
+                    if error.is_none() {
+                        // The homeserver's hierarchy view is what the tree renders, so
+                        // re-fetch that space's children rather than editing it locally.
+                        refresh_space_children(cx, space_id);
+                    }
+                    continue;
+                }
+
+                if let Some(CreateRoomAction::Created { room_name_id, parent_space_id, space_link_error, is_space, .. }) = action.downcast_ref() {
                     if space_link_error.is_none()
                         && parent_space_id.as_ref() == self.space_name_id.as_ref().map(RoomNameId::room_id)
                     {
-                        self.insert_created_room_placeholder(cx, room_name_id);
+                        self.insert_created_room_placeholder(cx, room_name_id, *is_space);
                     }
                 }
 
@@ -1201,6 +1351,9 @@ impl Widget for SpaceLobbyScreen {
                             });
                         }
                     }
+                    SubspaceEntryAction::RemoveFromSpaceClicked { room_id, is_space } => {
+                        self.confirm_remove_from_space(cx, room_id, *is_space);
+                    }
                     SubspaceEntryAction::ViewClicked { room_id } => {
                         cx.action(AppStateAction::NavigateToRoom {
                             room_to_close: None,
@@ -1217,6 +1370,67 @@ impl Widget for SpaceLobbyScreen {
                 {
                     cx.action(CreateRoomModalAction::Open {
                         parent_space_id: Some(space_name_id.room_id().clone()),
+                        create_space: false,
+                    });
+                }
+            }
+
+            // Adding an existing room writes the same `m.space.child` state as
+            // creating one, so it is behind the same permission gate.
+            if self.view.button(cx, ids!(header.parent_space_row.add_existing_room_button)).clicked(actions) {
+                if self.can_create_room_in_current_space()
+                    && let Some(space_name_id) = self.space_name_id.clone()
+                {
+                    let existing_children = self.children_cache
+                        .get(space_name_id.room_id())
+                        .map(|children| children.iter().map(|c| c.room_id.clone()).collect())
+                        .unwrap_or_default();
+                    cx.action(AddExistingRoomModalAction::Open {
+                        space_name_id,
+                        existing_children,
+                    });
+                }
+            }
+
+            // Same permission gate as creating a room: adding a subspace also
+            // requires being able to send `m.space.child` in this space.
+            if self.view.button(cx, ids!(header.parent_space_row.create_subspace_button)).clicked(actions) {
+                if self.can_create_room_in_current_space()
+                    && let Some(space_name_id) = self.space_name_id.as_ref()
+                {
+                    cx.action(CreateRoomModalAction::Open {
+                        parent_space_id: Some(space_name_id.room_id().clone()),
+                        create_space: true,
+                    });
+                }
+            }
+
+            // Space settings reuse the room settings modal: a space is a room
+            // underneath, so name/topic/avatar/addresses are all the same state.
+            if self.view.button(cx, ids!(header.parent_space_row.settings_button)).clicked(actions) {
+                if self.can_manage_current_space()
+                    && let Some(space_name_id) = self.space_name_id.as_ref()
+                {
+                    cx.action(RoomSettingsAction::Open {
+                        room_id: space_name_id.room_id().clone(),
+                        room_name: Some(space_name_id.to_string()),
+                        is_space: true,
+                    });
+                }
+            }
+
+            // Leave the space (and the rooms joined inside it). Reuses the same
+            // confirmation + backend path as leaving a subspace from the tree.
+            if self.view.button(cx, ids!(header.parent_space_row.leave_space_button)).clicked(actions) {
+                if let (Some(space_name_id), Some(space_request_sender)) =
+                    (self.space_name_id.clone(), self.space_request_sender.clone())
+                {
+                    cx.action(JoinLeaveRoomModalAction::Open {
+                        kind: JoinLeaveModalKind::LeaveSpace {
+                            details: BasicRoomDetails::Name(space_name_id),
+                            space_request_sender,
+                        },
+                        show_tip: false,
                     });
                 }
             }
@@ -1264,8 +1478,16 @@ impl Widget for SpaceLobbyScreen {
         self.sync_header_action_buttons(cx);
         self.view.button(cx, ids!(header.parent_space_row.create_room_button))
             .set_text(cx, tr_key(app_language, "space_lobby.header.button.new_room"));
+        self.view.button(cx, ids!(header.parent_space_row.add_existing_room_button))
+            .set_text(cx, tr_key(app_language, "space_lobby.header.button.add_existing_room"));
+        self.view.button(cx, ids!(header.parent_space_row.create_subspace_button))
+            .set_text(cx, tr_key(app_language, "space_lobby.header.button.new_subspace"));
+        self.view.button(cx, ids!(header.parent_space_row.settings_button))
+            .set_text(cx, tr_key(app_language, "space_lobby.header.button.settings"));
         self.view.button(cx, ids!(header.parent_space_row.invite_button))
             .set_text(cx, tr_key(app_language, "space_lobby.header.button.invite"));
+        self.view.button(cx, ids!(header.parent_space_row.leave_space_button))
+            .set_text(cx, tr_key(app_language, "space_lobby.header.button.leave"));
         
         while let Some(widget_to_draw) = self.view.draw_walk(cx, scope, walk).step() {
             let portal_list_ref = widget_to_draw.as_portal_list();
@@ -1308,9 +1530,15 @@ impl Widget for SpaceLobbyScreen {
                     item
                 }
                 // Draw a regular entry
-                else if let Some(entry) = self.tree_entries.get_mut(item_id) {
+                else if let Some(show_remove_button) = self.tree_entries.get(item_id).map(|entry| match entry {
+                    // Unlinking a child edits the *parent* space's state, so the permission
+                    // that matters is the one on that parent (which may be a nested subspace).
+                    // Resolved before the mutable borrow of `tree_entries` below.
+                    TreeEntry::Item { parent_space_id, .. } => self.creatable_spaces.contains(parent_space_id),
+                    TreeEntry::Loading { .. } => false,
+                }) && let Some(entry) = self.tree_entries.get_mut(item_id) {
                     match entry {
-                        TreeEntry::Item { info, level, is_last, parent_mask } => {
+                        TreeEntry::Item { info, level, is_last, parent_mask, .. } => {
                             let show_join_button = !matches!(info.state, Some(RoomState::Joined));
                             let show_leave_button = !show_join_button;
                             let show_view_button = show_leave_button && !info.is_space();
@@ -1371,6 +1599,12 @@ impl Widget for SpaceLobbyScreen {
                             item.child_by_path(ids!(buttons_view.view_button)).as_button().set_text(
                                 cx,
                                 tr_key(app_language, "space_lobby.item.button.view"),
+                            );
+                            item.child_by_path(ids!(buttons_view.remove_from_space_button))
+                                .set_visible(cx, show_remove_button);
+                            item.child_by_path(ids!(buttons_view.remove_from_space_button)).as_button().set_text(
+                                cx,
+                                tr_key(app_language, "space_lobby.item.button.remove_from_space"),
                             );
 
                             // Below, draw things that are common to child rooms and subspaces.
@@ -1548,23 +1782,100 @@ impl SpaceLobbyScreen {
         self.view.label(cx, ids!(header.space_info_row.space_info_label)).set_text(cx, &text);
     }
 
+    /// The space that the given child entry hangs off of, which is the space
+    /// whose `m.space.child` state has to change to unlink it.
+    fn parent_space_of(&self, room_id: &OwnedRoomId) -> Option<OwnedRoomId> {
+        self.tree_entries.iter().find_map(|entry| match entry {
+            TreeEntry::Item { info, parent_space_id, .. } if &info.id == room_id => {
+                Some(parent_space_id.clone())
+            }
+            _ => None,
+        })
+    }
+
+    /// Asks the user to confirm unlinking a child from its parent space, then submits it.
+    ///
+    /// This is a space-wide change (everyone sees the child disappear from the space),
+    /// so it is confirmed even though it neither leaves nor deletes the room itself.
+    fn confirm_remove_from_space(&mut self, cx: &mut Cx, room_id: &OwnedRoomId, is_space: bool) {
+        let Some(space_id) = self.parent_space_of(room_id) else {
+            error!("BUG: no parent space found for child {room_id} being removed.");
+            return;
+        };
+        let child = match self.basic_room_details_for(room_id) {
+            BasicRoomDetails::Name(room_name_id) => room_name_id,
+            other => other.room_name_id().clone(),
+        };
+        let parent_name = self.space_name_id.as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| space_id.to_string());
+        let child_name = child.to_string();
+        let app_language = self.app_language;
+
+        let content = ConfirmationModalContent {
+            title_text: Cow::Owned(tr_key(app_language, if is_space {
+                "space_lobby.remove_from_space.confirm.title_space"
+            } else {
+                "space_lobby.remove_from_space.confirm.title_room"
+            }).to_owned()),
+            body_text: Cow::Owned(tr_fmt(app_language, if is_space {
+                "space_lobby.remove_from_space.confirm.body_space"
+            } else {
+                "space_lobby.remove_from_space.confirm.body_room"
+            }, &[
+                ("child_name", child_name.as_str()),
+                ("space_name", parent_name.as_str()),
+            ])),
+            accept_button_text: Some(Cow::Owned(
+                tr_key(app_language, "space_lobby.remove_from_space.confirm.accept").to_owned()
+            )),
+            cancel_button_text: Some(Cow::Owned(
+                tr_key(app_language, "space_lobby.item.button.cancel").to_owned()
+            )),
+            on_accept_clicked: Some(Box::new(move |_cx| {
+                submit_async_request(MatrixRequest::RemoveRoomFromSpace { space_id, child });
+            })),
+            ..Default::default()
+        };
+        cx.action(ConfirmDeleteAction::Show(RefCell::new(Some(content))));
+    }
+
     fn can_create_room_in_current_space(&self) -> bool {
         self.space_name_id.as_ref()
             .is_some_and(|space_name_id| self.creatable_spaces.contains(space_name_id.room_id()))
     }
 
-    fn sync_header_action_buttons(&mut self, cx: &mut Cx) {
-        self.view.button(cx, ids!(header.parent_space_row.create_room_button))
-            .set_visible(cx, self.can_create_room_in_current_space());
+    /// Whether this user may edit the displayed space's own settings.
+    ///
+    /// This is a different power level than adding children, so a user can be
+    /// allowed to do one but not the other.
+    fn can_manage_current_space(&self) -> bool {
+        self.space_name_id.as_ref()
+            .is_some_and(|space_name_id| self.manageable_spaces.contains(space_name_id.room_id()))
     }
 
-    fn insert_created_room_placeholder(&mut self, cx: &mut Cx, room_name_id: &RoomNameId) {
+    fn sync_header_action_buttons(&mut self, cx: &mut Cx) {
+        let can_create = self.can_create_room_in_current_space();
+        self.view.button(cx, ids!(header.parent_space_row.create_room_button))
+            .set_visible(cx, can_create);
+        self.view.button(cx, ids!(header.parent_space_row.add_existing_room_button))
+            .set_visible(cx, can_create);
+        self.view.button(cx, ids!(header.parent_space_row.create_subspace_button))
+            .set_visible(cx, can_create);
+        self.view.button(cx, ids!(header.parent_space_row.settings_button))
+            .set_visible(cx, self.can_manage_current_space());
+    }
+
+    fn insert_created_room_placeholder(&mut self, cx: &mut Cx, room_name_id: &RoomNameId, is_space: bool) {
         let Some(space_id) = self.space_name_id.as_ref().map(|space| space.room_id().clone()) else {
             return;
         };
         let room_id = room_name_id.room_id().clone();
         let display_name = room_name_id.to_string();
         let mut children = self.children_cache.get(&space_id).cloned().unwrap_or_default();
+        // A newly-created subspace must be tagged as a space, or the tree would
+        // draw it as a plain room until the homeserver's hierarchy catches up.
+        let room_type = is_space.then_some(RoomType::Space);
 
         if let Some(existing_index) = children.iter().position(|child| child.room_id == room_id) {
             if let Some(existing_child) = children.get_mut(existing_index) {
@@ -1572,6 +1883,7 @@ impl SpaceLobbyScreen {
                 existing_child.display_name = display_name;
                 existing_child.state = Some(RoomState::Joined);
                 existing_child.num_joined_members = existing_child.num_joined_members.max(1);
+                existing_child.room_type = room_type;
             }
         } else {
             children.push_back(SpaceRoom {
@@ -1581,7 +1893,7 @@ impl SpaceLobbyScreen {
                 display_name,
                 topic: None,
                 avatar_url: None,
-                room_type: None,
+                room_type,
                 num_joined_members: 1,
                 join_rule: None,
                 world_readable: None,
@@ -1705,14 +2017,12 @@ impl SpaceLobbyScreen {
         let Some(children) = children_cache.get(space_id) else { return false };
 
         // Sort identically to the unfiltered tree: spaces first, then rooms, both alphabetically.
-        let mut sorted_children: Vec<_> = children.iter().collect();
-        sorted_children.sort_by(|a, b| {
-            match (a.is_space(), b.is_space()) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()),
-            }
-        });
+        // Keep the order the SpaceRoomList gave us: the SDK already sorts children
+        // per the spec's "Ordering of children within a space" — `m.space.child`
+        // `order`, then the child event's timestamp, then room ID. Re-sorting here
+        // (e.g. spaces-first, alphabetical) would silently discard the ordering a
+        // space's admins deliberately set.
+        let sorted_children: Vec<_> = children.iter().collect();
 
         // First pass: determine which children have matches (self or descendants)
         // so we can correctly compute `is_last` for tree line drawing.
@@ -1750,6 +2060,7 @@ impl SpaceLobbyScreen {
                 // For spaces: always include if self matches or descendants match.
                 tree_entries.push(TreeEntry::Item {
                     info,
+                    parent_space_id: space_id.clone(),
                     level,
                     is_last,
                     parent_mask,
@@ -1781,6 +2092,7 @@ impl SpaceLobbyScreen {
                 // Non-space room or space without cached children: include only if it matches.
                 tree_entries.push(TreeEntry::Item {
                     info,
+                    parent_space_id: space_id.clone(),
                     level,
                     is_last,
                     parent_mask,
@@ -1816,20 +2128,15 @@ impl SpaceLobbyScreen {
     ) {
         let Some(children) = children_cache.get(space_id) else { return };
 
-        let mut sorted_children: Vec<_> = children.iter().collect();
-        sorted_children.sort_by(|a, b| {
-            match (a.is_space(), b.is_space()) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()),
-            }
-        });
+        // Preserve the SDK's spec-compliant `m.space.child` ordering (see above).
+        let sorted_children: Vec<_> = children.iter().collect();
 
         let count = sorted_children.len();
         for (i, child) in sorted_children.into_iter().enumerate() {
             let is_last = i == count - 1;
             tree_entries.push(TreeEntry::Item {
                 info: SpaceRoomInfo::from(child),
+                parent_space_id: space_id.clone(),
                 level,
                 is_last,
                 parent_mask,
@@ -1870,14 +2177,8 @@ impl SpaceLobbyScreen {
         let Some(children) = children_cache.get(space_id) else { return };
 
         // Sort: spaces first, then rooms, both alphabetically
-        let mut sorted_children: Vec<_> = children.iter().collect();
-        sorted_children.sort_by(|a, b| {
-            match (a.is_space(), b.is_space()) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()),
-            }
-        });
+        // Preserve the SDK's spec-compliant `m.space.child` ordering (see above).
+        let sorted_children: Vec<_> = children.iter().collect();
 
         
         let count = sorted_children.len();
@@ -1886,6 +2187,7 @@ impl SpaceLobbyScreen {
             
             tree_entries.push(TreeEntry::Item {
                 info: SpaceRoomInfo::from(child),
+                parent_space_id: space_id.clone(),
                 level,
                 is_last,
                 parent_mask,
@@ -1939,7 +2241,7 @@ impl SpaceLobbyScreen {
     }
 
     pub fn set_displayed_space(&mut self, cx: &mut Cx, space_name_id: &RoomNameId) {
-        let space_name = space_name_id.to_string();
+        let space_name = space_name_id.display();
         let parent_name = self.view.label(cx, ids!(header.parent_space_row.parent_name));
         parent_name.set_text(cx, &space_name);
 
