@@ -9,7 +9,6 @@ estimate: 2d
 
 Add a real-time translation feature to the chat message input bar. Users can toggle "write-and-translate" mode, select a target language, type in their native language, and see the translation appear in a preview area above the input. Clicking "Apply" replaces the input text with the translation, ready to send.
 
-## Context
 
 The translation feature uses any OpenAI-compatible LLM API (local or cloud) to translate text in real-time as the user types. The system prompt is adapted from the makepad-voice-input (Vox) project's bilingual correction+translation prompt.
 
@@ -83,7 +82,7 @@ The translation feature uses any OpenAI-compatible LLM API (local or cloud) to t
 - Do NOT store translation state in Matrix room events
 - Do NOT run `cargo fmt`
 
-## Supported Languages
+**Supported Languages**
 
 | Code | Name |
 |------|------|
@@ -105,7 +104,7 @@ The translation feature uses any OpenAI-compatible LLM API (local or cloud) to t
 | ms | Bahasa Melayu |
 | tr | Türkçe |
 
-## Known Issues
+**Known Issues**
 
 - Language selector popup positioning uses `abs_pos` in `draw_walk` — position is calculated from button rect, may shift if input bar layout changes
 - Settings → Preferences language dropdown has arrow visual artifact (see issues/002)
