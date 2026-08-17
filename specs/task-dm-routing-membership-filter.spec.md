@@ -1,4 +1,3 @@
----
 spec: task
 name: "DM Reopen After Leave — Hide Stale Empty DMs And Reuse Only Active Candidates"
 inherits: project

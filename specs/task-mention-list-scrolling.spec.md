@@ -9,7 +9,6 @@ estimate: 1d
 
 Make the @mention autocomplete popup's user list scrollable so that users can browse all matching members instead of being limited to a hardcoded maximum (10 on desktop, 5 on mobile). In rooms with many members, the current truncation silently hides relevant results. A scrollable list with a fixed maximum height improves discoverability while keeping the popup compact.
 
-## Context
 
 The current `List` widget (in `command_text_input.rs`) is a plain `View` with `flow: Down` — it has no scroll capability. The popup uses `height: Fit` which means it grows unbounded. To prevent this, `DESKTOP_MAX_VISIBLE_ITEMS = 10` and `MOBILE_MAX_VISIBLE_ITEMS = 5` artificially cap the displayed items. The search buffer fetches `max_visible_items * 2` results but only the first half are shown.
 
