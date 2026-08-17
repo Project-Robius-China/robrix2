@@ -18,8 +18,10 @@ use makepad_widgets::*;
 use matrix_sdk::ruma::OwnedRoomId;
 
 use crate::{
+    app::AppState,
     avatar_cache::{self, AvatarCacheEntry},
     home::{invite_screen::JoinRoomResultAction, navigation_tab_bar::NavigationBarAction},
+    i18n::{AppLanguage, tr_fmt, tr_key},
     shared::avatar::AvatarWidgetExt,
     sliding_sync::{
         DirectoryRoomKind, MatrixRequest, PublicDirectoryAction, PublicRoomDirectoryEntry,
@@ -27,6 +29,49 @@ use crate::{
     },
     utils,
 };
+
+/// Solid `RBX_ACCENT` "selected" style for a Rooms/Spaces toggle tab, matching
+/// the segmented-tab look used by Settings' category tabs.
+fn apply_directory_tab_selected(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            color: mod.widgets.RBX_ACCENT,
+            color_hover: mod.widgets.RBX_ACCENT_HOVER,
+            color_down: mod.widgets.RBX_ACCENT_PRESSED,
+            border_size: 0.0,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_FG_ON_ACCENT,
+            color_hover: mod.widgets.RBX_FG_ON_ACCENT,
+            color_down: mod.widgets.RBX_FG_ON_ACCENT,
+        }
+    });
+}
+
+/// Ghost "unselected" style for a Rooms/Spaces toggle tab: transparent fill,
+/// secondary text, subtle hover wash (matches `DirectoryGhostIconButton`'s
+/// defaults, re-applied explicitly so switching back to this tab resets it).
+fn apply_directory_tab_unselected(cx: &mut Cx, button: &mut ButtonRef) {
+    script_apply_eval!(cx, button, {
+        draw_bg +: {
+            color: #0000,
+            color_hover: mod.widgets.RBX_BG_HOVER,
+            color_down: mod.widgets.RBX_BG_PRESSED,
+            border_size: 0.0,
+            border_color: #0000,
+            border_color_hover: #0000,
+            border_color_down: #0000,
+        }
+        draw_text +: {
+            color: mod.widgets.RBX_FG_SECONDARY,
+            color_hover: mod.widgets.RBX_FG_SECONDARY,
+            color_down: mod.widgets.RBX_FG_SECONDARY,
+        }
+    });
+}
 
 const PAGE_LIMIT: u64 = 20;
 
@@ -166,7 +211,7 @@ script_mod! {
                     color: (RBX_SUCCESS_BG)
                     border_radius: (RBX_RADIUS_PILL)
                 }
-                Label {
+                joined_label := Label {
                     width: Fit, height: Fit
                     draw_text +: {
                         color: (RBX_SUCCESS_FG)
@@ -223,6 +268,34 @@ script_mod! {
                     }
                     text: "Discover and join public rooms"
                 }
+            }
+        }
+
+        // ── Rooms/Spaces segmented toggle ─────────────────────────────────────
+        // A minimal two-button segmented control (styled like the Settings
+        // category tabs: solid RBX_ACCENT for the selected side, ghost/neutral
+        // for the other), since the design spec's shared `SegmentedTabs`
+        // component (§4.9) isn't built yet.
+        kind_toggle := View {
+            width: Fit, height: Fit
+            flow: Right
+            spacing: 4
+            margin: Inset{top: 2}
+
+            rooms_tab_button := mod.widgets.DirectoryGhostIconButton {
+                width: Fit, height: Fit
+                padding: Inset{top: (SPACE_XS), bottom: (SPACE_XS), left: (SPACE_MD), right: (SPACE_MD)}
+                spacing: 0
+                icon_walk: Walk{width: 0, height: 0, margin: 0}
+                text: "Rooms"
+            }
+
+            spaces_tab_button := mod.widgets.DirectoryGhostIconButton {
+                width: Fit, height: Fit
+                padding: Inset{top: (SPACE_XS), bottom: (SPACE_XS), left: (SPACE_MD), right: (SPACE_MD)}
+                spacing: 0
+                icon_walk: Walk{width: 0, height: 0, margin: 0}
+                text: "Spaces"
             }
         }
 
@@ -418,6 +491,7 @@ impl DirectoryRoomEntry {
         entry: &PublicRoomDirectoryEntry,
         is_joining: bool,
         is_joined: bool,
+        app_language: AppLanguage,
     ) {
         self.room_id = Some(entry.room_id.clone());
         self.is_joining = is_joining;
@@ -439,8 +513,13 @@ impl DirectoryRoomEntry {
         topic_label.set_text(cx, &topic_text);
 
         // Meta line: "N members" (with a people icon), plus the canonical alias
-        // when present, so the room is addressable at a glance.
-        let mut meta = format!("{} members", entry.num_joined_members);
+        // when present, so the room/space is addressable at a glance.
+        let member_key = if entry.num_joined_members == 1 {
+            "space_lobby.item.member_one"
+        } else {
+            "space_lobby.item.member_n"
+        };
+        let mut meta = tr_fmt(app_language, member_key, &[("count", &entry.num_joined_members.to_string())]);
         if let Some(alias) = &entry.canonical_alias {
             meta.push_str("  ·  ");
             meta.push_str(alias);
@@ -470,14 +549,17 @@ impl DirectoryRoomEntry {
         if is_joined {
             join_button.set_visible(cx, false);
             joined_badge.set_visible(cx, true);
+            self.view
+                .label(cx, ids!(joined_badge.joined_label))
+                .set_text(cx, tr_key(app_language, "directory_screen.entry.badge.joined"));
         } else {
             joined_badge.set_visible(cx, false);
             join_button.set_visible(cx, true);
             if is_joining {
-                join_button.set_text(cx, "Joining…");
+                join_button.set_text(cx, tr_key(app_language, "join_leave_modal.button.joining"));
                 join_button.set_enabled(cx, false);
             } else {
-                join_button.set_text(cx, "Join");
+                join_button.set_text(cx, tr_key(app_language, "join_leave_modal.button.join"));
                 join_button.set_enabled(cx, true);
             }
         }
@@ -502,10 +584,23 @@ pub struct DirectoryScreen {
     /// Last subtitle string pushed to the header, so we only call the
     /// (unconditionally-redrawing) `Label::set_text` when it actually changes.
     #[rust] last_subtitle: String,
+    /// Whether the directory browser is fetching public rooms or public
+    /// spaces. Toggled by the header's Rooms/Spaces tabs.
+    #[rust(DirectoryRoomKind::Rooms)] kind: DirectoryRoomKind,
+    #[rust] app_language: AppLanguage,
 }
 
 impl Widget for DirectoryScreen {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        if self.app_language != app_language {
+            self.app_language = app_language;
+            self.sync_kind_ui(cx);
+            self.refresh_status(cx);
+        }
+
         // Debounce timer fired: run the pending search if the text actually
         // differs from what we last queried.
         if let Event::Timer(te) = event {
@@ -526,6 +621,14 @@ impl Widget for DirectoryScreen {
             // Back button: return to the Home view.
             if self.view.button(cx, ids!(back_button)).clicked(actions) {
                 cx.action(NavigationBarAction::GoToHome);
+            }
+
+            // Rooms/Spaces toggle: switch the directory kind and re-search.
+            if self.view.button(cx, ids!(kind_toggle.rooms_tab_button)).clicked(actions) {
+                self.set_kind(cx, DirectoryRoomKind::Rooms);
+            }
+            if self.view.button(cx, ids!(kind_toggle.spaces_tab_button)).clicked(actions) {
+                self.set_kind(cx, DirectoryRoomKind::Spaces);
             }
 
             // Clear button: wipe the field and re-run the default (empty) query.
@@ -594,6 +697,7 @@ impl Widget for DirectoryScreen {
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         if self.needs_initial_fetch {
             self.needs_initial_fetch = false;
+            self.sync_kind_ui(cx);
             self.start_fresh_query(cx, String::new());
         }
 
@@ -622,14 +726,15 @@ impl Widget for DirectoryScreen {
             while let Some(item_id) = list.next_visible_item(cx) {
                 let item = if show_empty_status && item_id == 0 {
                     let item = list.item(cx, item_id, id!(status_entry));
-                    let msg = if self.search_text.trim().is_empty() {
-                        "No public rooms found on this homeserver."
-                    } else {
-                        "No rooms match your search."
-                    };
+                    let is_spaces = matches!(self.kind, DirectoryRoomKind::Spaces);
+                    let msg_key = if self.search_text.trim().is_empty() {
+                        if is_spaces { "directory_screen.empty.no_results_homeserver.spaces" }
+                        else { "directory_screen.empty.no_results_homeserver.rooms" }
+                    } else if is_spaces { "directory_screen.empty.no_match.spaces" }
+                    else { "directory_screen.empty.no_match.rooms" };
                     item.child_by_path(ids!(status_label))
                         .as_label()
-                        .set_text(cx, msg);
+                        .set_text(cx, tr_key(self.app_language, msg_key));
                     item
                 } else if item_id < n {
                     let entry = self.rooms[item_id].clone();
@@ -637,7 +742,7 @@ impl Widget for DirectoryScreen {
                     let is_joined = self.joined_rooms.contains(&entry.room_id);
                     let item = list.item(cx, item_id, id!(room_entry));
                     if let Some(mut inner) = item.borrow_mut::<DirectoryRoomEntry>() {
-                        inner.populate(cx, &entry, is_joining, is_joined);
+                        inner.populate(cx, &entry, is_joining, is_joined, self.app_language);
                     }
                     item
                 } else if has_more && item_id == n {
@@ -655,26 +760,34 @@ impl Widget for DirectoryScreen {
 
 impl DirectoryScreen {
     /// Refresh the header subtitle and error-card text to reflect the current
-    /// load / result / error state. Called only at state-change points (never
-    /// per-frame) because `Label::set_text` reschedules a redraw every call.
+    /// load / result / kind / error state. Called only at state-change points
+    /// (never per-frame) because `Label::set_text` reschedules a redraw every
+    /// call.
     fn refresh_status(&mut self, cx: &mut Cx) {
         let n = self.rooms.len();
         let has_more = self.next_batch.is_some();
+        let is_spaces = matches!(self.kind, DirectoryRoomKind::Spaces);
+        let count_str = n.to_string();
         let subtitle = if self.is_loading && n == 0 {
-            "Searching…".to_string()
+            tr_key(self.app_language, "directory_screen.subtitle.searching").to_string()
         } else if self.search_text.trim().is_empty() {
+            let discover_key = if is_spaces { "directory_screen.subtitle.discover.spaces" } else { "directory_screen.subtitle.discover.rooms" };
+            let one_key = if is_spaces { "directory_screen.subtitle.count_one.spaces" } else { "directory_screen.subtitle.count_one.rooms" };
+            let n_key = if is_spaces { "directory_screen.subtitle.count_n.spaces" } else { "directory_screen.subtitle.count_n.rooms" };
+            let n_plus_key = if is_spaces { "directory_screen.subtitle.count_n_plus.spaces" } else { "directory_screen.subtitle.count_n_plus.rooms" };
             match (n, has_more) {
-                (0, _) => "Discover and join public rooms".to_string(),
-                (1, false) => "1 public room".to_string(),
-                (_, false) => format!("{n} public rooms"),
-                (_, true) => format!("{n}+ public rooms"),
+                (0, _) => tr_key(self.app_language, discover_key).to_string(),
+                (1, false) => tr_key(self.app_language, one_key).to_string(),
+                (_, false) => tr_fmt(self.app_language, n_key, &[("count", &count_str)]),
+                (_, true) => tr_fmt(self.app_language, n_plus_key, &[("count", &count_str)]),
             }
         } else {
+            let no_match_key = if is_spaces { "directory_screen.subtitle.no_match.spaces" } else { "directory_screen.subtitle.no_match.rooms" };
             match (n, has_more) {
-                (0, _) => "No matching rooms".to_string(),
-                (1, false) => "1 result".to_string(),
-                (_, false) => format!("{n} results"),
-                (_, true) => format!("{n}+ results"),
+                (0, _) => tr_key(self.app_language, no_match_key).to_string(),
+                (1, false) => tr_key(self.app_language, "directory_screen.subtitle.result_one").to_string(),
+                (_, false) => tr_fmt(self.app_language, "directory_screen.subtitle.result_n", &[("count", &count_str)]),
+                (_, true) => tr_fmt(self.app_language, "directory_screen.subtitle.result_n_plus", &[("count", &count_str)]),
             }
         };
         if subtitle != self.last_subtitle {
@@ -698,6 +811,51 @@ impl DirectoryScreen {
             .set_visible(cx, !text.is_empty());
     }
 
+    /// Refresh everything that depends on `kind` and/or `app_language`: the
+    /// header title, the search field's placeholder, and the toggle tabs'
+    /// labels + selected/unselected styling.
+    fn sync_kind_ui(&mut self, cx: &mut Cx) {
+        let is_spaces = matches!(self.kind, DirectoryRoomKind::Spaces);
+
+        let title_key = if is_spaces { "directory_screen.header.title.spaces" } else { "directory_screen.header.title.rooms" };
+        self.view
+            .label(cx, ids!(header.header_col.title))
+            .set_text(cx, tr_key(self.app_language, title_key));
+
+        let placeholder_key = if is_spaces { "directory_screen.search.placeholder.spaces" } else { "directory_screen.search.placeholder.rooms" };
+        self.view
+            .text_input(cx, ids!(search_input))
+            .set_empty_text(cx, tr_key(self.app_language, placeholder_key).to_string());
+
+        let mut rooms_button = self.view.button(cx, ids!(kind_toggle.rooms_tab_button));
+        rooms_button.set_text(cx, tr_key(self.app_language, "app.room_filter.remote.rooms"));
+        let mut spaces_button = self.view.button(cx, ids!(kind_toggle.spaces_tab_button));
+        spaces_button.set_text(cx, tr_key(self.app_language, "app.room_filter.remote.spaces"));
+
+        if is_spaces {
+            apply_directory_tab_unselected(cx, &mut rooms_button);
+            apply_directory_tab_selected(cx, &mut spaces_button);
+        } else {
+            apply_directory_tab_selected(cx, &mut rooms_button);
+            apply_directory_tab_unselected(cx, &mut spaces_button);
+        }
+    }
+
+    /// Switch between browsing public Rooms and public Spaces: clears the
+    /// current results/pagination and re-runs the current search under the
+    /// new kind.
+    fn set_kind(&mut self, cx: &mut Cx, kind: DirectoryRoomKind) {
+        if self.kind == kind {
+            return;
+        }
+        self.kind = kind;
+        self.sync_kind_ui(cx);
+        cx.stop_timer(self.search_debounce_timer);
+        self.search_debounce_timer = Timer::empty();
+        self.pending_search_text.clear();
+        self.start_fresh_query(cx, self.search_text.clone());
+    }
+
     fn start_fresh_query(&mut self, cx: &mut Cx, text: String) {
         self.search_text = text;
         self.query_id = self.query_id.wrapping_add(1);
@@ -706,8 +864,9 @@ impl DirectoryScreen {
         self.last_error = None;
         self.is_loading = false;
         log!(
-            "[public_directory] start_fresh_query: query_id={} search_text={:?}",
+            "[public_directory] start_fresh_query: query_id={} kind={:?} search_text={:?}",
             self.query_id,
+            self.kind,
             self.search_text,
         );
         self.submit_fetch(true);
@@ -735,7 +894,7 @@ impl DirectoryScreen {
         );
         submit_async_request(MatrixRequest::FetchPublicDirectoryPage {
             search_term: self.search_text.clone(),
-            kind: DirectoryRoomKind::Rooms,
+            kind: self.kind,
             since: if is_first_page { None } else { self.next_batch.clone() },
             limit: Some(PAGE_LIMIT),
             query_id: self.query_id,
