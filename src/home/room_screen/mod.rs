@@ -626,6 +626,21 @@ impl Widget for RoomScreen {
             self.handle_message_actions(cx, actions, &portal_list, &loading_pane, scope);
 
             for action in actions {
+                // This room's display name was resolved or changed (e.g., a room
+                // created moments ago whose name arrives a few seconds later via
+                // sync). The dock tab is re-titled by MainDesktopUi; this widget
+                // must also update its own copy, which drives the RoomTopBar
+                // header — otherwise the header shows the stale "Room ID !..."
+                // placeholder until the room is closed and reopened.
+                if let Some(crate::home::main_desktop_ui::MainDesktopUiAction::UpdateRoomTabTitle(new_name)) = action.downcast_ref() {
+                    if self.room_id() == Some(new_name.room_id())
+                        && self.room_name_id.as_ref() != Some(new_name)
+                    {
+                        self.room_name_id = Some(new_name.clone());
+                        self.view.redraw(cx);
+                    }
+                }
+
                 // Mobile RoomTopBar (header + Chat/Info tabs) actions.
                 match action.as_widget_action().cast::<RoomTopBarAction>() {
                     RoomTopBarAction::Back => {
