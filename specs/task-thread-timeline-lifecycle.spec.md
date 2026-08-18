@@ -113,16 +113,16 @@ Scenario: Table lifecycle — begin, finish, close
   Tags: critical
   Test: thread_table_begin_finish_close_lifecycle
   Given an empty `ThreadTimelineTable<u32>`
-  When `begin_create(a)` then `finish_create(a, 1)` then `close(a)`
-  Then `begin_create` returns true, `finish_create` returns Ok, `close` returns Some(1)
+  When `begin_create(a)` returns `Some(token)`, then `finish_create(&token, 1)`, then `close(a)`
+  Then `finish_create` returns Ok and `close` returns Some(1)
   And afterwards `contains(a)` is false and both lengths are 0
 
 Scenario: Table rejects duplicate creation while live or pending
   Test: thread_table_rejects_duplicate_begin
-  Given a table where `a` is pending
+  Given a table where `begin_create(a)` returned `Some(token)` and `a` is pending
   When `begin_create(a)` is called again
-  Then it returns false
-  And after `finish_create(a, 1)` a further `begin_create(a)` also returns false
+  Then it returns None
+  And after `finish_create(&token, 1)` a further `begin_create(a)` also returns None
 
 Scenario: Property — table invariants hold under random operation sequences
   Tags: critical
@@ -140,10 +140,11 @@ Scenario: Property — table invariants hold under random operation sequences
 Scenario: finish_create after close hands the value back
   Tags: critical
   Test: thread_table_finish_after_close_is_rejected
-  Given `begin_create(a)` and then `close(a)` before creation finished
-  When `finish_create(a, 7)` is called
+  Given `begin_create(a)` returned `Some(token)` and then `close(a)` before creation finished
+  When `finish_create(&token, 7)` is called
   Then it returns Err(7)
   And `contains(a)` is false
+  And `fail_create(&token)` returns false
 
 Scenario: A stale creation cannot hijack or cancel a reopened thread
   Tags: critical
