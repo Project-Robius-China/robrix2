@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Enable once per clone:  git config core.hooksPath .githooks
+# Fast gate on every commit: lint changed specs + structural guards.
+# Set SPEC_GUARD_FULL=1 to also run capability specs, ADR liveness and the
+# skip-tolerant `agent-spec guard` (runs cargo tests; ~2-3 min).
+set -e
+if [ "${SPEC_GUARD_FULL:-0}" = "1" ]; then
+  exec scripts/spec-guard.sh --change-scope staged
+else
+  exec scripts/spec-guard.sh --change-scope staged --fast
+fi

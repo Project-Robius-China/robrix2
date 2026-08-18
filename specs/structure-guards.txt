@@ -1,0 +1,6 @@
+# Mechanical layering / single-decision-point guards, one per line:
+#   <forbidden literal> | <file glob>
+# Enforced by scripts/spec-guard.sh via `agent-spec check-structure`.
+# ADR-001 / dm-enc-4: user-facing DM entry points never hardcode a plaintext DM.
+create_encrypted: false | src/{home,profile}/**
+create_encrypted: false | src/settings/agent_settings.rs

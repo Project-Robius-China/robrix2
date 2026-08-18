@@ -1,0 +1,7 @@
+# Contract Acceptance: changes to specs and knowledge (decisions/requirements)
+# are reviewed as contracts, separately from code. Weakening or deleting a
+# `Rule:` / `Tags: critical` scenario needs an explicit maintainer OK.
+/specs/**            @ZhangHanDong
+/knowledge/**        @ZhangHanDong
+/scripts/spec-guard.sh @ZhangHanDong
+/.githooks/**        @ZhangHanDong
