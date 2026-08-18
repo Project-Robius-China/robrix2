@@ -14,7 +14,8 @@ proxychains.conf
 .mcp.json
 .playwright-mcp/
 .superpowers/
-.agent-spec/
+.agent-spec/*
+!.agent-spec/config.yaml
 
 ## local config backups / screenshots
 *.bak

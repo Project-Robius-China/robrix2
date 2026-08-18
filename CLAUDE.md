@@ -123,3 +123,16 @@ Write the invariants BEFORE the code, then bind each one to tests so `agent-spec
 7. Root-level files in `Allowed Changes` must be written as `./Cargo.toml` to match the boundary checker.
 
 `proptest` is an approved dev-dependency (see `specs/project.spec.md` → Decisions). Do not add fuzzing (`cargo-fuzz`) for decision logic; reserve it for byte-level parsing surfaces.
+
+### Spec regression gate
+
+`scripts/spec-guard.sh` is the single gate (pre-commit + CI job `spec_gate`):
+
+1. `agent-spec lint --min-score 0.7` on specs changed in the change set;
+2. structural guards from `specs/structure-guards.txt` (`agent-spec check-structure`);
+3. every `specs/capabilities/*.spec.md` must fully pass, and every ADR it `satisfies:` must trace as `honored` (`agent-spec trace --gate`);
+4. changed task specs are verified WITH the change set (boundaries + tests); all other task specs are verified WITHOUT it (regression, `failed > 0` fails; `manual_test_*` skips are tolerated).
+
+Enable the hook once per clone: `git config core.hooksPath .githooks` (fast path by default; `SPEC_GUARD_FULL=1 git commit …` runs everything).
+
+**Never make a red gate green by editing a spec, a capability spec, or an ADR.** If a Rule genuinely must change, switch to authoring mode, change it in its own commit, and say so in the PR — `specs/**` and `knowledge/**` are CODEOWNERS-reviewed as contracts. Long-lived invariants live in `specs/capabilities/` + `knowledge/decisions/` (see `dm-encryption` / ADR-001 as the reference).
