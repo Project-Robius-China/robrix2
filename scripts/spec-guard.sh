@@ -51,7 +51,10 @@ else
 fi
 CHANGED_SPECS=()
 for f in "${CHANGED[@]:-}"; do
-  case "$f" in specs/*.spec.md|specs/*/*.spec.md) [ -f "$f" ] && CHANGED_SPECS+=("$f");; esac
+  case "$f" in
+    specs/project.spec.md) ;;  # project-level spec has no scenarios; not held to the task lint bar
+    specs/*.spec.md|specs/*/*.spec.md) [ -f "$f" ] && CHANGED_SPECS+=("$f");;
+  esac
 done
 
 fail=0
