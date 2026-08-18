@@ -28,6 +28,7 @@ use crate::{
     home::{
         ContextMenuOpenGesture,
         add_room::CreateRoomAction,
+        main_desktop_ui::MainDesktopUiAction,
         navigation_tab_bar::{NavigationBarAction, SelectedTab},
         room_context_menu::RoomContextMenuDetails,
         room_screen::invalidate_timeline_state_for_room,
@@ -784,6 +785,10 @@ impl RoomsList {
                 }
                 RoomsListUpdate::AddJoinedRoom(joined_room) => {
                     let room_id = joined_room.room_name_id.room_id().clone();
+                    // A dock tab restored from persisted state may still carry a
+                    // "Room ID !..." placeholder title from before this room's
+                    // name was known; re-title it now that the room has arrived.
+                    cx.action(MainDesktopUiAction::UpdateRoomTabTitle(joined_room.room_name_id.clone()));
                     let is_direct = joined_room.is_direct;
                     let has_favorite_tag = joined_room.tags.contains_key(&TagName::Favorite);
                     let has_low_priority_tag = joined_room.tags.contains_key(&TagName::LowPriority);
@@ -859,10 +864,10 @@ impl RoomsList {
                     }
                 }
                 RoomsListUpdate::UpdateRoomName { new_room_name } => {
-
-                    // TODO: broadcast a new AppState action to ensure that this room's or space's new name
-                    //       gets updated in all of the `SelectedRoom` instances throughout Robrix,
-                    //       e.g., the name of the room in the Dock Tab or the StackNav header.
+                    // Propagate the new name to open dock tabs and all stored
+                    // `SelectedRoom` instances, which capture the name at tab
+                    // creation time (possibly a "Room ID !..." placeholder).
+                    cx.action(MainDesktopUiAction::UpdateRoomTabTitle(new_room_name.clone()));
 
                     let room_id = new_room_name.room_id().clone();
                     // Try to update joined room first
