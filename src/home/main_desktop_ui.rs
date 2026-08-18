@@ -495,6 +495,7 @@ impl MainDesktopUI {
             any_changed |= selected_room.update_room_name(new_name);
         }
         if any_changed {
+            log!("MainDesktopUi: re-titling tab for {} to {}", new_name.room_id(), new_name.display_name());
             let tab_id = LiveId::from_str(new_name.room_id().as_str());
             if let Some(room) = self.open_rooms.get(&tab_id) {
                 self.view.dock(cx, ids!(dock))

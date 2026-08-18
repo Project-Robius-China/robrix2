@@ -565,8 +565,13 @@ script_mod! {
         draw_bg +: {
             color: #0000
             hover: instance(0.0)
+            // Bind the token as a uniform instead of referencing `(RBX_COMPOSER_BG)`
+            // directly inside the pixel fn: makepad rev 1dd8d37 no longer resolves
+            // `mod.widgets.*` values in shader-fn scope ("shader variable not
+            // found" + a mix/depth_clip/fb0 error cascade every frame; issue #318).
+            hover_color: uniform((RBX_COMPOSER_BG))
             pixel: fn() {
-                return mix(self.color, (RBX_COMPOSER_BG), self.hover)
+                return mix(self.color, self.hover_color, self.hover)
             }
         }
         animator: Animator {
