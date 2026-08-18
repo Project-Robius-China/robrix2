@@ -6625,23 +6625,45 @@ fn clear_sso_prebuild_failure_flag() {
     let _ = std::fs::remove_file(sso_prebuild_failure_flag_path());
 }
 
+/// Attaches a child room (or subspace) to the given parent space.
+///
+/// Mirrors [`detach_room_from_space`]'s best-effort semantics: the primary
+/// write (`m.space.child` in the parent space) is what actually attaches the
+/// room, so only *its* failure is propagated as an `Err`. The reverse
+/// `m.space.parent` backlink in the child room is advisory — we may lack
+/// permission to write state there even though we could write `m.space.child`
+/// in the parent space (e.g. we're a space admin but not a mod in the child
+/// room) — so a failure there is only logged via [`warning!`], never
+/// propagated. This keeps the reported outcome consistent with what the
+/// server actually did: the attach succeeded.
 async fn attach_room_to_space(client: &Client, child_room: &Room, space_id: &OwnedRoomId) -> Result<()> {
-    let user_id = client.user_id().ok_or_else(|| anyhow!("Current user ID not found"))?;
     let space_room = client.get_room(space_id)
         .ok_or_else(|| anyhow!("Selected space {space_id} was not found"))?;
-    let child_power_levels = child_room.power_levels().await?;
 
     let child_route = room_route_with_fallback(child_room).await;
     space_room
         .send_state_event_for_key(child_room.room_id(), SpaceChildEventContent::new(child_route))
         .await?;
 
-    if child_power_levels.user_can_send_state(user_id, StateEventType::SpaceParent) {
+    // Best-effort: also set the reverse `m.space.parent` link in the child room.
+    // We may not have permission to write state there, and that must not fail
+    // the overall attach — the `m.space.child` write above already succeeded
+    // and is what actually attaches the room to the space.
+    if let Some(user_id) = client.user_id()
+        && let Ok(child_power_levels) = child_room.power_levels().await
+        && child_power_levels.user_can_send_state(user_id, StateEventType::SpaceParent)
+    {
         let mut parent_content = SpaceParentEventContent::new(room_route_with_fallback(&space_room).await);
         parent_content.canonical = true;
-        child_room
+        if let Err(error) = child_room
             .send_state_event_for_key(space_room.room_id(), parent_content)
-            .await?;
+            .await
+        {
+            warning!(
+                "Attached {} to space {space_id}, but failed to set its m.space.parent: {error}",
+                child_room.room_id(),
+            );
+        }
     }
 
     Ok(())

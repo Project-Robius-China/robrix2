@@ -475,6 +475,35 @@ impl MainDesktopUI {
 
     /// Replaces an accepted space invite with that space's lobby in the dock.
     ///
+    /// Applies a resolved/changed room display name to all stored
+    /// `SelectedRoom` instances and to the room's open dock tab title (if any).
+    ///
+    /// Tabs capture the display name at creation time, which may be a
+    /// "Room ID !..." placeholder if the name had not resolved yet (e.g., for
+    /// rooms materialized live from an incremental sync, or tabs restored from
+    /// a persisted dock state that was saved before the name was known).
+    ///
+    /// Returns `true` if anything changed (so the dock state should be re-saved).
+    /// Note: only the room's main tab is re-titled; a thread tab's title is
+    /// left as-is (its stored `SelectedRoom` is still updated).
+    fn update_room_tab_title(&mut self, cx: &mut Cx, new_name: &RoomNameId) -> bool {
+        let mut any_changed = false;
+        for selected_room in self.most_recently_selected_room.iter_mut()
+            .chain(self.room_order.iter_mut())
+            .chain(self.open_rooms.values_mut())
+        {
+            any_changed |= selected_room.update_room_name(new_name);
+        }
+        if any_changed {
+            let tab_id = LiveId::from_str(new_name.room_id().as_str());
+            if let Some(room) = self.open_rooms.get(&tab_id) {
+                self.view.dock(cx, ids!(dock))
+                    .set_tab_title(cx, tab_id, room.display_name().to_string());
+            }
+        }
+        any_changed
+    }
+
     /// This is the space counterpart of [`Self::replace_invite_with_joined_room()`]:
     /// a joined space has no timeline, so the InviteScreen tab becomes a
     /// `SpaceLobbyScreen` showing the space's rooms and subspaces.
@@ -616,6 +645,13 @@ impl WidgetMatchEvent for MainDesktopUI {
             if let Some(MainDesktopUiAction::CloseAllTabs { on_close_all }) = action.downcast_ref() {
                 self.close_all_tabs(cx);
                 on_close_all.notify_one();
+                continue;
+            }
+
+            if let Some(MainDesktopUiAction::UpdateRoomTabTitle(new_name)) = action.downcast_ref() {
+                if self.update_room_tab_title(cx, new_name) {
+                    should_save_dock_action = true;
+                }
                 continue;
             }
 
@@ -763,6 +799,9 @@ impl WidgetMatchEvent for MainDesktopUI {
 pub enum MainDesktopUiAction {
     /// Save the state of the dock into the AppState.
     SaveDockIntoAppState,
+    /// The given room's display name was resolved or changed; update the
+    /// title of its open dock tab (if any) and all stored `SelectedRoom`s.
+    UpdateRoomTabTitle(RoomNameId),
     /// Load the room panel state from the AppState to the dock.
     LoadDockFromAppState,
     /// Close every currently-open tab belonging to the given room.
