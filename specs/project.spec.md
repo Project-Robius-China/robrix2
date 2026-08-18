@@ -34,6 +34,7 @@ Robrix is a multi-platform Matrix chat client built with Makepad 2.0 and matrix-
 - Hex colors with letter 'e': use `#x` prefix (e.g., `#x1E90FF`)
 - Background CPU work: `cpu_worker::spawn_cpu_job(cx, CpuJob::*)` via `cx.spawn_thread()`
 - Dock state restoration: programmatic tab recreation via `close_all_tabs()` + `focus_or_create_tab()`, NOT `Dock.load_state()` (which corrupts DrawList references)
+- Spec invariants: each task spec states its logical invariants as `Rule:` blocks (semi-formal math in a comment line + prose); every Rule is bound to example unit tests AND at least one property test using the `proptest` dev-dependency (approved 2026-08-18) that asserts the invariant literally over generated inputs; decision logic that carries an invariant lives in a pure function whose signature is named in the task spec's Decisions
 
 ## Boundaries
 

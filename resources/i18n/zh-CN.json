@@ -244,6 +244,7 @@
   "add_room.start_chat.modal.section.suggestions_hint": "输入 Matrix 用户 ID 即可立即发起聊天。",
   "add_room.start_chat.modal.section.privacy_title": "出于隐私原因，部分建议可能不可见。",
   "add_room.start_chat.modal.hint": "如果尚无私聊房间，系统会自动创建一个。",
+  "dm.create.unencrypted_notice": "由于 {user} 是已知的机器人/智能体，此私聊将以未加密方式创建（不启用端到端加密）。",
   "add_room.create_room.button.create": "创建房间",
   "add_room.create_room.button.syncing": "同步中...",
   "add_room.create_room.modal.title": "创建新房间",

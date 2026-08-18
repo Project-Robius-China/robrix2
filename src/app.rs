@@ -1013,7 +1013,7 @@ impl MatchEvent for App {
                     }
                     RoomFilterResultTarget::RemoteUser(user_profile) => {
                         submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
-                            create_encrypted: self.app_state.bot_settings.should_create_encrypted_dm(
+                            create_encrypted: self.app_state.should_create_encrypted_dm(
                                 user_profile.user_id.as_ref(),
                                 current_user_id().as_deref(),
                             ),
@@ -2493,11 +2493,11 @@ impl MatchEvent for App {
                 }
                 Some(DirectMessageRoomAction::DidNotExist { user_profile }) => {
                     let user_profile = user_profile.clone();
-                    let create_encrypted = self.app_state.bot_settings.should_create_encrypted_dm(
+                    let create_encrypted = self.app_state.should_create_encrypted_dm(
                         user_profile.user_id.as_ref(),
                         current_user_id().as_deref(),
                     );
-                    let body_text = match &user_profile.username {
+                    let mut body_text = match &user_profile.username {
                         Some(un) if !un.is_empty() => format!(
                             "You don't have an existing direct message room with {} ({}).\n\n\
                             Would you like to create one now?",
@@ -2510,6 +2510,14 @@ impl MatchEvent for App {
                             user_profile.user_id,
                         ),
                     };
+                    if !create_encrypted {
+                        body_text.push_str("\n\n");
+                        body_text.push_str(&tr_fmt(
+                            self.app_state.app_language,
+                            "dm.create.unencrypted_notice",
+                            &[("user", user_profile.user_id.as_str())],
+                        ));
+                    }
                     self.ui.confirmation_modal(cx, ids!(positive_confirmation_modal_inner)).show(
                         cx,
                         ConfirmationModalContent {
@@ -3485,6 +3493,31 @@ impl AgentRegistry {
 }
 
 impl AppState {
+    /// Returns `true` if a new DM room with `target_user_id` should be encrypted.
+    ///
+    /// Combines [`BotSettingsState::should_create_encrypted_dm`] with the
+    /// [`AgentRegistry`]: any registered agent is treated as a bot and gets an
+    /// unencrypted DM; every other user gets an encrypted DM.
+    pub fn should_create_encrypted_dm(
+        &self,
+        target_user_id: &UserId,
+        current_user_id: Option<&UserId>,
+    ) -> bool {
+        let is_agent = self.agent_registry.contains(target_user_id);
+        let is_bot = self.bot_settings.is_identified_bot(target_user_id, current_user_id);
+        let encrypted = !is_agent && !is_bot;
+        log!(
+            "DM encryption decision for {target_user_id}: encrypted={encrypted} \
+            (registered_agent={is_agent}, identified_bot={is_bot}, \
+            agents={}, known_bots={}, bound_bots={}, botfather={:?})",
+            self.agent_registry.len(),
+            self.bot_settings.known_bot_user_ids.len(),
+            self.bot_settings.room_bindings.len(),
+            self.bot_settings.resolved_bot_user_id(current_user_id).ok(),
+        );
+        encrypted
+    }
+
     /// Migration: if the agent registry is empty, seed it from the legacy
     /// per-account known-bot list so upgraded users keep bot identification.
     ///
@@ -3918,17 +3951,45 @@ impl BotSettingsState {
         self.resolved_bot_user_id(current_user_id)
     }
 
+    /// Returns `true` if the target user is a positively identified bot:
+    /// the resolved BotFather MXID, a bot discovered via `/listbots`, or a
+    /// bot MXID bound to some room.
+    pub fn is_identified_bot(
+        &self,
+        target_user_id: &UserId,
+        current_user_id: Option<&UserId>,
+    ) -> bool {
+        if self
+            .resolved_bot_user_id(current_user_id)
+            .is_ok_and(|bot_user_id| bot_user_id.as_str() == target_user_id.as_str())
+        {
+            return true;
+        }
+        if self
+            .known_bot_user_ids
+            .iter()
+            .any(|bot_user_id| bot_user_id.as_str() == target_user_id.as_str())
+        {
+            return true;
+        }
+        self.room_bindings
+            .iter()
+            .any(|binding| binding.bot_user_id.as_str() == target_user_id.as_str())
+    }
+
     /// Returns `true` if new DM rooms for this target user should be encrypted.
     ///
-    /// New DM rooms are always created unencrypted so appservice bots can
-    /// receive and reply to messages without E2EE support.
+    /// Ordinary users always get an encrypted DM. Only DMs with a positively
+    /// identified bot (see [`Self::is_identified_bot`]) are created unencrypted,
+    /// because appservice bots typically cannot participate in E2EE rooms.
+    /// If the BotFather MXID cannot be resolved, the target is treated as an
+    /// ordinary user (encrypted).
     pub fn should_create_encrypted_dm(
         &self,
         target_user_id: &UserId,
         current_user_id: Option<&UserId>,
     ) -> bool {
-        let _ = (target_user_id, current_user_id);
-        false
+        !self.is_identified_bot(target_user_id, current_user_id)
     }
 }
 
@@ -4529,6 +4590,285 @@ mod tests {
             "",
             Some(current_user_id.as_ref()),
         ).is_err());
+    }
+
+    fn dm_test_settings() -> BotSettingsState {
+        BotSettingsState {
+            botfather_user_id: "bot".to_string(),
+            known_bot_user_ids: vec![UserId::parse("@weather:example.org").unwrap()],
+            room_bindings: vec![RoomBotBindingState {
+                room_id: OwnedRoomId::try_from("!room:example.org").unwrap(),
+                bot_user_id: UserId::parse("@helper:example.org").unwrap(),
+                remark: String::new(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn dm_test_current_user() -> OwnedUserId {
+        UserId::parse("@alex:example.org").unwrap()
+    }
+
+    #[test]
+    fn should_create_encrypted_dm_encrypts_ordinary_user() {
+        let settings = BotSettingsState::default();
+        let current = dm_test_current_user();
+        assert_eq!(
+            settings.resolved_bot_user_id(Some(current.as_ref())).unwrap().as_str(),
+            "@bot:example.org",
+        );
+        let alice = UserId::parse("@alice:example.org").unwrap();
+        assert!(settings.should_create_encrypted_dm(alice.as_ref(), Some(current.as_ref())));
+    }
+
+    #[test]
+    fn should_create_encrypted_dm_plaintext_for_configured_botfather() {
+        let settings = BotSettingsState::default();
+        let current = dm_test_current_user();
+        let botfather = UserId::parse("@bot:example.org").unwrap();
+        assert!(!settings.should_create_encrypted_dm(botfather.as_ref(), Some(current.as_ref())));
+
+        // A fully-qualified BotFather MXID on another homeserver is also honored.
+        let settings = BotSettingsState {
+            botfather_user_id: "@octos:other.example".to_string(),
+            ..Default::default()
+        };
+        let remote_bot = UserId::parse("@octos:other.example").unwrap();
+        assert!(!settings.should_create_encrypted_dm(remote_bot.as_ref(), Some(current.as_ref())));
+        assert!(settings.should_create_encrypted_dm(botfather.as_ref(), Some(current.as_ref())));
+    }
+
+    #[test]
+    fn should_create_encrypted_dm_plaintext_for_room_bound_bot() {
+        let settings = dm_test_settings();
+        let current = dm_test_current_user();
+        let helper = UserId::parse("@helper:example.org").unwrap();
+        assert!(!settings.known_bot_user_ids.iter().any(|id| id == &helper));
+        assert_ne!(
+            settings.resolved_bot_user_id(Some(current.as_ref())).unwrap(),
+            helper,
+        );
+        assert!(!settings.should_create_encrypted_dm(helper.as_ref(), Some(current.as_ref())));
+    }
+
+    #[test]
+    fn should_create_encrypted_dm_plaintext_for_known_bot() {
+        let settings = dm_test_settings();
+        let current = dm_test_current_user();
+        let weather = UserId::parse("@weather:example.org").unwrap();
+        assert!(!settings.should_create_encrypted_dm(weather.as_ref(), Some(current.as_ref())));
+    }
+
+    #[test]
+    fn should_create_encrypted_dm_encrypts_unrelated_user_with_bots_configured() {
+        let settings = dm_test_settings();
+        let current = dm_test_current_user();
+        let carol = UserId::parse("@carol:example.org").unwrap();
+        assert!(settings.should_create_encrypted_dm(carol.as_ref(), Some(current.as_ref())));
+        // The current user themself is also not a bot.
+        assert!(settings.should_create_encrypted_dm(current.as_ref(), Some(current.as_ref())));
+    }
+
+    #[test]
+    fn should_create_encrypted_dm_encrypts_when_botfather_unresolvable() {
+        let settings = BotSettingsState::default();
+        assert!(settings.resolved_bot_user_id(None).is_err());
+        let alice = UserId::parse("@alice:example.org").unwrap();
+        assert!(settings.should_create_encrypted_dm(alice.as_ref(), None));
+        // Even a bare "bot" localpart match cannot be inferred without a homeserver.
+        let bot_elsewhere = UserId::parse("@bot:example.org").unwrap();
+        assert!(settings.should_create_encrypted_dm(bot_elsewhere.as_ref(), None));
+    }
+
+    #[test]
+    fn app_state_should_create_encrypted_dm_plaintext_for_registered_agent() {
+        let mut app_state = AppState::default();
+        let agent = UserId::parse("@agent:example.org").unwrap();
+        app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+        let current = dm_test_current_user();
+        assert!(!app_state.bot_settings.is_identified_bot(agent.as_ref(), Some(current.as_ref())));
+        assert!(!app_state.should_create_encrypted_dm(agent.as_ref(), Some(current.as_ref())));
+
+        let dave = UserId::parse("@dave:example.org").unwrap();
+        assert!(app_state.should_create_encrypted_dm(dave.as_ref(), Some(current.as_ref())));
+
+        // Bot-settings identification still applies at the AppState level.
+        let botfather = UserId::parse("@bot:example.org").unwrap();
+        assert!(!app_state.should_create_encrypted_dm(botfather.as_ref(), Some(current.as_ref())));
+    }
+
+    #[test]
+    fn dm_unencrypted_notice_i18n_keys_exist_in_all_locales() {
+        use crate::i18n::{AppLanguage, tr_fmt, tr_key};
+        for language in AppLanguage::ALL {
+            let value = tr_key(language, "dm.create.unencrypted_notice");
+            assert_ne!(value, "dm.create.unencrypted_notice", "missing key for {language:?}");
+            assert!(!value.trim().is_empty());
+            let rendered = tr_fmt(language, "dm.create.unencrypted_notice", &[("user", "@bot:example.org")]);
+            assert!(rendered.contains("@bot:example.org"), "placeholder not substituted for {language:?}");
+        }
+    }
+
+    /// Rule dm-enc-4 (single decision point): user-facing DM entry points must
+    /// route through `AppState::should_create_encrypted_dm` and never hardcode a
+    /// plaintext request. Mirrors the CI guard
+    /// `agent-spec check-structure --forbid "create_encrypted: false" --in "src/{home,profile}/**"`
+    /// (plus `src/settings/agent_settings.rs`)
+    /// (that doc line is a comment and is excluded below).
+    #[test]
+    fn dm_entry_points_do_not_hardcode_plaintext() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        // Built at runtime so this test's own source does not match the needle.
+        let needle = format!("create_encrypted: {}", false);
+        for rel in [
+            "src/home/add_room.rs",
+            "src/profile/user_profile.rs",
+            "src/settings/agent_settings.rs",
+        ] {
+            let src = std::fs::read_to_string(format!("{root}/{rel}")).unwrap();
+            assert!(
+                !src.contains(&needle),
+                "{rel} hardcodes an unencrypted DM; use AppState::should_create_encrypted_dm",
+            );
+            assert!(
+                src.contains("should_create_encrypted_dm("),
+                "{rel} no longer consults the DM encryption decision",
+            );
+        }
+        // app.rs itself: the only `create_encrypted:` sites are the two decision-driven ones.
+        let app_src = std::fs::read_to_string(format!("{root}/src/app.rs")).unwrap();
+        let hardcoded = app_src
+            .lines()
+            .filter(|l| l.contains(&needle) && !l.trim_start().starts_with("//"))
+            .count();
+        assert_eq!(hardcoded, 0, "src/app.rs hardcodes an unencrypted DM");
+    }
+
+    // ---------------------------------------------------------------------
+    // Property tests for the DM-encryption invariants (spec:
+    // task-dm-encryption-default, Rules dm-enc-*). Inputs are drawn from a
+    // deliberately tiny alphabet so that targets frequently collide with the
+    // BotFather / known / bound / agent sets.
+    // ---------------------------------------------------------------------
+    mod dm_encryption_props {
+        use super::super::{AgentEntry, AppState, BotSettingsState, RoomBotBindingState};
+        use matrix_sdk::ruma::{OwnedRoomId, OwnedUserId, UserId};
+        use proptest::prelude::*;
+
+        const LOCALPARTS: [&str; 6] = ["alice", "bot", "helper", "weather", "agent", "octos"];
+        const SERVERS: [&str; 2] = ["example.org", "other.example"];
+
+        fn arb_user_id() -> impl Strategy<Value = OwnedUserId> {
+            (0..LOCALPARTS.len(), 0..SERVERS.len()).prop_map(|(l, s)| {
+                UserId::parse(format!("@{}:{}", LOCALPARTS[l], SERVERS[s])).unwrap()
+            })
+        }
+
+        /// BotFather config: localpart-only, full MXID, empty (→ default), or garbage.
+        fn arb_botfather_config() -> impl Strategy<Value = String> {
+            prop_oneof![
+                (0..LOCALPARTS.len()).prop_map(|l| LOCALPARTS[l].to_string()),
+                arb_user_id().prop_map(|u| u.to_string()),
+                Just(String::new()),
+                Just("@not a valid id".to_string()),
+            ]
+        }
+
+        fn arb_bot_settings() -> impl Strategy<Value = BotSettingsState> {
+            (
+                arb_botfather_config(),
+                prop::collection::vec(arb_user_id(), 0..4),
+                prop::collection::vec(arb_user_id(), 0..4),
+            )
+                .prop_map(|(botfather_user_id, known_bot_user_ids, bound)| BotSettingsState {
+                    botfather_user_id,
+                    known_bot_user_ids,
+                    room_bindings: bound
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, bot_user_id)| RoomBotBindingState {
+                            room_id: OwnedRoomId::try_from(format!("!room{i}:example.org")).unwrap(),
+                            bot_user_id,
+                            remark: String::new(),
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+        }
+
+        /// Independent oracle for B(t): the positive-evidence set, computed the
+        /// obvious way (not via `is_identified_bot`).
+        fn oracle_is_bot(settings: &BotSettingsState, target: &UserId, current: Option<&UserId>) -> bool {
+            let botfather_hit = match settings.resolved_bot_user_id(current) {
+                Ok(bot) => bot == target,
+                Err(_) => false, // I3: unresolvable ⇒ this clause is false
+            };
+            botfather_hit
+                || settings.known_bot_user_ids.iter().any(|b| b == target)
+                || settings.room_bindings.iter().any(|b| b.bot_user_id == target)
+        }
+
+        proptest! {
+            /// Rule dm-enc-1: E(t) ⇔ ¬B(t).
+            #[test]
+            fn prop_should_create_encrypted_dm_iff_not_identified_bot(
+                settings in arb_bot_settings(),
+                target in arb_user_id(),
+                current in prop::option::of(arb_user_id()),
+            ) {
+                let cur = current.as_deref();
+                prop_assert_eq!(
+                    settings.should_create_encrypted_dm(&target, cur),
+                    !oracle_is_bot(&settings, &target, cur),
+                );
+                prop_assert_eq!(
+                    settings.is_identified_bot(&target, cur),
+                    oracle_is_bot(&settings, &target, cur),
+                );
+            }
+
+            /// Rule dm-enc-2: plaintext requires positive local evidence, and an
+            /// unresolvable BotFather never contributes evidence.
+            #[test]
+            fn prop_plaintext_requires_positive_evidence(
+                settings in arb_bot_settings(),
+                target in arb_user_id(),
+                current in prop::option::of(arb_user_id()),
+            ) {
+                let cur = current.as_deref();
+                if !settings.should_create_encrypted_dm(&target, cur) {
+                    let evidence = settings.resolved_bot_user_id(cur).is_ok_and(|b| b == target)
+                        || settings.known_bot_user_ids.contains(&target)
+                        || settings.room_bindings.iter().any(|b| b.bot_user_id == target);
+                    prop_assert!(evidence, "plaintext DM without positive bot evidence");
+                }
+                if settings.resolved_bot_user_id(cur).is_err()
+                    && !settings.known_bot_user_ids.contains(&target)
+                    && !settings.room_bindings.iter().any(|b| b.bot_user_id == target)
+                {
+                    prop_assert!(settings.should_create_encrypted_dm(&target, cur));
+                }
+            }
+
+            /// Rule dm-enc-1 at the AppState level: agents extend B(t), nothing else changes.
+            #[test]
+            fn prop_app_state_encrypts_unless_agent_or_bot(
+                settings in arb_bot_settings(),
+                agents in prop::collection::vec(arb_user_id(), 0..4),
+                target in arb_user_id(),
+                current in prop::option::of(arb_user_id()),
+            ) {
+                let mut app_state = AppState::default();
+                app_state.bot_settings = settings;
+                for agent in &agents {
+                    app_state.agent_registry.register(agent.clone(), AgentEntry::default());
+                }
+                let cur = current.as_deref();
+                let expected = !(agents.contains(&target)
+                    || oracle_is_bot(&app_state.bot_settings, &target, cur));
+                prop_assert_eq!(app_state.should_create_encrypted_dm(&target, cur), expected);
+            }
+        }
     }
 
     #[test]

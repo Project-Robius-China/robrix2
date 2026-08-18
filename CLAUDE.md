@@ -102,5 +102,24 @@ Key entry points:
 
 Task specs live in `specs/` and inherit from `specs/project.spec.md`:
 - `specs/task-mention-user.spec.md` — @mention autocomplete feature
+- `specs/task-dm-encryption-default.spec.md` — reference template for invariant-driven specs (see below)
 
 Use `agent-spec parse` and `agent-spec lint --min-score 0.7` to validate specs.
+
+### Invariant-driven spec template (required for decision / lifecycle logic)
+
+Write the invariants BEFORE the code, then bind each one to tests so `agent-spec lifecycle` is the single gate:
+
+1. **State invariants as math** in an HTML comment at the top of `## Acceptance Criteria`
+   (e.g. `E(t) ⇔ ¬B(t)`, `¬E(t) ⇒ evidence`, `load(save(s)) = s`, `opens − closes = live`).
+2. **One `### Rule: <kebab-id> — <name>` per invariant**; scenarios sit under their Rule.
+3. **Name the pure function** that carries the invariant in `## Decisions` (signature + file). UI / worker code only calls it — never re-derives the decision.
+4. **Bind every Rule to**:
+   - example unit tests (happy path, inverse, boundary such as `Err`/`None`/empty),
+   - at least one **`proptest` property test** (`prop_*`) that asserts the invariant literally over generated inputs, using an independent oracle rather than the function under test,
+   - a **structural guard** where "single decision point" matters: a Rust test that scans sources + the equivalent `agent-spec check-structure --forbid "<literal>" --in "<glob>"`.
+5. UI-only or homeserver-dependent behaviour uses `Test: manual_test_*` selectors (they show as `skip`; the user runs them before commit).
+6. Mutation-check property tests once: revert the fix, confirm they fail, restore.
+7. Root-level files in `Allowed Changes` must be written as `./Cargo.toml` to match the boundary checker.
+
+`proptest` is an approved dev-dependency (see `specs/project.spec.md` → Decisions). Do not add fuzzing (`cargo-fuzz`) for decision logic; reserve it for byte-level parsing surfaces.
