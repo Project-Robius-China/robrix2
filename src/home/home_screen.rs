@@ -693,6 +693,14 @@ impl HomeScreen {
             app_state.selected_tab = SelectedTab::Home;
         }
 
+        // Keep the persistable `selected_space_id` in sync with `selected_tab`,
+        // which itself is transient (`#[serde(skip)]`). This is what allows the
+        // currently-selected space to be restored across app restarts.
+        app_state.selected_space_id = match &app_state.selected_tab {
+            SelectedTab::Space { space_name_id } => Some(space_name_id.room_id().clone()),
+            _ => None,
+        };
+
         self.view
             .page_flip(cx, ids!(home_screen_page_flip))
             .set_active_page(
