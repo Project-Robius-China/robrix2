@@ -198,6 +198,10 @@ askar-storage = { git = "https://github.com/openwallet-foundation/askar.git" }
 ## the whole per-room object (suspected cause of invites/new rooms never appearing).
 ruma = { git = "https://github.com/Project-Robius-China/ruma.git", branch = "tsp-lax-syncv5-deser" }
 
+[dev-dependencies]
+## Property-based testing for spec invariants (see specs/project.spec.md → Decisions).
+proptest = { version = "1", default-features = false, features = ["std"] }
+
 [build-dependencies]
 toml = "1"
 
