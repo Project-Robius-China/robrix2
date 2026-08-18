@@ -11,7 +11,7 @@ use crate::{
     sliding_sync::{AccountSwitchAction, current_user_id, get_client},
     utils::RoomNameId,
 };
-use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::RoomScreenWidgetRefExt, rooms_list::RoomsListAction};
+use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::{RoomScreenWidgetRefExt, close_if_unreferenced, close_thread_timeline}, rooms_list::RoomsListAction};
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -375,9 +375,19 @@ impl MainDesktopUI {
 
         dock.close_tab(cx, tab_id);
         self.tab_to_close = None;
-        self.open_rooms.remove(&tab_id);
+        let closed_room = self.open_rooms.remove(&tab_id);
         self.initialized_tabs.remove(&tab_id);
         self.sync_visible_room_timelines(cx);
+
+        // If that was the last tab showing a thread, free its backend timeline
+        // and subscriber task (spec task-thread-timeline-lifecycle, Rule th-2).
+        // `sync_visible_room_timelines` above has already hidden the RoomScreen,
+        // so its UI state is saved (and then invalidated) before the backend goes.
+        if let Some(closed_room) = closed_room
+            && let Some(kind) = close_if_unreferenced(&closed_room, self.open_rooms.values())
+        {
+            close_thread_timeline(cx, &kind);
+        }
     }
 
     /// Closes every open tab belonging to the given room, including thread tabs.
@@ -399,8 +409,15 @@ impl MainDesktopUI {
     /// Closes all tabs
     pub fn close_all_tabs(&mut self, cx: &mut Cx) {
         let dock = self.view.dock(cx, ids!(dock));
-        for tab_id in self.open_rooms.keys() {        
+        for tab_id in self.open_rooms.keys() {
             dock.close_tab(cx, *tab_id);
+        }
+        // Every thread tab is going away, so every thread timeline can be closed
+        // (nothing remains to reference them; see `close_tab`).
+        for room in self.open_rooms.values() {
+            if let Some(kind) = close_if_unreferenced(room, std::iter::empty()) {
+                close_thread_timeline(cx, &kind);
+            }
         }
 
         dock.select_tab(cx, id!(home_tab));

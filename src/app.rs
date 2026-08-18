@@ -22,7 +22,7 @@ use crate::{
         add_menu::{AddMenuAction, AddMenuWidgetRefExt},
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, JoinRoomModalAction, JoinRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, set_room_info_action_modal_open}, room_settings_modal::{PendingAliasWrites, RoomSettingsAction, RoomSettingsFetchReason, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
+        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, ReportRoomModalAction, ReportRoomModalWidgetRefExt, ReportRoomResultAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states, close_if_unreferenced, close_thread_timeline, set_room_info_action_modal_open}, room_settings_modal::{PendingAliasWrites, RoomSettingsAction, RoomSettingsFetchReason, RoomSettingsModalWidgetRefExt}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         report_orphaned_join_leave_results, JoinLeaveModalKind, JoinLeaveRoomModalAction,
         JoinLeaveRoomModalWidgetRefExt
@@ -1654,8 +1654,20 @@ impl MatchEvent for App {
             // When a stack navigation pop is initiated (back button pressed),
             // pop the mobile nav stack so it stays in sync with StackNavigation.
             if let StackNavigationAction::Pop = action.as_widget_action().cast() {
-                if self.app_state.selected_room.is_some() {
+                if let Some(popped) = self.app_state.selected_room.take() {
                     self.app_state.selected_room = self.mobile_room_nav_stack.pop();
+                    // On mobile, popping the last view of a thread frees its backend
+                    // timeline; a thread still deeper in the stack (room → thread →
+                    // room → thread) stays alive (spec task-thread-timeline-lifecycle,
+                    // Rules th-2/th-3). On desktop the mobile stack isn't drawn and
+                    // MainDesktopUI owns thread lifetimes via its dock tabs.
+                    if !effective_is_desktop(cx) {
+                        let remaining = self.mobile_room_nav_stack.iter()
+                            .chain(self.app_state.selected_room.iter());
+                        if let Some(kind) = close_if_unreferenced(&popped, remaining) {
+                            close_thread_timeline(cx, &kind);
+                        }
+                    }
                 }
                 // Don't `continue` — let StackNavigation also process this Pop.
             }

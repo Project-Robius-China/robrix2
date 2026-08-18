@@ -235,8 +235,8 @@ thread_local! {
     /// The global set of all timeline states, one entry per room.
     ///
     /// This is only useful when accessed from the main UI thread.
-    pub(super) static TIMELINE_STATES: RefCell<HashMap<TimelineKind, TimelineUiState>> =
-        RefCell::new(HashMap::new());
+    pub(super) static TIMELINE_STATES: RefCell<TimelineStateCache<TimelineUiState>> =
+        RefCell::new(TimelineStateCache::default());
 
     /// A per-room generation counter, bumped each time a room's timeline states
     /// are invalidated (left/kicked/banned). A room absent from this map is at
@@ -250,6 +250,68 @@ thread_local! {
     /// be written back, no matter how late it arrives.
     static TIMELINE_ROOM_GENERATIONS: RefCell<HashMap<OwnedRoomId, u64>> =
         RefCell::new(HashMap::new());
+}
+
+/// The cache of hidden timelines' UI states plus the set of kinds that were
+/// invalidated while their state was checked out by a visible RoomScreen.
+///
+/// Generic over the state type so the take / store / invalidate protocol
+/// (spec `task-thread-timeline-lifecycle`, Rule th-4) is unit-testable without
+/// building a real `TimelineUiState`.
+pub(super) struct TimelineStateCache<S> {
+    states: HashMap<TimelineKind, S>,
+    /// Kinds whose backend was closed while a RoomScreen might still be showing
+    /// them (see [`invalidate_timeline_state`]). When that RoomScreen hides and
+    /// tries to save its state back, [`TimelineStateCache::store`] drops it
+    /// instead, so a later show rebuilds from a fresh backend timeline.
+    invalidated: HashSet<TimelineKind>,
+}
+impl<S> Default for TimelineStateCache<S> {
+    fn default() -> Self {
+        Self { states: HashMap::new(), invalidated: HashSet::new() }
+    }
+}
+impl<S> TimelineStateCache<S> {
+    /// Checks the state for `kind` out (for a RoomScreen about to show it) and
+    /// clears any invalidation mark, so a state created by this show is stored
+    /// normally on the next hide.
+    pub(super) fn take(&mut self, kind: &TimelineKind) -> Option<S> {
+        self.invalidated.remove(kind);
+        self.states.remove(kind)
+    }
+
+    /// Stores a hidden RoomScreen's state back. Returns `false` (and drops the
+    /// state) if `kind` was invalidated while it was checked out.
+    pub(super) fn store(&mut self, kind: TimelineKind, state: S) -> bool {
+        if self.invalidated.remove(&kind) {
+            return false;
+        }
+        self.states.insert(kind, state);
+        true
+    }
+
+    /// Invalidates `kind`: removes a cached state if present, otherwise marks
+    /// the kind so the currently checked-out state is dropped when stored.
+    pub(super) fn invalidate(&mut self, kind: &TimelineKind) {
+        if self.states.remove(kind).is_none() {
+            self.invalidated.insert(kind.clone());
+        }
+    }
+
+    pub(super) fn retain_rooms(&mut self, mut keep: impl FnMut(&TimelineKind) -> bool) {
+        self.states.retain(|kind, _| keep(kind));
+        self.invalidated.retain(|kind| keep(kind));
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.states.clear();
+        self.invalidated.clear();
+    }
+
+    #[cfg(test)]
+    fn contains(&self, kind: &TimelineKind) -> bool {
+        self.states.contains_key(kind)
+    }
 }
 
 /// The UI-side state of a single room's timeline, which is only accessed/updated by the UI thread.
@@ -440,9 +502,7 @@ pub(super) struct SavedState {
 /// must only be called by the main UI thread.
 pub fn clear_timeline_states(_cx: &mut Cx) {
     // Clear timeline states cache
-    TIMELINE_STATES.with_borrow_mut(|states| {
-        states.clear();
-    });
+    TIMELINE_STATES.with_borrow_mut(|states| states.clear());
 }
 
 /// Clears all UI-related timeline state (the main room timeline plus any open
@@ -457,9 +517,7 @@ pub fn clear_timeline_states(_cx: &mut Cx) {
 /// which isn't used, but acts as a guarantee that this function
 /// must only be called by the main UI thread.
 pub fn invalidate_timeline_state_for_room(_cx: &mut Cx, room_id: &RoomId) {
-    TIMELINE_STATES.with_borrow_mut(|states| {
-        states.retain(|kind, _| kind.room_id() != room_id);
-    });
+    TIMELINE_STATES.with_borrow_mut(|states| states.retain_rooms(|kind| kind.room_id() != room_id));
     // A RoomScreen currently displaying this room still holds its state and will
     // try to save it back upon being hidden/closed; bumping the generation makes
     // `store_timeline_state` reject that state, even if the room gets re-joined
@@ -489,20 +547,99 @@ pub(super) fn is_generation_current(room_id: &RoomId, generation: u64) -> bool {
     generation == current_timeline_generation(room_id)
 }
 
+/// Invalidates the cached UI state of one timeline (a thread whose backend
+/// timeline is being closed), so the next show rebuilds it from a fresh backend
+/// instead of reusing a cache whose update channel is about to be dropped.
+///
+/// If a RoomScreen is currently showing `kind` (its state is checked out of the
+/// map), the kind is remembered and the state is dropped when that RoomScreen
+/// hides (see [`store_timeline_state`]). Otherwise the cached state is removed
+/// now. Either way, [`take_timeline_state`] on the next show clears the mark.
+///
+/// Requires `&mut Cx` (unused) so it can only be called from the UI thread.
+pub fn invalidate_timeline_state(_cx: &mut Cx, kind: &TimelineKind) {
+    TIMELINE_STATES.with_borrow_mut(|ts| ts.invalidate(kind));
+}
+
+/// Closes a thread timeline end to end: invalidates its cached UI state and
+/// asks the sliding-sync worker to drop the backend timeline + subscriber task.
+///
+/// Call this only when the last drawn view of the thread has gone away
+/// (spec `task-thread-timeline-lifecycle`, Rules th-2/th-3); does nothing for
+/// non-thread kinds.
+pub fn close_thread_timeline(cx: &mut Cx, kind: &TimelineKind) {
+    let TimelineKind::Thread { room_id, thread_root_event_id } = kind else { return };
+    invalidate_timeline_state(cx, kind);
+    submit_async_request(MatrixRequest::CloseThreadTimeline {
+        room_id: room_id.clone(),
+        thread_root_event_id: thread_root_event_id.clone(),
+    });
+}
+
+/// Checks a timeline state out of the global map for a RoomScreen that is
+/// about to show it. Also clears any pending invalidation mark for `kind`, so a
+/// state created by this show is stored normally on the next hide.
+pub(super) fn take_timeline_state(kind: &TimelineKind) -> Option<TimelineUiState> {
+    TIMELINE_STATES.with_borrow_mut(|ts| ts.take(kind))
+}
+
 /// Saves the given timeline state into the global `TIMELINE_STATES` map,
 /// unless it was created before the room's last invalidation
-/// (left/kicked/banned), in which case it is stale and gets discarded.
+/// (left/kicked/banned) or its timeline was invalidated while shown
+/// (thread closed), in which case it is stale and gets discarded.
 pub(super) fn store_timeline_state(tl: TimelineUiState) {
     if !is_generation_current(tl.kind.room_id(), tl.generation) {
         log!("Discarding stale timeline state (from before a leave/kick/ban) for room {:?}", tl.kind);
         return;
     }
-    TIMELINE_STATES.with_borrow_mut(|ts| ts.insert(tl.kind.clone(), tl));
+    let kind = tl.kind.clone();
+    let stored = TIMELINE_STATES.with_borrow_mut(|ts| ts.store(kind.clone(), tl));
+    if !stored {
+        log!("Discarding invalidated timeline state (thread closed while shown) for {kind:?}");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalidated_timeline_state_is_dropped_and_fresh_state_is_stored() {
+        let room_id = RoomId::parse("!thread_invalidate_test:example.org").unwrap();
+        let k = TimelineKind::Thread {
+            room_id: room_id.to_owned(),
+            thread_root_event_id: OwnedEventId::try_from("$root").unwrap(),
+        };
+        let other = TimelineKind::MainRoom { room_id: room_id.to_owned() };
+        let mut cache: TimelineStateCache<u32> = TimelineStateCache::default();
+
+        // Cached (hidden) state is removed immediately by invalidate.
+        assert!(cache.store(k.clone(), 1));
+        assert!(cache.contains(&k));
+        cache.invalidate(&k);
+        assert!(!cache.contains(&k));
+
+        // Checked-out (shown) state: invalidate marks; the late store is dropped.
+        assert!(cache.store(k.clone(), 2));
+        assert_eq!(cache.take(&k), Some(2));           // RoomScreen shows it
+        cache.invalidate(&k);                           // thread tab closed while shown
+        assert!(!cache.store(k.clone(), 2), "late save must be dropped");
+        assert!(!cache.contains(&k));
+
+        // A fresh show clears the mark: take (nothing cached) then store succeeds.
+        assert_eq!(cache.take(&k), None);
+        assert!(cache.store(k.clone(), 3));
+        assert_eq!(cache.take(&k), Some(3));
+
+        // Invalidation is per kind: the main room's state is untouched.
+        assert!(cache.store(other.clone(), 9));
+        cache.invalidate(&k);
+        assert!(cache.contains(&other));
+        assert_eq!(cache.take(&other), Some(9));
+        // The mark for k is still pending until k is taken or stored once.
+        assert!(!cache.store(k.clone(), 4));
+        assert!(cache.store(k.clone(), 5));
+    }
 
     #[test]
     fn stale_generation_rejected_after_invalidation_and_new_generation_accepted() {

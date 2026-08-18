@@ -1446,6 +1446,12 @@ pub enum MatrixRequest {
         room_id: OwnedRoomId,
         thread_root_event_id: OwnedEventId,
     },
+    /// Request to close a thread timeline: drop its backend timeline and stop its
+    /// subscriber task. Sent when the last UI view of that thread closes.
+    CloseThreadTimeline {
+        room_id: OwnedRoomId,
+        thread_root_event_id: OwnedEventId,
+    },
     /// Request to knock on (request an invite to) the given room.
     Knock {
         room_or_alias_id: OwnedRoomOrAliasId,
@@ -3405,6 +3411,25 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::CloseThreadTimeline { room_id, thread_root_event_id } => {
+                let mut all_joined_rooms = ALL_JOINED_ROOMS.lock().unwrap();
+                let Some(room_info) = all_joined_rooms.get_mut(&room_id) else {
+                    continue;
+                };
+                // Removes a pending creation too, so a build that finishes later
+                // is rejected by `finish_create` (Rule th-5). Dropping the returned
+                // details aborts its subscriber task (`PerTimelineDetails::drop`).
+                if let Some(details) = room_info.thread_timelines.close(&thread_root_event_id) {
+                    drop(details);
+                    log!(
+                        "Closed thread timeline for room {room_id}, thread {thread_root_event_id} \
+                        (remaining: live={}, pending={}).",
+                        room_info.thread_timelines.live_len(),
+                        room_info.thread_timelines.pending_len(),
+                    );
+                }
+            }
+
             MatrixRequest::CreateThreadTimeline { room_id, thread_root_event_id } => {
                 let main_room_timeline = {
                     let mut all_joined_rooms = ALL_JOINED_ROOMS.lock().unwrap();
@@ -3412,11 +3437,8 @@ async fn matrix_worker_task(
                         error!("BUG: room info not found for create thread timeline request, room {room_id}");
                         continue;
                     };
-                    if room_info.thread_timelines.contains_key(&thread_root_event_id) {
-                        continue;
-                    }
-                    let newly_pending = room_info.pending_thread_timelines.insert(thread_root_event_id.clone());
-                    if !newly_pending {
+                    if !room_info.thread_timelines.begin_create(thread_root_event_id.clone()) {
+                        // Already live or already being built.
                         continue;
                     }
                     room_info.main_timeline.timeline.clone()
@@ -3456,35 +3478,42 @@ async fn matrix_worker_task(
                                     Some(thread_root_event_id.clone()),
                                 )
                             );
-                            room_info
-                                .pending_thread_timelines
-                                .remove(&thread_root_event_id);
-                            room_info.thread_timelines.insert(
-                                thread_root_event_id.clone(),
-                                PerTimelineDetails {
-                                    timeline: thread_timeline,
-                                    timeline_update_sender,
-                                    pagination_status: Arc::new(
-                                        TimelinePaginationStatus::default(),
-                                    ),
-                                    timeline_singleton_endpoints: Some((
-                                        timeline_update_receiver,
-                                        request_sender,
-                                    )),
-                                    timeline_subscriber: TimelineSubscriber::Running(
-                                        timeline_subscriber_handler_task,
-                                    ),
-                                },
-                            );
-                            SignalToUI::set_ui_signal();
+                            let details = PerTimelineDetails {
+                                timeline: thread_timeline,
+                                timeline_update_sender,
+                                pagination_status: Arc::new(
+                                    TimelinePaginationStatus::default(),
+                                ),
+                                timeline_singleton_endpoints: Some((
+                                    timeline_update_receiver,
+                                    request_sender,
+                                )),
+                                timeline_subscriber: TimelineSubscriber::Running(
+                                    timeline_subscriber_handler_task,
+                                ),
+                            };
+                            match room_info.thread_timelines.finish_create(thread_root_event_id.clone(), details) {
+                                Ok(()) => {
+                                    log!(
+                                        "Thread timelines for room {room_id}: live={}, pending={}.",
+                                        room_info.thread_timelines.live_len(),
+                                        room_info.thread_timelines.pending_len(),
+                                    );
+                                    SignalToUI::set_ui_signal();
+                                }
+                                Err(orphan) => {
+                                    // The thread was closed while its timeline was building
+                                    // (Rule th-5): drop it now, which aborts the subscriber task.
+                                    log!("Thread timeline for room {room_id}, thread {thread_root_event_id} was closed while building; dropping it.");
+                                    drop(orphan);
+                                }
+                            }
                         }
                         Err(error) => {
                             error!("Failed to create thread-focused timeline for room {room_id}, thread {thread_root_event_id}: {error}");
                             let mut all_joined_rooms = ALL_JOINED_ROOMS.lock().unwrap();
                             if let Some(room_info) = all_joined_rooms.get_mut(&room_id) {
-                                room_info
-                                    .pending_thread_timelines
-                                    .remove(&thread_root_event_id);
+                                room_info.thread_timelines.fail_create(&thread_root_event_id);
                             }
                             let error_detail = format!("{error}");
                             let room_id_retry = room_id.clone();
@@ -6989,15 +7018,98 @@ impl Drop for PerTimelineDetails {
     }
 }
 
+/// Bookkeeping for the thread-focused timelines of one room.
+///
+/// A thread is either *pending* (its timeline is being built by an async task),
+/// *live* (built and subscribed), or absent. The table keeps
+/// `live ∩ pending = ∅` and makes "close while building" safe: `close()`
+/// forgets the pending id, so the build task's later `finish_create()` is
+/// rejected and the freshly built value is handed back to be dropped instead
+/// of leaking into the table (spec `task-thread-timeline-lifecycle`, Rules th-1/th-5).
+///
+/// Generic over the payload so its invariants can be property-tested without
+/// constructing real SDK timelines.
+#[derive(Debug)]
+pub(crate) struct ThreadTimelineTable<T> {
+    live: HashMap<OwnedEventId, T>,
+    pending: HashSet<OwnedEventId>,
+}
+impl<T> Default for ThreadTimelineTable<T> {
+    fn default() -> Self {
+        Self { live: HashMap::new(), pending: HashSet::new() }
+    }
+}
+impl<T> ThreadTimelineTable<T> {
+    /// Marks `id` as being created. Returns `false` (and does nothing) if the
+    /// thread is already live or already pending.
+    pub(crate) fn begin_create(&mut self, id: OwnedEventId) -> bool {
+        if self.live.contains_key(&id) {
+            return false;
+        }
+        self.pending.insert(id)
+    }
+
+    /// Completes a creation started with [`Self::begin_create`].
+    ///
+    /// Inserts `value` only if `id` is still pending; otherwise (the thread was
+    /// closed while building) returns `Err(value)` so the caller can drop it.
+    pub(crate) fn finish_create(&mut self, id: OwnedEventId, value: T) -> Result<(), T> {
+        if !self.pending.remove(&id) {
+            return Err(value);
+        }
+        self.live.insert(id, value);
+        Ok(())
+    }
+
+    /// Abandons a creation started with [`Self::begin_create`] (build failed).
+    pub(crate) fn fail_create(&mut self, id: &OwnedEventId) -> bool {
+        self.pending.remove(id)
+    }
+
+    /// Closes the thread: forgets a pending creation and removes a live entry,
+    /// returning it so the caller decides how to drop it.
+    pub(crate) fn close(&mut self, id: &OwnedEventId) -> Option<T> {
+        self.pending.remove(id);
+        self.live.remove(id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains(&self, id: &OwnedEventId) -> bool {
+        self.live.contains_key(id) || self.pending.contains(id)
+    }
+    pub(crate) fn get(&self, id: &OwnedEventId) -> Option<&T> {
+        self.live.get(id)
+    }
+    pub(crate) fn get_mut(&mut self, id: &OwnedEventId) -> Option<&mut T> {
+        self.live.get_mut(id)
+    }
+    pub(crate) fn live_len(&self) -> usize {
+        self.live.len()
+    }
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+    #[cfg(test)]
+    pub(crate) fn live_ids(&self) -> Vec<OwnedEventId> {
+        let mut v: Vec<_> = self.live.keys().cloned().collect();
+        v.sort();
+        v
+    }
+    #[cfg(test)]
+    pub(crate) fn pending_ids(&self) -> Vec<OwnedEventId> {
+        let mut v: Vec<_> = self.pending.iter().cloned().collect();
+        v.sort();
+        v
+    }
+}
+
 struct JoinedRoomDetails {
     /// The room ID of this joined room.
     room_id: OwnedRoomId,
     /// Details about the main timeline for this room.
     main_timeline: PerTimelineDetails,
-    /// Thread-focused timelines for this room, keyed by thread root event ID.
-    thread_timelines: HashMap<OwnedEventId, PerTimelineDetails>,
-    /// The set of thread timelines currently being created, to avoid duplicate in-flight work.
-    pending_thread_timelines: HashSet<OwnedEventId>,
+    /// Thread-focused timelines for this room (live and in-flight), keyed by thread root event ID.
+    thread_timelines: ThreadTimelineTable<PerTimelineDetails>,
     /// A drop guard for the event handler that represents a subscription to typing notices for this room.
     typing_notice_subscriber: Option<EventHandlerDropGuard>,
     /// A drop guard for the event handler that represents a subscription to pinned events for this room.
@@ -7488,6 +7600,14 @@ pub fn take_timeline_endpoints(kind: &TimelineKind) -> Option<TimelineEndpoints>
         pagination_status: details.pagination_status.clone(),
         successor_room: details.timeline.room().successor_room(),
     })
+}
+
+/// Returns `(live, pending)` thread-timeline counts for the given joined room,
+/// or `None` if the room is not joined. Used for logging and lifecycle tests.
+pub fn thread_timeline_counts(room_id: &RoomId) -> Option<(usize, usize)> {
+    let all_joined_rooms = ALL_JOINED_ROOMS.lock().unwrap();
+    let jrd = all_joined_rooms.get(room_id)?;
+    Some((jrd.thread_timelines.live_len(), jrd.thread_timelines.pending_len()))
 }
 
 /// Returns a clone of the timeline update sender for the given timeline.
@@ -8814,8 +8934,7 @@ async fn add_new_room(
                 pagination_status: Arc::new(TimelinePaginationStatus::default()),
                 timeline_subscriber: TimelineSubscriber::NotStarted { request_receiver },
             },
-            thread_timelines: HashMap::new(),
-            pending_thread_timelines: HashSet::new(),
+            thread_timelines: ThreadTimelineTable::default(),
             typing_notice_subscriber: None,
             pinned_events_subscriber: None,
             room_encryption_subscriber_task: None,
@@ -11050,5 +11169,119 @@ mod tests {
 
         assert_eq!(restore_session_failure_action(&err), RestoreSessionFailureAction::Preserve);
         assert!(restore_session_failure_message(&err).contains("latest user"));
+    }
+}
+
+#[cfg(test)]
+mod thread_timeline_table_tests {
+    //! Rules th-1 / th-5 of spec `task-thread-timeline-lifecycle`.
+    use super::ThreadTimelineTable;
+    use matrix_sdk::ruma::OwnedEventId;
+    use proptest::prelude::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn ev(n: u8) -> OwnedEventId {
+        OwnedEventId::try_from(format!("$thread{n}")).unwrap()
+    }
+
+    #[test]
+    fn thread_table_begin_finish_close_lifecycle() {
+        let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
+        assert!(t.begin_create(ev(1)));
+        assert_eq!((t.live_len(), t.pending_len()), (0, 1));
+        assert!(t.contains(&ev(1)));
+        assert!(t.get(&ev(1)).is_none(), "pending is not live");
+        assert_eq!(t.finish_create(ev(1), 1), Ok(()));
+        assert_eq!((t.live_len(), t.pending_len()), (1, 0));
+        assert_eq!(t.get(&ev(1)), Some(&1));
+        assert_eq!(t.close(&ev(1)), Some(1));
+        assert!(!t.contains(&ev(1)));
+        assert_eq!((t.live_len(), t.pending_len()), (0, 0));
+        // Closing again is a no-op.
+        assert_eq!(t.close(&ev(1)), None);
+    }
+
+    #[test]
+    fn thread_table_rejects_duplicate_begin() {
+        let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
+        assert!(t.begin_create(ev(1)));
+        assert!(!t.begin_create(ev(1)), "already pending");
+        assert_eq!(t.finish_create(ev(1), 1), Ok(()));
+        assert!(!t.begin_create(ev(1)), "already live");
+        assert_eq!((t.live_len(), t.pending_len()), (1, 0));
+    }
+
+    #[test]
+    fn thread_table_finish_after_close_is_rejected() {
+        let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
+        assert!(t.begin_create(ev(1)));
+        assert_eq!(t.close(&ev(1)), None, "nothing live yet, but pending is forgotten");
+        assert_eq!(t.finish_create(ev(1), 7), Err(7));
+        assert!(!t.contains(&ev(1)));
+        assert_eq!((t.live_len(), t.pending_len()), (0, 0));
+        // fail_create after close is also a harmless no-op.
+        assert!(!t.fail_create(&ev(1)));
+    }
+
+    #[derive(Clone, Debug)]
+    enum Op { Begin(u8), Finish(u8, u32), Fail(u8), Close(u8) }
+
+    fn arb_op() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            (0u8..4).prop_map(Op::Begin),
+            (0u8..4, 0u32..100).prop_map(|(i, v)| Op::Finish(i, v)),
+            (0u8..4).prop_map(Op::Fail),
+            (0u8..4).prop_map(Op::Close),
+        ]
+    }
+
+    proptest! {
+        /// Rule th-1: live ∩ pending = ∅; close ⇒ ¬live ∧ ¬pending; finish inserts
+        /// iff the id was pending; the table matches an obvious reference model.
+        #[test]
+        fn prop_thread_table_invariants(ops in prop::collection::vec(arb_op(), 1..60)) {
+            let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
+            let mut live: BTreeMap<OwnedEventId, u32> = BTreeMap::new();
+            let mut pending: BTreeSet<OwnedEventId> = BTreeSet::new();
+            for op in ops {
+                match op {
+                    Op::Begin(i) => {
+                        let id = ev(i);
+                        let expect = !live.contains_key(&id) && !pending.contains(&id);
+                        prop_assert_eq!(t.begin_create(id.clone()), expect);
+                        if expect { pending.insert(id); }
+                    }
+                    Op::Finish(i, v) => {
+                        let id = ev(i);
+                        let was_pending = pending.remove(&id);
+                        let res = t.finish_create(id.clone(), v);
+                        if was_pending {
+                            prop_assert_eq!(res, Ok(()));
+                            live.insert(id, v);
+                        } else {
+                            prop_assert_eq!(res, Err(v));
+                        }
+                    }
+                    Op::Fail(i) => {
+                        let id = ev(i);
+                        prop_assert_eq!(t.fail_create(&id), pending.remove(&id));
+                    }
+                    Op::Close(i) => {
+                        let id = ev(i);
+                        pending.remove(&id);
+                        prop_assert_eq!(t.close(&id), live.remove(&id));
+                        prop_assert!(!t.contains(&id));
+                    }
+                }
+                // Invariants after every step.
+                let live_ids: Vec<_> = live.keys().cloned().collect();
+                let pending_ids: Vec<_> = pending.iter().cloned().collect();
+                prop_assert_eq!(t.live_ids(), live_ids.clone());
+                prop_assert_eq!(t.pending_ids(), pending_ids.clone());
+                for id in &live_ids { prop_assert!(!pending_ids.contains(id)); }
+                prop_assert_eq!(t.live_len(), live.len());
+                prop_assert_eq!(t.pending_len(), pending.len());
+            }
+        }
     }
 }
