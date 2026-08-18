@@ -28,6 +28,7 @@ use crate::{
     home::{
         ContextMenuOpenGesture,
         add_room::CreateRoomAction,
+        main_desktop_ui::MainDesktopUiAction,
         navigation_tab_bar::{NavigationBarAction, SelectedTab},
         room_context_menu::RoomContextMenuDetails,
         room_screen::invalidate_timeline_state_for_room,
@@ -784,6 +785,10 @@ impl RoomsList {
                 }
                 RoomsListUpdate::AddJoinedRoom(joined_room) => {
                     let room_id = joined_room.room_name_id.room_id().clone();
+                    // A dock tab restored from persisted state may still carry a
+                    // "Room ID !..." placeholder title from before this room's
+                    // name was known; re-title it now that the room has arrived.
+                    cx.action(MainDesktopUiAction::UpdateRoomTabTitle(joined_room.room_name_id.clone()));
                     let is_direct = joined_room.is_direct;
                     let has_favorite_tag = joined_room.tags.contains_key(&TagName::Favorite);
                     let has_low_priority_tag = joined_room.tags.contains_key(&TagName::LowPriority);
@@ -859,10 +864,10 @@ impl RoomsList {
                     }
                 }
                 RoomsListUpdate::UpdateRoomName { new_room_name } => {
-
-                    // TODO: broadcast a new AppState action to ensure that this room's or space's new name
-                    //       gets updated in all of the `SelectedRoom` instances throughout Robrix,
-                    //       e.g., the name of the room in the Dock Tab or the StackNav header.
+                    // Propagate the new name to open dock tabs and all stored
+                    // `SelectedRoom` instances, which capture the name at tab
+                    // creation time (possibly a "Room ID !..." placeholder).
+                    cx.action(MainDesktopUiAction::UpdateRoomTabTitle(new_room_name.clone()));
 
                     let room_id = new_room_name.room_id().clone();
                     // Try to update joined room first
@@ -1632,13 +1637,31 @@ impl RoomsList {
     /// Returns whether the given target room or space is indirectly within the given parent space.
     ///
     /// This will recursively search all nested spaces within the given `parent_space`.
+    ///
+    /// Cycle-safe: `m.space.child` relationships can legally form cycles (the Matrix
+    /// spec does not forbid them), so this guards against infinite recursion via a
+    /// `visited` set of subspace IDs already walked, rather than a depth limit
+    /// (which would incorrectly truncate legitimately deep hierarchies).
     fn is_room_indirectly_in_space(&self, parent_space: &OwnedRoomId, target: &OwnedRoomId) -> bool {
+        let mut visited = HashSet::new();
+        visited.insert(parent_space.clone());
+        self.is_room_indirectly_in_space_inner(parent_space, target, &mut visited)
+    }
+
+    fn is_room_indirectly_in_space_inner(
+        &self,
+        parent_space: &OwnedRoomId,
+        target: &OwnedRoomId,
+        visited: &mut HashSet<OwnedRoomId>,
+    ) -> bool {
         if let Some(smv) = self.space_map.get(parent_space) {
             if smv.direct_child_rooms.contains(target) {
                 return true;
             }
             for subspace in smv.direct_subspaces.iter() {
-                if self.is_room_indirectly_in_space(subspace, target) {
+                if visited.insert(subspace.clone())
+                    && self.is_room_indirectly_in_space_inner(subspace, target, visited)
+                {
                     return true;
                 }
             }

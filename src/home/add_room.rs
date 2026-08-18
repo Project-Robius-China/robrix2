@@ -2831,6 +2831,19 @@ pub(crate) fn refresh_space_children(cx: &mut Cx, space_id: &OwnedRoomId) {
         return;
     };
     let parent_chain = rooms_list_ref.get_space_parent_chain(space_id).unwrap_or_default();
+    // Force a genuinely fresh fetch: `SubscribeToSpaceRoomList` is a no-op for
+    // a space whose room-list task already exists (deduped by design), and
+    // `Paginate` no-ops once the existing `SpaceRoomList` is exhausted — so a
+    // plain re-subscribe would show the same stale children until restart.
+    // Unsubscribing first tears the task down; the re-subscribe below then
+    // builds a new `SpaceRoomList`, which re-fetches `/hierarchy` from scratch
+    // (the SDK constructs it anew each time; there is no SDK-level cache).
+    if let Err(e) = space_request_sender.send(SpaceRequest::UnsubscribeFromSpaceRoomList {
+        space_id: space_id.clone(),
+    }) {
+        error!("Failed to unsubscribe from space room list for {space_id}: {e}");
+        return;
+    }
     if let Err(e) = space_request_sender.send(SpaceRequest::SubscribeToSpaceRoomList {
         space_id: space_id.clone(),
         parent_chain: parent_chain.clone(),

@@ -201,16 +201,13 @@ pub struct RoomDisplayFilterBuilder {
 }
 /// ## Example
 /// You can create any combination of filters and sorting functions using the `RoomDisplayFilterBuilder`.
-/// ```rust,norun
+/// ```rust,no_run
+/// # use robrix::room::room_display_filter::{RoomDisplayFilterBuilder, RoomFilterCriteria};
+/// # let keywords = String::from("rust");
 ///   let (filter, sort_fn) = RoomDisplayFilterBuilder::new()
 ///     .set_keywords(keywords)
-///     .by_room_id()
-///     .by_room_name()
-///     .sort_by(|a, b| {
-///         let name_a = a.room_name.as_ref().map_or("", |n| n.display_str());
-///         let name_b = b.room_name.as_ref().map_or("", |n| n.display_str());
-///         name_a.cmp(name_b)
-///     })
+///     .set_filter_criteria(RoomFilterCriteria::RoomId | RoomFilterCriteria::RoomName)
+///     .sort_by(|a, b| a.room_name().cmp(&b.room_name()))
 ///     .build();
 /// ```
 impl RoomDisplayFilterBuilder {

@@ -8,6 +8,7 @@ use std::{
     cell::RefCell,
     collections::{hash_map::DefaultHasher, BTreeMap, HashMap},
     hash::{Hash, Hasher},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 use makepad_widgets::*;
@@ -789,6 +790,25 @@ pub fn cleanup_old_logs(max_logs_to_keep: usize) {
 /// Maximum number of log files to keep
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const MAX_LOG_FILES_TO_KEEP: usize = 10;
+
+/// Thread-safe cache of the current app-wide UI language preference, so that
+/// background tasks (e.g., `space_service_sync`, which has no UI/widget
+/// access) can localize a message without needing a request-scoped
+/// `AppLanguage` param. Kept in sync with `AppState::app_language` by
+/// `App::sync_app_language()`, which runs on startup and on every actions
+/// batch, so this may lag a genuinely-concurrent in-UI language change by at
+/// most one event loop tick.
+static CURRENT_APP_LANGUAGE_IS_CHINESE: AtomicBool = AtomicBool::new(false);
+
+/// Returns the most recently observed app-wide UI language; see
+/// [`CURRENT_APP_LANGUAGE_IS_CHINESE`] for the freshness caveat.
+pub fn current_app_language() -> AppLanguage {
+    if CURRENT_APP_LANGUAGE_IS_CHINESE.load(Ordering::Relaxed) {
+        AppLanguage::ChineseSimplified
+    } else {
+        AppLanguage::English
+    }
+}
 
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
@@ -2896,6 +2916,10 @@ impl App {
             return;
         }
         self.synced_app_language = Some(app_language);
+        CURRENT_APP_LANGUAGE_IS_CHINESE.store(
+            matches!(app_language, AppLanguage::ChineseSimplified),
+            Ordering::Relaxed,
+        );
         self.ui.label(cx, ids!(room_filter_modal_inner.search_results_title))
             .set_text(cx, tr_key(app_language, "app.room_filter.search_results_title"));
         self.ui.label(cx, ids!(room_filter_modal_inner.search_results_scroll.search_results.search_results_empty))
@@ -3283,6 +3307,20 @@ pub struct AppState {
     /// invalidating the entire persisted `AppState`.
     #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
     pub selected_room: Option<SelectedRoom>,
+    /// The room ID of the currently-selected Space, if the user is currently
+    /// viewing a Space's Lobby (i.e., `selected_tab` is `SelectedTab::Space`).
+    ///
+    /// This mirrors `selected_tab`'s `Space` variant so that the selected
+    /// space can be restored across app restarts, since `selected_tab` itself
+    /// is transient (`#[serde(skip)]`). On startup, restoration is applied
+    /// only after the list of joined spaces has (asynchronously) reported
+    /// this space as joined; if the space is never reported (e.g., the user
+    /// left/was removed from it while the app was closed), the app safely
+    /// stays on the default `Home` tab.
+    ///
+    /// Tolerant of per-field deser failures, like `selected_room` above.
+    #[serde(default, deserialize_with = "crate::utils::deserialize_or_default")]
+    pub selected_space_id: Option<OwnedRoomId>,
     /// The currently-selected navigation tab: defines which top-level view is shown.
     ///
     /// This field is only updated by the `HomeScreen` widget, which has the
@@ -3998,6 +4036,30 @@ pub enum SelectedRoom {
 }
 
 impl SelectedRoom {
+    /// Replaces this room's `RoomNameId` with `new_name` if it refers to the
+    /// same room and the name actually differs.
+    ///
+    /// `SelectedRoom` instances capture the room's display name at the moment
+    /// they were created (e.g., when a dock tab was opened), which may predate
+    /// the name being known — leaving a "Room ID !..." placeholder behind.
+    /// Returns `true` if an update was applied.
+    pub fn update_room_name(&mut self, new_name: &RoomNameId) -> bool {
+        let name_id = match self {
+            SelectedRoom::JoinedRoom { room_name_id }
+            | SelectedRoom::Thread { room_name_id, .. }
+            | SelectedRoom::InvitedRoom { room_name_id } => room_name_id,
+            SelectedRoom::Space { space_name_id } => space_name_id,
+        };
+        if name_id.room_id() == new_name.room_id() && name_id != new_name {
+            *name_id = new_name.clone();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl SelectedRoom {
     pub fn room_id(&self) -> &OwnedRoomId {
         match self {
             SelectedRoom::JoinedRoom { room_name_id } => room_name_id.room_id(),
@@ -4366,6 +4428,16 @@ mod tests {
             r#"{"logged_in":true,"bot_settings":{"enabled":true,"known_bot_user_ids":["@botA:example.org"]}}"#;
         let app_state: AppState = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(app_state.agent_registry.len(), 0);
+        assert!(app_state.logged_in);
+    }
+
+    #[test]
+    fn app_state_without_selected_space_deserializes() {
+        // A previously-saved AppState JSON that predates the selected_space_id field.
+        let legacy_json =
+            r#"{"logged_in":true,"bot_settings":{"enabled":true,"known_bot_user_ids":["@botA:example.org"]}}"#;
+        let app_state: AppState = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(app_state.selected_space_id, None);
         assert!(app_state.logged_in);
     }
 

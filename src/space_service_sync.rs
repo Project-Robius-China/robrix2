@@ -10,7 +10,7 @@ use matrix_sdk::{Client, RoomState, media::MediaRequestParameters};
 use matrix_sdk_ui::spaces::{SpaceRoom, SpaceRoomList, SpaceService, room_list::SpaceRoomListPaginationState};
 use ruma::{OwnedMxcUri, OwnedRoomId, events::room::MediaSource, room::RoomType};
 use tokio::{runtime::Handle, sync::mpsc::{UnboundedReceiver, UnboundedSender}, task::JoinHandle};
-use crate::{home::{rooms_list::{RoomsListUpdate, enqueue_rooms_list_update}, spaces_bar::{JoinedSpaceInfo, SpacesListUpdate, build_space_search_text, enqueue_spaces_list_update}}, room::FetchedRoomAvatar, utils::{self, RoomNameId}};
+use crate::{app::current_app_language, home::{rooms_list::{RoomsListUpdate, enqueue_rooms_list_update}, spaces_bar::{JoinedSpaceInfo, SpacesListUpdate, build_space_search_text, enqueue_spaces_list_update}}, i18n::tr_fmt, room::FetchedRoomAvatar, shared::popup_list::{PopupKind, enqueue_popup_notification}, utils::{self, RoomNameId}};
 
 /// Whether to enable verbose logging of all spaces service diff updates.
 const LOG_SPACE_SERVICE_DIFFS: bool = cfg!(feature = "log_space_service_diffs");
@@ -444,9 +444,21 @@ async fn update_space(
         if old_space.state != new_space.state {
             match new_space.state {
                 Some(RoomState::Banned) => {
-                    // TODO: handle spaces that this user has been banned from.
                     log!("Removing Banned space: {:?} ({new_space_id})", new_space.display_name);
                     remove_space(new_space);
+                    // Minimal, best-effort feedback (decision B in the space-usability
+                    // design doc): a re-join/re-knock management entry is out of scope
+                    // for this slice, so we just let the user know why the space
+                    // disappeared from their SpacesBar instead of failing silently.
+                    enqueue_popup_notification(
+                        tr_fmt(
+                            current_app_language(),
+                            "space_service_sync.popup.banned_from_space",
+                            &[("space_name", &new_space.display_name)],
+                        ),
+                        PopupKind::Warning,
+                        None,
+                    );
                     return;
                 }
                 Some(RoomState::Left) => {
@@ -457,6 +469,18 @@ async fn update_space(
                     //       that prompts the user to rejoin the space or forget it permanently.
                     //       Currently, we just remove it and do not show left spaces at all.
                     remove_space(new_space);
+                    // Minimal, best-effort feedback (decision B): this state also covers
+                    // being kicked (Matrix reports both as `Left`), so the wording stays
+                    // neutral rather than claiming the user left voluntarily.
+                    enqueue_popup_notification(
+                        tr_fmt(
+                            current_app_language(),
+                            "space_service_sync.popup.left_space",
+                            &[("space_name", &new_space.display_name)],
+                        ),
+                        PopupKind::Info,
+                        None,
+                    );
                     return;
                 }
                 Some(RoomState::Joined) => {
@@ -470,7 +494,10 @@ async fn update_space(
                     return;
                 }
                 Some(RoomState::Knocked) => {
-                    // TODO: handle Knocked spaces (e.g., can you re-knock? or cancel a prior knock?)
+                    // Decision (space-usability design, decision B): a management entry
+                    // for re-knocking or canceling a pending knock is left for a later
+                    // slice. For now we deliberately ignore this transition and do not
+                    // surface any feedback for it.
                     return;
                 }
                 None => {
