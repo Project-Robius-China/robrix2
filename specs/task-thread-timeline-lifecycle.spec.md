@@ -39,12 +39,17 @@ The desired behavior is:
   `ThreadTimelineTable<T>` (`src/sliding_sync.rs`) replacing the two fields
   `thread_timelines: HashMap<_, PerTimelineDetails>` and
   `pending_thread_timelines: HashSet<_>` on `JoinedRoomDetails`; API:
-  `begin_create(id) -> bool` (false if live or pending), `finish_create(id, T) -> Result<(), T>`
-  (Err(T) hands the value back when the id is no longer pending, i.e. it was
-  closed while building), `fail_create(id)`, `close(id) -> Option<T>` (removes
-  pending and live), `get/get_mut/contains/live_len/pending_len/clear`
+  `begin_create(id) -> Option<CreateToken>` (None if live or pending; the token
+  carries the id and a monotonically increasing creation generation),
+  `finish_create(&token, T) -> Result<(), T>` (Err(T) hands the value back when
+  the token is not the *current* pending attempt for its id — closed while
+  building, or superseded by a newer `begin_create`), `fail_create(&token) -> bool`
+  (only clears the current attempt), `close(id) -> Option<T>` (removes pending
+  of any generation and live), `get/get_mut/live_len/pending_len`
 - Invariant kept by the table: `live ∩ pending = ∅`, `close(id)` ⇒ `¬live(id) ∧ ¬pending(id)`,
-  `finish_create` after `close` does not insert
+  `finish_create`/`fail_create` act iff their token's generation is the current
+  pending generation for that id (so `begin(A) → close(A) → begin(A) → finish(old A)`
+  is rejected and the new attempt is untouched — no ABA hijack)
 - `MatrixRequest::CloseThreadTimeline` handler calls `table.close(id)`; dropping
   the returned `PerTimelineDetails` aborts its subscriber task (existing `Drop`)
 - The create task calls `finish_create`; on `Err(details)` it drops the built
@@ -97,7 +102,8 @@ V(t) = number of drawn UI views of thread t; L(t) = t ∈ live ∨ t ∈ pending
   th-2  V(t): 1 → 0 ⇒ CloseThreadTimeline sent ⇒ ¬L(t) ∧ task aborted   (last view closes backend)
   th-3  V(t) > 1 ∧ one view closes ⇒ no CloseThreadTimeline for t        (shared views protected)
   th-4  ¬L(t) then open ⇒ fresh create succeeds                          (reopen)
-  th-5  close(t) while pending ⇒ finish_create(t) is rejected            (race)
+  th-5  close(t) while pending ⇒ finish_create(old token) is rejected; a newer begin(t)
+        is never hijacked or cancelled by an older attempt (ABA)          (race)
   th-6  room removal / logout still clears all                           (existing, unchanged)
 -->
 
@@ -122,9 +128,11 @@ Scenario: Property — table invariants hold under random operation sequences
   Tags: critical
   Test: prop_thread_table_invariants
   Given a random sequence of `begin_create` / `finish_create` / `fail_create` / `close` over a small id alphabet
-  When the operations are applied to a `ThreadTimelineTable<u32>` and to a reference model
+  And finish/fail may use any token ever issued for that id (stale generations included)
+  When the operations are applied to a `ThreadTimelineTable<u32>` and to a generation-tracking reference model
   Then after every step `live ∩ pending = ∅`, `close(id)` leaves id neither live nor pending
-  And `finish_create` inserts iff the id was pending at that moment
+  And `finish_create` inserts iff its token is the current pending generation at that moment
+  And `fail_create` clears pending iff its token is the current pending generation
   And the table's live/pending sets equal the reference model's
 
 ### Rule: th-5 — A close that races a creation never leaves an orphan
@@ -136,6 +144,15 @@ Scenario: finish_create after close hands the value back
   When `finish_create(a, 7)` is called
   Then it returns Err(7)
   And `contains(a)` is false
+
+Scenario: A stale creation cannot hijack or cancel a reopened thread
+  Tags: critical
+  Test: thread_table_stale_generation_cannot_hijack_reopened_thread
+  Given `begin_create(a)` yielded token `old`, then `close(a)`, then `begin_create(a)` yielded token `new`
+  When `finish_create(old, 10)` and `fail_create(old)` are called
+  Then both are rejected and `a` is still pending for `new`
+  And `finish_create(new, 20)` succeeds and `get(a)` is 20
+  And a later `finish_create(old, 30)` is rejected leaving 20 live
 
 Scenario: Worker drops a timeline that finished building after its close
   Test: manual_test_close_during_thread_build_logs_and_drops

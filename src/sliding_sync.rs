@@ -3431,17 +3431,17 @@ async fn matrix_worker_task(
             }
 
             MatrixRequest::CreateThreadTimeline { room_id, thread_root_event_id } => {
-                let main_room_timeline = {
+                let (main_room_timeline, create_token) = {
                     let mut all_joined_rooms = ALL_JOINED_ROOMS.lock().unwrap();
                     let Some(room_info) = all_joined_rooms.get_mut(&room_id) else {
                         error!("BUG: room info not found for create thread timeline request, room {room_id}");
                         continue;
                     };
-                    if !room_info.thread_timelines.begin_create(thread_root_event_id.clone()) {
+                    let Some(create_token) = room_info.thread_timelines.begin_create(thread_root_event_id.clone()) else {
                         // Already live or already being built.
                         continue;
-                    }
-                    room_info.main_timeline.timeline.clone()
+                    };
+                    (room_info.main_timeline.timeline.clone(), create_token)
                 };
 
                 let _create_thread_timeline_task = Handle::current().spawn(async move {
@@ -3492,7 +3492,7 @@ async fn matrix_worker_task(
                                     timeline_subscriber_handler_task,
                                 ),
                             };
-                            match room_info.thread_timelines.finish_create(thread_root_event_id.clone(), details) {
+                            match room_info.thread_timelines.finish_create(&create_token, details) {
                                 Ok(()) => {
                                     log!(
                                         "Thread timelines for room {room_id}: live={}, pending={}.",
@@ -3502,8 +3502,9 @@ async fn matrix_worker_task(
                                     SignalToUI::set_ui_signal();
                                 }
                                 Err(orphan) => {
-                                    // The thread was closed while its timeline was building
-                                    // (Rule th-5): drop it now, which aborts the subscriber task.
+                                    // The thread was closed (or closed and re-requested) while this
+                                    // timeline was building (Rule th-5): drop it now, which aborts
+                                    // its subscriber task. A newer attempt, if any, is unaffected.
                                     log!("Thread timeline for room {room_id}, thread {thread_root_event_id} was closed while building; dropping it.");
                                     drop(orphan);
                                 }
@@ -3513,7 +3514,9 @@ async fn matrix_worker_task(
                             error!("Failed to create thread-focused timeline for room {room_id}, thread {thread_root_event_id}: {error}");
                             let mut all_joined_rooms = ALL_JOINED_ROOMS.lock().unwrap();
                             if let Some(room_info) = all_joined_rooms.get_mut(&room_id) {
-                                room_info.thread_timelines.fail_create(&thread_root_event_id);
+                                // Only clears *this* attempt; a newer attempt for the same
+                                // thread keeps its pending state.
+                                room_info.thread_timelines.fail_create(&create_token);
                             }
                             let error_detail = format!("{error}");
                             let room_id_retry = room_id.clone();
@@ -7029,45 +7032,73 @@ impl Drop for PerTimelineDetails {
 ///
 /// Generic over the payload so its invariants can be property-tested without
 /// constructing real SDK timelines.
+/// A ticket for one in-flight creation returned by
+/// [`ThreadTimelineTable::begin_create`]. `finish_create` / `fail_create`
+/// only act if the ticket still matches the *current* pending generation for
+/// that thread, so an old build that completes after `close` + re-`begin`
+/// cannot hijack (or cancel) the newer creation (ABA protection).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CreateToken {
+    id: OwnedEventId,
+    generation: u64,
+}
 #[derive(Debug)]
 pub(crate) struct ThreadTimelineTable<T> {
     live: HashMap<OwnedEventId, T>,
-    pending: HashSet<OwnedEventId>,
+    /// In-flight creations: thread id → generation of the current attempt.
+    pending: HashMap<OwnedEventId, u64>,
+    /// Monotonic generation counter, bumped on every `begin_create`.
+    next_generation: u64,
 }
 impl<T> Default for ThreadTimelineTable<T> {
     fn default() -> Self {
-        Self { live: HashMap::new(), pending: HashSet::new() }
+        Self { live: HashMap::new(), pending: HashMap::new(), next_generation: 0 }
     }
 }
 impl<T> ThreadTimelineTable<T> {
-    /// Marks `id` as being created. Returns `false` (and does nothing) if the
-    /// thread is already live or already pending.
-    pub(crate) fn begin_create(&mut self, id: OwnedEventId) -> bool {
-        if self.live.contains_key(&id) {
-            return false;
+    /// Marks `id` as being created and returns the ticket for this attempt.
+    /// Returns `None` (and does nothing) if the thread is already live or
+    /// already pending.
+    pub(crate) fn begin_create(&mut self, id: OwnedEventId) -> Option<CreateToken> {
+        if self.live.contains_key(&id) || self.pending.contains_key(&id) {
+            return None;
         }
-        self.pending.insert(id)
+        self.next_generation += 1;
+        let generation = self.next_generation;
+        self.pending.insert(id.clone(), generation);
+        Some(CreateToken { id, generation })
     }
 
-    /// Completes a creation started with [`Self::begin_create`].
+    fn token_is_current(&self, token: &CreateToken) -> bool {
+        self.pending.get(&token.id) == Some(&token.generation)
+    }
+
+    /// Completes the creation identified by `token`.
     ///
-    /// Inserts `value` only if `id` is still pending; otherwise (the thread was
-    /// closed while building) returns `Err(value)` so the caller can drop it.
-    pub(crate) fn finish_create(&mut self, id: OwnedEventId, value: T) -> Result<(), T> {
-        if !self.pending.remove(&id) {
+    /// Inserts `value` only if `token` is still the current pending attempt for
+    /// its thread; otherwise (closed while building, or superseded by a newer
+    /// attempt) returns `Err(value)` so the caller can drop it.
+    pub(crate) fn finish_create(&mut self, token: &CreateToken, value: T) -> Result<(), T> {
+        if !self.token_is_current(token) {
             return Err(value);
         }
-        self.live.insert(id, value);
+        self.pending.remove(&token.id);
+        self.live.insert(token.id.clone(), value);
         Ok(())
     }
 
-    /// Abandons a creation started with [`Self::begin_create`] (build failed).
-    pub(crate) fn fail_create(&mut self, id: &OwnedEventId) -> bool {
-        self.pending.remove(id)
+    /// Abandons the creation identified by `token` (build failed). Returns
+    /// `false` if the token was no longer current (nothing changed).
+    pub(crate) fn fail_create(&mut self, token: &CreateToken) -> bool {
+        if !self.token_is_current(token) {
+            return false;
+        }
+        self.pending.remove(&token.id);
+        true
     }
 
-    /// Closes the thread: forgets a pending creation and removes a live entry,
-    /// returning it so the caller decides how to drop it.
+    /// Closes the thread: forgets a pending creation (any generation) and
+    /// removes a live entry, returning it so the caller decides how to drop it.
     pub(crate) fn close(&mut self, id: &OwnedEventId) -> Option<T> {
         self.pending.remove(id);
         self.live.remove(id)
@@ -7075,7 +7106,7 @@ impl<T> ThreadTimelineTable<T> {
 
     #[cfg(test)]
     pub(crate) fn contains(&self, id: &OwnedEventId) -> bool {
-        self.live.contains_key(id) || self.pending.contains(id)
+        self.live.contains_key(id) || self.pending.contains_key(id)
     }
     pub(crate) fn get(&self, id: &OwnedEventId) -> Option<&T> {
         self.live.get(id)
@@ -7097,7 +7128,7 @@ impl<T> ThreadTimelineTable<T> {
     }
     #[cfg(test)]
     pub(crate) fn pending_ids(&self) -> Vec<OwnedEventId> {
-        let mut v: Vec<_> = self.pending.iter().cloned().collect();
+        let mut v: Vec<_> = self.pending.keys().cloned().collect();
         v.sort();
         v
     }
@@ -11175,7 +11206,7 @@ mod tests {
 #[cfg(test)]
 mod thread_timeline_table_tests {
     //! Rules th-1 / th-5 of spec `task-thread-timeline-lifecycle`.
-    use super::ThreadTimelineTable;
+    use super::{CreateToken, ThreadTimelineTable};
     use matrix_sdk::ruma::OwnedEventId;
     use proptest::prelude::*;
     use std::collections::{BTreeMap, BTreeSet};
@@ -11187,11 +11218,11 @@ mod thread_timeline_table_tests {
     #[test]
     fn thread_table_begin_finish_close_lifecycle() {
         let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
-        assert!(t.begin_create(ev(1)));
+        let tok = t.begin_create(ev(1)).expect("first begin succeeds");
         assert_eq!((t.live_len(), t.pending_len()), (0, 1));
         assert!(t.contains(&ev(1)));
         assert!(t.get(&ev(1)).is_none(), "pending is not live");
-        assert_eq!(t.finish_create(ev(1), 1), Ok(()));
+        assert_eq!(t.finish_create(&tok, 1), Ok(()));
         assert_eq!((t.live_len(), t.pending_len()), (1, 0));
         assert_eq!(t.get(&ev(1)), Some(&1));
         assert_eq!(t.close(&ev(1)), Some(1));
@@ -11204,83 +11235,151 @@ mod thread_timeline_table_tests {
     #[test]
     fn thread_table_rejects_duplicate_begin() {
         let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
-        assert!(t.begin_create(ev(1)));
-        assert!(!t.begin_create(ev(1)), "already pending");
-        assert_eq!(t.finish_create(ev(1), 1), Ok(()));
-        assert!(!t.begin_create(ev(1)), "already live");
+        let tok = t.begin_create(ev(1)).unwrap();
+        assert!(t.begin_create(ev(1)).is_none(), "already pending");
+        assert_eq!(t.finish_create(&tok, 1), Ok(()));
+        assert!(t.begin_create(ev(1)).is_none(), "already live");
         assert_eq!((t.live_len(), t.pending_len()), (1, 0));
     }
 
     #[test]
     fn thread_table_finish_after_close_is_rejected() {
         let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
-        assert!(t.begin_create(ev(1)));
+        let tok = t.begin_create(ev(1)).unwrap();
         assert_eq!(t.close(&ev(1)), None, "nothing live yet, but pending is forgotten");
-        assert_eq!(t.finish_create(ev(1), 7), Err(7));
+        assert_eq!(t.finish_create(&tok, 7), Err(7));
         assert!(!t.contains(&ev(1)));
         assert_eq!((t.live_len(), t.pending_len()), (0, 0));
         // fail_create after close is also a harmless no-op.
-        assert!(!t.fail_create(&ev(1)));
+        assert!(!t.fail_create(&tok));
+    }
+
+    /// ABA: begin(A) → close(A) → begin(A) again → the *old* build finishing (or
+    /// failing) must not touch the new attempt; the new build lands normally.
+    #[test]
+    fn thread_table_stale_generation_cannot_hijack_reopened_thread() {
+        let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
+        let old = t.begin_create(ev(1)).unwrap();
+        assert_eq!(t.close(&ev(1)), None);
+        let new = t.begin_create(ev(1)).expect("re-begin after close");
+        assert_ne!(old, new);
+        assert_eq!(t.pending_len(), 1);
+
+        // Old build finishes late: rejected, new attempt still pending.
+        assert_eq!(t.finish_create(&old, 10), Err(10));
+        assert_eq!((t.live_len(), t.pending_len()), (0, 1));
+        // Old build failing late: also ignored.
+        assert!(!t.fail_create(&old));
+        assert_eq!(t.pending_len(), 1);
+
+        // New build lands.
+        assert_eq!(t.finish_create(&new, 20), Ok(()));
+        assert_eq!(t.get(&ev(1)), Some(&20));
+        assert_eq!((t.live_len(), t.pending_len()), (1, 0));
+        // And a stale finish after the new one is live is rejected too.
+        assert_eq!(t.finish_create(&old, 30), Err(30));
+        assert_eq!(t.get(&ev(1)), Some(&20));
+
+        // Symmetric case: old attempt fails late after new attempt is live.
+        let mut t2: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
+        let old = t2.begin_create(ev(2)).unwrap();
+        t2.close(&ev(2));
+        let new = t2.begin_create(ev(2)).unwrap();
+        assert!(!t2.fail_create(&old), "stale fail must not clear the new pending attempt");
+        assert_eq!(t2.finish_create(&new, 5), Ok(()));
+        assert_eq!(t2.get(&ev(2)), Some(&5));
+    }
+
+    /// Reference model: pending id → generation of the current attempt.
+    #[derive(Default)]
+    struct Model {
+        live: BTreeMap<OwnedEventId, u32>,
+        pending: BTreeMap<OwnedEventId, u64>,
+        next_gen: u64,
     }
 
     #[derive(Clone, Debug)]
-    enum Op { Begin(u8), Finish(u8, u32), Fail(u8), Close(u8) }
+    enum Op {
+        Begin(u8),
+        /// Finish using the token from the k-th (0-based) begin for this id
+        /// that we still hold — lets old generations resurface.
+        Finish(u8, usize, u32),
+        Fail(u8, usize),
+        Close(u8),
+    }
 
     fn arb_op() -> impl Strategy<Value = Op> {
         prop_oneof![
-            (0u8..4).prop_map(Op::Begin),
-            (0u8..4, 0u32..100).prop_map(|(i, v)| Op::Finish(i, v)),
-            (0u8..4).prop_map(Op::Fail),
-            (0u8..4).prop_map(Op::Close),
+            (0u8..3).prop_map(Op::Begin),
+            (0u8..3, 0usize..4, 0u32..100).prop_map(|(i, k, v)| Op::Finish(i, k, v)),
+            (0u8..3, 0usize..4).prop_map(|(i, k)| Op::Fail(i, k)),
+            (0u8..3).prop_map(Op::Close),
         ]
     }
 
     proptest! {
-        /// Rule th-1: live ∩ pending = ∅; close ⇒ ¬live ∧ ¬pending; finish inserts
-        /// iff the id was pending; the table matches an obvious reference model.
+        /// Rule th-1 (+ ABA): live ∩ pending = ∅; close ⇒ ¬live ∧ ¬pending;
+        /// finish/fail act iff their token is the *current* generation for the id;
+        /// the table matches the reference model after every step.
         #[test]
-        fn prop_thread_table_invariants(ops in prop::collection::vec(arb_op(), 1..60)) {
+        fn prop_thread_table_invariants(ops in prop::collection::vec(arb_op(), 1..80)) {
             let mut t: ThreadTimelineTable<u32> = ThreadTimelineTable::default();
-            let mut live: BTreeMap<OwnedEventId, u32> = BTreeMap::new();
-            let mut pending: BTreeSet<OwnedEventId> = BTreeSet::new();
+            let mut m = Model::default();
+            // Every token ever issued, per id (oldest first), so ops can pick stale ones.
+            let mut tokens: BTreeMap<OwnedEventId, Vec<(CreateToken, u64)>> = BTreeMap::new();
             for op in ops {
                 match op {
                     Op::Begin(i) => {
                         let id = ev(i);
-                        let expect = !live.contains_key(&id) && !pending.contains(&id);
-                        prop_assert_eq!(t.begin_create(id.clone()), expect);
-                        if expect { pending.insert(id); }
+                        let expect = !m.live.contains_key(&id) && !m.pending.contains_key(&id);
+                        let got = t.begin_create(id.clone());
+                        prop_assert_eq!(got.is_some(), expect);
+                        if let Some(tok) = got {
+                            m.next_gen += 1;
+                            m.pending.insert(id.clone(), m.next_gen);
+                            tokens.entry(id).or_default().push((tok, m.next_gen));
+                        }
                     }
-                    Op::Finish(i, v) => {
+                    Op::Finish(i, k, v) => {
                         let id = ev(i);
-                        let was_pending = pending.remove(&id);
-                        let res = t.finish_create(id.clone(), v);
-                        if was_pending {
+                        let Some(list) = tokens.get(&id) else { continue };
+                        if list.is_empty() { continue }
+                        let (tok, g) = &list[k % list.len()];
+                        let current = m.pending.get(&id) == Some(g);
+                        let res = t.finish_create(tok, v);
+                        if current {
                             prop_assert_eq!(res, Ok(()));
-                            live.insert(id, v);
+                            m.pending.remove(&id);
+                            m.live.insert(id, v);
                         } else {
                             prop_assert_eq!(res, Err(v));
                         }
                     }
-                    Op::Fail(i) => {
+                    Op::Fail(i, k) => {
                         let id = ev(i);
-                        prop_assert_eq!(t.fail_create(&id), pending.remove(&id));
+                        let Some(list) = tokens.get(&id) else { continue };
+                        if list.is_empty() { continue }
+                        let (tok, g) = &list[k % list.len()];
+                        let current = m.pending.get(&id) == Some(g);
+                        prop_assert_eq!(t.fail_create(tok), current);
+                        if current { m.pending.remove(&id); }
                     }
                     Op::Close(i) => {
                         let id = ev(i);
-                        pending.remove(&id);
-                        prop_assert_eq!(t.close(&id), live.remove(&id));
+                        m.pending.remove(&id);
+                        prop_assert_eq!(t.close(&id), m.live.remove(&id));
                         prop_assert!(!t.contains(&id));
                     }
                 }
                 // Invariants after every step.
-                let live_ids: Vec<_> = live.keys().cloned().collect();
-                let pending_ids: Vec<_> = pending.iter().cloned().collect();
+                let live_ids: Vec<_> = m.live.keys().cloned().collect();
+                let pending_ids: Vec<_> = m.pending.keys().cloned().collect();
                 prop_assert_eq!(t.live_ids(), live_ids.clone());
                 prop_assert_eq!(t.pending_ids(), pending_ids.clone());
-                for id in &live_ids { prop_assert!(!pending_ids.contains(id)); }
-                prop_assert_eq!(t.live_len(), live.len());
-                prop_assert_eq!(t.pending_len(), pending.len());
+                let live_set: BTreeSet<_> = live_ids.iter().collect();
+                for id in &pending_ids { prop_assert!(!live_set.contains(id)); }
+                prop_assert_eq!(t.live_len(), m.live.len());
+                prop_assert_eq!(t.pending_len(), m.pending.len());
             }
         }
     }
