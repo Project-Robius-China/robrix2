@@ -4641,13 +4641,18 @@ mod tests {
     /// route through `AppState::should_create_encrypted_dm` and never hardcode a
     /// plaintext request. Mirrors the CI guard
     /// `agent-spec check-structure --forbid "create_encrypted: false" --in "src/{home,profile}/**"`
+    /// (plus `src/settings/agent_settings.rs`)
     /// (that doc line is a comment and is excluded below).
     #[test]
     fn dm_entry_points_do_not_hardcode_plaintext() {
         let root = env!("CARGO_MANIFEST_DIR");
         // Built at runtime so this test's own source does not match the needle.
         let needle = format!("create_encrypted: {}", false);
-        for rel in ["src/home/add_room.rs", "src/profile/user_profile.rs"] {
+        for rel in [
+            "src/home/add_room.rs",
+            "src/profile/user_profile.rs",
+            "src/settings/agent_settings.rs",
+        ] {
             let src = std::fs::read_to_string(format!("{root}/{rel}")).unwrap();
             assert!(
                 !src.contains(&needle),

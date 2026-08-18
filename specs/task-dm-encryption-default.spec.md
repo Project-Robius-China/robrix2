@@ -53,15 +53,18 @@ The desired behavior is:
   (`dm.create.unencrypted_notice`) when the DM will be created unencrypted;
   `StartChatModal` shows the same notice as an info popup before submitting an
   unencrypted request
-- Explicit agent entry points that already pass `create_encrypted: false`
-  (`src/settings/agent_settings.rs`, `src/settings/agent_add_modal.rs`) are
-  left unchanged because their targets are agents by construction
+- The Agents-settings "Open chat" row action (`src/settings/agent_settings.rs`)
+  sends `allow_create: false` with the `AppState` decision, so an existing DM
+  opens directly and a missing one goes through the same confirmation dialog
+  (and notice) as People search; the agent-binding "add friend" flow in
+  `src/settings/agent_add_modal.rs` keeps its explicit plaintext request
+  because that modal exists solely to bind a bot/agent
 - Each invariant below is proven by example unit tests plus at least one
   `proptest` property test that asserts the invariant literally over generated
   `BotSettingsState` / target / current-user inputs; the property tests live in
   `src/app.rs` `mod tests::dm_encryption_props`
 - The "single decision point" invariant is additionally enforced mechanically
-  by `agent-spec check-structure --forbid "create_encrypted: false" --in "src/{home,profile}/**"`
+  by `agent-spec check-structure --forbid "create_encrypted: false" --in "src/{home,profile}/**"` (plus `src/settings/agent_settings.rs`)
 
 ## Boundaries
 
@@ -69,6 +72,7 @@ The desired behavior is:
 - `src/app.rs`
 - `src/profile/user_profile.rs`
 - `src/home/add_room.rs`
+- `src/settings/agent_settings.rs`
 - `resources/i18n/en.json`
 - `resources/i18n/zh-CN.json`
 - `specs/task-dm-encryption-default.spec.md`
@@ -79,7 +83,7 @@ The desired behavior is:
 
 ### Forbidden
 - Do not modify `src/sliding_sync.rs`
-- Do not modify `src/settings/agent_settings.rs` or `src/settings/agent_add_modal.rs`
+- Do not modify `src/settings/agent_add_modal.rs`
 - Do not modify matrix-sdk `create_dm()` / `create_room()` usage
 - Do not add a global "always plaintext" toggle
 - Do not add `proptest` to `[dependencies]` (dev-dependency only); `Cargo.toml` / `Cargo.lock` / `specs/project.spec.md` may change only for that dev-dependency and its recorded decision
@@ -98,7 +102,8 @@ Invariants (E(t) = "new DM with t is encrypted", B(t) = "t is a positively ident
   dm-enc-1  E(t) ⇔ ¬B(t)                                   (encrypt iff not a bot)
   dm-enc-2  ¬E(t) ⇒ positive evidence; resolve = Err ⇒ clause false   (fail-closed)
   dm-enc-3  ¬E(t) ⇒ notice shown before the room is created           (visibility)
-  dm-enc-4  create_encrypted is decided once in AppState; entry points never hardcode false
+  dm-enc-4  create_encrypted is decided once in AppState; user-facing entry points never hardcode false
+            (sole exception: the agent-binding modal, whose target is a bot by construction)
 -->
 
 ### Rule: dm-enc-1 — Encrypt iff the target is not an identified bot
@@ -201,6 +206,13 @@ Scenario: Start-chat modal defaults to encrypted and warns before an unencrypted
   When the user submits the MXID of a known bot
   Then an info popup with the unencrypted notice appears before the request is sent
 
+Scenario: Agents-settings "Open chat" reuses the confirmation dialog and notice
+  Test: manual_test_agent_settings_open_chat_uses_confirmation_notice
+  Given a registered agent with no existing DM
+  When the user clicks "Open chat" on its row in Settings → Agents
+  Then the "Create New Direct Message" confirmation appears with the unencrypted notice
+  And clicking "Open chat" for an agent with an existing DM opens that room directly
+
 Scenario: Created room encryption state matches the decision
   Test: manual_test_created_dm_room_encryption_state
   Given a homeserver with E2EE available
@@ -213,10 +225,10 @@ Scenario: Created room encryption state matches the decision
 Scenario: User-facing DM entry points never hardcode a plaintext request
   Tags: critical
   Test: dm_entry_points_do_not_hardcode_plaintext
-  Given the sources `src/home/add_room.rs`, `src/profile/user_profile.rs` and `src/app.rs`
+  Given the sources `src/home/add_room.rs`, `src/profile/user_profile.rs`, `src/settings/agent_settings.rs` and `src/app.rs`
   When they are scanned for the literal `create_encrypted: false`
   Then no non-comment occurrence exists
-  And `add_room.rs` and `user_profile.rs` call `should_create_encrypted_dm(`
+  And `add_room.rs`, `user_profile.rs` and `agent_settings.rs` call `should_create_encrypted_dm(`
 
 ## Out Of Scope
 

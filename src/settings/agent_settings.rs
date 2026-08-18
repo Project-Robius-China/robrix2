@@ -993,14 +993,29 @@ impl WidgetMatchEvent for AgentSettings {
             match action.downcast_ref::<AgentRowAction>() {
                 Some(AgentRowAction::OpenChat(user_id)) => {
                     let display_name = user_id.localpart().to_string();
+                    // Route through the same decision as every other DM entry point.
+                    // `allow_create: false` opens an existing DM directly; otherwise
+                    // the App shows the "Create New Direct Message" confirmation,
+                    // which carries the unencrypted-DM notice for bots/agents
+                    // (spec task-dm-encryption-default, Rule dm-enc-3).
+                    let create_encrypted = scope
+                        .data
+                        .get::<AppState>()
+                        .map(|app_state| {
+                            app_state.should_create_encrypted_dm(
+                                user_id.as_ref(),
+                                current_user_id().as_deref(),
+                            )
+                        })
+                        .unwrap_or(true);
                     submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
                         user_profile: UserProfile {
                             user_id: user_id.clone(),
                             username: Some(display_name),
                             avatar_state: AvatarState::Unknown,
                         },
-                        allow_create: true,
-                        create_encrypted: false,
+                        allow_create: false,
+                        create_encrypted,
                     });
                     return;
                 }
