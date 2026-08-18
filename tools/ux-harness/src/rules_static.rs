@@ -231,7 +231,7 @@ pub fn check_visual_consistency(scan: &SourceScan) -> Vec<Finding> {
         "Screens hardcode raw hex colors instead of design tokens",
         format!("{} file(s) under src/", files.len()),
         format!("{count} literal(s); e.g. {}", sample.join(", ")),
-    ));
+    ).with_count(count));
     out
 }
 
@@ -258,7 +258,7 @@ pub fn check_i18n_coverage(scan: &SourceScan) -> Vec<Finding> {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(", "),
-        ));
+        ).with_count(n));
     }
     out
 }
@@ -280,7 +280,7 @@ pub fn check_locale_dict(locale: &str, en: &Dict, dict: &Dict) -> Vec<Finding> {
                 missing.len(),
                 missing.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
             ),
-        ));
+        ).with_count(missing.len()));
     }
 
     let identical: Vec<&String> = en
@@ -301,7 +301,7 @@ pub fn check_locale_dict(locale: &str, en: &Dict, dict: &Dict) -> Vec<Finding> {
                 identical.len(),
                 identical.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
             ),
-        ));
+        ).with_count(identical.len()));
     }
     out
 }
@@ -337,4 +337,44 @@ pub fn load_dict(path: &Path) -> Result<Dict, String> {
         .iter()
         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aggregate_findings_expose_counts() {
+        let scan = SourceScan {
+            hardcoded_hex: vec![
+                ("src/a.rs".into(), 1, "#ff0000".into()),
+                ("src/a.rs".into(), 2, "#00ff00".into()),
+            ],
+            dsl_files_without_i18n: vec!["src/a.rs".into(), "src/b.rs".into(), "src/c.rs".into()],
+            total_dsl_files: 10,
+        };
+        let f = check_i18n_coverage(&scan);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].rule, "i18n.untranslated-screen");
+        assert_eq!(f[0].count, 3);
+
+        let f = check_visual_consistency(&scan);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].rule, "visual.hardcoded-color");
+        assert_eq!(f[0].count, 2);
+
+        let mut en = Dict::new();
+        en.insert("a".into(), "Hello there".into());
+        en.insert("b".into(), "Good morning".into());
+        en.insert("c".into(), "See you soon".into());
+        en.insert("d".into(), "Take care now".into());
+        let mut zh = Dict::new();
+        zh.insert("a".into(), "你好".into());
+        zh.insert("d".into(), "Take care now".into()); // identical → untranslated value; b, c missing
+        let f = check_locale_dict("zh-CN", &en, &zh);
+        let missing = f.iter().find(|x| x.rule == "i18n.missing-key").expect("missing-key finding");
+        assert_eq!(missing.count, 2, "keys b and c are missing");
+        let identical = f.iter().find(|x| x.rule == "i18n.untranslated-value").expect("untranslated-value finding");
+        assert_eq!(identical.count, 1);
+    }
 }

@@ -112,6 +112,10 @@ pub struct Finding {
     pub locus: String,
     /// The measurement that produced the finding, so it can be re-checked.
     pub evidence: String,
+    /// How many offending items this finding aggregates (files, keys, literals,
+    /// token pairs). `1` for a finding about a single thing. The gate policy
+    /// (`--gate`) compares these counts against per-rule maxima.
+    pub count: usize,
 }
 
 impl Finding {
@@ -130,7 +134,14 @@ impl Finding {
             summary: summary.into(),
             locus: locus.into(),
             evidence: evidence.into(),
+            count: 1,
         }
+    }
+
+    /// Set the number of offending items this finding aggregates.
+    pub fn with_count(mut self, count: usize) -> Finding {
+        self.count = count;
+        self
     }
 }
 
