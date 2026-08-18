@@ -20,6 +20,7 @@ on:
         - knowledge/**
         - scripts/**
         - .githooks/**
+        - tools/**
 
     pull_request:
       types: [opened, synchronize, reopened, ready_for_review]
@@ -37,6 +38,7 @@ on:
         - knowledge/**
         - scripts/**
         - .githooks/**
+        - tools/**
 
 # Prevent concurrent CI runs and cancel in-progress runs on new pushes
 concurrency:
@@ -132,9 +134,14 @@ jobs:
           fi
           agent-spec --version
 
-      - name: Unit tests (lib)
-        # Doctests are excluded for now: see #301 / #311 for the doctest cleanup.
-        run: cargo test --lib
+      - name: Tests (workspace: lib, bins, doctests, ux-harness)
+        run: cargo test --workspace
+
+      - name: Static UX audit (gate policy: tools/ux-harness/gate.json)
+        # Source-only audit: token contrast, token discipline, translation
+        # coverage. Thresholds are a ratchet documented in gate.json.
+        run: |
+          cargo run -q -p ux-harness -- static --repo . --out target/ux-audit --gate tools/ux-harness/gate.json
 
       - name: Spec guard
         env:

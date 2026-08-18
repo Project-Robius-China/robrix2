@@ -14,7 +14,7 @@
 //!
 //! ## State Flow
 //!
-//! ```
+//! ```text
 //! Idle (0%) → PreChecking (10%) → StoppingSyncService (20%) → LoggingOutFromServer (30%)
 //!     ↓                                                                    ↓
 //!   Failed ←─────────────────────────────────────────────────────── PointOfNoReturn (50%) ⚠️
@@ -75,8 +75,12 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```rust,no_run
+//! # async fn example(is_desktop: bool) -> anyhow::Result<()> {
+//! use robrix::logout::logout_state_machine::logout_with_state_machine;
 //! let result = logout_with_state_machine(is_desktop).await;
+//! # result
+//! # }
 //! ```
 //!
 //! Progress updates are sent via `LogoutAction::ProgressUpdate` for UI feedback.

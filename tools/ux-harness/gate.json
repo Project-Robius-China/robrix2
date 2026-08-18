@@ -1,0 +1,25 @@
+{
+  "unlisted": "fail",
+  "rules": {
+    "legibility.token-contrast": {
+      "max": 0,
+      "note": "Every semantic RBX_* fg/bg pair must meet WCAG AA. Never raise."
+    },
+    "visual.hardcoded-color": {
+      "max": 0,
+      "note": "No raw hex literals outside src/shared/design_tokens.rs and styles.rs. Never raise."
+    },
+    "i18n.missing-key": {
+      "max": 0,
+      "note": "Every key in resources/i18n/en.json must exist in every other locale. Never raise."
+    },
+    "i18n.untranslated-screen": {
+      "max": 37,
+      "note": "Ratchet. Baseline 2026-08-19: 37 of 108 DSL files ship copy that never goes through tr_key/tr_fmt. Lower this number as screens are translated; a PR that raises it must say why."
+    },
+    "i18n.untranslated-value": {
+      "max": 4,
+      "note": "Ratchet. Baseline 2026-08-19: 4 zh-CN values byte-identical to English (excluding locale-neutral strings). Lower as they are translated."
+    }
+  }
+}

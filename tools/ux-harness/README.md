@@ -31,12 +31,29 @@ reported as **not run**, never as a pass.
 ### Static only (runs anywhere, no build needed)
 
 ```bash
-cd tools/ux-harness
-cargo run -- static --repo ../.. --out ../../target/ux-audit
+cargo run -q -p ux-harness -- static --repo . --out target/ux-audit
 ```
 
 Scores token contrast, token discipline, and translation coverage from the
 source tree.
+
+### Gate (CI pass/fail)
+
+Scores are informative; the **gate** is the verdict. `--gate <policy.json>`
+sums each finding's `count` per rule and compares it with the policy:
+
+```bash
+cargo run -q -p ux-harness -- static --repo . --out target/ux-audit --gate tools/ux-harness/gate.json
+# exit 0 = passed, 3 = gate failed (table printed and written to <out>/ux-gate.md)
+```
+
+`gate.json` is a **ratchet**: `max` records today's baseline for rules that
+still have debt (`i18n.untranslated-screen`, `i18n.untranslated-value`) and is
+`0` for rules that must never regress (`i18n.missing-key`,
+`visual.hardcoded-color`, `legibility.token-contrast`). Lower a `max` when you
+pay debt down; a PR that raises one must say why. `"unlisted": "fail"` means a
+new rule with findings has to be triaged into the policy before CI goes green.
+CI runs this in the `spec_gate` job on every PR.
 
 ### Full audit (drives the app)
 
