@@ -16,6 +16,10 @@ on:
         - Cargo.lock
         - Cargo.toml
         - rust-toolchain.toml
+        - specs/**
+        - knowledge/**
+        - scripts/**
+        - .githooks/**
 
     pull_request:
       types: [opened, synchronize, reopened, ready_for_review]
@@ -29,6 +33,10 @@ on:
         - Cargo.lock
         - Cargo.toml
         - rust-toolchain.toml
+        - specs/**
+        - knowledge/**
+        - scripts/**
+        - .githooks/**
 
 # Prevent concurrent CI runs and cancel in-progress runs on new pushes
 concurrency:
@@ -87,3 +95,51 @@ jobs:
               exit 1
             }
           ' Cargo.toml
+
+  # Spec regression gate: unit tests + agent-spec invariants.
+  # See scripts/spec-guard.sh for exactly what is (and is not) enforced.
+  spec_gate:
+    if: github.event.pull_request.draft == false
+    name: spec gate (cargo test + agent-spec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # spec-guard diffs against the base branch
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev libsqlite3-dev pkg-config llvm clang libclang-dev \
+            libxcursor-dev libx11-dev libasound2-dev libpulse-dev \
+            libwayland-dev libxkbcommon-dev
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: spec-gate-${{ hashFiles('Cargo.lock') }}
+          cache-all-crates: "true"
+          cache-on-failure: "true"
+
+      - name: Install agent-spec
+        run: |
+          if ! command -v agent-spec >/dev/null 2>&1; then
+            cargo install agent-spec --locked
+          fi
+          agent-spec --version
+
+      - name: Unit tests (lib)
+        # Doctests are excluded for now: see #301 / #311 for the doctest cleanup.
+        run: cargo test --lib
+
+      - name: Spec guard
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+        run: |
+          git fetch origin "$BASE_REF" --depth=1 || true
+          scripts/spec-guard.sh --base "origin/$BASE_REF"
+
