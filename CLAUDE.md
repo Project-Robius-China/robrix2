@@ -84,9 +84,15 @@ cargo run
 # Run with hot reload
 cargo run -- --hot
 
-# Tests (limited — mostly manual testing)
-cargo test
+# Tests — CI runs exactly this on every PR (job `spec_gate`):
+cargo test --workspace                     # lib + bins + doctests + tools/ux-harness
+cargo run -q -p ux-harness -- static --repo . --out target/ux-audit --gate tools/ux-harness/gate.json
+scripts/spec-guard.sh --base main          # spec lint / structural guards / capability specs / regressions
 ```
+
+Required PR checks: `clippy`, `typos`, `check patches`, `spec gate`, plus the platform builds.
+Doctests must compile — fix the example (imports / current API), never mark it `ignore`.
+The UX gate is a ratchet (`tools/ux-harness/gate.json`); lower thresholds as debt is paid, never raise silently.
 
 ## Project Structure
 
