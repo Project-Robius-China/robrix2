@@ -636,6 +636,7 @@ impl Widget for RoomScreen {
                     if self.room_id() == Some(new_name.room_id())
                         && self.room_name_id.as_ref() != Some(new_name)
                     {
+                        log!("RoomScreen: updating own room_name_id for {} to {}", new_name.room_id(), new_name.display_name());
                         self.room_name_id = Some(new_name.clone());
                         self.view.redraw(cx);
                     }

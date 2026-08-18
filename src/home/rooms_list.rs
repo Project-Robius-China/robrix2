@@ -867,6 +867,7 @@ impl RoomsList {
                     // Propagate the new name to open dock tabs and all stored
                     // `SelectedRoom` instances, which capture the name at tab
                     // creation time (possibly a "Room ID !..." placeholder).
+                    log!("RoomsList: broadcasting name update for {}: {}", new_room_name.room_id(), new_room_name.display_name());
                     cx.action(MainDesktopUiAction::UpdateRoomTabTitle(new_room_name.clone()));
 
                     let room_id = new_room_name.room_id().clone();
