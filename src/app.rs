@@ -3937,6 +3937,30 @@ pub enum SelectedRoom {
 }
 
 impl SelectedRoom {
+    /// Replaces this room's `RoomNameId` with `new_name` if it refers to the
+    /// same room and the name actually differs.
+    ///
+    /// `SelectedRoom` instances capture the room's display name at the moment
+    /// they were created (e.g., when a dock tab was opened), which may predate
+    /// the name being known — leaving a "Room ID !..." placeholder behind.
+    /// Returns `true` if an update was applied.
+    pub fn update_room_name(&mut self, new_name: &RoomNameId) -> bool {
+        let name_id = match self {
+            SelectedRoom::JoinedRoom { room_name_id }
+            | SelectedRoom::Thread { room_name_id, .. }
+            | SelectedRoom::InvitedRoom { room_name_id } => room_name_id,
+            SelectedRoom::Space { space_name_id } => space_name_id,
+        };
+        if name_id.room_id() == new_name.room_id() && name_id != new_name {
+            *name_id = new_name.clone();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl SelectedRoom {
     pub fn room_id(&self) -> &OwnedRoomId {
         match self {
             SelectedRoom::JoinedRoom { room_name_id } => room_name_id.room_id(),

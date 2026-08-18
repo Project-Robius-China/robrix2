@@ -33,7 +33,9 @@ script_mod! {
     let AddExistingRoomResultItem = View {
         visible: false
         width: Fill
-        height: 48
+        // Tall enough for the two-line content (room name + room ID line);
+        // at 48 the ID line got vertically clipped mid-glyph.
+        height: 58
         flow: Overlay
 
         row := View {
