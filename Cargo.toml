@@ -1,3 +1,6 @@
+[workspace]
+members = ["tools/ux-harness"]
+
 [package]
 name = "robrix"
 authors = ["Kevin Boos <kevinaboos@gmail.com>", "Robius Project Maintainers"]

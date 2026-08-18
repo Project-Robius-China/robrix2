@@ -161,9 +161,10 @@ impl ActionDefaultRef for ConfirmationModalAction {
 /// Only the title and body text are required.
 /// Everything else can be left as default values like so:
 /// ```rust,no_run
+/// # use robrix::shared::confirmation_modal::ConfirmationModalContent;
 /// let content = ConfirmationModalContent {
-///     title_text: "Confirm deletion".into()
-///     body_text: "Are you sure you want to delete this file?".into()
+///     title_text: "Confirm deletion".into(),
+///     body_text: "Are you sure you want to delete this file?".into(),
 ///     ..Default::default()
 /// };
 /// ```

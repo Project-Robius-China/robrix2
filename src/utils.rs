@@ -777,6 +777,7 @@ pub fn ends_with_href(text: &str) -> bool {
 ///
 /// # Examples
 /// ```
+/// use robrix::utils::human_readable_list;
 /// assert_eq!(human_readable_list(&vec!["Alice"], 3), String::from("Alice"));
 /// assert_eq!(human_readable_list(&vec![String::from("Alice"), String::from("Bob")], 3), String::from("Alice and Bob"));
 /// assert_eq!(human_readable_list(&vec!["Alice", "Bob", "Charlie"], 3), String::from("Alice, Bob and Charlie"));

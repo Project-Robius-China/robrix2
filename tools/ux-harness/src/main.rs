@@ -20,6 +20,7 @@
 mod driver;
 mod findings;
 mod frame;
+mod gate;
 mod proto;
 mod rules_runtime;
 mod rules_static;
@@ -41,6 +42,7 @@ fn main() {
     let mut fg = String::new();
     let mut bg = String::new();
     let mut target = 4.5f64;
+    let mut gate_path: Option<PathBuf> = None;
 
     let mut i = 2;
     while i < args.len() {
@@ -72,6 +74,10 @@ fn main() {
                 out = PathBuf::from(args.get(i + 1).cloned().unwrap_or_default());
                 i += 2;
             }
+            "--gate" => {
+                gate_path = args.get(i + 1).map(PathBuf::from);
+                i += 2;
+            }
             other => {
                 eprintln!("unknown argument: {other}");
                 std::process::exit(2);
@@ -81,9 +87,13 @@ fn main() {
 
     match mode {
         "static" => {
-            if let Err(e) = run(&repo, None, &out) {
-                eprintln!("error: {e}");
-                std::process::exit(1);
+            match run(&repo, None, &out, gate_path.as_deref()) {
+                Ok(true) => {}
+                Ok(false) => std::process::exit(3),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
             }
         }
         "run" => {
@@ -91,9 +101,13 @@ fn main() {
                 eprintln!("`run` needs --app <path to MAKEPAD=headless binary>");
                 std::process::exit(2);
             };
-            if let Err(e) = run(&repo, Some(&app), &out) {
-                eprintln!("error: {e}");
-                std::process::exit(1);
+            match run(&repo, Some(&app), &out, gate_path.as_deref()) {
+                Ok(true) => {}
+                Ok(false) => std::process::exit(3),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
             }
         }
         "contrast" => {
@@ -105,8 +119,8 @@ fn main() {
         _ => {
             eprintln!(
                 "usage:\n  \
-                 ux-harness static --repo <dir> [--out <dir>]\n  \
-                 ux-harness run --repo <dir> --app <bin> [--out <dir>]\n  \
+                 ux-harness static --repo <dir> [--out <dir>] [--gate <policy.json>]\n  \
+                 ux-harness run --repo <dir> --app <bin> [--out <dir>] [--gate <policy.json>]\n  \
                  ux-harness contrast --fg #RRGGBB --bg #RRGGBB [--target 4.5]"
             );
             std::process::exit(2);
@@ -114,7 +128,9 @@ fn main() {
     }
 }
 
-fn run(repo: &Path, app: Option<&Path>, out: &Path) -> Result<(), String> {
+/// Returns `Ok(true)` when no gate was requested or the gate passed,
+/// `Ok(false)` when the gate failed (exit code 3 at the call site).
+fn run(repo: &Path, app: Option<&Path>, out: &Path, gate_path: Option<&Path>) -> Result<bool, String> {
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
 
     let mut all: Vec<Finding> = Vec::new();
@@ -236,7 +252,18 @@ fn run(repo: &Path, app: Option<&Path>, out: &Path) -> Result<(), String> {
 
     println!("{md}");
     println!("\nwrote {} and {}", md_path.display(), json_path.display());
-    Ok(())
+
+    // ---- gate ---------------------------------------------------------------
+    let Some(gate_path) = gate_path else { return Ok(true) };
+    let policy_text = std::fs::read_to_string(gate_path)
+        .map_err(|e| format!("read {}: {e}", gate_path.display()))?;
+    let policy = gate::GatePolicy::parse(&policy_text)?;
+    let outcome = gate::evaluate(&policy, &report.findings);
+    let gate_md = gate::render(&outcome, &policy.unlisted);
+    println!("{gate_md}");
+    let gate_path_out = out.join("ux-gate.md");
+    std::fs::write(&gate_path_out, &gate_md).map_err(|e| format!("write {}: {e}", gate_path_out.display()))?;
+    Ok(outcome.passed())
 }
 
 /// Report the contrast of a pair, and — when it fails — the nearest compliant
