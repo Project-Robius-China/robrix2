@@ -70,6 +70,7 @@ mod room_info_pane;
 mod search;
 mod small_state;
 mod state;
+mod thread_lifecycle;
 mod threads_pane;
 mod updates;
 
@@ -85,7 +86,8 @@ use small_state::*;
 use state::*;
 pub use threads_pane::*;
 pub(crate) use bot_admin::is_known_or_likely_bot;
-pub use state::{RoomScreenProps, RoomScreenTooltipActions, TimelineUpdate, clear_timeline_states, invalidate_timeline_state_for_room};
+pub use state::{RoomScreenProps, RoomScreenTooltipActions, TimelineUpdate, clear_timeline_states, close_thread_timeline, invalidate_timeline_state, invalidate_timeline_state_for_room};
+pub use thread_lifecycle::{close_if_unreferenced, thread_kind_of};
 
 /// The maximum number of timeline items to search through
 /// when looking for a particular event.
@@ -2016,7 +2018,7 @@ impl RoomScreen {
             .expect("BUG: Timeline::show_timeline(): no timeline_kind was set.");
         let room_id = kind.room_id().clone();
 
-        let state_opt = TIMELINE_STATES.with_borrow_mut(|ts| ts.remove(&kind));
+        let state_opt = state::take_timeline_state(&kind);
         let (mut tl_state, mut is_first_time_being_loaded) = if let Some(existing) = state_opt {
             (existing, false)
         } else {
