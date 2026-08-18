@@ -993,7 +993,7 @@ impl MatchEvent for App {
                     }
                     RoomFilterResultTarget::RemoteUser(user_profile) => {
                         submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
-                            create_encrypted: self.app_state.bot_settings.should_create_encrypted_dm(
+                            create_encrypted: self.app_state.should_create_encrypted_dm(
                                 user_profile.user_id.as_ref(),
                                 current_user_id().as_deref(),
                             ),
@@ -2473,11 +2473,11 @@ impl MatchEvent for App {
                 }
                 Some(DirectMessageRoomAction::DidNotExist { user_profile }) => {
                     let user_profile = user_profile.clone();
-                    let create_encrypted = self.app_state.bot_settings.should_create_encrypted_dm(
+                    let create_encrypted = self.app_state.should_create_encrypted_dm(
                         user_profile.user_id.as_ref(),
                         current_user_id().as_deref(),
                     );
-                    let body_text = match &user_profile.username {
+                    let mut body_text = match &user_profile.username {
                         Some(un) if !un.is_empty() => format!(
                             "You don't have an existing direct message room with {} ({}).\n\n\
                             Would you like to create one now?",
@@ -2490,6 +2490,14 @@ impl MatchEvent for App {
                             user_profile.user_id,
                         ),
                     };
+                    if !create_encrypted {
+                        body_text.push_str("\n\n");
+                        body_text.push_str(&tr_fmt(
+                            self.app_state.app_language,
+                            "dm.create.unencrypted_notice",
+                            &[("user", user_profile.user_id.as_str())],
+                        ));
+                    }
                     self.ui.confirmation_modal(cx, ids!(positive_confirmation_modal_inner)).show(
                         cx,
                         ConfirmationModalContent {
@@ -3447,6 +3455,31 @@ impl AgentRegistry {
 }
 
 impl AppState {
+    /// Returns `true` if a new DM room with `target_user_id` should be encrypted.
+    ///
+    /// Combines [`BotSettingsState::should_create_encrypted_dm`] with the
+    /// [`AgentRegistry`]: any registered agent is treated as a bot and gets an
+    /// unencrypted DM; every other user gets an encrypted DM.
+    pub fn should_create_encrypted_dm(
+        &self,
+        target_user_id: &UserId,
+        current_user_id: Option<&UserId>,
+    ) -> bool {
+        let is_agent = self.agent_registry.contains(target_user_id);
+        let is_bot = self.bot_settings.is_identified_bot(target_user_id, current_user_id);
+        let encrypted = !is_agent && !is_bot;
+        log!(
+            "DM encryption decision for {target_user_id}: encrypted={encrypted} \
+            (registered_agent={is_agent}, identified_bot={is_bot}, \
+            agents={}, known_bots={}, bound_bots={}, botfather={:?})",
+            self.agent_registry.len(),
+            self.bot_settings.known_bot_user_ids.len(),
+            self.bot_settings.room_bindings.len(),
+            self.bot_settings.resolved_bot_user_id(current_user_id).ok(),
+        );
+        encrypted
+    }
+
     /// Migration: if the agent registry is empty, seed it from the legacy
     /// per-account known-bot list so upgraded users keep bot identification.
     ///
@@ -3880,17 +3913,45 @@ impl BotSettingsState {
         self.resolved_bot_user_id(current_user_id)
     }
 
+    /// Returns `true` if the target user is a positively identified bot:
+    /// the resolved BotFather MXID, a bot discovered via `/listbots`, or a
+    /// bot MXID bound to some room.
+    pub fn is_identified_bot(
+        &self,
+        target_user_id: &UserId,
+        current_user_id: Option<&UserId>,
+    ) -> bool {
+        if self
+            .resolved_bot_user_id(current_user_id)
+            .is_ok_and(|bot_user_id| bot_user_id.as_str() == target_user_id.as_str())
+        {
+            return true;
+        }
+        if self
+            .known_bot_user_ids
+            .iter()
+            .any(|bot_user_id| bot_user_id.as_str() == target_user_id.as_str())
+        {
+            return true;
+        }
+        self.room_bindings
+            .iter()
+            .any(|binding| binding.bot_user_id.as_str() == target_user_id.as_str())
+    }
+
     /// Returns `true` if new DM rooms for this target user should be encrypted.
     ///
-    /// New DM rooms are always created unencrypted so appservice bots can
-    /// receive and reply to messages without E2EE support.
+    /// Ordinary users always get an encrypted DM. Only DMs with a positively
+    /// identified bot (see [`Self::is_identified_bot`]) are created unencrypted,
+    /// because appservice bots typically cannot participate in E2EE rooms.
+    /// If the BotFather MXID cannot be resolved, the target is treated as an
+    /// ordinary user (encrypted).
     pub fn should_create_encrypted_dm(
         &self,
         target_user_id: &UserId,
         current_user_id: Option<&UserId>,
     ) -> bool {
-        let _ = (target_user_id, current_user_id);
-        false
+        !self.is_identified_bot(target_user_id, current_user_id)
     }
 }
 

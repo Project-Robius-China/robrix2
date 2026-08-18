@@ -244,6 +244,7 @@
   "add_room.start_chat.modal.section.suggestions_hint": "Enter a Matrix user ID to start chatting immediately.",
   "add_room.start_chat.modal.section.privacy_title": "Some suggestions may be hidden for privacy.",
   "add_room.start_chat.modal.hint": "A direct message room will be created if one does not already exist.",
+  "dm.create.unencrypted_notice": "This conversation with {user} will be created without end-to-end encryption because {user} is a known bot or agent.",
   "add_room.create_room.button.create": "Create room",
   "add_room.create_room.button.syncing": "Syncing...",
   "add_room.create_room.modal.title": "Create New Room",

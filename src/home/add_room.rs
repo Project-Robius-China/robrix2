@@ -1760,7 +1760,7 @@ impl Widget for StartChatModal {
 }
 
 impl WidgetMatchEvent for StartChatModal {
-    fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+    fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, scope: &mut Scope) {
         let chat_user_id_input = self.view.text_input(cx, ids!(chat_user_id_input));
         let go_button = self.view.button(cx, ids!(go_button));
         let cancel_button = self.view.button(cx, ids!(cancel_button));
@@ -1773,7 +1773,7 @@ impl WidgetMatchEvent for StartChatModal {
         let submit_chat_request = go_button.clicked(actions)
             || chat_user_id_input.returned(actions).is_some();
         if submit_chat_request {
-            self.submit(cx);
+            self.submit(cx, scope);
         }
 
         if cancel_button.clicked(actions) {
@@ -1814,7 +1814,7 @@ impl StartChatModal {
         self.view.redraw(cx);
     }
 
-    fn submit(&mut self, cx: &mut Cx) {
+    fn submit(&mut self, cx: &mut Cx, scope: &mut Scope) {
         let user_id_str = self.view.text_input(cx, ids!(chat_user_id_input)).text();
         let user_id_str = user_id_str.trim();
         if user_id_str.is_empty() {
@@ -1832,11 +1832,36 @@ impl StartChatModal {
                     return;
                 }
 
+                // Ordinary users get an encrypted DM; only positively identified
+                // bots/agents get a plaintext room. Default to encrypted if the
+                // app state is unavailable for some reason.
+                let create_encrypted = scope
+                    .data
+                    .get::<AppState>()
+                    .map(|app_state| {
+                        app_state.should_create_encrypted_dm(
+                            user_id.as_ref(),
+                            current_user_id().as_deref(),
+                        )
+                    })
+                    .unwrap_or(true);
+                if !create_encrypted {
+                    enqueue_popup_notification(
+                        tr_fmt(
+                            self.app_language,
+                            "dm.create.unencrypted_notice",
+                            &[("user", user_id.as_str())],
+                        ),
+                        PopupKind::Info,
+                        Some(6.0),
+                    );
+                }
+
                 self.submitting = true;
                 self.view.button(cx, ids!(go_button)).set_enabled(cx, false);
                 // cancel_button stays enabled so user can cancel during submission
                 submit_async_request(MatrixRequest::OpenOrCreateDirectMessage {
-                    create_encrypted: false,
+                    create_encrypted,
                     user_profile: UserProfile {
                         user_id,
                         username: None,

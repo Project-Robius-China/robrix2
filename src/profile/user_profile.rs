@@ -542,7 +542,7 @@ impl Widget for UserProfileSlidingPane {
                     .data
                     .get::<AppState>()
                     .map(|app_state| {
-                        app_state.bot_settings.should_create_encrypted_dm(
+                        app_state.should_create_encrypted_dm(
                             info.user_profile.user_id.as_ref(),
                             current_user_id().as_deref(),
                         )
