@@ -76,6 +76,8 @@ fn ci_workflow_scalars_with_colon_space_are_quoted() {
             if t.starts_with('#') {
                 continue;
             }
+            // Steps are list items: `- name: …` — drop the bullet before matching keys.
+            let t = t.strip_prefix("- ").map(str::trim_start).unwrap_or(t);
             for key in ["name:", "run:", "if:", "key:"] {
                 let Some(rest) = t.strip_prefix(key) else { continue };
                 let v = rest.trim();
