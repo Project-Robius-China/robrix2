@@ -134,10 +134,10 @@ jobs:
           fi
           agent-spec --version
 
-      - name: Tests (workspace: lib, bins, doctests, ux-harness)
+      - name: "Tests (workspace: lib, bins, doctests, ux-harness)"
         run: cargo test --workspace
 
-      - name: Static UX audit (gate policy: tools/ux-harness/gate.json)
+      - name: "Static UX audit (gate policy: tools/ux-harness/gate.json)"
         # Source-only audit: token contrast, token discipline, translation
         # coverage. Thresholds are a ratchet documented in gate.json.
         run: |

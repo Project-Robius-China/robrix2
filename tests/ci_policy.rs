@@ -61,6 +61,41 @@ fn run_lines(job: &str) -> Vec<String> {
     out
 }
 
+/// GitHub silently refuses to run a workflow whose YAML does not parse — the
+/// run shows up as "workflow file issue" and, worse, the PR simply has no
+/// `spec gate` check at all, so a broken file looks green. Without a YAML
+/// dependency we enforce the one mistake that bit us: an unquoted scalar
+/// containing `: ` (e.g. `name: Tests (workspace: lib)`) is a nested mapping
+/// to YAML. Every single-line `name:` / `run:` value with `: ` must be quoted.
+#[test]
+fn ci_workflow_scalars_with_colon_space_are_quoted() {
+    for rel in [".github/workflows/main.yml", ".github/workflows/builds.yml"] {
+        let wf = read(rel);
+        for (i, line) in wf.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with('#') {
+                continue;
+            }
+            for key in ["name:", "run:", "if:", "key:"] {
+                let Some(rest) = t.strip_prefix(key) else { continue };
+                let v = rest.trim();
+                if v.is_empty() || v == "|" || v == ">" || v == "|-" {
+                    continue;
+                }
+                let quoted = (v.starts_with('"') && v.ends_with('"'))
+                    || (v.starts_with('\'') && v.ends_with('\''));
+                // `${{ ... }}` expressions are fine; a bare `: ` elsewhere is not.
+                let stripped = v.replace("${{", "").replace("}}", "");
+                assert!(
+                    quoted || !stripped.contains(": "),
+                    "{rel}:{}: unquoted YAML scalar contains `: ` — quote it: {line}",
+                    i + 1
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn ci_workflow_runs_all_cargo_test_targets() {
     let wf = read(".github/workflows/main.yml");
